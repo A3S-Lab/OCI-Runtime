@@ -66,7 +66,9 @@ The project is experimental. The current Windows milestone implements:
   payloads;
 - an internal single-writer durable-state foundation with atomic JSON
   replacement, exact `config.json` snapshots, monotonic container
-  generations, generation fencing, and a global idempotent create journal;
+  generations, generation fencing, a global idempotent create journal, and a
+  runtime-owned protected Windows DACL limited to that principal and
+  LocalSystem;
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
@@ -264,9 +266,9 @@ The runtime now applies this transition contract to an internal durable
 `creating`/`created` record. It persists the exact accepted `config.json`,
 allocates monotonically increasing generations, fences stale reads, and
 replays create operations by global `OperationId`. Crash reconciliation,
-Windows owner-only ACL enforcement, the remaining transitions, and the
-driver/guest integration are still release gates, so lifecycle operations are
-not yet advertised.
+descriptor-relative traversal, the remaining transitions, and the driver/guest
+integration are still release gates, so lifecycle operations are not yet
+advertised.
 
 See [Durable State](docs/durable-state.md) for the on-disk contract and its
 current recovery boundary.

@@ -72,7 +72,8 @@ pub(super) async fn open_root(path: &Path) -> Result<(PathBuf, Arc<RootLock>)> {
     if path_exists(&lock_path).await? {
         ensure_plain_file(&lock_path, "runtime root lock").await?;
     }
-    let root_lock = acquire_root_lock(lock_path).await?;
+    let root_lock = acquire_root_lock(lock_path.clone()).await?;
+    set_private_file_permissions(&lock_path).await?;
     initialize_layout(&root).await?;
     Ok((root, Arc::new(root_lock)))
 }
@@ -179,6 +180,7 @@ fn is_lock_contended(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::WouldBlock
 }
 
+#[cfg(not(windows))]
 pub(super) async fn create_private_directory(path: &Path) -> Result<()> {
     tokio::fs::create_dir(path)
         .await
@@ -187,7 +189,7 @@ pub(super) async fn create_private_directory(path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-async fn set_private_directory_permissions(path: &Path) -> Result<()> {
+pub(super) async fn set_private_directory_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
@@ -195,8 +197,36 @@ async fn set_private_directory_permissions(path: &Path) -> Result<()> {
         .map_err(|error| io_error("protect-state-directory", path, error))
 }
 
-#[cfg(not(unix))]
-async fn set_private_directory_permissions(_path: &Path) -> Result<()> {
+#[cfg(windows)]
+pub(super) async fn create_private_directory(path: &Path) -> Result<()> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || super::windows_security::create_private_directory(&path))
+        .await
+        .map_err(|error| {
+            state_error(
+                ErrorCode::Internal,
+                "create-state-directory",
+                format!("Windows state-directory task failed: {error}"),
+            )
+        })?
+}
+
+#[cfg(windows)]
+pub(super) async fn set_private_directory_permissions(path: &Path) -> Result<()> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || super::windows_security::protect_path(&path))
+        .await
+        .map_err(|error| {
+            state_error(
+                ErrorCode::Internal,
+                "protect-state-directory",
+                format!("Windows state-directory protection task failed: {error}"),
+            )
+        })?
+}
+
+#[cfg(all(not(unix), not(windows)))]
+pub(super) async fn set_private_directory_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -235,6 +265,7 @@ pub(super) async fn ensure_plain_file(path: &Path, label: &str) -> Result<()> {
             ),
         ));
     }
+    set_private_file_permissions(path).await?;
     Ok(())
 }
 
@@ -430,8 +461,23 @@ async fn set_private_file_permissions(path: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
+#[cfg(not(windows))]
 async fn set_private_file_permissions(_path: &Path) -> Result<()> {
     Ok(())
+}
+
+#[cfg(windows)]
+async fn set_private_file_permissions(path: &Path) -> Result<()> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || super::windows_security::protect_path(&path))
+        .await
+        .map_err(|error| {
+            state_error(
+                ErrorCode::Internal,
+                "protect-state-file",
+                format!("Windows state-file protection task failed: {error}"),
+            )
+        })?
 }
 
 #[cfg(unix)]

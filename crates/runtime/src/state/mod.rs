@@ -2,6 +2,8 @@ mod create;
 mod filesystem;
 mod model;
 mod oci_state;
+#[cfg(windows)]
+mod windows_security;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -372,6 +374,7 @@ impl DurableStateStore {
             ));
         }
         ensure_plain_directory(&directory, "container state directory").await?;
+        filesystem::set_private_directory_permissions(&directory).await?;
         let path = directory.join(CONTAINER_RECORD_FILE);
         if !path_exists(&path).await? {
             return Err(state_error(

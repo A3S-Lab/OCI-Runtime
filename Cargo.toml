@@ -31,8 +31,12 @@ thiserror = "2.0"
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "rt", "sync"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
 ] }
 
 [workspace.lints.rust]

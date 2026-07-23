@@ -19,14 +19,30 @@ The state root:
 - permits exactly one runtime writer through a cross-process exclusive lock;
 - bounds every state file to 16 MiB;
 - uses `0700` directories and `0600` transaction files on Unix;
+- creates Windows directories with the runtime principal as owner and a
+  protected DACL, grants full access only to that principal and LocalSystem,
+  disables inherited access, and verifies the owner plus every applied ACE
+  type, mask, flag, and principal;
 - commits files by atomic rename plus directory sync on Unix;
 - commits files with `MoveFileExW`, replacement, and write-through semantics
   on Windows.
 
-Windows owner-only DACL creation and verification is not implemented yet.
-Until that lands, operators must place the root under an already protected
-directory. Descriptor-relative traversal is also pending. Both remain release
-gates before lifecycle operations can be enabled.
+A Windows state root therefore requires a filesystem with persistent ACL
+support. Opening the root fails closed when ownership or the protected DACL
+cannot be applied and read back exactly.
+
+Descriptor-relative traversal is still pending and remains a release gate
+before lifecycle operations can be enabled. The current metadata/reparse-point
+checks and protected parent directories prevent ordinary traversal and
+inheritance attacks, but they are not presented as a substitute for
+handle-relative resolution under adversarial races.
+
+The implementation uses the security descriptor supplied directly to
+[`CreateDirectoryW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createdirectoryw)
+for first creation, applies protected DACLs with
+[`SetNamedSecurityInfoW`](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow),
+and reads them back with
+[`GetNamedSecurityInfoW`](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getnamedsecurityinfow).
 
 ## Layout
 
@@ -92,5 +108,5 @@ development:
 - malformed or digest-mismatched records fail closed.
 
 The next persistence gate adds fault injection at every write, deterministic
-driver reconciliation, quarantine of ambiguous resources, Windows DACL
-enforcement, and journals for all mutating SDK operations.
+driver reconciliation, quarantine of ambiguous resources, descriptor-relative
+path operations, and journals for all mutating SDK operations.

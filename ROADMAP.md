@@ -63,12 +63,15 @@ Completed:
 - internal single-writer durable state with atomic creating/created records,
   exact bundle snapshots, monotonic generations, generation fencing, and a
   global idempotent create journal;
+- runtime-owned Windows state paths with protected DACLs limited to the
+  runtime principal and LocalSystem, inheritance disabled, and every applied
+  owner and ACL verified;
 - Windows and Linux CI.
 
 Not yet complete:
 
 - crash reconciliation and the complete durable lifecycle;
-- Windows owner-only state-root ACLs and descriptor-relative path resolution;
+- descriptor-relative path resolution;
 - guest protocol and Linux executor;
 - any workload lifecycle operation;
 - OCI hook execution;
@@ -110,8 +113,9 @@ enforce it. No property is silently ignored.
 
 - [x] Add an absolute, single-writer runtime root with plain-path/reparse-point
   checks, bounded reads, and atomic file replacement.
-- [ ] Enforce Windows owner-only state-root ACLs and descriptor-relative path
-  operations on every supported host.
+- [x] Create, apply, and verify runtime ownership plus protected Windows state
+  DACLs limited to the runtime principal and LocalSystem.
+- [ ] Use descriptor-relative path operations on every supported host.
 - [x] Add atomic creating/created records with exact configuration snapshots
   and monotonically increasing generations.
 - [x] Add a global idempotent create journal keyed by `OperationId`.
