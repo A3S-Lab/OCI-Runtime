@@ -59,6 +59,8 @@ Completed:
 - exhaustive SDK request validation on in-process and transport boundaries;
 - version-negotiated, length-delimited transport for every SDK operation;
 - tested Windows named-pipe and Unix-domain-socket client connectors;
+- authenticated, version-negotiated, bounded host/guest lifecycle protocol
+  with exact bundle and response correlation;
 - existing `features` CLI path routed through the Rust SDK;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
@@ -150,6 +152,8 @@ and host/agent transition.
 - [x] Enter the VM and execute a guest command through WHPX.
 - [x] Configure one vCPU, bounded memory, a diagnostic rootfs share, and
   console output.
+- [x] Define and test the versioned host/guest lifecycle protocol over a
+  transport-independent byte stream.
 - [ ] Replace the diagnostic path with a protected runtime-owned share.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [ ] Establish the named-pipe/vsock bridge.

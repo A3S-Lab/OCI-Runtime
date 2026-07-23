@@ -2,6 +2,7 @@
 members = [
     "crates/core",
     "crates/sdk",
+    "crates/agent-protocol",
     "crates/krun",
     "crates/runtime",
     "crates/cli",
