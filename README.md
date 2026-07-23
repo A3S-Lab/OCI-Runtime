@@ -107,8 +107,9 @@ The project is experimental. The current Windows milestone implements:
   protocol version 1, and retains nested host/shim evidence;
 - a real fixed-bundle WHPX OCI smoke that proves create does not execute the
   process, replays create and delete exactly, releases the process only on
-  start, observes stopped, verifies and removes its marker, returns NotFound
-  after delete, and leaves no new guest runtime directory;
+  start, observes it running, delivers and replays `SIGTERM`, observes
+  stopped, verifies and removes its marker, returns NotFound after delete, and
+  leaves no new guest runtime directory;
 - the pure OCI `creating -> created -> running -> stopped` state contract;
 - Windows and Linux CI scaffolding.
 
@@ -256,7 +257,8 @@ cargo run -p a3s-oci-cli -- oci-vm-smoke `
 
 The fixed bootstrap bundle uses a writable `rootfs`, null standard I/O,
 `noNewPrivileges: true`, an absolute executable and working directory, and no
-unimplemented OCI properties. See
+unimplemented OCI properties. Its process must write the expected marker and
+remain running until `SIGTERM`. See
 [Guest Agent Bootstrap](docs/guest-agent.md) for the exact current boundary.
 
 ## Capability And Readiness
@@ -393,8 +395,10 @@ The fixed OCI VM smoke additionally verifies:
   process remains blocked;
 - state and an exact create retry reproduce the created state;
 - start alone releases the PID-authenticated abstract Unix barrier;
-- state observes the natural process exit as `stopped`;
-- the configured process writes the exact marker, and the host removes it;
+- state observes `running` and the configured process writes the exact marker;
+- kill delivers `SIGTERM`, an exact kill retry reproduces the original
+  result, and state then observes `stopped`;
+- the host removes the marker;
 - stopped-only delete and its exact retry succeed;
 - state returns `NotFound` after delete;
 - VM shutdown leaves no new guest-agent runtime directory or host process.
@@ -456,7 +460,7 @@ state, and cleanup.
 
 | Host | Execution path | Current state |
 | --- | --- | --- |
-| Windows x86_64 | libkrun + WHPX utility VM | Fixed OCI create/start/delete vertical slice passes; complete enforcement and recovery pending; driver is `probe-only` |
+| Windows x86_64 | libkrun + WHPX utility VM | Fixed OCI create/start/kill/delete vertical slice passes; complete enforcement and recovery pending; driver is `probe-only` |
 | Linux x86_64/aarch64 without KVM | Native Linux executor | Required before `crun` removal; not implemented |
 | Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Planned after the shared executor contract |
 | macOS arm64 | libkrun + HVF utility VM | Planned after the shared executor contract |
@@ -521,7 +525,7 @@ crates/
 |       |-- agent_smoke.rs # Authenticated host-to-guest WHPX evidence
 |       |-- agent_session.rs
 |       |                   # Reusable authenticated WHPX agent session
-|       |-- oci_smoke/     # Fixed-bundle create/start lifecycle evidence
+|       |-- oci_smoke/     # Fixed-bundle core lifecycle evidence
 |       |-- platform/      # Windows WHPX and unsupported-host probes
 |       |-- report.rs      # Versioned WHPX, bridge, and OCI smoke results
 |       |-- service.rs     # Host implementation of the SDK contract

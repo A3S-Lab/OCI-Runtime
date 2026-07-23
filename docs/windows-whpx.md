@@ -31,8 +31,9 @@ The runtime:
    through libkrun to the protected pipe, authenticates the exact shim PID and
    one-time token, negotiates protocol version 1, and waits for zero
    guest/shim exit;
-10. runs a fixed OCI bundle through distinct create and start calls, verifies
-    lifecycle replay and cleanup, and keeps the built-in driver disabled;
+10. runs a fixed OCI bundle through distinct create, start, signal, and delete
+    calls, verifies lifecycle replay and cleanup, and keeps the built-in
+    driver disabled;
 11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
@@ -109,7 +110,9 @@ A successful fixed OCI VM smoke additionally proves that:
   verifies the exact init-wrapper PID;
 - the wrapper applies the accepted rootfs, credentials, umask, and
   `no_new_privileges`, then calls `execve`;
-- the host observes `stopped` and the exact workload marker;
+- the host observes `running` and the exact workload marker;
+- kill delivers `SIGTERM`, its exact retry replays the original result, and
+  state then observes `stopped`;
 - stopped-only delete and its exact retry succeed;
 - state returns NotFound after delete;
 - the marker is removed and VM shutdown leaves no new agent runtime directory

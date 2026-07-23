@@ -50,9 +50,10 @@ Completed:
 - root-only Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
   exact-generation state, session idempotency, signaling, and cleanup;
-- real WHPX fixed-bundle create/state/start/delete evidence, including exact
-  retries, pre-start non-execution, stopped observation, marker verification,
-  post-delete NotFound, and nominal leak checks;
+- real WHPX fixed-bundle create/state/start/kill/delete evidence, including
+  exact mutation retries, pre-start non-execution, running and stopped
+  observation, marker verification, post-delete NotFound, and nominal leak
+  checks;
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
@@ -176,8 +177,9 @@ and host/agent transition.
 - [x] Establish the named-pipe/vsock bridge.
 - [x] Negotiate the guest protocol and retain boot evidence.
 - [x] Run a fixed init process through distinct OCI create and start calls.
-- [x] Verify exact create/delete replay, stopped state, post-delete NotFound,
-  marker cleanup, and no new guest runtime directory on the nominal path.
+- [x] Verify running state, exact create/kill/delete replay, signal-driven
+  stopped state, post-delete NotFound, marker cleanup, and no new guest
+  runtime directory on the nominal path.
 - [ ] Prove deterministic VM, handle, process, and filesystem cleanup.
 
 Exit gate: a fresh Windows host test boots a utility VM, runs the fixed OCI

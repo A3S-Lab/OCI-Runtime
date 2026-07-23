@@ -3,13 +3,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentStartRequest,
-    AgentStateRequest, GuestPath,
+    AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest,
+    AgentStartRequest, AgentStateRequest, GuestPath,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, IoMode, OciBundle, OperationContext,
-    OperationId, ProcessIo,
+    OperationId, ProcessIo, Signal,
 };
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::time::{sleep, timeout, Instant};
@@ -17,9 +17,10 @@ use tokio::time::{sleep, timeout, Instant};
 use super::{path_exists, read_marker, OciVmSmokeReport};
 
 const GUEST_CALL_TIMEOUT: Duration = Duration::from_secs(15);
-const STOP_TIMEOUT: Duration = Duration::from_secs(15);
+const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const LINUX_SIGTERM: i32 = 15;
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-v1\n";
 
 pub(super) async fn exercise(
@@ -73,19 +74,34 @@ pub(super) async fn exercise(
         }),
     )
     .await?;
-    report.start_released = matches!(
-        started.status(),
-        ContainerState::Running | ContainerState::Stopped
-    );
+    report.start_released = started.status() == ContainerState::Running;
     if !report.start_released {
-        return Err("guest start did not release the configured process".into());
+        return Err("guest start did not leave the fixed workload running".into());
     }
 
-    report.stopped_observed = wait_until_stopped(client, target).await?;
-    report.marker_verified = read_marker(marker).await? == MARKER_CONTENTS;
-    if !report.marker_verified {
-        return Err("configured process produced unexpected marker contents".into());
+    wait_for_running_marker(client, target, marker, report).await?;
+
+    let kill = AgentKillRequest {
+        context: operation(nonce, "kill")?,
+        target: target.clone(),
+        signal: Signal::new(LINUX_SIGTERM)
+            .map_err(|error| format!("invalid smoke signal: {error}"))?,
+        all: false,
+    };
+    let killed = guest_call("kill", client.kill(kill.clone())).await?;
+    report.kill_delivered = matches!(
+        killed.status(),
+        ContainerState::Running | ContainerState::Stopped
+    );
+    if !report.kill_delivered {
+        return Err("guest kill returned an unexpected lifecycle state".into());
     }
+    let replayed_kill = guest_call("replayed kill", client.kill(kill)).await?;
+    report.kill_replayed = replayed_kill == killed;
+    if !report.kill_replayed {
+        return Err("guest did not exactly replay the kill result".into());
+    }
+    report.stopped_observed = wait_until_stopped(client, target).await?;
 
     let delete = AgentDeleteRequest {
         context: operation(nonce, "delete")?,
@@ -103,11 +119,48 @@ pub(super) async fn exercise(
     Ok(())
 }
 
+async fn wait_for_running_marker(
+    client: &AgentClient<NamedPipeServer>,
+    target: &ContainerTarget,
+    marker: &Path,
+    report: &mut OciVmSmokeReport,
+) -> Result<(), String> {
+    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+    loop {
+        let state = guest_call(
+            "state while waiting for running marker",
+            client.state(AgentStateRequest {
+                target: target.clone(),
+            }),
+        )
+        .await?;
+        match state.status() {
+            ContainerState::Running => report.running_observed = true,
+            status => {
+                return Err(format!(
+                    "guest reported unexpected state {status} before kill"
+                ));
+            }
+        }
+        if path_exists(marker).await? {
+            report.marker_verified = read_marker(marker).await? == MARKER_CONTENTS;
+            if report.marker_verified {
+                return Ok(());
+            }
+            return Err("configured process produced unexpected marker contents".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out waiting for the running workload marker".into());
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
 async fn wait_until_stopped(
     client: &AgentClient<NamedPipeServer>,
     target: &ContainerTarget,
 ) -> Result<bool, String> {
-    let deadline = Instant::now() + STOP_TIMEOUT;
+    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
     loop {
         let state = guest_call(
             "state while waiting for stop",

@@ -347,6 +347,9 @@ fn lifecycle_succeeded(report: &OciVmSmokeReport) -> bool {
         && report.created_pid.is_some_and(|pid| pid > 0)
         && report.marker_absent_after_create
         && report.start_released
+        && report.running_observed
+        && report.kill_delivered
+        && report.kill_replayed
         && report.stopped_observed
         && report.marker_verified
         && report.delete_succeeded

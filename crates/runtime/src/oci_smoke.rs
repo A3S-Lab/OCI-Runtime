@@ -8,7 +8,7 @@ use crate::report::OciVmSmokeReport;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod windows;
 
-/// Exercise the fixed OCI create/start barrier inside one WHPX utility VM.
+/// Exercise the fixed OCI core lifecycle inside one WHPX utility VM.
 ///
 /// This diagnostic accepts only a bundle contained by the supplied VM
 /// rootfs. The guest executor validates the exact bootstrap profile and

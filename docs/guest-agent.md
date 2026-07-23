@@ -76,8 +76,8 @@ cargo zigbuild -p a3s-oci-agent --release `
 guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact core
 operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a bundle
 below the VM rootfs and proves the distinct create/start barrier, state
-observation, exact create/delete replay, post-delete NotFound, marker cleanup,
-and nominal guest runtime cleanup.
+observation, exact create/kill/delete replay, signal-driven stop, post-delete
+NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
 minirootfs and the 6,285,448-byte static agent with SHA-256

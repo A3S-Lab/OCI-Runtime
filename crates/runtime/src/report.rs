@@ -8,8 +8,8 @@ use serde_json::Value;
 pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
 pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v1";
-/// Schema emitted by the fixed OCI create/start utility-VM smoke.
-pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v1";
+/// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v2";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,7 +189,7 @@ impl AgentVmSmokeReport {
     }
 }
 
-/// End-to-end evidence for the first real OCI create/start barrier.
+/// End-to-end evidence for the fixed OCI core lifecycle in a real utility VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmSmokeReport {
     /// Version of this JSON-compatible schema.
@@ -211,6 +211,12 @@ pub struct OciVmSmokeReport {
     pub marker_absent_after_create: bool,
     /// Whether start released the prepared init wrapper.
     pub start_released: bool,
+    /// Whether the configured process was observed running.
+    pub running_observed: bool,
+    /// Whether the guest accepted the exact signal request.
+    pub kill_delivered: bool,
+    /// Whether retrying kill replayed its exact original result.
+    pub kill_replayed: bool,
     /// Whether state eventually reported the workload stopped.
     pub stopped_observed: bool,
     /// Whether the workload produced the exact expected marker.
@@ -244,6 +250,9 @@ impl OciVmSmokeReport {
             created_pid: None,
             marker_absent_after_create: false,
             start_released: false,
+            running_observed: false,
+            kill_delivered: false,
+            kill_replayed: false,
             stopped_observed: false,
             marker_verified: false,
             delete_succeeded: false,
@@ -275,6 +284,9 @@ impl OciVmSmokeReport {
             && self.created_pid.is_some_and(|pid| pid > 0)
             && self.marker_absent_after_create
             && self.start_released
+            && self.running_observed
+            && self.kill_delivered
+            && self.kill_replayed
             && self.stopped_observed
             && self.marker_verified
             && self.delete_succeeded
