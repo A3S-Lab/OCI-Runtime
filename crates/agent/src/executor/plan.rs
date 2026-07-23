@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use a3s_oci_sdk::oci_spec::runtime::LinuxNamespaceType;
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result};
 use serde_json::{Map, Value};
 
 const MAX_ARGUMENTS: usize = 4_096;
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
 const MAX_EXEC_BYTES: usize = 1024 * 1024;
+const LINUX_HOST_NAME_MAX: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitPlan {
@@ -20,6 +22,8 @@ pub(super) struct InitPlan {
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
+    pub(super) new_uts_namespace: bool,
+    pub(super) hostname: Option<String>,
 }
 
 impl InitPlan {
@@ -95,6 +99,18 @@ impl InitPlan {
                 "process.user.umask must fit the POSIX permission mask",
             ));
         }
+        let new_uts_namespace = validate_linux_namespaces(spec.linux().as_ref())?;
+        let hostname = spec
+            .hostname()
+            .as_deref()
+            .map(validate_hostname)
+            .transpose()?;
+        if hostname.is_some() && !new_uts_namespace {
+            return Err(unsupported(
+                "hostname",
+                "the bootstrap executor changes it only in a newly created UTS namespace",
+            ));
+        }
 
         Ok(Self {
             bundle_directory: bundle.directory().to_path_buf(),
@@ -107,13 +123,19 @@ impl InitPlan {
             additional_gids,
             umask: user.umask(),
             no_new_privileges: true,
+            new_uts_namespace,
+            hostname,
         })
     }
 }
 
 fn validate_profile(raw: &Value) -> Result<()> {
     let root = object(raw, "config")?;
-    reject_unimplemented_keys(root, "config", &["ociVersion", "root", "process"])?;
+    reject_unimplemented_keys(
+        root,
+        "config",
+        &["ociVersion", "root", "process", "hostname", "linux"],
+    )?;
 
     let root_config = object(
         root.get("root")
@@ -143,7 +165,77 @@ fn validate_profile(raw: &Value) -> Result<()> {
         user,
         "process.user",
         &["uid", "gid", "umask", "additionalGids", "username"],
-    )
+    )?;
+
+    let Some(linux) = root.get("linux") else {
+        return Ok(());
+    };
+    let linux = object(linux, "linux")?;
+    reject_unimplemented_keys(linux, "linux", &["namespaces"])?;
+    let namespaces = linux
+        .get("namespaces")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("linux.namespaces must be an array"))?;
+    if namespaces.len() != 1 {
+        return Err(unsupported(
+            "linux.namespaces",
+            "the bootstrap executor currently accepts exactly one UTS namespace",
+        ));
+    }
+    let namespace = object(&namespaces[0], "linux.namespaces[0]")?;
+    reject_unimplemented_keys(namespace, "linux.namespaces[0]", &["type", "path"])?;
+    if namespace.get("type").and_then(Value::as_str) != Some("uts") {
+        return Err(unsupported(
+            "linux.namespaces[0].type",
+            "only a new UTS namespace is implemented",
+        ));
+    }
+    if namespace.contains_key("path") {
+        return Err(unsupported(
+            "linux.namespaces[0].path",
+            "joining an existing UTS namespace is not implemented",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_linux_namespaces(
+    linux: Option<&a3s_oci_sdk::oci_spec::runtime::Linux>,
+) -> Result<bool> {
+    let Some(linux) = linux else {
+        return Ok(false);
+    };
+    let namespaces = linux.namespaces().as_deref().ok_or_else(|| {
+        invalid("linux.namespaces is required when linux is present in the bootstrap profile")
+    })?;
+    let [namespace] = namespaces else {
+        return Err(unsupported(
+            "linux.namespaces",
+            "the bootstrap executor currently accepts exactly one UTS namespace",
+        ));
+    };
+    if namespace.typ() != LinuxNamespaceType::Uts {
+        return Err(unsupported(
+            "linux.namespaces[0].type",
+            "only a new UTS namespace is implemented",
+        ));
+    }
+    if namespace.path().is_some() {
+        return Err(unsupported(
+            "linux.namespaces[0].path",
+            "joining an existing UTS namespace is not implemented",
+        ));
+    }
+    Ok(true)
+}
+
+fn validate_hostname(hostname: &str) -> Result<String> {
+    if hostname.len() > LINUX_HOST_NAME_MAX || hostname.as_bytes().contains(&0) {
+        return Err(invalid(format!(
+            "hostname must contain at most {LINUX_HOST_NAME_MAX} bytes and no NUL"
+        )));
+    }
+    Ok(hostname.to_string())
 }
 
 fn object<'a>(value: &'a Value, field: &str) -> Result<&'a Map<String, Value>> {
@@ -271,86 +363,4 @@ fn invalid(message: impl Into<String>) -> Error {
 fn unsupported(field: &str, reason: &str) -> Error {
     Error::new(ErrorCode::Unsupported, format!("{field}: {reason}"))
         .for_operation("plan-guest-init")
-}
-
-#[cfg(test)]
-mod tests {
-    use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo};
-
-    use super::InitPlan;
-
-    const FIXED_CONFIG: &str = r#"{
-      "ociVersion": "1.3.0",
-      "root": {"path": "rootfs", "readonly": false},
-      "process": {
-        "terminal": false,
-        "user": {"uid": 0, "gid": 0, "umask": 18},
-        "args": ["/bin/sh", "-c", "printf ready"],
-        "env": ["PATH=/bin:/usr/bin"],
-        "cwd": "/",
-        "noNewPrivileges": true
-      }
-    }"#;
-
-    fn bundle(config: &str) -> OciBundle {
-        OciBundle::from_json(
-            std::env::current_dir()
-                .expect("current directory")
-                .join("bootstrap-test-bundle"),
-            config,
-        )
-        .expect("schema-valid test bundle")
-    }
-
-    fn null_io() -> ProcessIo {
-        ProcessIo {
-            stdin: IoMode::Null,
-            stdout: IoMode::Null,
-            stderr: IoMode::Null,
-            terminal_size: None,
-        }
-    }
-
-    #[test]
-    fn accepts_the_exact_bootstrap_profile() {
-        let bundle = bundle(FIXED_CONFIG);
-        let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("supported fixed profile");
-        assert_eq!(plan.rootfs, bundle.directory().join("rootfs"));
-        assert_eq!(plan.args[0], "/bin/sh");
-        assert_eq!(plan.umask, Some(0o22));
-        assert!(plan.no_new_privileges);
-    }
-
-    #[test]
-    fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
-        let config = FIXED_CONFIG.replace(
-            r#""root": {"path": "rootfs", "readonly": false},"#,
-            r#""root": {"path": "rootfs", "readonly": false},
-               "mounts": [{"destination": "/proc", "type": "proc", "source": "proc"}],"#,
-        );
-        let error =
-            InitPlan::from_bundle(&bundle(&config), &null_io()).expect_err("mounts unsupported");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains("config.mounts"));
-
-        let config = FIXED_CONFIG.replace(
-            r#""noNewPrivileges": true"#,
-            r#""noNewPrivileges": true,
-               "capabilities": {"bounding": [], "effective": [], "inheritable": [],
-                                "permitted": [], "ambient": []}"#,
-        );
-        let error = InitPlan::from_bundle(&bundle(&config), &null_io())
-            .expect_err("capability enforcement unsupported");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains("process.capabilities"));
-    }
-
-    #[test]
-    fn rejects_non_null_process_io() {
-        let mut io = null_io();
-        io.stdout = IoMode::Capture;
-        let error =
-            InitPlan::from_bundle(&bundle(FIXED_CONFIG), &io).expect_err("capture unsupported");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-    }
 }

@@ -87,11 +87,13 @@ proves a fixed bundle through create, state, exact create replay, start,
 running observation, marker verification, signal delivery, exact kill replay,
 stopped observation, stopped-only delete, exact delete replay, and a final
 NotFound state query. The marker proves that the workload did not run before
-start and did run afterward. The host also verifies marker removal and that
-VM shutdown leaves no new guest-agent runtime directory.
+start and did run afterward. The qualified workload also verifies the
+configured hostname inside a new UTS namespace established before create
+returns. The host verifies marker removal and that VM shutdown leaves no new
+guest-agent runtime directory.
 
 This is the first Linux executor vertical slice, not complete OCI
-enforcement. A pinned immutable system image, complete process I/O,
+enforcement. A pinned immutable system image, complete process I/O, remaining
 namespaces, mounts, resources, hooks, recovery, negative isolation cases,
 fault cleanup, and full lifecycle evidence remain required before the WHPX
 driver can advance beyond `probe-only`.

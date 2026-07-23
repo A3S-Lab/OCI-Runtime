@@ -1,5 +1,7 @@
 mod init;
 mod plan;
+#[cfg(test)]
+mod plan_tests;
 mod process;
 mod state;
 

@@ -69,6 +69,7 @@ fn run_container_init(
             ),
         ));
     }
+    prepare_create_environment(&plan)?;
 
     let control_address =
         StdSocketAddr::from_abstract_name(control_name.as_bytes()).map_err(|error| {
@@ -104,6 +105,30 @@ fn run_container_init(
     }
     drop(control);
     enter_rootfs_and_exec(&plan, &rootfs)
+}
+
+fn prepare_create_environment(plan: &InitPlan) -> Result<()> {
+    if plan.new_uts_namespace {
+        // SAFETY: `unshare` has no pointer preconditions. This dedicated
+        // wrapper is single-threaded before it reports the created barrier.
+        if unsafe { libc::unshare(libc::CLONE_NEWUTS) } != 0 {
+            return Err(last_os_error("create Linux UTS namespace"));
+        }
+    }
+    if let Some(hostname) = &plan.hostname {
+        if !plan.new_uts_namespace {
+            return Err(init_error(
+                ErrorCode::FailedPrecondition,
+                "refusing to change hostname outside a new UTS namespace",
+            ));
+        }
+        // SAFETY: the byte slice remains live for the call and its exact
+        // length was bounded by the validated init plan.
+        if unsafe { libc::sethostname(hostname.as_bytes().as_ptr().cast(), hostname.len()) } != 0 {
+            return Err(last_os_error("set container hostname"));
+        }
+    }
+    Ok(())
 }
 
 fn read_bounded_config(path: &Path) -> Result<String> {

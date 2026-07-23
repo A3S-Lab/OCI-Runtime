@@ -49,7 +49,8 @@ Completed:
   host/shim evidence;
 - root-only Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
-  exact-generation state, session idempotency, signaling, and cleanup;
+  create-time UTS namespace and hostname, exact-generation state, session
+  idempotency, signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -189,8 +190,10 @@ runtime-root leak. Only then may WHPX become `experimental`.
 ### R3 — Shared Linux Executor And Guest Agent
 
 - [ ] Multi-container guest registry with per-container generations.
-- [ ] Namespace creation and joining for PID, mount, IPC, UTS, user, network,
-  cgroup, and time namespaces.
+- [x] Create a new UTS namespace and apply the configured hostname before the
+  created barrier.
+- [ ] Namespace creation and joining for PID, mount, IPC, user, network,
+  cgroup, and time namespaces, plus joining existing UTS namespaces.
 - [ ] Rootfs, mount order, propagation, idmapped mounts, masked paths, and
   read-only paths.
 - [ ] UID/GID mappings, credentials, capabilities, rlimits, scheduler, I/O

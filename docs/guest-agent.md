@@ -32,13 +32,20 @@ than the final OCI executor and rejects every property it cannot enforce.
 
 The accepted bootstrap profile requires:
 
-- only `ociVersion`, `root`, and `process` at the configuration root;
+- only `ociVersion`, `root`, `process`, optional `hostname`, and optional
+  `linux` at the configuration root;
 - a writable normalized relative `root.path` equal to `rootfs`;
 - `terminal: false` and null stdin, stdout, and stderr;
 - `noNewPrivileges: true`;
 - an absolute executable and working directory;
 - numeric UID, GID, optional supplementary groups, and optional umask;
 - bounded arguments and environment with unique environment names.
+
+When `linux` is present, it currently accepts exactly one newly created UTS
+namespace and no join path. A configured hostname is bounded to the Linux
+kernel limit and requires that new UTS namespace. The wrapper calls
+`unshare(CLONE_NEWUTS)` and `sethostname` before reporting ready, so both are
+part of the create barrier rather than deferred until start.
 
 Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits for that wrapper on a randomly named Linux abstract Unix
@@ -58,10 +65,10 @@ All guest registry, generation, and idempotency state is session-local. A
 closed host connection force-stops remaining init processes and removes the
 agent-owned runtime root. Agent restart recovery is not implemented yet.
 
-The executor currently rejects mounts, namespaces, cgroups, capabilities,
-seccomp, hooks, read-only rootfs, terminals, non-null I/O, process-group
-signals, and every other unimplemented OCI property. These are release
-blockers, not silently accepted compatibility gaps.
+The executor currently rejects mounts, every non-UTS or joined namespace,
+cgroups, capabilities, seccomp, hooks, read-only rootfs, terminals, non-null
+I/O, process-group signals, and every other unimplemented OCI property. These
+are release blockers, not silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -80,8 +87,8 @@ observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
-minirootfs and the 6,285,448-byte static agent with SHA-256
-`7f8c3d19d0cbe3ab70abb0215bcc9bdb8ed3b9f2fba9e31e8e508dc43841ecde`.
+minirootfs and the 6,290,296-byte static agent with SHA-256
+`217029c1d7fb94b9f318ec8cf42c741bcb81869d68ebdc0d2ad826fb3925227f`.
 This proves the fixed bootstrap slice, not the immutable A3S system image,
 complete OCI enforcement, process I/O, networking, restart recovery, or
 fault-injected cleanup. The WHPX driver therefore remains `probe-only`.

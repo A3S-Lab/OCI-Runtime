@@ -59,8 +59,9 @@ The project is experimental. The current Windows milestone implements:
   executor active;
 - a root-only guest bootstrap executor with exact-generation state,
   session-bounded idempotency, a PID-authenticated abstract Unix start
-  barrier, `chroot`, credentials, umask, `no_new_privileges`, `execve`,
-  signaling, stopped observation, and scoped cleanup;
+  barrier, a create-time UTS namespace and hostname, `chroot`, credentials,
+  umask, `no_new_privileges`, `execve`, signaling, stopped observation, and
+  scoped cleanup;
 - the complete pinned OCI Runtime Specification 1.3.0 schema and upstream
   fixture set, compiled into an offline validator for configuration, state,
   and feature documents;
@@ -117,10 +118,10 @@ The durable host lifecycle and its driver-facing Rust API are implemented and
 tested with an injected conformance driver. The static A3S guest agent now
 executes one deliberately narrow OCI bootstrap profile and fails every
 unimplemented property instead of ignoring it. This is a verified vertical
-slice, not full OCI enforcement: namespaces, mounts, cgroups, capabilities,
-hooks, seccomp, complete I/O, recovery, and the remaining SDK operations are
-still pending. The built-in WHPX driver therefore remains `probe-only`, and
-the default host service advertises only `features`.
+slice, not full OCI enforcement: remaining namespaces, mounts, cgroups,
+capabilities, hooks, seccomp, complete I/O, recovery, and the remaining SDK
+operations are still pending. The built-in WHPX driver therefore remains
+`probe-only`, and the default host service advertises only `features`.
 
 See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
@@ -391,6 +392,8 @@ The end-to-end agent smoke additionally verifies:
 The fixed OCI VM smoke additionally verifies:
 
 - the host accepts only a bundle strictly contained by the VM rootfs;
+- create establishes a new UTS namespace and the configured hostname before
+  returning;
 - create returns `created` with a positive guest PID while the configured
   process remains blocked;
 - state and an exact create retry reproduce the created state;
@@ -412,8 +415,9 @@ The smokes do not yet verify:
 
 The next Windows gate replaces the diagnostic share with a protected,
 runtime-owned immutable system image and expands the shared Linux executor
-through process I/O, namespaces, mounts, resources, hooks, recovery, and
-negative isolation cases. WHPX remains `probe-only` until those gates pass.
+through process I/O, the remaining namespaces, mounts, resources, hooks,
+recovery, and negative isolation cases. WHPX remains `probe-only` until those
+gates pass.
 
 ## Target Architecture
 

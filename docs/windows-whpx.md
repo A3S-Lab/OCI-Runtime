@@ -103,6 +103,8 @@ A successful end-to-end agent VM smoke additionally proves that:
 A successful fixed OCI VM smoke additionally proves that:
 
 - the accepted bundle is a strict descendant of the supplied VM rootfs;
+- create establishes a new UTS namespace, applies the configured hostname,
+  and reports ready only afterward;
 - create returns `created` and a positive guest PID without running the
   configured process;
 - state and an exact create retry match the original result;
@@ -124,9 +126,9 @@ minirootfs archive with SHA-256
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
 
-The fixed OCI lifecycle qualification used the 6,285,448-byte static musl agent
+The fixed OCI lifecycle qualification used the 6,290,296-byte static musl agent
 with SHA-256
-`7f8c3d19d0cbe3ab70abb0215bcc9bdb8ed3b9f2fba9e31e8e508dc43841ecde`.
+`217029c1d7fb94b9f318ec8cf42c741bcb81869d68ebdc0d2ad826fb3925227f`.
 Its report selected protocol version 1, identified the guest as `x86_64`,
 verified every fixed lifecycle field, retained the complete successful shim
 report, and returned exit status zero.
@@ -134,6 +136,11 @@ report, and returned exit status zero.
 A companion real-WHPX negative run added an otherwise valid `proc` mount.
 Create returned `Unsupported` for `config.mounts` before starting a process,
 and the report still verified marker and guest-runtime cleanup.
+
+The UTS qualification configured hostname `a3s-smoke` and checked it from the
+workload before writing the marker. A companion bundle added a PID namespace;
+create returned `Unsupported` for `linux.namespaces` and left no runtime
+state.
 
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
@@ -143,7 +150,8 @@ The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
 - networking or complete process I/O works;
-- namespaces, mounts, resources, capabilities, seccomp, or hooks work;
+- remaining namespaces, mounts, resources, capabilities, seccomp, or hooks
+  work;
 - restart recovery, concurrent containers, or shared-guest-kernel isolation
   work;
 - the driver is production ready.
