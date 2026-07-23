@@ -27,9 +27,14 @@ The runtime:
    authenticated agent protocol with a simulated local guest;
 8. enters a one-vCPU, 512 MiB utility VM, executes `/bin/sh` from a supplied
    Linux rootfs, and verifies a guest-written marker through virtiofs;
-9. emits stable JSON evidence through `a3s-oci features`,
+9. boots `/usr/bin/a3s-oci-agent`, carries its host-CID port 4093 connection
+   through libkrun to the protected pipe, authenticates the exact shim PID and
+   one-time token, negotiates protocol version 1, and waits for zero
+   guest/shim exit;
+10. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
-   `a3s-oci-krun-shim vm-smoke`.
+   `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
+   `a3s-oci agent-vm-smoke`.
 
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
@@ -79,11 +84,31 @@ A successful libkrun VM smoke additionally proves that:
 - the guest returns exit code zero and the host removes the marker;
 - fatal WHPX exits are not accepted as successful workload completion.
 
+A successful end-to-end agent VM smoke additionally proves that:
+
+- the static musl guest agent starts from the supplied rootfs;
+- guest AF_VSOCK reaches the protected Windows named pipe through libkrun;
+- only the exact spawned shim PID is accepted before the token is sent;
+- the real guest authenticates the one-time token and negotiates protocol
+  version 1;
+- the agent version and `x86_64` guest architecture are reported;
+- the negotiation-only guest advertises no OCI executor operations;
+- the shim reports every VM configuration stage and a zero guest exit;
+- the host rejects an existing console destination rather than overwriting
+  it.
+
 The July 24, 2026 qualification used the untouched Alpine 3.22.5 x86_64
 minirootfs archive with SHA-256
 `4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`.
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
+
+The end-to-end bridge qualification used the 5,824,440-byte static musl agent
+with SHA-256
+`b1e4cf22b0e9483b97f07f2f9063df950dbbf0ccdd4c10624e76ee61cbbbebb3`.
+Its host report selected protocol version 1, identified the guest as
+`x86_64`, retained the complete successful shim report, and returned exit
+status zero.
 
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
@@ -91,9 +116,7 @@ does not build it.
 
 The smokes do not prove that:
 
-- the static A3S guest agent or its system image boots;
-- libkrun carries a real Linux guest's vsock connection to the protected
-  named-pipe server;
+- the pinned immutable A3S system image boots;
 - networking or complete process I/O works;
 - OCI create/start ordering is implemented;
 - one or multiple Linux containers can execute;
@@ -107,9 +130,9 @@ silently treating host capability as runtime support.
 
 The next vertical slice must:
 
-1. boot a version-pinned A3S system image and static guest agent;
-2. negotiate the versioned host/guest protocol;
-3. mount one protected runtime-owned root through virtio-fs;
+1. boot a version-pinned A3S system image;
+2. mount one protected runtime-owned root through virtio-fs;
+3. implement the guest Linux executor;
 4. execute a fixed local Alpine OCI bundle with an exact create/start barrier;
 5. return stdout, stderr, and the natural exit code;
 6. reconcile stopped state after host runtime restart;

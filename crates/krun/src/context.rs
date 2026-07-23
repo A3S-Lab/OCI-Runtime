@@ -10,6 +10,7 @@ use a3s_libkrun_sys::{
     krun_set_workdir, krun_start_enter,
 };
 use a3s_oci_sdk::{Error, ErrorCode, Result};
+use zeroize::Zeroizing;
 
 use crate::{AgentVsockEndpoint, VmConfig};
 
@@ -132,10 +133,12 @@ impl KrunContext {
         let id = self.active_id("krun_set_exec")?;
         let executable = value_to_cstring("krun_set_exec", "executable", executable)?;
         let arguments = FfiStringArray::new("krun_set_exec", "arguments", arguments)?;
-        let environment_entries = environment
-            .iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>();
+        let environment_entries = Zeroizing::new(
+            environment
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>(),
+        );
         let environment =
             FfiStringArray::new("krun_set_exec", "environment", &environment_entries)?;
 
@@ -274,7 +277,7 @@ fn value_to_cstring(
 
 #[derive(Debug)]
 struct FfiStringArray {
-    _storage: Vec<CString>,
+    _storage: Vec<Zeroizing<Vec<u8>>>,
     pointers: Vec<*const c_char>,
 }
 
@@ -294,11 +297,15 @@ impl FfiStringArray {
 
         let storage = values
             .iter()
-            .map(|value| value_to_cstring(operation, description, value))
+            .map(|value| {
+                value_to_cstring(operation, description, value)
+                    .map(CString::into_bytes_with_nul)
+                    .map(Zeroizing::new)
+            })
             .collect::<Result<Vec<_>>>()?;
         let mut pointers = vec![ptr::null(); LIBKRUN_MAX_ARGS];
         for (slot, value) in pointers.iter_mut().zip(&storage) {
-            *slot = value.as_ptr();
+            *slot = value.as_ptr().cast();
         }
 
         Ok(Self {

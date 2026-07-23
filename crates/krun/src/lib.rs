@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+mod agent_smoke;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod context;
 mod report;
@@ -14,8 +15,10 @@ pub use a3s_oci_agent_protocol::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
+pub use agent_smoke::agent_vm_smoke;
 pub use report::{
-    KrunContextSmokeReport, KrunVmSmokeReport, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,
+    KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunVmSmokeReport,
+    KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,
     KRUN_VM_SMOKE_SCHEMA_VERSION,
 };
 
@@ -181,7 +184,7 @@ pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
     }
 }
 
-fn fallback_config() -> VmConfig {
+pub(crate) fn fallback_config() -> VmConfig {
     VmConfig {
         vcpus: 1,
         memory_mib: 512,

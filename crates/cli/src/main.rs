@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use a3s_oci_sdk::RuntimeClient;
@@ -19,6 +20,18 @@ enum Command {
     Features,
     /// Query WHPX and create then delete one partition object.
     WhpxSmoke,
+    /// Boot and authenticate the Linux agent at its fixed guest path.
+    AgentVmSmoke {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        rootfs: PathBuf,
+        /// New host file that receives the guest console stream.
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -50,6 +63,20 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
         }
         Command::WhpxSmoke => {
             let report = a3s_oci_runtime::whpx_smoke();
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::AgentVmSmoke {
+            shim,
+            rootfs,
+            console,
+        } => {
+            let report = a3s_oci_runtime::agent_vm_smoke(&shim, &rootfs, &console).await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

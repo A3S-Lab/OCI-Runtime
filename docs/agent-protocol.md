@@ -68,16 +68,19 @@ In-memory duplex tests cover:
 - response correlation failure and permanent connection poisoning;
 - secret redaction and guest-path normalization.
 
-Windows tests additionally create the real host-side named-pipe endpoint,
-verify its live kernel-object owner and protected DACL, reject a second owner
-of the same name, generate both an unguessable endpoint nonce and the session
-token from the OS, reject a connected process whose PID is not the expected
-libkrun shim, and complete authenticated negotiation with a local simulated
-guest. PID verification occurs before the host sends the session token. The
-endpoint type and fixed port 4093 are shared with the libkrun shim.
+Windows tests create the real host-side named-pipe endpoint, verify its live
+kernel-object owner and protected DACL, reject a second owner of the same name,
+generate both an unguessable endpoint nonce and the session token from the OS,
+and reject a connected process whose PID is not the expected libkrun shim.
+PID verification occurs before the host sends the session token.
 
-This proves the protocol and the Windows host half of the bridge, not a guest
-vsock connection or Linux executor. The Linux agent binary and CID-host
-connector now build as a static musl executable, but the pinned image, real
-vsock-to-pipe boot test, bundle execution, process I/O, and recovery evidence
-remain required before the WHPX driver can advance beyond `probe-only`.
+The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
+carries its CID-host port 4093 connection through libkrun to that protected
+pipe, authenticates the token, negotiates protocol version 1, and retains
+bounded host and shim evidence. The current guest correctly advertises no
+operations.
+
+This proves bootstrap and the complete transport path, not the Linux OCI
+executor. A pinned immutable system image, bundle execution, process I/O,
+recovery, fault cleanup, and lifecycle evidence remain required before the
+WHPX driver can advance beyond `probe-only`.

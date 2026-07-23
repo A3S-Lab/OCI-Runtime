@@ -24,3 +24,25 @@ fn features_command_emits_versioned_machine_readable_output() {
     assert_eq!(whpx.readiness, DriverReadiness::ProbeOnly);
     assert!(!whpx.can_launch());
 }
+
+#[test]
+fn agent_vm_smoke_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "agent-vm-smoke",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--rootfs",
+            "missing-a3s-oci-rootfs",
+            "--console",
+            "missing-a3s-oci-console",
+        ])
+        .output()
+        .expect("agent VM smoke command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
+    assert_eq!(report["schema_version"], "a3s.oci.agent-vm-smoke.v1");
+    assert_ne!(report["status"], "available");
+}

@@ -96,15 +96,19 @@ The project is experimental. The current Windows milestone implements:
 - a real WHPX utility-VM entry smoke that boots the packaged Linux kernel,
   executes `/bin/sh` in an untouched Alpine rootfs, and verifies a
   guest-written marker on the host;
+- a real end-to-end WHPX guest-agent smoke that boots the static musl agent,
+  carries its AF_VSOCK connection through libkrun to the protected Windows
+  pipe, authenticates the exact shim PID and one-time token, negotiates
+  protocol version 1, and retains nested host/shim evidence;
 - the pure OCI `creating -> created -> running -> stopped` state contract;
 - Windows and Linux CI scaffolding.
 
 The durable host lifecycle and its driver-facing Rust API are implemented and
-tested with an injected conformance driver. The repository does **not** yet
-boot the A3S guest agent or execute an OCI bundle through a production driver.
-The built-in WHPX driver therefore reports `probe-only` readiness even when
-the host capability, partition-object, context, and guest-command smokes
-succeed, and the default host service advertises only `features`.
+tested with an injected conformance driver. The static A3S guest agent now
+boots and completes authenticated transport negotiation, but deliberately
+advertises no executor operations and does not execute an OCI bundle. The
+built-in WHPX driver therefore reports `probe-only` readiness, and the default
+host service advertises only `features`.
 
 See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
@@ -210,6 +214,23 @@ This command succeeds only after `/bin/sh` runs in the guest, writes a unique
 marker through virtiofs, the host verifies and removes that marker, and
 libkrun reports exit code zero. A VM API return alone is not accepted as
 workload evidence.
+
+After installing the static `a3s-oci-agent` at
+`<rootfs>/usr/bin/a3s-oci-agent`, run the authenticated end-to-end bridge
+smoke:
+
+```powershell
+cargo build -p a3s-oci-krun -p a3s-oci-cli
+cargo run -p a3s-oci-cli -- agent-vm-smoke `
+  --shim target\debug\a3s-oci-krun-shim.exe `
+  --rootfs C:\path\to\rootfs `
+  --console C:\path\to\new-console.log
+```
+
+The console destination must not already exist. Success requires the exact
+shim PID to connect, token authentication and protocol-v1 negotiation from
+the real Linux guest, a zero guest/shim exit, and a validated nested shim
+report. The negotiation-only agent must advertise an empty operation set.
 
 ## Capability And Readiness
 
@@ -325,17 +346,29 @@ The separate libkrun smoke also verifies:
   remove it;
 - a fatal WHPX exit is not misreported as a successful guest exit.
 
+The end-to-end agent smoke additionally verifies:
+
+- the static Linux agent starts as `/usr/bin/a3s-oci-agent`;
+- guest CID 2 port 4093 reaches the first-instance-only Windows pipe through
+  libkrun's plain-vsock mapping;
+- the pipe client is the exact spawned shim process;
+- the guest authenticates the one-time 256-bit token and negotiates protocol
+  version 1;
+- the guest reports its version and `x86_64` architecture without advertising
+  unimplemented executor operations;
+- the host validates and retains bounded shim evidence before reporting
+  success.
+
 The smokes do not yet verify:
 
-- the A3S guest agent or its pinned system image;
-- vsock, named-pipe transport, networking, or full process I/O;
+- a pinned immutable A3S system image;
+- networking or full process I/O;
 - OCI bundle validation or lifecycle commands;
 - single-container or shared-guest-kernel execution.
 
-The next Windows gate adds the static guest agent, negotiates a versioned
-protocol, mounts a protected runtime root, and runs a fixed local Alpine OCI
-bundle with an exact create/start barrier. Only that gate may promote WHPX
-readiness to `experimental`.
+The next Windows gate mounts a protected runtime-owned root and runs a fixed
+local Alpine OCI bundle through distinct create and start calls. Only that
+gate, plus its cleanup evidence, may promote WHPX readiness to `experimental`.
 
 ## Target Architecture
 
@@ -382,7 +415,7 @@ state, and cleanup.
 
 | Host | Execution path | Current state |
 | --- | --- | --- |
-| Windows x86_64 | libkrun + WHPX utility VM | Real guest command and virtiofs marker smoke pass; OCI guest agent/lifecycle pending; driver is `probe-only` |
+| Windows x86_64 | libkrun + WHPX utility VM | Real guest command and authenticated guest-agent bridge pass; OCI executor/lifecycle pending; driver is `probe-only` |
 | Linux x86_64/aarch64 without KVM | Native Linux executor | Required before `crun` removal; not implemented |
 | Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Planned after the shared executor contract |
 | macOS arm64 | libkrun + HVF utility VM | Planned after the shared executor contract |
@@ -442,12 +475,13 @@ crates/
 |   `-- RUNTIME-PROVENANCE.md
 |-- runtime/
 |   `-- src/
+|       |-- agent_smoke.rs # Authenticated host-to-guest WHPX evidence
 |       |-- platform/      # Windows WHPX and unsupported-host probes
-|       |-- report.rs      # Versioned WHPX smoke result
+|       |-- report.rs      # Versioned WHPX and agent-VM smoke results
 |       |-- service.rs     # Host implementation of the SDK contract
 |       `-- state/         # Durable records, generations, operation journals
 `-- cli/
-    |-- src/main.rs        # a3s-oci features and whpx-smoke
+    |-- src/main.rs        # Feature, WHPX, and guest-agent diagnostics
     `-- tests/cli.rs       # Public machine-readable CLI contract
 ```
 
@@ -488,6 +522,10 @@ cargo run -p a3s-oci-cli -- whpx-smoke
 cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
 cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- \
   vm-smoke --rootfs C:\path\to\rootfs --console C:\path\to\console.log
+cargo run -p a3s-oci-cli -- agent-vm-smoke \
+  --shim target\debug\a3s-oci-krun-shim.exe \
+  --rootfs C:\path\to\rootfs \
+  --console C:\path\to\new-console.log
 ```
 
 Cross-check the non-Windows capability path when the target is installed:

@@ -1,8 +1,13 @@
+use a3s_oci_agent_protocol::{AgentOperation, AGENT_PROTOCOL_VERSION_MAX};
 use a3s_oci_core::CapabilityStatus;
+use a3s_oci_core::HostPlatform;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Schema emitted by the WHPX smoke command.
 pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
+/// Schema emitted by the authenticated guest-agent VM smoke.
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v1";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,5 +75,107 @@ impl WhpxSmokeReport {
             && self.dll_loaded
             && self.hypervisor_present
             && self.partition_object_round_trip
+    }
+}
+
+/// End-to-end evidence from host pipe binding through guest-agent negotiation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentVmSmokeReport {
+    /// Version of this JSON-compatible schema.
+    pub schema_version: String,
+    /// Host on which the smoke was attempted.
+    pub platform: HostPlatform,
+    /// End-to-end availability of the diagnostic path.
+    pub status: CapabilityStatus,
+    /// Whether an exclusive, protected host endpoint was bound.
+    pub endpoint_bound: bool,
+    /// Whether the isolated libkrun shim process was started.
+    pub shim_spawned: bool,
+    /// Process ID used for named-pipe peer authentication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shim_process_id: Option<u32>,
+    /// Whether the connected pipe client matched the exact shim PID.
+    pub shim_client_verified: bool,
+    /// Whether token authentication and protocol negotiation succeeded.
+    pub protocol_negotiated: bool,
+    /// Selected guest-agent protocol version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_protocol: Option<u16>,
+    /// Version reported by the agent started at the fixed guest path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
+    /// Guest architecture reported during negotiation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guest_architecture: Option<String>,
+    /// Exact operations advertised by the guest.
+    pub advertised_operations: Vec<AgentOperation>,
+    /// Whether the shim's bounded machine-readable evidence was valid.
+    pub shim_report_verified: bool,
+    /// Exit code returned by the isolated shim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shim_exit_code: Option<i32>,
+    /// Whether libkrun created the requested guest console file.
+    pub console_created: bool,
+    /// Exact shim evidence retained without linking libkrun into the runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shim_report: Option<Value>,
+    /// Diagnostic reason when the smoke was not successful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl AgentVmSmokeReport {
+    pub(crate) fn initial(platform: HostPlatform) -> Self {
+        Self {
+            schema_version: AGENT_VM_SMOKE_SCHEMA_VERSION.to_string(),
+            platform,
+            status: CapabilityStatus::Unavailable,
+            endpoint_bound: false,
+            shim_spawned: false,
+            shim_process_id: None,
+            shim_client_verified: false,
+            protocol_negotiated: false,
+            selected_protocol: None,
+            agent_version: None,
+            guest_architecture: None,
+            advertised_operations: Vec::new(),
+            shim_report_verified: false,
+            shim_exit_code: None,
+            console_created: false,
+            shim_report: None,
+            reason: None,
+        }
+    }
+
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    pub(crate) fn unsupported(platform: HostPlatform) -> Self {
+        let mut report = Self::initial(platform);
+        report.status = CapabilityStatus::Unsupported;
+        report.reason = Some(
+            "the authenticated guest-agent VM smoke is implemented only for Windows x86_64/WHPX"
+                .into(),
+        );
+        report
+    }
+
+    /// Return whether host authentication, guest negotiation, and VM exit succeeded.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        matches!(self.status, CapabilityStatus::Available)
+            && self.endpoint_bound
+            && self.shim_spawned
+            && self
+                .shim_process_id
+                .is_some_and(|process_id| process_id != 0)
+            && self.shim_client_verified
+            && self.protocol_negotiated
+            && self.selected_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
+            && self.agent_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))
+            && self.guest_architecture.as_deref() == Some("x86_64")
+            && self.advertised_operations.is_empty()
+            && self.shim_report_verified
+            && self.shim_exit_code == Some(0)
+            && self.console_created
+            && self.shim_report.is_some()
     }
 }

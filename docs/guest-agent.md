@@ -38,7 +38,15 @@ cargo zigbuild -p a3s-oci-agent --release `
   --target x86_64-unknown-linux-musl
 ```
 
-The build alone does not prove WHPX transport. Promotion requires booting the
-artifact from the pinned guest image, completing negotiation through the real
-guest-vsock/libkrun/named-pipe path, and retaining host and guest cleanup
-evidence.
+The Windows `a3s-oci agent-vm-smoke` command now boots this artifact from a
+supplied Linux rootfs and proves the real
+guest-AF_VSOCK/libkrun/Windows-named-pipe path. The host binds first, starts
+the isolated shim, verifies the connected shim PID, sends the token, validates
+protocol-v1 negotiation, closes the connection, waits for zero guest/shim
+exit, and retains the bounded shim report.
+
+The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
+minirootfs plus the static agent at `/usr/bin/a3s-oci-agent`. This proves
+bootstrap and transport, not the immutable A3S system image, OCI lifecycle
+execution, complete process I/O, networking, recovery, or cleanup under fault
+injection. The WHPX driver therefore remains `probe-only`.

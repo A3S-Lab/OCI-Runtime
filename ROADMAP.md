@@ -44,6 +44,9 @@ Completed:
 - libkrun context create/configure/release smoke on Windows;
 - real WHPX VM entry, Linux userspace command, virtiofs marker, and natural
   exit-code smoke on Windows;
+- real WHPX guest-agent boot through AF_VSOCK and the protected Windows pipe,
+  with exact shim-PID authentication, protocol-v1 negotiation, and retained
+  host/shim evidence;
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
@@ -77,7 +80,7 @@ Not yet complete:
 
 - fault injection at every durable write and host/driver boundary;
 - descriptor-relative path resolution;
-- guest protocol and Linux executor;
+- guest OCI executor;
 - a production workload driver;
 - OCI hook execution;
 - OCI configuration enforcement;
@@ -164,8 +167,8 @@ and host/agent transition.
   connection retry, secret-zeroizing bootstrap, and static musl build.
 - [ ] Replace the diagnostic path with a protected runtime-owned share.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
-- [ ] Establish the named-pipe/vsock bridge.
-- [ ] Negotiate the guest protocol and retain boot evidence.
+- [x] Establish the named-pipe/vsock bridge.
+- [x] Negotiate the guest protocol and retain boot evidence.
 - [ ] Run a fixed init process through distinct OCI create and start calls.
 - [ ] Prove deterministic VM, handle, process, and filesystem cleanup.
 
