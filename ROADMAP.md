@@ -160,6 +160,8 @@ and host/agent transition.
   DACL, first-instance ownership, remote-client rejection, expected-shim PID
   verification, and authenticated protocol negotiation over a real named
   pipe.
+- [x] Implement the Linux negotiation-only guest binary, bounded AF_VSOCK
+  connection retry, secret-zeroizing bootstrap, and static musl build.
 - [ ] Replace the diagnostic path with a protected runtime-owned share.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [ ] Establish the named-pipe/vsock bridge.

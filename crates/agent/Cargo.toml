@@ -1,20 +1,24 @@
 [package]
-name = "a3s-oci-agent-protocol"
+name = "a3s-oci-agent"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Versioned host-to-guest protocol for A3S OCI Runtime"
+description = "Linux guest agent for A3S OCI Runtime"
+
+[[bin]]
+name = "a3s-oci-agent"
+path = "src/main.rs"
 
 [dependencies]
+a3s-oci-agent-protocol = { path = "../agent-protocol" }
 a3s-oci-sdk = { path = "../sdk" }
-async-trait.workspace = true
-getrandom.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 tokio.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [lints]
 workspace = true

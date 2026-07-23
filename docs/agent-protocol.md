@@ -77,6 +77,7 @@ guest. PID verification occurs before the host sends the session token. The
 endpoint type and fixed port 4093 are shared with the libkrun shim.
 
 This proves the protocol and the Windows host half of the bridge, not a guest
-vsock connection or Linux executor. The static guest-agent image, real
-vsock-to-pipe connection, bundle execution, process I/O, and recovery evidence
+vsock connection or Linux executor. The Linux agent binary and CID-host
+connector now build as a static musl executable, but the pinned image, real
+vsock-to-pipe boot test, bundle execution, process I/O, and recovery evidence
 remain required before the WHPX driver can advance beyond `probe-only`.

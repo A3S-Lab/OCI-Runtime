@@ -7,6 +7,7 @@ use a3s_oci_sdk::{
     Signal,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
@@ -16,6 +17,8 @@ pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 1;
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Required session-token entropy supplied by the host.
 pub const AGENT_SESSION_TOKEN_BYTES: usize = 32;
+/// Environment key used only for the protected guest bootstrap.
+pub const AGENT_SESSION_TOKEN_ENV: &str = "A3S_OCI_AGENT_SESSION_TOKEN";
 
 const MAX_GUEST_PATH_BYTES: usize = 4_096;
 const MAX_CAPABILITY_TEXT_BYTES: usize = 128;
@@ -25,7 +28,7 @@ const MAX_CAPABILITY_TEXT_BYTES: usize = 128;
 /// Debug formatting is deliberately redacted. The host must fill the 32-byte
 /// value from its operating-system CSPRNG and transfer it to the guest through
 /// a protected bootstrap channel.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct SessionToken([u8; AGENT_SESSION_TOKEN_BYTES]);
 
 impl SessionToken {
@@ -61,6 +64,45 @@ impl SessionToken {
         Ok(Self(bytes))
     }
 
+    /// Decode the exact bootstrap representation.
+    pub fn from_hex(encoded: &str) -> Result<Self> {
+        if encoded.len() != AGENT_SESSION_TOKEN_BYTES * 2
+            || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "agent session token must contain exactly 64 hexadecimal characters",
+            )
+            .for_operation("decode-agent-session-token"));
+        }
+        let mut bytes = [0_u8; AGENT_SESSION_TOKEN_BYTES];
+        for (index, slot) in bytes.iter_mut().enumerate() {
+            *slot =
+                u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16).map_err(|error| {
+                    Error::new(
+                        ErrorCode::InvalidArgument,
+                        format!("agent session token contains invalid hexadecimal: {error}"),
+                    )
+                    .for_operation("decode-agent-session-token")
+                })?;
+        }
+        Self::from_bytes(bytes)
+    }
+
+    /// Expose the token for one protected bootstrap environment entry.
+    ///
+    /// The returned string is secret, zeroizes on drop, and must not be logged
+    /// or persisted.
+    #[must_use]
+    pub fn expose_hex(&self) -> Zeroizing<String> {
+        let mut encoded = String::with_capacity(AGENT_SESSION_TOKEN_BYTES * 2);
+        for byte in self.0 {
+            use fmt::Write;
+            let _ = write!(&mut encoded, "{byte:02x}");
+        }
+        Zeroizing::new(encoded)
+    }
+
     /// Borrow the secret bytes for protected bootstrap transport.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; AGENT_SESSION_TOKEN_BYTES] {
@@ -89,12 +131,8 @@ impl Serialize for SessionToken {
     where
         S: Serializer,
     {
-        let mut encoded = String::with_capacity(AGENT_SESSION_TOKEN_BYTES * 2);
-        for byte in self.0 {
-            use fmt::Write;
-            write!(&mut encoded, "{byte:02x}").map_err(serde::ser::Error::custom)?;
-        }
-        serializer.serialize_str(&encoded)
+        let encoded = self.expose_hex();
+        serializer.serialize_str(encoded.as_str())
     }
 }
 
@@ -103,20 +141,8 @@ impl<'de> Deserialize<'de> for SessionToken {
     where
         D: Deserializer<'de>,
     {
-        let encoded = String::deserialize(deserializer)?;
-        if encoded.len() != AGENT_SESSION_TOKEN_BYTES * 2
-            || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err(de::Error::custom(
-                "agent session token must contain exactly 64 hexadecimal characters",
-            ));
-        }
-        let mut bytes = [0_u8; AGENT_SESSION_TOKEN_BYTES];
-        for (index, slot) in bytes.iter_mut().enumerate() {
-            *slot = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16)
-                .map_err(de::Error::custom)?;
-        }
-        Self::from_bytes(bytes).map_err(de::Error::custom)
+        let encoded = Zeroizing::new(String::deserialize(deserializer)?);
+        Self::from_hex(encoded.as_str()).map_err(de::Error::custom)
     }
 }
 

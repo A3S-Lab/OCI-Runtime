@@ -125,5 +125,13 @@ mod tests {
         let token = crate::SessionToken::generate().expect("operating-system random source");
         assert!(token.as_bytes().iter().any(|byte| *byte != 0));
         assert_eq!(format!("{token:?}"), "SessionToken([REDACTED])");
+        let encoded = token.expose_hex();
+        assert_eq!(encoded.len(), 64);
+        assert_eq!(
+            crate::SessionToken::from_hex(encoded.as_str()).expect("decode bootstrap token"),
+            token
+        );
+        assert!(crate::SessionToken::from_hex("00").is_err());
+        assert!(crate::SessionToken::from_hex(&"0".repeat(64)).is_err());
     }
 }

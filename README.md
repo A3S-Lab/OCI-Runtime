@@ -53,6 +53,9 @@ The project is experimental. The current Windows milestone implements:
   protocol for exact-generation create/state/start/kill/delete, with immutable
   `config.json` and digest preservation, response-barrier checks, and poisoned
   connection handling after protocol violations;
+- a static-musl-capable Linux guest binary that removes and zeroizes its
+  bootstrap token, connects to host CID 2 port 4093 over AF_VSOCK, and
+  truthfully advertises zero executor operations until the executor exists;
 - the complete pinned OCI Runtime Specification 1.3.0 schema and upstream
   fixture set, compiled into an offline validator for configuration, state,
   and feature documents;
@@ -429,11 +432,14 @@ crates/
 |       `-- validation.rs  # Fail-closed validation for every SDK request
 |-- agent-protocol/
 |   `-- src/               # Authenticated host/guest lifecycle protocol
+|-- agent/
+|   `-- src/               # Linux AF_VSOCK bootstrap and guest service
 |-- krun/
-|   |-- src/lib.rs         # Safe shim-local libkrun context and VM smoke boundary
+|   |-- src/
+|   |   |-- lib.rs         # Safe shim-local libkrun context and VM smoke boundary
+|   |   `-- main.rs        # Isolated a3s-oci-krun-shim process
 |   |-- build.rs           # Hash-verified native runtime extraction and staging
 |   `-- RUNTIME-PROVENANCE.md
-|   `-- src/main.rs        # Isolated a3s-oci-krun-shim process
 |-- runtime/
 |   `-- src/
 |       |-- platform/      # Windows WHPX and unsupported-host probes
@@ -445,8 +451,8 @@ crates/
     `-- tests/cli.rs       # Public machine-readable CLI contract
 ```
 
-Future `linux-executor` and `agent` crates will be added only when the native
-Linux implementation and static guest binary require those build boundaries.
+The future `linux-executor` crate will be added only when the shared native
+Linux implementation requires that compilation boundary.
 
 ## Development
 
@@ -567,9 +573,10 @@ never reported as available early. No built-in platform driver is promoted
 from `probe-only` yet.
 
 See [SDK Transport](docs/sdk-transport.md) for the Box-facing connection
-contract and platform examples, and
+contract and platform examples,
 [Guest Agent Protocol](docs/agent-protocol.md) for the utility-VM boundary,
-and
+[Guest Agent Bootstrap](docs/guest-agent.md) for the Linux binary and AF_VSOCK
+startup contract,
 [OCI Semantic Validation](docs/semantic-validation.md) for the current
 phase/rule boundary, and
 [Normative Coverage](docs/normative-coverage.md) for the generated
