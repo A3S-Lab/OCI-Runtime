@@ -407,6 +407,82 @@ pub(super) async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     sync_parent(parent).await
 }
 
+pub(super) async fn atomic_move_directory(source: &Path, destination: &Path) -> Result<()> {
+    ensure_plain_directory(source, "state transaction source").await?;
+    if path_exists(destination).await? {
+        return Err(state_error(
+            ErrorCode::Conflict,
+            "commit-state-directory",
+            format!(
+                "state transaction destination already exists: {}",
+                destination.display()
+            ),
+        ));
+    }
+    let source_parent = source.parent().ok_or_else(|| {
+        state_error(
+            ErrorCode::Internal,
+            "commit-state-directory",
+            format!("state source has no parent: {}", source.display()),
+        )
+    })?;
+    let destination_parent = destination.parent().ok_or_else(|| {
+        state_error(
+            ErrorCode::Internal,
+            "commit-state-directory",
+            format!("state destination has no parent: {}", destination.display()),
+        )
+    })?;
+    ensure_plain_directory(source_parent, "state transaction source parent").await?;
+    ensure_plain_directory(destination_parent, "state transaction destination parent").await?;
+    move_directory(source, destination).await?;
+    sync_parent(source_parent).await?;
+    if source_parent != destination_parent {
+        sync_parent(destination_parent).await?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn move_directory(source: &Path, destination: &Path) -> Result<()> {
+    tokio::fs::rename(source, destination)
+        .await
+        .map_err(|error| io_error("commit-state-directory", destination, error))
+}
+
+#[cfg(windows)]
+async fn move_directory(source: &Path, destination: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+
+    let source_wide = source
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both path buffers are live, immutable, and NUL-terminated.
+    let result = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(io_error(
+            "commit-state-directory",
+            destination,
+            io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 async fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
     tokio::fs::rename(source, destination)

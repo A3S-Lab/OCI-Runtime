@@ -1,13 +1,15 @@
 //! Cross-platform host orchestration and platform capability probing.
 
+mod driver;
 mod platform;
 mod report;
 mod service;
-// The store is intentionally compiled before lifecycle operations are
-// advertised so its crash and idempotency contract can be tested in isolation.
-#[allow(dead_code)]
 mod state;
 
+pub use driver::{
+    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
+    RuntimeDriver,
+};
 pub use report::WhpxSmokeReport;
 pub use service::HostRuntimeService;
 

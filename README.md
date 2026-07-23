@@ -64,11 +64,15 @@ The project is experimental. The current Windows milestone implements:
 - SDK request validation at the in-process client, IPC client, and
   authenticated server boundaries, including bounded event, output, and stdin
   payloads;
-- an internal single-writer durable-state foundation with atomic JSON
-  replacement, exact `config.json` snapshots, monotonic container
-  generations, generation fencing, a global idempotent create journal, and a
-  runtime-owned protected Windows DACL limited to that principal and
-  LocalSystem;
+- a single-writer durable core lifecycle with atomic JSON replacement, exact
+  `config.json` snapshots, monotonic generations, generation fencing, global
+  idempotent create/start/kill/delete journals, crash reconciliation, terminal
+  failure replay, and quarantine;
+- a public async `RuntimeDriver` integration boundary used by
+  `HostRuntimeService` to expose `create`, `state`, `start`, `kill`, and
+  `delete` only for an explicitly supplied launch-ready enforcing driver;
+- runtime-owned Windows state paths with protected DACLs limited to the
+  runtime principal and LocalSystem;
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
@@ -81,10 +85,12 @@ The project is experimental. The current Windows milestone implements:
 - the pure OCI `creating -> created -> running -> stopped` state contract;
 - Windows and Linux CI scaffolding.
 
-It does **not** yet boot the A3S guest agent or create, start, or execute an
-OCI container. The WHPX driver therefore reports `probe-only` readiness even
-when the host capability, partition-object, context, and guest-command smokes
-succeed.
+The durable host lifecycle and its driver-facing Rust API are implemented and
+tested with an injected conformance driver. The repository does **not** yet
+boot the A3S guest agent or execute an OCI bundle through a production driver.
+The built-in WHPX driver therefore reports `probe-only` readiness even when
+the host capability, partition-object, context, and guest-command smokes
+succeed, and the default host service advertises only `features`.
 
 See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
@@ -262,13 +268,19 @@ fn main() -> Result<(), TransitionError> {
 }
 ```
 
-The runtime now applies this transition contract to an internal durable
-`creating`/`created` record. It persists the exact accepted `config.json`,
-allocates monotonically increasing generations, fences stale reads, and
-replays create operations by global `OperationId`. Crash reconciliation,
-descriptor-relative traversal, the remaining transitions, and the driver/guest
-integration are still release gates, so lifecycle operations are not yet
-advertised.
+The runtime applies this transition contract to durable
+`creating`/`created`/`running`/`stopped` records. It persists the exact accepted
+`config.json`, allocates monotonically increasing generations, fences stale
+requests, and journals create, start, kill, and delete by global
+`OperationId`. Matching retries replay the exact result; retryable driver
+errors retain the active intent, terminal errors are replayed and release the
+container claim, and failed creates are quarantined.
+
+`HostRuntimeService::open` exposes the five core lifecycle operations only
+around a launch-ready `RuntimeDriver`. The built-in WHPX implementation does
+not yet provide that driver, so normal CLI/service discovery remains
+feature-only. Descriptor-relative traversal, hooks, the guest executor, and
+real platform lifecycle conformance remain release gates.
 
 See [Durable State](docs/durable-state.md) for the on-disk contract and its
 current recovery boundary.
@@ -413,7 +425,7 @@ crates/
 |       |-- platform/      # Windows WHPX and unsupported-host probes
 |       |-- report.rs      # Versioned WHPX smoke result
 |       |-- service.rs     # Host implementation of the SDK contract
-|       `-- state/         # Durable records, generations, and create journal
+|       `-- state/         # Durable records, generations, operation journals
 `-- cli/
     |-- src/main.rs        # a3s-oci features and whpx-smoke
     `-- tests/cli.rs       # Public machine-readable CLI contract
@@ -532,9 +544,13 @@ Its operation surface includes:
 - operation IDs, deadlines, typed container and process IDs, generation
   fencing, explicit isolation requirements, and stable error classes.
 
-Current host integration supports feature discovery through the SDK. Other
-methods deliberately return `unsupported` until their durable implementation
-and conformance tests land; they are never reported as available early.
+The default host integration supports feature discovery and deliberately
+returns `unsupported` for workload calls. Runtime integrators construct
+`HostRuntimeService::open` with a launch-ready, isolation-enforcing
+`RuntimeDriver`; that configured service exposes durable `create`, `state`,
+`start`, `kill`, and `delete`. Remaining SDK methods stay unsupported and are
+never reported as available early. No built-in platform driver is promoted
+from `probe-only` yet.
 
 See [SDK Transport](docs/sdk-transport.md) for the Box-facing connection
 contract and platform examples, and

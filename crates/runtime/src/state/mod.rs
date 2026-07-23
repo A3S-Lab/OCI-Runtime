@@ -1,7 +1,13 @@
 mod create;
+mod delete;
+mod failure;
 mod filesystem;
+mod kill;
 mod model;
+mod observe;
 mod oci_state;
+mod operation;
+mod start;
 #[cfg(windows)]
 mod windows_security;
 
@@ -16,7 +22,7 @@ use a3s_oci_sdk::{
 };
 use tokio::sync::Mutex;
 
-use create::{create_request_digest, validate_create_retry, validate_deadline};
+use create::{create_request_digest, validate_create_retry};
 use filesystem::{
     atomic_write, atomic_write_json, create_private_directory, ensure_plain_directory, path_exists,
     read_json, read_utf8, state_error, RootLock,
@@ -26,19 +32,31 @@ use model::{
     CONTAINER_SCHEMA_VERSION, GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION,
 };
 use oci_state::{build_state, container_state, rebuild_state};
+use operation::validate_deadline;
 
 const CONTAINER_RECORD_FILE: &str = "record.json";
 const CONFIG_SNAPSHOT_FILE: &str = "config.json";
 
-/// Result of preparing an idempotent OCI create operation.
+/// Result of preparing an idempotent operation that returns container state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CreatePreparation {
-    /// This call durably created a new operation intent and `creating` record.
+pub(crate) enum RecordOperationPreparation {
+    /// This call durably created a new operation intent.
     Prepared(ContainerRecord),
     /// A matching operation intent exists and requires driver reconciliation.
     Resume(ContainerRecord),
     /// A matching operation already completed; this is its exact response.
     Replayed(ContainerRecord),
+}
+
+/// Result of preparing an idempotent OCI delete operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeletePreparation {
+    /// This call durably created a new delete intent.
+    Prepared(ContainerRecord),
+    /// A matching delete intent requires driver reconciliation.
+    Resume(ContainerRecord),
+    /// A matching delete already completed.
+    Replayed,
 }
 
 /// Single-writer durable lifecycle store.
@@ -60,6 +78,7 @@ impl DurableStateStore {
         })
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn root(&self) -> &Path {
         self.root.as_ref()
@@ -70,9 +89,8 @@ impl DurableStateStore {
         &self,
         request: &CreateRequest,
         driver: DriverKind,
-    ) -> Result<CreatePreparation> {
+    ) -> Result<RecordOperationPreparation> {
         request.validate()?;
-        validate_deadline(request)?;
         let request_digest = create_request_digest(request)?;
         let _guard = self.gate.lock().await;
 
@@ -81,16 +99,38 @@ impl DurableStateStore {
             .await?
         {
             validate_create_retry(&operation, request, &request_digest)?;
-            let record = self
-                .load_record_exact(&operation.container_id, operation.generation)
-                .await?;
-            return match operation.outcome {
-                StoredOperationStatus::Prepared => Ok(CreatePreparation::Resume(record)),
-                StoredOperationStatus::Succeeded { response } => {
-                    Ok(CreatePreparation::Replayed(response))
+            return match &operation.outcome {
+                StoredOperationStatus::Prepared => {
+                    let mut stored = self
+                        .reconcile_prepared_create(request, driver, operation.generation)
+                        .await?;
+                    claim_active_operation(
+                        self,
+                        &mut stored,
+                        &request.context.operation_id,
+                        "prepare-create",
+                    )
+                    .await?;
+                    Ok(RecordOperationPreparation::Resume(stored.record))
                 }
+                StoredOperationStatus::Succeeded { response } => {
+                    Ok(RecordOperationPreparation::Replayed(response.clone()))
+                }
+                StoredOperationStatus::Failed { error } => {
+                    self.reconcile_failed_create(&operation).await?;
+                    Err(error.clone())
+                }
+                StoredOperationStatus::SucceededEmpty => Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    "prepare-create",
+                    format!(
+                        "create operation {} has an invalid empty outcome",
+                        request.context.operation_id
+                    ),
+                )),
             };
         }
+        validate_deadline(&request.context, "prepare-create")?;
 
         let container_directory = self.container_directory(&request.id);
         if path_exists(&container_directory).await? {
@@ -117,12 +157,62 @@ impl DurableStateStore {
         )
         .await?;
 
-        create_private_directory(&container_directory).await?;
-        atomic_write(
-            &container_directory.join(CONFIG_SNAPSHOT_FILE),
-            request.bundle.config_bytes(),
-        )
-        .await?;
+        let stored = self
+            .reconcile_prepared_create(request, driver, generation)
+            .await?;
+        let record = stored.record;
+        Ok(RecordOperationPreparation::Prepared(record))
+    }
+
+    async fn reconcile_prepared_create(
+        &self,
+        request: &CreateRequest,
+        driver: DriverKind,
+        generation: Generation,
+    ) -> Result<StoredContainer> {
+        let container_directory = self.container_directory(&request.id);
+        if path_exists(&container_directory).await? {
+            ensure_plain_directory(&container_directory, "container state directory").await?;
+            filesystem::set_private_directory_permissions(&container_directory).await?;
+        } else {
+            create_private_directory(&container_directory).await?;
+        }
+
+        let config_path = container_directory.join(CONFIG_SNAPSHOT_FILE);
+        if path_exists(&config_path).await? {
+            let durable_config = read_utf8(&config_path).await?;
+            if durable_config.as_bytes() != request.bundle.config_bytes() {
+                return Err(state_error(
+                    ErrorCode::Conflict,
+                    "reconcile-create",
+                    format!(
+                        "container {} configuration snapshot differs from its create request",
+                        request.id
+                    ),
+                ));
+            }
+        } else {
+            atomic_write(&config_path, request.bundle.config_bytes()).await?;
+        }
+
+        let record_path = container_directory.join(CONTAINER_RECORD_FILE);
+        if path_exists(&record_path).await? {
+            let stored = self.load_stored_exact(&request.id, generation).await?;
+            if stored.record.driver != driver
+                || stored.record.isolation != request.isolation.class()
+                || stored.record.config_digest != request.bundle.config_digest()
+            {
+                return Err(state_error(
+                    ErrorCode::Conflict,
+                    "reconcile-create",
+                    format!(
+                        "container {} durable record differs from its create request",
+                        request.id
+                    ),
+                ));
+            }
+            return Ok(stored);
+        }
 
         let state = build_state(&request.id, &request.bundle, ContainerState::Creating, None)?;
         let record = ContainerRecord {
@@ -135,10 +225,11 @@ impl DurableStateStore {
         let stored = StoredContainer {
             schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
             id: request.id.clone(),
-            record: record.clone(),
+            record,
+            active_operation: Some(request.context.operation_id.clone()),
         };
-        atomic_write_json(&container_directory.join(CONTAINER_RECORD_FILE), &stored).await?;
-        Ok(CreatePreparation::Prepared(record))
+        atomic_write_json(&record_path, &stored).await?;
+        Ok(stored)
     }
 
     /// Commit driver create completion with the prepared init-process PID.
@@ -163,8 +254,17 @@ impl DurableStateStore {
                 format!("operation {operation_id} is not an OCI create"),
             ));
         }
-        if let StoredOperationStatus::Succeeded { response } = &operation.outcome {
-            return Ok(response.clone());
+        match &operation.outcome {
+            StoredOperationStatus::Prepared => {}
+            StoredOperationStatus::Succeeded { response } => return Ok(response.clone()),
+            StoredOperationStatus::Failed { error } => return Err(error.clone()),
+            StoredOperationStatus::SucceededEmpty => {
+                return Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    "complete-create",
+                    format!("create operation {operation_id} has an invalid empty outcome"),
+                ));
+            }
         }
 
         let mut stored = self.load_stored_container(&operation.container_id).await?;
@@ -191,13 +291,6 @@ impl DurableStateStore {
                 let status = container_state(lifecycle);
                 stored.record.state = rebuild_state(&stored.record.state, status, Some(pid))?;
                 OciSchemaValidator::new()?.validate_state(&stored.record.state)?;
-                atomic_write_json(
-                    &self
-                        .container_directory(&operation.container_id)
-                        .join(CONTAINER_RECORD_FILE),
-                    &stored,
-                )
-                .await?;
             }
             ContainerState::Created if *stored.record.state.pid() == Some(pid) => {}
             ContainerState::Created => {
@@ -223,6 +316,15 @@ impl DurableStateStore {
             }
         }
 
+        ensure_active_operation(&stored, operation_id, "complete-create")?;
+        stored.active_operation = None;
+        atomic_write_json(
+            &self
+                .container_directory(&operation.container_id)
+                .join(CONTAINER_RECORD_FILE),
+            &stored,
+        )
+        .await?;
         let response = stored.record.clone();
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
@@ -333,11 +435,11 @@ impl DurableStateStore {
         Ok(operation)
     }
 
-    async fn load_record_exact(
+    async fn load_stored_exact(
         &self,
         id: &ContainerId,
         generation: Generation,
-    ) -> Result<ContainerRecord> {
+    ) -> Result<StoredContainer> {
         let stored = self.load_stored_container(id).await.map_err(|error| {
             if error.code == ErrorCode::NotFound {
                 state_error(
@@ -361,7 +463,7 @@ impl DurableStateStore {
                 "reconcile-operation",
             ));
         }
-        Ok(stored.record)
+        Ok(stored)
     }
 
     async fn load_stored_container(&self, id: &ContainerId) -> Result<StoredContainer> {
@@ -439,6 +541,12 @@ impl DurableStateStore {
             .join("operations")
             .join(format!("{}.json", id.as_str()))
     }
+
+    fn failed_create_tombstone(&self, operation_id: &OperationId) -> PathBuf {
+        self.root
+            .join("quarantine")
+            .join(format!("{}.failed-create", operation_id.as_str()))
+    }
 }
 
 fn generation_conflict(
@@ -455,6 +563,54 @@ fn generation_conflict(
             expected.0, actual.0
         ),
     )
+}
+
+fn ensure_active_operation(
+    stored: &StoredContainer,
+    operation_id: &OperationId,
+    operation: &'static str,
+) -> Result<()> {
+    match stored.active_operation.as_ref() {
+        Some(active) if active == operation_id => Ok(()),
+        Some(active) => Err(state_error(
+            ErrorCode::Conflict,
+            operation,
+            format!(
+                "container {} is owned by active operation {active}, not {operation_id}",
+                stored.id
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
+async fn claim_active_operation(
+    store: &DurableStateStore,
+    stored: &mut StoredContainer,
+    operation_id: &OperationId,
+    operation: &'static str,
+) -> Result<()> {
+    match stored.active_operation.as_ref() {
+        Some(active) if active == operation_id => return Ok(()),
+        Some(active) => {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                operation,
+                format!(
+                    "container {} already has active operation {active}",
+                    stored.id
+                ),
+            ));
+        }
+        None => stored.active_operation = Some(operation_id.clone()),
+    }
+    atomic_write_json(
+        &store
+            .container_directory(&stored.id)
+            .join(CONTAINER_RECORD_FILE),
+        stored,
+    )
+    .await
 }
 
 #[cfg(test)]

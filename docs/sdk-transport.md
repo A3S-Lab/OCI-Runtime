@@ -61,6 +61,13 @@ The platform-specific constructors are compiled only on their corresponding
 targets. Callers can also create `RuntimeTransportClient::from_io` over an
 already authenticated async byte stream.
 
+For an in-process host integration, A3S Box can wrap
+`HostRuntimeService::open(state_root, driver)` in `RuntimeClient`. The
+`RuntimeDriver` trait receives exact-generation requests and the immutable
+durable bundle at both create and start. Its mutating methods are async,
+`Send + Sync`, and idempotent by `OperationId`. Platform resources and guest
+protocol types remain behind that boundary.
+
 ## Runtime Server
 
 Listener creation and access control belong to the runtime process because

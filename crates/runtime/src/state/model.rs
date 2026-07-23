@@ -1,4 +1,4 @@
-use a3s_oci_sdk::{ContainerId, ContainerRecord, Generation, OperationId};
+use a3s_oci_sdk::{ContainerId, ContainerRecord, Error, Generation, OperationId};
 use serde::{Deserialize, Serialize};
 
 pub(super) const ROOT_SCHEMA_VERSION: &str = "a3s.oci.runtime-root.v1";
@@ -34,12 +34,17 @@ pub(super) struct StoredContainer {
     pub schema_version: String,
     pub id: ContainerId,
     pub record: ContainerRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_operation: Option<OperationId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum StoredOperationKind {
     Create,
+    Start,
+    Kill,
+    Delete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +52,8 @@ pub(super) enum StoredOperationKind {
 pub(super) enum StoredOperationStatus {
     Prepared,
     Succeeded { response: ContainerRecord },
+    SucceededEmpty,
+    Failed { error: Error },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

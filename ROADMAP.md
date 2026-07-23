@@ -60,9 +60,12 @@ Completed:
 - version-negotiated, length-delimited transport for every SDK operation;
 - tested Windows named-pipe and Unix-domain-socket client connectors;
 - existing `features` CLI path routed through the Rust SDK;
-- internal single-writer durable state with atomic creating/created records,
-  exact bundle snapshots, monotonic generations, generation fencing, and a
-  global idempotent create journal;
+- single-writer durable state for the complete core lifecycle, with exact
+  bundle snapshots, monotonic generations, generation fencing, global
+  idempotent create/start/kill/delete journals, active-operation claims,
+  terminal failure replay, crash reconciliation, and quarantine;
+- async `RuntimeDriver` integration plus a tested host implementation of
+  `create`, `state`, `start`, `kill`, and `delete`;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -70,18 +73,19 @@ Completed:
 
 Not yet complete:
 
-- crash reconciliation and the complete durable lifecycle;
+- fault injection at every durable write and host/driver boundary;
 - descriptor-relative path resolution;
 - guest protocol and Linux executor;
-- any workload lifecycle operation;
+- a production workload driver;
 - OCI hook execution;
 - OCI configuration enforcement;
 - native Linux execution;
 - A3S Box migration;
 - upstream conformance and security certification.
 
-The WHPX driver remains `probe-only`, and the host service advertises only the
-`features` operation.
+The built-in WHPX driver remains `probe-only`, and the default host service
+advertises only `features`. A host explicitly opened around a launch-ready
+`RuntimeDriver` advertises the five durable core lifecycle operations.
 
 ## Delivery Sequence
 
@@ -119,11 +123,15 @@ enforce it. No property is silently ignored.
 - [x] Add atomic creating/created records with exact configuration snapshots
   and monotonically increasing generations.
 - [x] Add a global idempotent create journal keyed by `OperationId`.
-- [ ] Extend the operation journal to every mutating lifecycle and process
-  request.
-- [ ] Crash reconciliation and quarantine for ambiguous state.
-- [ ] Implement `create`, `state`, `start`, `kill`, and `delete`.
-- [ ] Preserve an exact create/start barrier.
+- [x] Extend the operation journal to start, kill, and delete.
+- [ ] Extend idempotent journals to every remaining process mutation.
+- [x] Reconcile interrupted core lifecycle operations and quarantine failed
+  create/delete state.
+- [x] Implement driver-independent `create`, `state`, `start`, `kill`, and
+  `delete` host orchestration.
+- [x] Preserve the exact create/start barrier in the durable host/driver
+  contract.
+- [ ] Verify the barrier against the real Linux guest executor.
 - [ ] Implement all OCI hook phases and error behavior.
 - [ ] Implement `run` as a client composition, not a second lifecycle.
 

@@ -43,7 +43,7 @@ impl LifecycleState {
         match (self, event) {
             (Self::Creating, LifecycleEvent::CreateCompleted) => Ok(Self::Created),
             (Self::Created, LifecycleEvent::StartCompleted) => Ok(Self::Running),
-            (Self::Running, LifecycleEvent::ProcessExited) => Ok(Self::Stopped),
+            (Self::Created | Self::Running, LifecycleEvent::ProcessExited) => Ok(Self::Stopped),
             (state, event) => Err(TransitionError { state, event }),
         }
     }
@@ -74,6 +74,15 @@ mod tests {
 
         assert_eq!(error.state, LifecycleState::Creating);
         assert_eq!(error.event, LifecycleEvent::StartCompleted);
+    }
+
+    #[test]
+    fn prepared_init_can_be_killed_before_start() {
+        let stopped = LifecycleState::Created
+            .transition(LifecycleEvent::ProcessExited)
+            .expect("a created init process can exit after an OCI kill");
+
+        assert_eq!(stopped, LifecycleState::Stopped);
     }
 
     #[test]
