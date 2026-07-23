@@ -35,7 +35,9 @@ After negotiation:
 
 Protocol version 1 carries `create`, `state`, `start`, `kill`, and `delete`.
 Every target includes a positive exact generation. Mutating guest operations
-must be idempotent by `OperationId` and recoverable after agent restart.
+must be idempotent by `OperationId`. Production promotion also requires
+recovery after an agent or host restart; the current bootstrap executor keeps
+only session-local replay state.
 
 ## Bundle Preservation
 
@@ -77,10 +79,18 @@ PID verification occurs before the host sends the session token.
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
 pipe, authenticates the token, negotiates protocol version 1, and retains
-bounded host and shim evidence. The current guest correctly advertises no
-operations.
+bounded host and shim evidence. The current guest must advertise the exact
+five core operations.
 
-This proves bootstrap and the complete transport path, not the Linux OCI
-executor. A pinned immutable system image, bundle execution, process I/O,
-recovery, fault cleanup, and lifecycle evidence remain required before the
-WHPX driver can advance beyond `probe-only`.
+The real WHPX `oci-vm-smoke` keeps the same authenticated connection open and
+proves a fixed bundle through create, state, exact create replay, start,
+stopped observation, stopped-only delete, exact delete replay, and a final
+NotFound state query. A marker proves that the workload did not run before
+start and did run afterward. The host also verifies marker removal and that VM
+shutdown leaves no new guest-agent runtime directory.
+
+This is the first Linux executor vertical slice, not complete OCI
+enforcement. A pinned immutable system image, complete process I/O,
+namespaces, mounts, resources, hooks, recovery, negative isolation cases,
+fault cleanup, and full lifecycle evidence remain required before the WHPX
+driver can advance beyond `probe-only`.

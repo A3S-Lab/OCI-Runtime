@@ -31,10 +31,12 @@ The runtime:
    through libkrun to the protected pipe, authenticates the exact shim PID and
    one-time token, negotiates protocol version 1, and waits for zero
    guest/shim exit;
-10. emits stable JSON evidence through `a3s-oci features`,
+10. runs a fixed OCI bundle through distinct create and start calls, verifies
+    lifecycle replay and cleanup, and keeps the built-in driver disabled;
+11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
-   `a3s-oci agent-vm-smoke`.
+   `a3s-oci agent-vm-smoke` and `a3s-oci oci-vm-smoke`.
 
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
@@ -71,7 +73,7 @@ The real Windows host-pipe test additionally proves that:
 - an unexpected connected process is rejected before the session token is
   written;
 - protocol version negotiation and token authentication succeed over the
-  protected pipe without advertising unimplemented executor operations.
+  protected pipe with the exact core operation advertisement.
 
 A successful libkrun VM smoke additionally proves that:
 
@@ -92,10 +94,26 @@ A successful end-to-end agent VM smoke additionally proves that:
 - the real guest authenticates the one-time token and negotiates protocol
   version 1;
 - the agent version and `x86_64` guest architecture are reported;
-- the negotiation-only guest advertises no OCI executor operations;
+- the guest advertises exactly create, state, start, kill, and delete;
 - the shim reports every VM configuration stage and a zero guest exit;
 - the host rejects an existing console destination rather than overwriting
   it.
+
+A successful fixed OCI VM smoke additionally proves that:
+
+- the accepted bundle is a strict descendant of the supplied VM rootfs;
+- create returns `created` and a positive guest PID without running the
+  configured process;
+- state and an exact create retry match the original result;
+- start releases a randomly named abstract Unix socket only after the parent
+  verifies the exact init-wrapper PID;
+- the wrapper applies the accepted rootfs, credentials, umask, and
+  `no_new_privileges`, then calls `execve`;
+- the host observes `stopped` and the exact workload marker;
+- stopped-only delete and its exact retry succeed;
+- state returns NotFound after delete;
+- the marker is removed and VM shutdown leaves no new agent runtime directory
+  or A3S process.
 
 The July 24, 2026 qualification used the untouched Alpine 3.22.5 x86_64
 minirootfs archive with SHA-256
@@ -103,12 +121,16 @@ minirootfs archive with SHA-256
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
 
-The end-to-end bridge qualification used the 5,824,440-byte static musl agent
+The fixed OCI lifecycle qualification used the 6,285,448-byte static musl agent
 with SHA-256
-`b1e4cf22b0e9483b97f07f2f9063df950dbbf0ccdd4c10624e76ee61cbbbebb3`.
-Its host report selected protocol version 1, identified the guest as
-`x86_64`, retained the complete successful shim report, and returned exit
-status zero.
+`7f8c3d19d0cbe3ab70abb0215bcc9bdb8ed3b9f2fba9e31e8e508dc43841ecde`.
+Its report selected protocol version 1, identified the guest as `x86_64`,
+verified every fixed lifecycle field, retained the complete successful shim
+report, and returned exit status zero.
+
+A companion real-WHPX negative run added an otherwise valid `proc` mount.
+Create returned `Unsupported` for `config.mounts` before starting a process,
+and the report still verified marker and guest-runtime cleanup.
 
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
@@ -118,11 +140,12 @@ The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
 - networking or complete process I/O works;
-- OCI create/start ordering is implemented;
-- one or multiple Linux containers can execute;
+- namespaces, mounts, resources, capabilities, seccomp, or hooks work;
+- restart recovery, concurrent containers, or shared-guest-kernel isolation
+  work;
 - the driver is production ready.
 
-For that reason, driver readiness remains `probe-only` even after both smokes
+For that reason, driver readiness remains `probe-only` even after all smokes
 succeed. Driver resolution must reject `probe-only` readiness rather than
 silently treating host capability as runtime support.
 
@@ -132,11 +155,11 @@ The next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
-3. implement the guest Linux executor;
-4. execute a fixed local Alpine OCI bundle with an exact create/start barrier;
-5. return stdout, stderr, and the natural exit code;
-6. reconcile stopped state after host runtime restart;
-7. leave no process, handle, endpoint, or temporary state after delete.
+3. add namespace, mount, capability, resource, seccomp, and hook enforcement;
+4. return stdout, stderr, and the natural exit code;
+5. reconcile stopped state after host runtime restart;
+6. add concurrent-container and negative isolation evidence;
+7. prove cleanup under fault injection and repeated soak runs.
 
 Only completion of that gate may promote Windows driver readiness to
 `experimental`.

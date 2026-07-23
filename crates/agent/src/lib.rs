@@ -11,10 +11,27 @@ use a3s_oci_sdk::{async_trait, Error, ErrorCode, Result};
 use zeroize::Zeroizing;
 
 #[cfg(target_os = "linux")]
+mod executor;
+#[cfg(target_os = "linux")]
 mod vsock;
 
 /// Guest implementation version sent during protocol negotiation.
 pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Run the internal prepared-init mode when selected by the guest executor.
+///
+/// Normal guest-agent startup returns `None`; the internal child mode returns
+/// its terminal result and must not attempt host protocol bootstrap.
+#[cfg(target_os = "linux")]
+pub fn run_internal_container_init() -> Option<Result<()>> {
+    executor::run_container_init_if_requested()
+}
+
+/// Non-Linux builds never enter the internal Linux init mode.
+#[cfg(not(target_os = "linux"))]
+pub const fn run_internal_container_init() -> Option<Result<()>> {
+    None
+}
 
 /// Guest service that proves transport bootstrap without claiming execution.
 #[derive(Debug)]
@@ -77,13 +94,13 @@ pub fn take_session_token_from_environment() -> Result<SessionToken> {
     })
 }
 
-/// Connect to the host bridge and serve negotiation-only protocol version 1.
+/// Connect to the host bridge and serve the fail-closed Linux executor.
 #[cfg(target_os = "linux")]
 pub fn run(token: SessionToken) -> Result<()> {
-    let service = Arc::new(NegotiationOnlyAgent::new()?);
     let stream = vsock::connect_host_with_retry()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
+        .enable_time()
         .build()
         .map_err(|error| {
             Error::new(
@@ -100,7 +117,22 @@ pub fn run(token: SessionToken) -> Result<()> {
             )
             .for_operation("run-guest-agent")
         })?;
-        a3s_oci_agent_protocol::serve_agent_connection(stream, token, service).await
+        let service = Arc::new(executor::LinuxExecutorAgent::new().await?);
+        let protocol_service: Arc<dyn GuestAgentService> = service.clone();
+        let serve_result =
+            a3s_oci_agent_protocol::serve_agent_connection(stream, token, protocol_service).await;
+        let cleanup_result = service.shutdown().await;
+        match (serve_result, cleanup_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(cleanup)) => Err(Error::new(
+                error.code,
+                format!("{error}; guest executor cleanup also failed: {cleanup}"),
+            )
+            .for_operation("run-guest-agent")
+            .retryable(error.retryable)),
+        }
     })
 }
 

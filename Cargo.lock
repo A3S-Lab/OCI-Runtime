@@ -22,6 +22,9 @@ dependencies = [
  "a3s-oci-agent-protocol",
  "a3s-oci-sdk",
  "libc",
+ "serde",
+ "serde_json",
+ "sha2",
  "tokio",
  "zeroize",
 ]

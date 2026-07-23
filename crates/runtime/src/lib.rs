@@ -2,10 +2,13 @@
 
 #[cfg(windows)]
 mod agent_pipe;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod agent_session;
 mod agent_smoke;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod agent_smoke_process;
 mod driver;
+mod oci_smoke;
 mod platform;
 mod report;
 mod service;
@@ -20,7 +23,8 @@ pub use driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
     RuntimeDriver,
 };
-pub use report::{AgentVmSmokeReport, WhpxSmokeReport};
+pub use oci_smoke::oci_vm_smoke;
+pub use report::{AgentVmSmokeReport, OciVmSmokeReport, WhpxSmokeReport};
 pub use service::HostRuntimeService;
 
 use a3s_oci_core::RuntimeFeatures;

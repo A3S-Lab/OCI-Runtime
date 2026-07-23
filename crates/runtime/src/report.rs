@@ -8,6 +8,8 @@ use serde_json::Value;
 pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
 pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v1";
+/// Schema emitted by the fixed OCI create/start utility-VM smoke.
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v1";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +72,7 @@ impl WhpxSmokeReport {
 
     /// Return whether every smoke step succeeded.
     #[must_use]
-    pub const fn is_success(&self) -> bool {
+    pub fn is_success(&self) -> bool {
         matches!(self.status, CapabilityStatus::Available)
             && self.dll_loaded
             && self.hypervisor_present
@@ -172,10 +174,114 @@ impl AgentVmSmokeReport {
             && self.selected_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
             && self.agent_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))
             && self.guest_architecture.as_deref() == Some("x86_64")
-            && self.advertised_operations.is_empty()
+            && self.advertised_operations
+                == [
+                    AgentOperation::Create,
+                    AgentOperation::State,
+                    AgentOperation::Start,
+                    AgentOperation::Kill,
+                    AgentOperation::Delete,
+                ]
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)
             && self.console_created
             && self.shim_report.is_some()
+    }
+}
+
+/// End-to-end evidence for the first real OCI create/start barrier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OciVmSmokeReport {
+    /// Version of this JSON-compatible schema.
+    pub schema_version: String,
+    /// Host on which the smoke was attempted.
+    pub platform: HostPlatform,
+    /// End-to-end availability of this diagnostic path.
+    pub status: CapabilityStatus,
+    /// Whether the host loaded and validated the submitted OCI bundle.
+    pub bundle_loaded: bool,
+    /// Whether create returned the exact OCI `created` barrier.
+    pub create_returned_created: bool,
+    /// Whether retrying create replayed its exact original result.
+    pub create_replayed: bool,
+    /// Guest init-wrapper PID returned while the container was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_pid: Option<i32>,
+    /// Whether the workload marker remained absent before start.
+    pub marker_absent_after_create: bool,
+    /// Whether start released the prepared init wrapper.
+    pub start_released: bool,
+    /// Whether state eventually reported the workload stopped.
+    pub stopped_observed: bool,
+    /// Whether the workload produced the exact expected marker.
+    pub marker_verified: bool,
+    /// Whether stopped-only delete succeeded.
+    pub delete_succeeded: bool,
+    /// Whether retrying delete replayed its exact success.
+    pub delete_replayed: bool,
+    /// Whether state returned `not-found` after delete.
+    pub state_missing_after_delete: bool,
+    /// Whether the host removed the known marker.
+    pub marker_removed: bool,
+    /// Whether VM shutdown left no new guest-agent runtime directory.
+    pub guest_runtime_clean: bool,
+    /// Nested authenticated host/guest and shim evidence.
+    pub bridge: AgentVmSmokeReport,
+    /// Diagnostic reason when the smoke was not successful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl OciVmSmokeReport {
+    pub(crate) fn initial(platform: HostPlatform) -> Self {
+        Self {
+            schema_version: OCI_VM_SMOKE_SCHEMA_VERSION.to_string(),
+            platform,
+            status: CapabilityStatus::Unavailable,
+            bundle_loaded: false,
+            create_returned_created: false,
+            create_replayed: false,
+            created_pid: None,
+            marker_absent_after_create: false,
+            start_released: false,
+            stopped_observed: false,
+            marker_verified: false,
+            delete_succeeded: false,
+            delete_replayed: false,
+            state_missing_after_delete: false,
+            marker_removed: false,
+            guest_runtime_clean: false,
+            bridge: AgentVmSmokeReport::initial(platform),
+            reason: None,
+        }
+    }
+
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    pub(crate) fn unsupported(platform: HostPlatform) -> Self {
+        let mut report = Self::initial(platform);
+        report.status = CapabilityStatus::Unsupported;
+        report.bridge = AgentVmSmokeReport::unsupported(platform);
+        report.reason =
+            Some("the fixed OCI VM smoke is implemented only for Windows x86_64/WHPX".into());
+        report
+    }
+
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        matches!(self.status, CapabilityStatus::Available)
+            && self.bundle_loaded
+            && self.create_returned_created
+            && self.create_replayed
+            && self.created_pid.is_some_and(|pid| pid > 0)
+            && self.marker_absent_after_create
+            && self.start_released
+            && self.stopped_observed
+            && self.marker_verified
+            && self.delete_succeeded
+            && self.delete_replayed
+            && self.state_missing_after_delete
+            && self.marker_removed
+            && self.guest_runtime_clean
+            && self.bridge.is_success()
     }
 }

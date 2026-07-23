@@ -32,6 +32,21 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
     },
+    /// Run a fixed OCI create/start lifecycle inside one WHPX utility VM.
+    OciVmSmoke {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// OCI bundle contained by the VM root filesystem.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// New host file that receives the guest console stream.
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -77,6 +92,21 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             console,
         } => {
             let report = a3s_oci_runtime::agent_vm_smoke(&shim, &rootfs, &console).await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::OciVmSmoke {
+            shim,
+            vm_rootfs,
+            bundle,
+            console,
+        } => {
+            let report = a3s_oci_runtime::oci_vm_smoke(&shim, &vm_rootfs, &bundle, &console).await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

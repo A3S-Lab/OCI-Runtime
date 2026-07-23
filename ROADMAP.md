@@ -47,6 +47,12 @@ Completed:
 - real WHPX guest-agent boot through AF_VSOCK and the protected Windows pipe,
   with exact shim-PID authentication, protocol-v1 negotiation, and retained
   host/shim evidence;
+- root-only Linux guest bootstrap executor for an exact fail-closed OCI
+  profile, with a PID-authenticated abstract Unix create/start barrier,
+  exact-generation state, session idempotency, signaling, and cleanup;
+- real WHPX fixed-bundle create/state/start/delete evidence, including exact
+  retries, pre-start non-execution, stopped observation, marker verification,
+  post-delete NotFound, and nominal leak checks;
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
@@ -80,7 +86,7 @@ Not yet complete:
 
 - fault injection at every durable write and host/driver boundary;
 - descriptor-relative path resolution;
-- guest OCI executor;
+- complete shared guest OCI executor;
 - a production workload driver;
 - OCI hook execution;
 - OCI configuration enforcement;
@@ -136,7 +142,7 @@ enforce it. No property is silently ignored.
   `delete` host orchestration.
 - [x] Preserve the exact create/start barrier in the durable host/driver
   contract.
-- [ ] Verify the barrier against the real Linux guest executor.
+- [x] Verify the barrier against the real Linux guest bootstrap executor.
 - [ ] Implement all OCI hook phases and error behavior.
 - [ ] Implement `run` as a client composition, not a second lifecycle.
 
@@ -163,13 +169,15 @@ and host/agent transition.
   DACL, first-instance ownership, remote-client rejection, expected-shim PID
   verification, and authenticated protocol negotiation over a real named
   pipe.
-- [x] Implement the Linux negotiation-only guest binary, bounded AF_VSOCK
-  connection retry, secret-zeroizing bootstrap, and static musl build.
+- [x] Implement the Linux guest binary, bounded AF_VSOCK connection retry,
+  secret-zeroizing bootstrap, and static musl build.
 - [ ] Replace the diagnostic path with a protected runtime-owned share.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the named-pipe/vsock bridge.
 - [x] Negotiate the guest protocol and retain boot evidence.
-- [ ] Run a fixed init process through distinct OCI create and start calls.
+- [x] Run a fixed init process through distinct OCI create and start calls.
+- [x] Verify exact create/delete replay, stopped state, post-delete NotFound,
+  marker cleanup, and no new guest runtime directory on the nominal path.
 - [ ] Prove deterministic VM, handle, process, and filesystem cleanup.
 
 Exit gate: a fresh Windows host test boots a utility VM, runs the fixed OCI
