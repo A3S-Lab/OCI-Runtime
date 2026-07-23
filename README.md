@@ -17,6 +17,13 @@ across Linux, macOS, and Windows. It is designed to replace A3S Box's direct
 dependency on an external `crun` binary while keeping product policy, image
 management, builds, and SDK behavior in A3S Box.
 
+The release contract is complete OCI Runtime Specification 1.3.0 conformance
+for every normative requirement applicable to Linux containers and the
+advertised native or utility-VM driver. The implementation will not ship a
+permanent restricted "A3S profile." The public Rust SDK carries the complete
+official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features`
+models without translating them into a reduced A3S configuration.
+
 The runtime has two execution families:
 
 - native Linux execution through namespaces, mounts, cgroup v2, seccomp,
@@ -32,6 +39,10 @@ separately.
 The project is experimental. The current Windows milestone implements:
 
 - versioned, machine-readable driver capability output;
+- an async, transport-independent `a3s-oci-sdk` contract for the full OCI
+  lifecycle and A3S Box process-control surface;
+- strict, size-bounded OCI 1.0.0 through 1.3.0 bundle loading with an immutable
+  SHA-256 configuration digest;
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
@@ -41,6 +52,10 @@ The project is experimental. The current Windows milestone implements:
 It does **not** yet boot an A3S Linux kernel or create, start, or execute an OCI
 container. The WHPX driver therefore reports `probe-only` readiness even when
 the host capability and partition-object smoke succeed.
+
+See [Roadmap](ROADMAP.md) and
+[OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
+and current field-by-field implementation status.
 
 ## Quick Start
 
@@ -209,7 +224,9 @@ barrier. Only that gate may promote WHPX readiness to `experimental`.
 ```text
 A3S Box / a3s-oci / future containerd shim
                     |
-            OCI runtime frontend
+              a3s-oci-sdk
+                    |
+            OCI runtime service
                     |
        durable state + operation journal
                     |
@@ -228,21 +245,20 @@ NativeLinuxDriver                  LibkrunVmDriver
 ```
 
 The runtime repository does not depend on `a3s-box-core` or
-`a3s-box-runtime`. The dependency direction remains:
+`a3s-box-runtime`. The Rust crate dependency direction is:
 
 ```text
-a3s-box
-    |
-    v
-a3s-oci-runtime
-    |
-    v
-a3s-libkrun-sys
+a3s-box ---------> a3s-oci-sdk <--------- a3s-oci-runtime
+                                                |
+                                                v
+                               a3s-libkrun-sys + platform driver
 ```
 
-A3S Box owns OCI bundle policy, images, builds, volumes, networks, SDKs, and
-product lifecycle. A3S OCI Runtime owns the lower-level OCI lifecycle,
-platform drivers, guest protocol, runtime state, and cleanup.
+The SDK contains contracts and client transport, never a driver. The runtime
+implements those contracts. A3S Box owns OCI bundle policy, images, builds,
+volumes, networks, product SDKs, and product lifecycle. A3S OCI Runtime owns
+the lower-level OCI lifecycle, platform drivers, guest protocol, runtime
+state, and cleanup.
 
 ## Platform Direction
 
@@ -269,7 +285,7 @@ inaccessible. KVM is an optional VM backend, not a Linux runtime prerequisite.
 | Filesystem | Protected runtime-owned roots and descriptor-relative path resolution |
 | Networking | Explicit staged support; unsupported modes fail before create |
 | Capability output | Host evidence, driver readiness, and isolation reported separately |
-| Compatibility | Restricted A3S OCI profile first; broader OCI claims only after conformance |
+| Compatibility | Complete OCI Runtime Specification 1.3.0 for all normative Linux-container and advertised-driver requirements; no permanent A3S subset |
 | Migration | Certified `crun` remains a rollback backend until release gates pass |
 
 The runtime rejects unsupported OCI properties instead of ignoring them. A
@@ -286,10 +302,16 @@ crates/
 |   `-- src/
 |       |-- capability.rs  # Driver evidence, readiness, and isolation types
 |       `-- lifecycle.rs   # Pure OCI lifecycle state transitions
+|-- sdk/
+|   `-- src/
+|       |-- bundle.rs      # Strict, digest-bound complete OCI spec loading
+|       |-- service.rs     # Async full lifecycle and process-control contract
+|       `-- client.rs      # Cloneable A3S Box client
 |-- runtime/
 |   `-- src/
 |       |-- platform/      # Windows WHPX and unsupported-host probes
-|       `-- report.rs      # Versioned WHPX smoke result
+|       |-- report.rs      # Versioned WHPX smoke result
+|       `-- service.rs     # Host implementation of the SDK contract
 `-- cli/
     |-- src/main.rs        # a3s-oci features and whpx-smoke
     `-- tests/cli.rs       # Public machine-readable CLI contract
@@ -330,6 +352,41 @@ cargo clippy \
 The generic Windows CI lane accepts an unavailable WHPX host only for
 `features`; release promotion requires retained smoke and lifecycle evidence
 from a real WHPX-capable host.
+
+## Rust SDK
+
+`a3s-oci-sdk` is the only runtime lifecycle API A3S Box should consume. It is
+async, `Send + Sync`, cloneable, strongly typed, and independent of WHPX,
+libkrun, native Linux internals, and transport selection.
+
+Its operation surface includes:
+
+- required OCI `features`, `create`, `state`, `start`, `kill`, and `delete`;
+- `exec`, `wait`, `list`, `pause`, `resume`, `update`, processes, stats, and
+  cursor-based events;
+- streaming-friendly stdin, stdout, stderr, PTY resize, per-process signals,
+  and per-process wait;
+- checkpoint and restore;
+- operation IDs, deadlines, typed container and process IDs, generation
+  fencing, explicit isolation requirements, and stable error classes.
+
+Current host integration supports feature discovery through the SDK. Other
+methods deliberately return `unsupported` until their durable implementation
+and conformance tests land; they are never reported as available early.
+
+```rust
+use a3s_oci_runtime::HostRuntimeService;
+use a3s_oci_sdk::RuntimeClient;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> a3s_oci_sdk::Result<()> {
+    let client = RuntimeClient::new(HostRuntimeService::new());
+    let info = client.features().await?;
+
+    assert_eq!(info.operations.len(), 1);
+    Ok(())
+}
+```
 
 ## License
 

@@ -1,6 +1,7 @@
 use std::io;
 use std::process::ExitCode;
 
+use a3s_oci_sdk::RuntimeClient;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use thiserror::Error;
@@ -22,12 +23,15 @@ enum Command {
 
 #[derive(Debug, Error)]
 enum CliError {
+    #[error("runtime request failed: {0}")]
+    Runtime(#[from] a3s_oci_sdk::Error),
     #[error("failed to serialize command output: {0}")]
     Serialize(#[from] serde_json::Error),
 }
 
-fn main() -> ExitCode {
-    match run(Cli::parse()) {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    match run(Cli::parse()).await {
         Ok(code) => code,
         Err(error) => {
             eprintln!("a3s-oci: {error}");
@@ -36,10 +40,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<ExitCode, CliError> {
+async fn run(cli: Cli) -> Result<ExitCode, CliError> {
     match cli.command {
         Command::Features => {
-            write_json(&a3s_oci_runtime::features())?;
+            let client = RuntimeClient::new(a3s_oci_runtime::HostRuntimeService::new());
+            let info = client.features().await?;
+            write_json(&info.drivers)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::WhpxSmoke => {

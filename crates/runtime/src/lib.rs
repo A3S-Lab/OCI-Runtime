@@ -2,8 +2,10 @@
 
 mod platform;
 mod report;
+mod service;
 
 pub use report::WhpxSmokeReport;
+pub use service::HostRuntimeService;
 
 use a3s_oci_core::RuntimeFeatures;
 
