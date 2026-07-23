@@ -1,0 +1,19 @@
+[package]
+name = "a3s-oci-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cross-platform host runtime for A3S OCI workloads"
+
+[dependencies]
+a3s-oci-core = { path = "../core" }
+serde.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "a3s-oci-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure capability and OCI lifecycle contracts for A3S OCI Runtime"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
