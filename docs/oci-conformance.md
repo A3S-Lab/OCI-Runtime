@@ -74,9 +74,9 @@ does not make it a native Windows container.
 | Area | Represented | Validated | Enforced | Conformant |
 | --- | --- | --- | --- | --- |
 | Complete `Spec` object | Yes | Official schema, version range, unknown fields, initial semantics | No | No |
-| Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | No | No |
+| Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | Bootstrap slice applies writable rootfs, hostname/domainname, credentials, and process launch; OCI mount entries remain rejected | No |
 | POSIX hooks | Yes | Initial path and environment rules | No | No |
-| Linux namespaces and ID mappings | Yes | Initial relationship and range rules | No | No |
+| Linux namespaces and ID mappings | Yes | Initial relationship and range rules | Bootstrap slice creates new UTS and mount namespaces and rejects every other type or join; ID mappings remain rejected | No |
 | Linux devices, seccomp, capabilities, LSM, sysctl | Yes | Initial path, seccomp, and namespaced-sysctl rules; capability/LSM rules pending | No | No |
 | Linux cgroup resources | Yes | Initial CPU, block I/O, and RDMA relationships | No | No |
 | Linux Intel RDT, memory policy, time offsets, net devices | Yes | Initial cross-field and path rules | No | No |

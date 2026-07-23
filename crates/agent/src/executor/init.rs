@@ -10,6 +10,7 @@ use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CO
 
 use super::control::{write_rejection, READY_BYTE, START_BYTE};
 use super::plan::InitPlan;
+use super::rootfs;
 
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let mut arguments = std::env::args_os().skip(1);
@@ -122,16 +123,23 @@ fn prepare_container_init(
             ),
         ));
     }
-    prepare_create_environment(&plan)?;
+    prepare_create_environment(&plan, &rootfs)?;
     Ok((plan, rootfs))
 }
 
-fn prepare_create_environment(plan: &InitPlan) -> Result<()> {
+fn prepare_create_environment(plan: &InitPlan, rootfs: &Path) -> Result<()> {
+    let mut namespace_flags = 0;
     if plan.new_uts_namespace {
+        namespace_flags |= libc::CLONE_NEWUTS;
+    }
+    if plan.new_mount_namespace {
+        namespace_flags |= libc::CLONE_NEWNS;
+    }
+    if namespace_flags != 0 {
         // SAFETY: `unshare` has no pointer preconditions. This dedicated
         // wrapper is single-threaded before it reports the created barrier.
-        if unsafe { libc::unshare(libc::CLONE_NEWUTS) } != 0 {
-            return Err(last_os_error("create Linux UTS namespace"));
+        if unsafe { libc::unshare(namespace_flags) } != 0 {
+            return Err(last_os_error("create Linux OCI namespaces"));
         }
     }
     if let Some(hostname) = &plan.hostname {
@@ -162,7 +170,11 @@ fn prepare_create_environment(plan: &InitPlan) -> Result<()> {
             return Err(last_os_error("set container domainname"));
         }
     }
-    verify_uts_names(plan)
+    verify_uts_names(plan)?;
+    if plan.new_mount_namespace {
+        rootfs::pivot_root(rootfs)?;
+    }
+    Ok(())
 }
 
 fn verify_uts_names(plan: &InitPlan) -> Result<()> {
@@ -256,7 +268,6 @@ fn read_bounded_config(path: &Path) -> Result<String> {
 }
 
 fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &Path) -> Result<()> {
-    let rootfs = path_cstring(rootfs, "rootfs")?;
     let cwd = CString::new(plan.cwd.as_bytes()).map_err(|error| {
         init_error(
             ErrorCode::InvalidArgument,
@@ -279,13 +290,14 @@ fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &Path) -> Result<()> {
         .collect::<Vec<_>>();
     environment_pointers.push(std::ptr::null());
 
+    if !plan.new_mount_namespace {
+        rootfs::chroot(rootfs)?;
+    }
+
     // SAFETY: every pointer below references a live, NUL-terminated buffer.
     // This internal init process is single-threaded and immediately replaces
     // its image after applying the validated bootstrap profile.
     unsafe {
-        if libc::chroot(rootfs.as_ptr()) != 0 {
-            return Err(last_os_error("chroot container rootfs"));
-        }
         if libc::chdir(cwd.as_ptr()) != 0 {
             return Err(last_os_error("change to configured process.cwd"));
         }
@@ -326,15 +338,6 @@ fn cstring_vector(values: &[String], field: &str) -> Result<Vec<CString>> {
             })
         })
         .collect()
-}
-
-fn path_cstring(path: &Path, field: &str) -> Result<CString> {
-    CString::new(path.as_os_str().as_bytes()).map_err(|error| {
-        init_error(
-            ErrorCode::InvalidArgument,
-            format!("{field} contains a NUL byte: {error}"),
-        )
-    })
 }
 
 fn null_io() -> ProcessIo {

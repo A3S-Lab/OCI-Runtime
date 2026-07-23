@@ -56,6 +56,8 @@ fn accepts_the_exact_bootstrap_profile() {
     assert_eq!(plan.args[0], "/bin/sh");
     assert_eq!(plan.umask, Some(0o22));
     assert!(plan.no_new_privileges);
+    assert!(!plan.new_uts_namespace);
+    assert!(!plan.new_mount_namespace);
 }
 
 #[test]
@@ -96,6 +98,7 @@ fn accepts_a_new_uts_namespace_and_bounded_uts_names() {
     let plan =
         InitPlan::from_bundle(&bundle(UTS_CONFIG), &null_io()).expect("UTS namespace profile");
     assert!(plan.new_uts_namespace);
+    assert!(!plan.new_mount_namespace);
     assert_eq!(plan.hostname.as_deref(), Some("a3s-smoke"));
     assert_eq!(plan.domainname.as_deref(), Some("runtime.test"));
 
@@ -106,6 +109,31 @@ fn accepts_a_new_uts_namespace_and_bounded_uts_names() {
     let plan = InitPlan::from_bundle(&bundle(&config), &null_io()).expect("64-byte UTS names");
     assert_eq!(plan.hostname.as_deref(), Some(maximum.as_str()));
     assert_eq!(plan.domainname.as_deref(), Some(maximum.as_str()));
+}
+
+#[test]
+fn accepts_new_uts_and_mount_namespaces_in_any_order() {
+    let mut mount_only: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode mount-only configuration");
+    mount_only["linux"] = serde_json::json!({
+        "namespaces": [{"type": "mount"}]
+    });
+    let mount_only = serde_json::to_string(&mount_only).expect("encode mount-only configuration");
+    let plan =
+        InitPlan::from_bundle(&bundle(&mount_only), &null_io()).expect("new mount namespace");
+    assert!(!plan.new_uts_namespace);
+    assert!(plan.new_mount_namespace);
+
+    for namespaces in [
+        r#"{"type": "uts"}, {"type": "mount"}"#,
+        r#"{"type": "mount"}, {"type": "uts"}"#,
+    ] {
+        let config = UTS_CONFIG.replace(r#"{"type": "uts"}"#, namespaces);
+        let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+            .expect("new UTS and mount namespaces");
+        assert!(plan.new_uts_namespace);
+        assert!(plan.new_mount_namespace);
+    }
 }
 
 #[test]
@@ -162,4 +190,13 @@ fn rejects_unimplemented_or_joined_namespaces() {
         .expect_err("joined UTS namespace unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("namespaces[0].path"));
+
+    let joined_mount = UTS_CONFIG.replace(
+        r#"{"type": "uts"}"#,
+        r#"{"type": "uts"}, {"type": "mount", "path": "/proc/1/ns/mnt"}"#,
+    );
+    let error = InitPlan::from_bundle(&bundle(&joined_mount), &null_io())
+        .expect_err("joined mount namespace unsupported");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("namespaces[1].path"));
 }

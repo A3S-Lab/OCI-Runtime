@@ -23,6 +23,7 @@ pub(super) struct InitPlan {
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
     pub(super) new_uts_namespace: bool,
+    pub(super) new_mount_namespace: bool,
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
 }
@@ -100,7 +101,7 @@ impl InitPlan {
                 "process.user.umask must fit the POSIX permission mask",
             ));
         }
-        let new_uts_namespace = validate_linux_namespaces(spec.linux().as_ref())?;
+        let namespaces = validate_linux_namespaces(spec.linux().as_ref())?;
         let hostname = spec
             .hostname()
             .as_deref()
@@ -111,7 +112,7 @@ impl InitPlan {
             .as_deref()
             .map(|value| validate_uts_name("domainname", value))
             .transpose()?;
-        if (hostname.is_some() || domainname.is_some()) && !new_uts_namespace {
+        if (hostname.is_some() || domainname.is_some()) && !namespaces.new_uts {
             return Err(unsupported(
                 "hostname/domainname",
                 "the bootstrap executor changes UTS names only in a newly created UTS namespace",
@@ -129,7 +130,8 @@ impl InitPlan {
             additional_gids,
             umask: user.umask(),
             no_new_privileges: true,
-            new_uts_namespace,
+            new_uts_namespace: namespaces.new_uts,
+            new_mount_namespace: namespaces.new_mount,
             hostname,
             domainname,
         })
@@ -186,61 +188,78 @@ fn validate_profile(raw: &Value) -> Result<()> {
     };
     let linux = object(linux, "linux")?;
     reject_unimplemented_keys(linux, "linux", &["namespaces"])?;
-    let namespaces = linux
-        .get("namespaces")
-        .and_then(Value::as_array)
+    let Some(namespaces) = linux.get("namespaces") else {
+        return Ok(());
+    };
+    let namespaces = namespaces
+        .as_array()
         .ok_or_else(|| invalid("linux.namespaces must be an array"))?;
-    if namespaces.len() != 1 {
-        return Err(unsupported(
-            "linux.namespaces",
-            "the bootstrap executor currently accepts exactly one UTS namespace",
-        ));
-    }
-    let namespace = object(&namespaces[0], "linux.namespaces[0]")?;
-    reject_unimplemented_keys(namespace, "linux.namespaces[0]", &["type", "path"])?;
-    if namespace.get("type").and_then(Value::as_str) != Some("uts") {
-        return Err(unsupported(
-            "linux.namespaces[0].type",
-            "only a new UTS namespace is implemented",
-        ));
-    }
-    if namespace.contains_key("path") {
-        return Err(unsupported(
-            "linux.namespaces[0].path",
-            "joining an existing UTS namespace is not implemented",
-        ));
+    for (index, namespace) in namespaces.iter().enumerate() {
+        let field = format!("linux.namespaces[{index}]");
+        let namespace = object(namespace, &field)?;
+        reject_unimplemented_keys(namespace, &field, &["type", "path"])?;
+        let namespace_type = namespace
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid(format!("{field}.type must be a string")))?;
+        if !matches!(namespace_type, "uts" | "mount") {
+            return Err(unsupported(
+                &format!("{field}.type"),
+                "only new UTS and mount namespaces are implemented",
+            ));
+        }
+        if namespace.contains_key("path") {
+            return Err(unsupported(
+                &format!("{field}.path"),
+                "joining an existing namespace is not implemented",
+            ));
+        }
     }
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct NamespacePlan {
+    new_uts: bool,
+    new_mount: bool,
+}
+
 fn validate_linux_namespaces(
     linux: Option<&a3s_oci_sdk::oci_spec::runtime::Linux>,
-) -> Result<bool> {
+) -> Result<NamespacePlan> {
     let Some(linux) = linux else {
-        return Ok(false);
+        return Ok(NamespacePlan::default());
     };
-    let namespaces = linux.namespaces().as_deref().ok_or_else(|| {
-        invalid("linux.namespaces is required when linux is present in the bootstrap profile")
-    })?;
-    let [namespace] = namespaces else {
-        return Err(unsupported(
-            "linux.namespaces",
-            "the bootstrap executor currently accepts exactly one UTS namespace",
-        ));
+    let Some(namespaces) = linux.namespaces().as_deref() else {
+        return Ok(NamespacePlan::default());
     };
-    if namespace.typ() != LinuxNamespaceType::Uts {
-        return Err(unsupported(
-            "linux.namespaces[0].type",
-            "only a new UTS namespace is implemented",
-        ));
+    let mut plan = NamespacePlan::default();
+    for (index, namespace) in namespaces.iter().enumerate() {
+        if namespace.path().is_some() {
+            return Err(unsupported(
+                &format!("linux.namespaces[{index}].path"),
+                "joining an existing namespace is not implemented",
+            ));
+        }
+        let present = match namespace.typ() {
+            LinuxNamespaceType::Uts => &mut plan.new_uts,
+            LinuxNamespaceType::Mount => &mut plan.new_mount,
+            _ => {
+                return Err(unsupported(
+                    &format!("linux.namespaces[{index}].type"),
+                    "only new UTS and mount namespaces are implemented",
+                ));
+            }
+        };
+        if *present {
+            return Err(invalid(format!(
+                "linux.namespaces contains duplicate {:?} entries",
+                namespace.typ()
+            )));
+        }
+        *present = true;
     }
-    if namespace.path().is_some() {
-        return Err(unsupported(
-            "linux.namespaces[0].path",
-            "joining an existing UTS namespace is not implemented",
-        ));
-    }
-    Ok(true)
+    Ok(plan)
 }
 
 fn validate_uts_name(field: &str, value: &str) -> Result<String> {

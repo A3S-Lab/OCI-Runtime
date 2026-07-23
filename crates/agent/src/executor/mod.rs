@@ -4,6 +4,7 @@ mod plan;
 #[cfg(test)]
 mod plan_tests;
 mod process;
+mod rootfs;
 mod state;
 
 use std::path::{Path, PathBuf};

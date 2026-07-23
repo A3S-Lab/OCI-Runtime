@@ -59,10 +59,11 @@ The project is experimental. The current Windows milestone implements:
   executor active;
 - a root-only guest bootstrap executor with exact-generation state,
   session-bounded idempotency, a PID-authenticated abstract Unix start
-  barrier, a create-time UTS namespace with hostname and domainname, `chroot`,
-  bounded typed init rejection reporting, credentials, umask,
-  `no_new_privileges`, `execve`, signaling, stopped observation, and scoped
-  cleanup;
+  barrier, create-time UTS and mount namespaces, hostname and domainname,
+  recursively private mount propagation, `pivot_root`, a compatible inherited
+  mount-namespace `chroot` path, bounded typed init rejection reporting,
+  credentials, umask, `no_new_privileges`, `execve`, signaling, stopped
+  observation, and scoped cleanup;
 - the complete pinned OCI Runtime Specification 1.3.0 schema and upstream
   fixture set, compiled into an offline validator for configuration, state,
   and feature documents;
@@ -119,10 +120,11 @@ The durable host lifecycle and its driver-facing Rust API are implemented and
 tested with an injected conformance driver. The static A3S guest agent now
 executes one deliberately narrow OCI bootstrap profile and fails every
 unimplemented property instead of ignoring it. This is a verified vertical
-slice, not full OCI enforcement: remaining namespaces, mounts, cgroups,
-capabilities, hooks, seccomp, complete I/O, recovery, and the remaining SDK
-operations are still pending. The built-in WHPX driver therefore remains
-`probe-only`, and the default host service advertises only `features`.
+slice, not full OCI enforcement: remaining namespace types and joins, OCI
+mount entries, propagation overrides, cgroups, capabilities, hooks, seccomp,
+complete I/O, recovery, and the remaining SDK operations are still pending.
+The built-in WHPX driver therefore remains `probe-only`, and the default host
+service advertises only `features`.
 
 See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
@@ -259,8 +261,10 @@ cargo run -p a3s-oci-cli -- oci-vm-smoke `
 
 The fixed bootstrap bundle uses a writable `rootfs`, null standard I/O,
 `noNewPrivileges: true`, an absolute executable and working directory, and no
-unimplemented OCI properties. Its process must write the expected marker and
-remain running until `SIGTERM`. See
+unimplemented OCI properties. It may request new UTS and mount namespaces; a
+new mount namespace is made recursively private and enters the rootfs with
+`pivot_root` before create returns. Its process must write the expected marker
+and remain running until `SIGTERM`. See
 [Guest Agent Bootstrap](docs/guest-agent.md) for the exact current boundary.
 
 ## Capability And Readiness
@@ -395,6 +399,8 @@ The fixed OCI VM smoke additionally verifies:
 - the host accepts only a bundle strictly contained by the VM rootfs;
 - create establishes a new UTS namespace and its configured hostname and
   domainname before returning;
+- create establishes a new mount namespace, makes its mount tree recursively
+  private, self-binds the rootfs, and completes `pivot_root` before returning;
 - create returns `created` with a positive guest PID while the configured
   process remains blocked;
 - state and an exact create retry reproduce the created state;
@@ -416,9 +422,9 @@ The smokes do not yet verify:
 
 The next Windows gate replaces the diagnostic share with a protected,
 runtime-owned immutable system image and expands the shared Linux executor
-through process I/O, the remaining namespaces, mounts, resources, hooks,
-recovery, and negative isolation cases. WHPX remains `probe-only` until those
-gates pass.
+through process I/O, the remaining namespace types and joins, OCI mount
+entries, resources, hooks, recovery, and negative isolation cases. WHPX
+remains `probe-only` until those gates pass.
 
 ## Target Architecture
 

@@ -105,6 +105,9 @@ A successful fixed OCI VM smoke additionally proves that:
 - the accepted bundle is a strict descendant of the supplied VM rootfs;
 - create establishes a new UTS namespace, applies the configured hostname and
   domainname, and reports ready only afterward;
+- when configured, create establishes a new mount namespace, makes `/`
+  recursively private, self-binds the rootfs, completes `pivot_root`, and
+  reports ready only afterward;
 - create returns `created` and a positive guest PID without running the
   configured process;
 - state and an exact create retry match the original result;
@@ -126,9 +129,9 @@ minirootfs archive with SHA-256
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
 
-The fixed OCI lifecycle qualification used the 6,293,664-byte static musl agent
+The fixed OCI lifecycle qualification used the 6,298,768-byte static musl agent
 with SHA-256
-`3f7dc4357ad655674203303f9ade255d9ad39c2b8a0ae4dc60759e02ca8a619c`.
+`851e898f023b86339bcbd65e668b0b3853097764902692cc9fa08880ea39db15`.
 Its report selected protocol version 1, identified the guest as `x86_64`,
 verified every fixed lifecycle field, retained the complete successful shim
 report, and returned exit status zero.
@@ -143,6 +146,13 @@ barrier only after the wrapper read both applied values back with `uname`. A
 companion bundle added a PID namespace; create returned `Unsupported` for
 `linux.namespaces` and left no runtime state.
 
+The mount qualification requested new UTS and mount namespaces in the same
+bundle. The full lifecycle passed after recursively private propagation,
+rootfs self-bind, and `pivot_root`. A companion bundle supplied
+`/proc/1/ns/mnt` as a mount namespace join path; create retained the exact
+typed `Unsupported` rejection, did not create container state, and left no
+guest runtime directory.
+
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
 does not build it.
@@ -151,8 +161,8 @@ The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
 - networking or complete process I/O works;
-- remaining namespaces, mounts, resources, capabilities, seccomp, or hooks
-  work;
+- remaining namespace types and joins, OCI mount entries, resources,
+  capabilities, seccomp, or hooks work;
 - restart recovery, concurrent containers, or shared-guest-kernel isolation
   work;
 - the driver is production ready.
@@ -167,7 +177,8 @@ The next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
-3. add namespace, mount, capability, resource, seccomp, and hook enforcement;
+3. add remaining namespace, OCI mount-entry, capability, resource, seccomp,
+   and hook enforcement;
 4. return stdout, stderr, and the natural exit code;
 5. reconcile stopped state after host runtime restart;
 6. add concurrent-container and negative isolation evidence;

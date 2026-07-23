@@ -49,9 +49,9 @@ Completed:
   host/shim evidence;
 - root-only Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
-  create-time UTS namespace with hostname and domainname, exact-generation
-  state, bounded typed init rejection reporting, session idempotency,
-  signaling, and cleanup;
+  create-time UTS and mount namespaces, hostname and domainname, recursively
+  private mount propagation, `pivot_root`, exact-generation state, bounded
+  typed init rejection reporting, session idempotency, signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -193,10 +193,13 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [ ] Multi-container guest registry with per-container generations.
 - [x] Create a new UTS namespace and apply the configured hostname and
   domainname before the created barrier.
-- [ ] Namespace creation and joining for PID, mount, IPC, user, network,
-  cgroup, and time namespaces, plus joining existing UTS namespaces.
-- [ ] Rootfs, mount order, propagation, idmapped mounts, masked paths, and
-  read-only paths.
+- [x] Create a new mount namespace, make the inherited mount tree recursively
+  private, self-bind the rootfs, and complete `pivot_root` before the created
+  barrier.
+- [ ] Namespace creation for PID, IPC, user, network, cgroup, and time
+  namespaces, plus joining existing namespaces.
+- [ ] OCI mount entries and order, propagation overrides, idmapped mounts,
+  masked paths, read-only paths, and read-only rootfs.
 - [ ] UID/GID mappings, credentials, capabilities, rlimits, scheduler, I/O
   priority, affinity, `no_new_privileges`, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified

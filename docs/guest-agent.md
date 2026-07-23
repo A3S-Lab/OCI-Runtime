@@ -41,12 +41,20 @@ The accepted bootstrap profile requires:
 - numeric UID, GID, optional supplementary groups, and optional umask;
 - bounded arguments and environment with unique environment names.
 
-When `linux` is present, it currently accepts exactly one newly created UTS
-namespace and no join path. Configured hostname and domainname values are
-bounded to the Linux kernel limit and require that new UTS namespace. The
-wrapper calls `unshare(CLONE_NEWUTS)`, `sethostname`, and `setdomainname`
-and verifies both values with `uname` before reporting ready, so the UTS
-configuration is part of the create barrier rather than deferred until start.
+When `linux.namespaces` is present, it accepts only unique, newly created UTS
+and mount namespace entries, in either order, with no join paths. Omitting a
+namespace inherits the runtime namespace of that type. Configured hostname and
+domainname values are bounded to the Linux kernel limit and require the new
+UTS namespace.
+
+The wrapper creates all requested namespaces in one `unshare` call. It applies
+and reads back hostname and domainname with `uname`. When a mount namespace is
+requested, it then makes `/` recursively private, recursively bind-mounts the
+rootfs onto itself, and uses `pivot_root(".", ".")` followed by a detached
+unmount of the old root. All of this succeeds before readiness is reported, so
+namespace and rootfs isolation are part of the create barrier. When a mount
+namespace is omitted, the wrapper preserves the inherited namespace and uses
+the compatible `chroot` path after start.
 
 Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
@@ -54,8 +62,9 @@ accepts only the exact kernel-reported child PID. The wrapper revalidates the
 bundle, resolves a contained rootfs, and returns either a bounded typed error
 or readiness before blocking. Create therefore preserves the exact rejection
 or returns `created` before the configured process runs. Start sends the
-one-byte release signal; the wrapper then applies `chroot`, working directory,
-groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
+one-byte release signal; the wrapper applies the inherited-namespace `chroot`
+when needed, then working directory, groups, GID, UID, umask, and
+`PR_SET_NO_NEW_PRIVS`, and calls `execve`.
 
 State observes the init process, kill delivers one positive Linux signal, and
 delete supports stopped-only and force cleanup. Exact request retries are
@@ -66,10 +75,11 @@ All guest registry, generation, and idempotency state is session-local. A
 closed host connection force-stops remaining init processes and removes the
 agent-owned runtime root. Agent restart recovery is not implemented yet.
 
-The executor currently rejects mounts, every non-UTS or joined namespace,
-cgroups, capabilities, seccomp, hooks, read-only rootfs, terminals, non-null
-I/O, process-group signals, and every other unimplemented OCI property. These
-are release blockers, not silently accepted compatibility gaps.
+The executor currently rejects OCI mount entries, every namespace type other
+than UTS and mount, all namespace joins, propagation overrides, cgroups,
+capabilities, seccomp, hooks, read-only rootfs, terminals, non-null I/O,
+process-group signals, and every other unimplemented OCI property. These are
+release blockers, not silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -88,8 +98,11 @@ observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
-minirootfs and the 6,293,664-byte static agent with SHA-256
-`3f7dc4357ad655674203303f9ade255d9ad39c2b8a0ae4dc60759e02ca8a619c`.
-This proves the fixed bootstrap slice, not the immutable A3S system image,
-complete OCI enforcement, process I/O, networking, restart recovery, or
-fault-injected cleanup. The WHPX driver therefore remains `probe-only`.
+minirootfs and the 6,298,768-byte static agent with SHA-256
+`851e898f023b86339bcbd65e668b0b3853097764902692cc9fa08880ea39db15`.
+The positive bundle requested both new UTS and mount namespaces and completed
+the full lifecycle after `pivot_root`. A joined-mount negative bundle retained
+its typed `Unsupported` error and left no guest runtime state. This proves the
+fixed bootstrap slice, not the immutable A3S system image, complete OCI
+enforcement, process I/O, networking, restart recovery, or fault-injected
+cleanup. The WHPX driver therefore remains `probe-only`.
