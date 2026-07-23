@@ -3,6 +3,10 @@
 mod platform;
 mod report;
 mod service;
+// The store is intentionally compiled before lifecycle operations are
+// advertised so its crash and idempotency contract can be tested in isolation.
+#[allow(dead_code)]
+mod state;
 
 pub use report::WhpxSmokeReport;
 pub use service::HostRuntimeService;

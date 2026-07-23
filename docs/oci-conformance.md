@@ -81,9 +81,9 @@ does not make it a native Windows container.
 | Linux cgroup resources | Yes | Initial CPU, block I/O, and RDMA relationships | No | No |
 | Linux Intel RDT, memory policy, time offsets, net devices | Yes | Initial cross-field and path rules | No | No |
 | VM hypervisor, kernel, initrd, image, and parameters | Yes | Initial absolute-path and NUL rules; driver policy pending | No | No |
-| OCI `State` | Yes | Official schema and typed lifecycle transition contract | No durable state | No |
+| OCI `State` | Yes | Official schema, typed transitions, and generation fences | Internal durable `creating`/`created` records; service disabled | No |
 | OCI `Features` | Yes | Official schema, version and operation separation | Feature-only service | No |
-| `create/state/start/kill/delete` | SDK contract | Exhaustive request boundary; durable start validation pending | No | No |
+| `create/state/start/kill/delete` | SDK contract | Exhaustive request boundary; durable create preparation tested internally | No driver-backed operation is advertised | No |
 | Hooks and rollback ordering | SDK contract | Pending | No | No |
 | Exec, I/O, PTY, wait, pause/resume, update | SDK contract | Typed requests | No | No |
 | Checkpoint and restore | SDK contract | Typed requests | No | No |

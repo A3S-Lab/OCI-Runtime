@@ -41,8 +41,31 @@ fn validate_identifier(kind: &str, value: String) -> Result<String> {
             format!("{kind} contains a character that is unsafe in a runtime path"),
         ));
     }
+    if value.ends_with('.') || is_windows_reserved_name(&value) {
+        return Err(Error::new(
+            ErrorCode::InvalidArgument,
+            format!("{kind} is not a portable runtime path component"),
+        ));
+    }
 
     Ok(value)
+}
+
+fn is_windows_reserved_name(value: &str) -> bool {
+    let basename = value
+        .split_once('.')
+        .map_or(value, |(basename, _extension)| basename);
+    if basename.eq_ignore_ascii_case("CON")
+        || basename.eq_ignore_ascii_case("PRN")
+        || basename.eq_ignore_ascii_case("AUX")
+        || basename.eq_ignore_ascii_case("NUL")
+    {
+        return true;
+    }
+    let bytes = basename.as_bytes();
+    bytes.len() == 4
+        && matches!(bytes[3], b'1'..=b'9')
+        && (basename[..3].eq_ignore_ascii_case("COM") || basename[..3].eq_ignore_ascii_case("LPT"))
 }
 
 macro_rules! identifier {
@@ -125,11 +148,28 @@ mod tests {
     fn accepts_path_safe_identifier() {
         let id = ContainerId::new("box_01.worker+test").expect("ID should be valid");
         assert_eq!(id.as_str(), "box_01.worker+test");
+        for value in ["com0", "com10", "container.json"] {
+            ContainerId::new(value).unwrap_or_else(|error| {
+                panic!("{value:?} should remain a valid identifier: {error}")
+            });
+        }
     }
 
     #[test]
-    fn rejects_path_traversal_and_separators() {
-        for value in ["../box", "/box", "box/child", r"box\child", "-box", ""] {
+    fn rejects_unsafe_or_nonportable_path_components() {
+        for value in [
+            "../box",
+            "/box",
+            "box/child",
+            r"box\child",
+            "-box",
+            "box.",
+            "NUL",
+            "con.json",
+            "COM1",
+            "lpt9.log",
+            "",
+        ] {
             assert!(
                 ContainerId::new(value).is_err(),
                 "{value:?} must be rejected"

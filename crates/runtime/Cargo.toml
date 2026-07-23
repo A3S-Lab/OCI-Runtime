@@ -10,14 +10,18 @@ description = "Cross-platform host runtime for A3S OCI workloads"
 [dependencies]
 a3s-oci-core = { path = "../core" }
 a3s-oci-sdk = { path = "../sdk" }
+fs2.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+tempfile = "3.20"
 
 [lints]
 workspace = true

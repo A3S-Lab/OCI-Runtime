@@ -19,6 +19,7 @@ repository = "https://github.com/A3S-Lab/OCI-Runtime"
 a3s-libkrun-sys = "=3.1.0"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
+fs2 = "0.4"
 jsonschema = { version = "0.48.5", default-features = false }
 oci-spec = { version = "0.10", default-features = false, features = ["runtime"] }
 semver = "1.0"
@@ -30,6 +31,7 @@ thiserror = "2.0"
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "rt", "sync"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
 ] }
 

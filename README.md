@@ -64,6 +64,9 @@ The project is experimental. The current Windows milestone implements:
 - SDK request validation at the in-process client, IPC client, and
   authenticated server boundaries, including bounded event, output, and stdin
   payloads;
+- an internal single-writer durable-state foundation with atomic JSON
+  replacement, exact `config.json` snapshots, monotonic container
+  generations, generation fencing, and a global idempotent create journal;
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
@@ -257,8 +260,16 @@ fn main() -> Result<(), TransitionError> {
 }
 ```
 
-Durable state, operation idempotency, generation fencing, and recovery journals
-will be layered on this pure contract before workload launch is enabled.
+The runtime now applies this transition contract to an internal durable
+`creating`/`created` record. It persists the exact accepted `config.json`,
+allocates monotonically increasing generations, fences stale reads, and
+replays create operations by global `OperationId`. Crash reconciliation,
+Windows owner-only ACL enforcement, the remaining transitions, and the
+driver/guest integration are still release gates, so lifecycle operations are
+not yet advertised.
+
+See [Durable State](docs/durable-state.md) for the on-disk contract and its
+current recovery boundary.
 
 ## Windows WHPX
 
@@ -399,7 +410,8 @@ crates/
 |   `-- src/
 |       |-- platform/      # Windows WHPX and unsupported-host probes
 |       |-- report.rs      # Versioned WHPX smoke result
-|       `-- service.rs     # Host implementation of the SDK contract
+|       |-- service.rs     # Host implementation of the SDK contract
+|       `-- state/         # Durable records, generations, and create journal
 `-- cli/
     |-- src/main.rs        # a3s-oci features and whpx-smoke
     `-- tests/cli.rs       # Public machine-readable CLI contract
@@ -527,7 +539,8 @@ contract and platform examples, and
 [OCI Semantic Validation](docs/semantic-validation.md) for the current
 phase/rule boundary, and
 [Normative Coverage](docs/normative-coverage.md) for the generated
-requirements lock and promotion rules.
+requirements lock and promotion rules. The internal persistence contract is
+documented in [Durable State](docs/durable-state.md).
 
 ```rust
 use a3s_oci_runtime::HostRuntimeService;

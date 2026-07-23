@@ -60,11 +60,15 @@ Completed:
 - version-negotiated, length-delimited transport for every SDK operation;
 - tested Windows named-pipe and Unix-domain-socket client connectors;
 - existing `features` CLI path routed through the Rust SDK;
+- internal single-writer durable state with atomic creating/created records,
+  exact bundle snapshots, monotonic generations, generation fencing, and a
+  global idempotent create journal;
 - Windows and Linux CI.
 
 Not yet complete:
 
-- durable container state and operation journal;
+- crash reconciliation and the complete durable lifecycle;
+- Windows owner-only state-root ACLs and descriptor-relative path resolution;
 - guest protocol and Linux executor;
 - any workload lifecycle operation;
 - OCI hook execution;
@@ -104,9 +108,15 @@ enforce it. No property is silently ignored.
 
 ### R1 — Durable OCI Lifecycle
 
-- [ ] Protected runtime root and descriptor-relative path operations.
-- [ ] Atomic container records with monotonically increasing generations.
-- [ ] Idempotent operation journal keyed by `OperationId`.
+- [x] Add an absolute, single-writer runtime root with plain-path/reparse-point
+  checks, bounded reads, and atomic file replacement.
+- [ ] Enforce Windows owner-only state-root ACLs and descriptor-relative path
+  operations on every supported host.
+- [x] Add atomic creating/created records with exact configuration snapshots
+  and monotonically increasing generations.
+- [x] Add a global idempotent create journal keyed by `OperationId`.
+- [ ] Extend the operation journal to every mutating lifecycle and process
+  request.
 - [ ] Crash reconciliation and quarantine for ambiguous state.
 - [ ] Implement `create`, `state`, `start`, `kill`, and `delete`.
 - [ ] Preserve an exact create/start barrier.
