@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
-use super::{contains_nul, is_posix_absolute, OciSemanticPhase, ViolationCollector};
+use super::{contains_nul, is_posix_absolute, rules, OciSemanticPhase, ViolationCollector};
 
 const UNSUPPORTED_PLATFORM_FIELDS: &[&str] = &["freebsd", "solaris", "windows", "zos"];
 const HOOK_PHASES: &[&str] = &[
@@ -35,7 +35,7 @@ fn reject_unsupported_platforms(
         if configuration.contains_key(*field) {
             collector.unsupported(
                 format!("/{field}"),
-                "oci.platform.linux-only",
+                rules::PLATFORM_LINUX_ONLY,
                 format!(
                     "native {field} workload configuration is not supported; A3S hosts execute Linux OCI workloads"
                 ),
@@ -48,7 +48,7 @@ fn validate_root(configuration: &Map<String, Value>, collector: &mut ViolationCo
     let Some(root) = configuration.get("root").and_then(Value::as_object) else {
         collector.invalid(
             "/root",
-            "oci.common.root.required",
+            rules::ROOT_REQUIRED,
             "root is required for a Linux OCI workload",
         );
         return;
@@ -59,13 +59,13 @@ fn validate_root(configuration: &Map<String, Value>, collector: &mut ViolationCo
     if path.is_empty() {
         collector.invalid(
             "/root/path",
-            "oci.common.root.path.non-empty",
+            rules::ROOT_PATH_NON_EMPTY,
             "root.path must not be empty",
         );
     } else if contains_nul(path) {
         collector.invalid(
             "/root/path",
-            "oci.common.path.no-nul",
+            rules::PATH_NO_NUL,
             "root.path must not contain a NUL byte",
         );
     }
@@ -80,7 +80,7 @@ fn validate_process(
         if phase == OciSemanticPhase::Start {
             collector.invalid(
                 "/process",
-                "oci.common.process.required-for-start",
+                rules::PROCESS_REQUIRED_FOR_START,
                 "process is required before OCI start",
             );
         }
@@ -91,14 +91,14 @@ fn validate_process(
         if !is_posix_absolute(cwd) {
             collector.invalid(
                 "/process/cwd",
-                "oci.common.process.cwd.absolute",
+                rules::PROCESS_CWD_ABSOLUTE,
                 "process.cwd must be an absolute Linux container path",
             );
         }
         if contains_nul(cwd) {
             collector.invalid(
                 "/process/cwd",
-                "oci.common.path.no-nul",
+                rules::PATH_NO_NUL,
                 "process.cwd must not contain a NUL byte",
             );
         }
@@ -107,7 +107,7 @@ fn validate_process(
     match process.get("args").and_then(Value::as_array) {
         Some(arguments) if arguments.is_empty() => collector.invalid(
             "/process/args",
-            "oci.common.process.args.non-empty",
+            rules::PROCESS_ARGS_NON_EMPTY,
             "process.args must contain the executable for a Linux workload",
         ),
         Some(arguments) => {
@@ -115,7 +115,7 @@ fn validate_process(
                 if contains_nul(argument) {
                     collector.invalid(
                         format!("/process/args/{index}"),
-                        "oci.common.process.argument.no-nul",
+                        rules::PROCESS_ARGUMENT_NO_NUL,
                         "process arguments must not contain a NUL byte",
                     );
                 }
@@ -127,14 +127,14 @@ fn validate_process(
             {
                 collector.invalid(
                     "/process/args/0",
-                    "oci.common.process.executable.non-empty",
+                    rules::PROCESS_EXECUTABLE_NON_EMPTY,
                     "the first process argument must name an executable",
                 );
             }
         }
         None => collector.invalid(
             "/process/args",
-            "oci.common.process.args.required-linux",
+            rules::PROCESS_ARGS_REQUIRED_LINUX,
             "process.args is required for a Linux workload",
         ),
     }
@@ -142,7 +142,7 @@ fn validate_process(
     if process.contains_key("commandLine") {
         collector.unsupported(
             "/process/commandLine",
-            "oci.platform.windows-process-field",
+            rules::PLATFORM_WINDOWS_PROCESS_FIELD,
             "process.commandLine is a native Windows process field",
         );
     }
@@ -153,7 +153,7 @@ fn validate_process(
     {
         collector.unsupported(
             "/process/user/username",
-            "oci.platform.windows-process-field",
+            rules::PLATFORM_WINDOWS_PROCESS_FIELD,
             "process.user.username is a native Windows process field",
         );
     }
@@ -176,7 +176,7 @@ fn validate_environment(
         let Some((name, _)) = entry.split_once('=') else {
             collector.invalid(
                 path,
-                "oci.common.environment.assignment",
+                rules::ENVIRONMENT_ASSIGNMENT,
                 "environment entries must use NAME=VALUE form",
             );
             continue;
@@ -184,14 +184,14 @@ fn validate_environment(
         if name.is_empty() {
             collector.invalid(
                 &path,
-                "oci.common.environment.name.non-empty",
+                rules::ENVIRONMENT_NAME_NON_EMPTY,
                 "environment variable names must not be empty",
             );
         }
         if contains_nul(entry) {
             collector.invalid(
                 path,
-                "oci.common.environment.no-nul",
+                rules::ENVIRONMENT_NO_NUL,
                 "environment entries must not contain a NUL byte",
             );
         }
@@ -208,7 +208,7 @@ fn validate_rlimits(process: &Map<String, Value>, collector: &mut ViolationColle
             if !seen.insert(kind) {
                 collector.invalid(
                     format!("/process/rlimits/{index}/type"),
-                    "oci.common.rlimit.type.unique",
+                    rules::RLIMIT_TYPE_UNIQUE,
                     format!("duplicate process rlimit type {kind}"),
                 );
             }
@@ -220,7 +220,7 @@ fn validate_rlimits(process: &Map<String, Value>, collector: &mut ViolationColle
             if soft > hard {
                 collector.invalid(
                     format!("/process/rlimits/{index}/soft"),
-                    "oci.common.rlimit.soft-at-most-hard",
+                    rules::RLIMIT_SOFT_AT_MOST_HARD,
                     format!("rlimit soft value {soft} exceeds hard value {hard}"),
                 );
             }
@@ -240,7 +240,7 @@ fn validate_io_priority(process: &Map<String, Value>, collector: &mut ViolationC
     if !(0..=7).contains(&priority) {
         collector.invalid(
             "/process/ioPriority/priority",
-            "oci.linux.io-priority.range",
+            rules::IO_PRIORITY_RANGE,
             "Linux I/O priority must be between 0 and 7",
         );
     }
@@ -262,7 +262,7 @@ fn validate_scheduler(process: &Map<String, Value>, collector: &mut ViolationCol
     {
         collector.invalid(
             "/process/scheduler/nice",
-            "oci.linux.scheduler.nice.range",
+            rules::SCHEDULER_NICE_RANGE,
             "scheduler nice must be between -20 and 19 for SCHED_OTHER or SCHED_BATCH",
         );
     }
@@ -274,7 +274,7 @@ fn validate_scheduler(process: &Map<String, Value>, collector: &mut ViolationCol
     {
         collector.invalid(
             "/process/scheduler/priority",
-            "oci.linux.scheduler.priority.policy",
+            rules::SCHEDULER_PRIORITY_POLICY,
             "scheduler priority is valid only for SCHED_FIFO or SCHED_RR",
         );
     }
@@ -289,7 +289,7 @@ fn validate_scheduler(process: &Map<String, Value>, collector: &mut ViolationCol
     if policy != "SCHED_DEADLINE" && has_deadline_values {
         collector.invalid(
             "/process/scheduler",
-            "oci.linux.scheduler.deadline-fields.policy",
+            rules::SCHEDULER_DEADLINE_FIELDS_POLICY,
             "scheduler runtime, deadline, and period are valid only for SCHED_DEADLINE",
         );
     }
@@ -309,7 +309,7 @@ fn validate_scheduler(process: &Map<String, Value>, collector: &mut ViolationCol
         if runtime == 0 || runtime > deadline || deadline > period {
             collector.invalid(
                 "/process/scheduler",
-                "oci.linux.scheduler.deadline-order",
+                rules::SCHEDULER_DEADLINE_ORDER,
                 "SCHED_DEADLINE requires 0 < runtime <= deadline <= period",
             );
         }
@@ -325,13 +325,13 @@ fn validate_mounts(configuration: &Map<String, Value>, collector: &mut Violation
             if destination.is_empty() {
                 collector.invalid(
                     format!("/mounts/{index}/destination"),
-                    "oci.common.mount.destination.non-empty",
+                    rules::MOUNT_DESTINATION_NON_EMPTY,
                     "mount destination must not be empty",
                 );
             } else if contains_nul(destination) {
                 collector.invalid(
                     format!("/mounts/{index}/destination"),
-                    "oci.common.path.no-nul",
+                    rules::PATH_NO_NUL,
                     "mount destination must not contain a NUL byte",
                 );
             }
@@ -347,7 +347,7 @@ fn validate_mounts(configuration: &Map<String, Value>, collector: &mut Violation
             };
             collector.invalid(
                 format!("/mounts/{index}/{missing}"),
-                "oci.common.mount.id-mappings.paired",
+                rules::MOUNT_ID_MAPPINGS_PAIRED,
                 "mount uidMappings and gidMappings must be specified together",
             );
         }
@@ -367,14 +367,14 @@ fn validate_hooks(configuration: &Map<String, Value>, collector: &mut ViolationC
                 if !is_posix_absolute(path) {
                     collector.invalid(
                         format!("/hooks/{phase}/{index}/path"),
-                        "oci.common.hook.path.absolute",
+                        rules::HOOK_PATH_ABSOLUTE,
                         "hook path must be absolute",
                     );
                 }
                 if contains_nul(path) {
                     collector.invalid(
                         format!("/hooks/{phase}/{index}/path"),
-                        "oci.common.path.no-nul",
+                        rules::PATH_NO_NUL,
                         "hook path must not contain a NUL byte",
                     );
                 }
@@ -397,7 +397,7 @@ fn validate_annotations(configuration: &Map<String, Value>, collector: &mut Viol
     if annotations.contains_key("") {
         collector.invalid(
             "/annotations/",
-            "oci.common.annotation.key.non-empty",
+            rules::ANNOTATION_KEY_NON_EMPTY,
             "annotation keys must not be empty",
         );
     }

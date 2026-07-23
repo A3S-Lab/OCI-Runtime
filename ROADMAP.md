@@ -94,7 +94,7 @@ The WHPX driver remains `probe-only`, and the host service advertises only the
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Review and bind all 655 pending common, Linux, and VM normative entries
+- [ ] Review and bind all 630 pending common, Linux, and VM normative entries
   to exact rules, enforcement owners, and positive and negative evidence.
 - [x] Add version-negotiated local IPC transport for out-of-process callers.
 

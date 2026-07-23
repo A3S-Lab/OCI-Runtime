@@ -1,0 +1,268 @@
+{
+  "schemaVersion": "a3s.oci.normative-evidence.v1",
+  "ociRuntimeSpec": "1.3.0",
+  "upstreamCommit": "92249139eea7161e13745abd4cb6d0ea02a3227a",
+  "bindings": [
+    {
+      "requirementIds": [
+        "sha256:e3edff401547ac1dea717dc4be796cde5ac7aff43208ac9719e2de67c2145e6c"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.root.required"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::requires_a_root_for_linux_workloads"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:2ee4476f21d447258ad18b2cab33f364f0756c4b25216744cbd0314497bcd7e3"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.root.path.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:f7d4882643e10264a1e6334b116092921f1e0a4276c1e0e6fc8025cb6549cfc7"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.required-for-start"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::start_requires_a_process_but_configuration_loading_does_not"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:121b5c9bd83c6a8f1daa0f073955775b178a1148a20be7262546c37b28158cd0"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.args.non-empty",
+        "oci.common.process.args.required-linux",
+        "oci.common.process.executable.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:c082d6891182727bf42a85f13d30fcf33d510d7fe229565c42f080bc57fa6a36"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.cwd.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:5a2d519f228dca83fef9c028418d201b81590cdee323603ec687b4372c58775c"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.rlimit.type.unique"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:ccb4ddae139f49f522c030aabfb27ba33d94e80a3b99428b48dda6c0f9ff35d8",
+        "sha256:4574f1f626f0905ede6b72ebe7a483cabe1d4f91187f0520127dce04eeb3d4ed"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.hook.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:c27b6bae5d95b1f12d147cfb551141488c39e7b15561f3937fe9e0134be96ded"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.mount.destination.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:328400910decbdeb351b4e5c478e117ea81fea015a93ba9379f07ef6394e5304",
+        "sha256:0164b27593de09918a968255a8903b5d9bafd6e38c8c43dac55702a9773274ad"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.mount.id-mappings.paired"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:964cdbc18ba751489db3a08921658519eb9ca3bfd14988b93ed1680acac0b294"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.annotation.key.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:aad4531adb0d9808b8430e1999e9361c9e0f8532c9db4a6aaddb031c08ea46f0"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.namespace.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:2ce888418c337578e8544eba2afa32fc89eb5dad4156481bfebc6200484b0025"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.namespace.type.unique"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:e332cc6bca0930016cdd669785aa25fbd627ce8f951a996118a5172489e8f95d",
+        "sha256:e288b8f4b39b37fffa1234b455188672a229ec3e6b14afbe053fe091b554abbe"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.cpu.burst-at-most-quota"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:740ac90fb12eb528d2f9f993405048707294bf8d931d3d1f6b3cccea4c900970"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.block-io.weight-device.weight-required"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:09e3e030e1407cf927c6074a67fb9fd9dd3f18858afb3e2cd4f0bea4eb852639"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.rdma.limit-required"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:687a2720881b633c508a91042d1518b94fa0e55e39803e284ed0e9b0f32178d5",
+        "sha256:77a9af483847153520b1685497e7dd44efc984f82e68ae401765838032d24845"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.container-path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:5baf766eb335fb8cd23c8fab434f515894fd1088c18bbd42092e216582adb4ba"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.io-priority.range"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:d3b3bf7d5a3b2803391f9073450ddd732faad448e5d24f513057a880d2380faa",
+        "sha256:fb4c7f06a3184dc6bdec28d8456c44776484c56307a8321d6e5d202e1799022f",
+        "sha256:678aade3513e7385c84d39cf95341c610269f98dec7ff8f3be4e9fb8db7bcfcb",
+        "sha256:84e17d4e9a43b1084e85b6742d1eeadf64efa9680f92f67f1afdac062d832562"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.vm.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
+    }
+  ]
+}

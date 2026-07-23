@@ -2,6 +2,7 @@
 
 mod common;
 mod linux;
+mod rules;
 mod vm;
 
 use std::fmt;
@@ -11,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{Error, ErrorCode, OciSchemaDocument, OciSchemaValidator, Result};
+
+pub use rules::{OciSemanticRule, OciSemanticRuleKind};
 
 const MAX_REPORTED_VIOLATIONS: usize = 64;
 
@@ -78,6 +81,12 @@ impl OciSemanticValidator {
     pub fn new() -> Result<Self> {
         OciSchemaValidator::new()?;
         Ok(Self)
+    }
+
+    /// Return the complete stable semantic-rule registry.
+    #[must_use]
+    pub const fn rules() -> &'static [OciSemanticRule] {
+        rules::ALL
     }
 
     /// Validate schema first, then return bounded semantic evidence.
@@ -190,7 +199,7 @@ impl ViolationCollector {
     fn invalid(
         &mut self,
         instance_path: impl Into<String>,
-        rule: &'static str,
+        rule: OciSemanticRule,
         message: impl Into<String>,
     ) {
         self.push(
@@ -204,7 +213,7 @@ impl ViolationCollector {
     fn unsupported(
         &mut self,
         instance_path: impl Into<String>,
-        rule: &'static str,
+        rule: OciSemanticRule,
         message: impl Into<String>,
     ) {
         self.push(
@@ -218,7 +227,7 @@ impl ViolationCollector {
     fn push(
         &mut self,
         instance_path: impl Into<String>,
-        rule: &'static str,
+        rule: OciSemanticRule,
         kind: OciSemanticViolationKind,
         message: impl Into<String>,
     ) {
@@ -231,7 +240,7 @@ impl ViolationCollector {
         }
         self.violations.push(OciSemanticViolation {
             instance_path: instance_path.into(),
-            rule: rule.to_string(),
+            rule: rule.id.to_string(),
             kind,
             message: message.into(),
         });

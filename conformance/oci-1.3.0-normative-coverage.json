@@ -1419,10 +1419,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "On all other platforms, this field is REQUIRED.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.root.required"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::requires_a_root_for_linux_workloads"
+      ]
     },
     {
       "id": "sha256:2ee4476f21d447258ad18b2cab33f364f0756c4b25216744cbd0314497bcd7e3",
@@ -1433,10 +1438,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`path`** (string, REQUIRED) Specifies the path to the root filesystem for the container.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.root.path.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:a215d688a668698533b7c6a564505b78bf0920b49c34fe0d79ef1d5de06785f1",
@@ -1559,10 +1569,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`destination`** (string, REQUIRED) Destination of mount point: path inside container.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.mount.destination.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:62db98f3a07902992e78d479609c720f776f0097539237d59b39168e32167bad",
@@ -2917,10 +2932,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If specified, it MUST be specified along with `gidMappings`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.mount.id-mappings.paired"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:aa1e8cfdb933712308374484297f6b884c6d947dbd0babe8e682e3bd49c51776",
@@ -2973,10 +2993,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If specified, it MUST be specified along with `uidMappings`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.mount.id-mappings.paired"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:afc4d05a6ea0135c371b7ab6289be3c76f2534dbea7c013ec79b91fd39faab99",
@@ -3001,10 +3026,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "This property is REQUIRED when [`start`](runtime.md#start) is called.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.required-for-start"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::start_requires_a_process_but_configuration_loading_does_not"
+      ]
     },
     {
       "id": "sha256:018569c898d550bf2e49d9c82e879d4bb43414b1a2b894532e16e9b44188782e",
@@ -3099,10 +3129,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This value MUST be an absolute path.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.cwd.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:2d308cae038f92e6e4e681470ddbb262740633d8ff27cb5c666b56103ac43b1c",
@@ -3141,10 +3176,17 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "This specification extends the IEEE standard in that at least one entry is REQUIRED (non-Windows), and that entry is used with the same semantics as `execvp`'s *file*. This field is OPTIONAL on Windows, and `commandLine` is REQUIRED if this field is omitted.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.args.non-empty",
+        "oci.common.process.args.required-linux",
+        "oci.common.process.executable.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:7885296846b768ba504df1869e9bcc3a0d1821fb987200edadd11c921cba3560",
@@ -3309,10 +3351,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If `rlimits` contains duplicated entries with same `type`, the runtime MUST [generate an error](runtime.md#errors).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.rlimit.type.unique"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:be00d67ca50b9d646810a6a66880f15b185f2d530216a4a2946d04f8aa619dd5",
@@ -3659,10 +3706,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`priority`** (int, REQUIRED) specifies the priority level within the class. The value should be an integer ranging from 0 (highest) to 7 (lowest).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.io-priority.range"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:6256f5f4161b174897726d79430c3cecf37414270cfdcf6e56ae7b4a7eb9ce9c",
@@ -4065,10 +4117,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This specification extends the IEEE standard in that **`path`** MUST be absolute.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.hook.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:2843797abcedc768fe0e3450b049d5e9fa1a92ff12a1698100fe404082ecfb5b",
@@ -4191,10 +4248,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This specification extends the IEEE standard in that **`path`** MUST be absolute.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.hook.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:ef85c0d03cab985775eddb1f1d1dbb038ec2ade38c33d354d45733d249095d0d",
@@ -4835,10 +4897,15 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "Keys MUST NOT be an empty string.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.annotation.key.non-empty"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:185ef1cbecc6097d381abc609393b3b86c9b3b790c690175c0c28f0709d49613",
@@ -5873,10 +5940,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This value MUST be an absolute path in the [runtime mount namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.namespace.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:bcc3a006727c85a5249e844802ee69d97cb5f11a83362daf84913e1d35387206",
@@ -5943,10 +6015,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If a `namespaces` field contains duplicated namespaces with same `type`, the runtime MUST [generate an error](runtime.md#errors).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.namespace.type.unique"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:a01aa6f12002e8d8c8c8fbb3a2dc645cde3b9a65bc5e72314998101cc6abb520",
@@ -7049,10 +7126,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If specified with any (valid) positive value, it MUST be no smaller than `burst` (runtimes MAY generate an error).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.cpu.burst-at-most-quota"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:aa74ab9199eb278b97ef357199b34e434ef5d5ea108a88facd9b18e47f441de3",
@@ -7091,10 +7173,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If specified, this value MUST be no larger than any positive `quota` (runtimes MAY generate an error).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.cpu.burst-at-most-quota"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:5d658da3f99d4aca258719bc54e29914c5c94d85b607de4086f77ab3b6b6c734",
@@ -7301,10 +7388,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "You MUST specify at least one of `weight` or `leafWeight` in a given entry, and MAY specify both.",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.block-io.weight-device.weight-required"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:31b63cea15642d288ff4773da60e617317842a633e4ce78b678fa3eb2affe995",
@@ -7609,10 +7701,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "You MUST specify at least one of the `hcaHandles` or `hcaObjects` in a given entry, and MAY specify both.",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.rdma.limit-required"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:eb39bd2f2c6d205b9a01e36ee459c86a6a36ca76bbb6defa6101cd1dec1282d2",
@@ -8771,10 +8868,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The values MUST be absolute paths in the [container namespace](glossary.md#container_namespace).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.container-path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:0956a5c9fb318d03be9f752c46f1fc81475c6adbcbbb9433882cef23d5aa7292",
@@ -8799,10 +8901,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The values MUST be absolute paths in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.container-path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:9c62e4d50c0d74140a2248152c133760f087da7d5d0f6296a89ed53a5848fc95",
@@ -9761,10 +9868,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This value MUST be an absolute path in the [runtime mount namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.vm.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:509788e0e8482f454f0d851993bec2a8d3fb3c1f8bac5a10dcaef0484db24c69",
@@ -9817,10 +9929,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This value MUST be an absolute path in the [runtime mount namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.vm.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:d3b871baba551b934b0b915b898b239df51cf459ec1d2b118dc02834ad54636b",
@@ -9859,10 +9976,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This value MUST be an absolute path in the [runtime mount namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.vm.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:add77c5040d7c155b9d392efadb2cfe7193f20e37bb84ef7dd8e8b37d21282ed",
@@ -9901,10 +10023,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This value MUST be an absolute path in the [runtime mount namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.vm.path.absolute"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:c79728fb5f64089b055b2a432c02fc3680ae9671ee1c7549344d0a3335ea96c1",

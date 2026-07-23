@@ -33,7 +33,8 @@ The v1.3.0 corpus currently contains 764 entries:
 | --- | ---: | --- |
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
-| `pending-review` | 655 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `validated` | 25 | Exact semantic rules with positive and negative SDK tests |
+| `pending-review` | 630 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
@@ -52,6 +53,14 @@ non-empty rule and test evidence. The verifier rejects:
 - empty or duplicate rule and test IDs;
 - an implementation claim without both rule and test evidence.
 
+Reviewed promotions live in
+`conformance/oci-1.3.0-normative-evidence.json`. The generator applies that
+small source-of-truth file to a fresh 764-entry baseline and produces
+`conformance/oci-1.3.0-normative-coverage.json`. The SDK's typed 67-rule
+registry is checked in both directions: an evidence rule must exist, and every
+rule classified as directly normative must have at least one requirement
+binding.
+
 Promotion is monotonic in reviewed commits:
 
 ```text
@@ -68,12 +77,12 @@ For an intentional OCI release update:
 
 1. replace the vendored corpus and schemas from one exact upstream commit;
 2. update the supported version and provenance;
-3. generate fresh schema and normative baselines;
+3. generate a fresh schema baseline and apply reviewed normative evidence;
 4. review every added, removed, or changed inventory item;
 5. restore exact rule, owner, and test mappings only where the new release
    still has valid evidence;
 6. run the full conformance and platform suites before raising support.
 
-The normative generator emits a baseline and resets applicable entries to
-`pending-review`. It is not a routine formatting command and must not be used
-to erase reviewed evidence.
+The normative generator rejects stale evidence instead of silently dropping
+it. New or changed requirements remain `pending-review` until an explicit
+binding is added.

@@ -59,6 +59,8 @@ The project is experimental. The current Windows milestone implements:
   entries;
 - phase-aware, bounded semantic reports with an initial fail-closed rule set
   for common, Linux, and VM cross-field requirements;
+- a typed registry for all 67 semantic rules, with 20 normative rules bound to
+  25 exact OCI source entries and positive and negative tests;
 - SDK request validation at the in-process client, IPC client, and
   authenticated server boundaries, including bounded event, output, and stdin
   payloads;
@@ -424,11 +426,13 @@ conformance inputs:
 cargo run -p a3s-oci-sdk --example generate_schema_coverage -- \
   conformance/oci-1.3.0-schema-coverage.json
 cargo run -p a3s-oci-sdk --example generate_normative_coverage -- \
+  conformance/oci-1.3.0-normative-evidence.json \
   conformance/oci-1.3.0-normative-coverage.json
 ```
 
-The normative generator creates a review baseline. It must not overwrite
-manually promoted rule and test evidence during routine development.
+The normative generator applies the reviewed evidence file to a fresh corpus
+baseline. Unknown requirements or rules, duplicate bindings, and orphaned
+normative semantic rules fail generation.
 
 On Windows, also run the real host probe:
 
@@ -473,6 +477,11 @@ always applies the configuration phase; start-time validation additionally
 requires a runnable process. The current rule set establishes the mandatory
 fail-closed boundary, while the generated normative-requirement manifest and
 driver enforcement evidence remain release gates.
+
+`OciSemanticValidator::rules()` returns the complete typed rule registry and
+classifies each entry as a direct normative rule, a runtime/kernel constraint,
+or platform policy. CI requires every direct normative rule to appear in the
+reviewed OCI evidence map.
 
 `OciNormativeInventory` exposes the pinned specification-document digests and
 all RFC 2119 occurrences to conformance tooling. Its verifier requires a

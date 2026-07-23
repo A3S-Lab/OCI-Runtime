@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use super::{contains_nul, is_runtime_absolute, ViolationCollector};
+use super::{contains_nul, is_runtime_absolute, rules, ViolationCollector};
 
 pub(super) fn inspect(value: &Value, collector: &mut ViolationCollector) {
     let Some(vm) = value.get("vm").and_then(Value::as_object) else {
@@ -38,14 +38,14 @@ fn validate_runtime_path(
     if !is_runtime_absolute(path) {
         collector.invalid(
             instance_path,
-            "oci.vm.path.absolute",
+            rules::VM_PATH_ABSOLUTE,
             "VM runtime paths must be absolute",
         );
     }
     if contains_nul(path) {
         collector.invalid(
             instance_path,
-            "oci.common.path.no-nul",
+            rules::PATH_NO_NUL,
             "VM runtime paths must not contain a NUL byte",
         );
     }
@@ -64,7 +64,7 @@ fn validate_parameters(
         if contains_nul(parameter) {
             collector.invalid(
                 format!("{base_path}/{index}"),
-                "oci.vm.parameter.no-nul",
+                rules::VM_PARAMETER_NO_NUL,
                 "VM parameters must not contain a NUL byte",
             );
         }

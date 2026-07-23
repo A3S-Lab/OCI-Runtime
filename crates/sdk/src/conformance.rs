@@ -248,6 +248,27 @@ pub struct OciNormativeCoverageManifest {
     pub items: Vec<OciNormativeCoverageItem>,
 }
 
+/// Reviewed promotions applied to the generated normative baseline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OciNormativeEvidenceManifest {
+    pub schema_version: String,
+    pub oci_runtime_spec: String,
+    pub upstream_commit: String,
+    pub bindings: Vec<OciNormativeEvidenceBinding>,
+}
+
+/// One evidence mapping that may promote several equivalent requirements.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OciNormativeEvidenceBinding {
+    pub requirement_ids: Vec<String>,
+    pub disposition: OciNormativeDisposition,
+    pub owner: String,
+    pub rule_ids: Vec<String>,
+    pub test_ids: Vec<String>,
+}
+
 /// Offline inventory for the normative OCI Runtime Specification 1.3.0 text.
 ///
 /// The corpus is the exact document list linked by the pinned `spec.md` table
@@ -306,6 +327,58 @@ impl OciNormativeInventory {
         }
     }
 
+    /// Apply reviewed evidence bindings to a newly generated baseline.
+    pub fn coverage_with_evidence(
+        self,
+        evidence: &OciNormativeEvidenceManifest,
+    ) -> Result<OciNormativeCoverageManifest> {
+        if evidence.schema_version != "a3s.oci.normative-evidence.v1"
+            || evidence.oci_runtime_spec != OCI_RUNTIME_SPEC_VERSION
+            || evidence.upstream_commit != OCI_RUNTIME_SPEC_COMMIT
+        {
+            return Err(coverage_error(
+                "normative evidence metadata does not match the pinned OCI release",
+            ));
+        }
+
+        let mut manifest = self.coverage_baseline();
+        let indexes = manifest
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (item.requirement.id.clone(), index))
+            .collect::<BTreeMap<_, _>>();
+        let mut promoted = BTreeSet::new();
+        for binding in &evidence.bindings {
+            verify_evidence_binding(binding)?;
+            for requirement_id in &binding.requirement_ids {
+                if !promoted.insert(requirement_id) {
+                    return Err(coverage_error(format!(
+                        "normative requirement {requirement_id} has more than one evidence binding"
+                    )));
+                }
+                let Some(index) = indexes.get(requirement_id).copied() else {
+                    return Err(coverage_error(format!(
+                        "normative evidence references unknown requirement {requirement_id}"
+                    )));
+                };
+                let item = &mut manifest.items[index];
+                if item.disposition != OciNormativeDisposition::PendingReview {
+                    return Err(coverage_error(format!(
+                        "normative evidence cannot replace the generated {:?} disposition for {}",
+                        item.disposition, requirement_id
+                    )));
+                }
+                item.disposition = binding.disposition;
+                item.owner.clone_from(&binding.owner);
+                item.rule_ids.clone_from(&binding.rule_ids);
+                item.test_ids.clone_from(&binding.test_ids);
+            }
+        }
+        self.verify_coverage(&manifest)?;
+        Ok(manifest)
+    }
+
     /// Verify that a coverage manifest has no missing, stale, or invalid entry.
     pub fn verify_coverage(self, manifest: &OciNormativeCoverageManifest) -> Result<()> {
         if manifest.schema_version != NORMATIVE_COVERAGE_SCHEMA_VERSION
@@ -358,6 +431,7 @@ impl OciNormativeInventory {
             }
             verify_coverage_item(item)?;
         }
+        verify_semantic_rule_coverage(manifest)?;
         Ok(())
     }
 }
@@ -610,6 +684,64 @@ fn verify_coverage_item(item: &OciNormativeCoverageItem) -> Result<()> {
     Ok(())
 }
 
+fn verify_evidence_binding(binding: &OciNormativeEvidenceBinding) -> Result<()> {
+    if binding.requirement_ids.is_empty() {
+        return Err(coverage_error(
+            "normative evidence binding has no requirement IDs",
+        ));
+    }
+    if !matches!(
+        binding.disposition,
+        OciNormativeDisposition::Validated
+            | OciNormativeDisposition::Enforced
+            | OciNormativeDisposition::Conformant
+    ) {
+        return Err(coverage_error(
+            "reviewed normative evidence may only promote to validated, enforced, or conformant",
+        ));
+    }
+    if binding.owner.trim().is_empty() || binding.rule_ids.is_empty() || binding.test_ids.is_empty()
+    {
+        return Err(coverage_error(
+            "normative evidence requires an owner, rule IDs, and test IDs",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_semantic_rule_coverage(manifest: &OciNormativeCoverageManifest) -> Result<()> {
+    let registry = crate::OciSemanticValidator::rules();
+    let registered = registry.iter().map(|rule| rule.id).collect::<BTreeSet<_>>();
+    if registered.len() != registry.len() {
+        return Err(coverage_error(
+            "semantic rule registry contains duplicate rule IDs",
+        ));
+    }
+
+    let referenced = manifest
+        .items
+        .iter()
+        .flat_map(|item| item.rule_ids.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    if let Some(unknown) = referenced
+        .iter()
+        .find(|rule_id| !registered.contains(**rule_id))
+    {
+        return Err(coverage_error(format!(
+            "normative coverage references unknown semantic rule {unknown}"
+        )));
+    }
+    if let Some(orphan) = registry.iter().find(|rule| {
+        rule.kind == crate::OciSemanticRuleKind::Normative && !referenced.contains(rule.id)
+    }) {
+        return Err(coverage_error(format!(
+            "normative semantic rule {} has no specification evidence binding",
+            orphan.id
+        )));
+    }
+    Ok(())
+}
+
 fn coverage_error(message: impl Into<String>) -> Error {
     Error::new(ErrorCode::InvalidArgument, message).for_operation("verify-oci-normative-coverage")
 }
@@ -620,7 +752,8 @@ mod tests {
 
     use super::{
         canonical_text_sha256, keyword_occurrences, OciNormativeCoverageManifest,
-        OciNormativeInventory, OciNormativeKeyword, SPECIFICATION_DOCUMENTS,
+        OciNormativeEvidenceManifest, OciNormativeInventory, OciNormativeKeyword,
+        SPECIFICATION_DOCUMENTS,
     };
 
     #[test]
@@ -655,9 +788,14 @@ mod tests {
             "../../../conformance/oci-1.3.0-normative-coverage.json"
         ))
         .expect("decode checked-in normative coverage");
-        OciNormativeInventory::new()
-            .verify_coverage(&manifest)
-            .expect("checked-in normative coverage must be complete and current");
+        let evidence: OciNormativeEvidenceManifest = serde_json::from_str(include_str!(
+            "../../../conformance/oci-1.3.0-normative-evidence.json"
+        ))
+        .expect("decode checked-in normative evidence");
+        let generated = OciNormativeInventory::new()
+            .coverage_with_evidence(&evidence)
+            .expect("checked-in normative evidence must be complete and current");
+        assert_eq!(manifest, generated);
     }
 
     #[test]

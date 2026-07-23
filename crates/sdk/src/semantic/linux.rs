@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use super::{contains_nul, is_posix_absolute, ViolationCollector};
+use super::{contains_nul, is_posix_absolute, rules, OciSemanticRule, ViolationCollector};
 
 #[derive(Default)]
 struct NamespaceFacts {
@@ -37,14 +37,14 @@ pub(super) fn inspect(value: &Value, collector: &mut ViolationCollector) {
     if (uid_specified || gid_specified) && !namespaces.creates("user") {
         collector.invalid(
             "/linux/namespaces",
-            "oci.linux.id-mapping.requires-new-user-namespace",
+            rules::ID_MAPPING_REQUIRES_NEW_USER_NAMESPACE,
             "Linux UID/GID mappings require a newly created user namespace",
         );
     }
     if namespaces.creates("user") && !(uid_mappings || gid_mappings) {
         collector.invalid(
             "/linux/namespaces",
-            "oci.linux.user-namespace.mapping-required",
+            rules::USER_NAMESPACE_MAPPING_REQUIRED,
             "a newly created Linux user namespace requires UID or GID mappings",
         );
     }
@@ -82,7 +82,7 @@ fn validate_namespaces(
         if facts.entries.insert(kind.to_string(), creates).is_some() {
             collector.invalid(
                 format!("/linux/namespaces/{index}/type"),
-                "oci.linux.namespace.type.unique",
+                rules::NAMESPACE_TYPE_UNIQUE,
                 format!("duplicate Linux namespace type {kind}"),
             );
         }
@@ -90,14 +90,14 @@ fn validate_namespaces(
             if !is_posix_absolute(path) {
                 collector.invalid(
                     format!("/linux/namespaces/{index}/path"),
-                    "oci.linux.namespace.path.absolute",
+                    rules::NAMESPACE_PATH_ABSOLUTE,
                     "Linux namespace paths must be absolute",
                 );
             }
             if contains_nul(path) {
                 collector.invalid(
                     format!("/linux/namespaces/{index}/path"),
-                    "oci.common.path.no-nul",
+                    rules::PATH_NO_NUL,
                     "Linux namespace paths must not contain a NUL byte",
                 );
             }
@@ -138,7 +138,7 @@ fn validate_mapping_array(
         if size == 0 {
             collector.invalid(
                 format!("{base_path}/{index}/size"),
-                "oci.linux.id-mapping.size.nonzero",
+                rules::ID_MAPPING_SIZE_NONZERO,
                 "ID mapping size must be greater than zero",
             );
             continue;
@@ -149,7 +149,7 @@ fn validate_mapping_array(
         if container_end > address_space_end {
             collector.invalid(
                 format!("{base_path}/{index}/containerID"),
-                "oci.linux.id-mapping.container-range",
+                rules::ID_MAPPING_CONTAINER_RANGE,
                 "ID mapping exceeds the uint32 container ID space",
             );
             continue;
@@ -157,7 +157,7 @@ fn validate_mapping_array(
         if host_end > address_space_end {
             collector.invalid(
                 format!("{base_path}/{index}/hostID"),
-                "oci.linux.id-mapping.host-range",
+                rules::ID_MAPPING_HOST_RANGE,
                 "ID mapping exceeds the uint32 host ID space",
             );
             continue;
@@ -183,7 +183,7 @@ fn validate_mapping_array(
             ) {
                 collector.invalid(
                     format!("{base_path}/{}/containerID", right.index),
-                    "oci.linux.id-mapping.container-range.unique",
+                    rules::ID_MAPPING_CONTAINER_RANGE_UNIQUE,
                     format!(
                         "container ID range overlaps mapping at index {}",
                         left.index
@@ -198,7 +198,7 @@ fn validate_mapping_array(
             ) {
                 collector.invalid(
                     format!("{base_path}/{}/hostID", right.index),
-                    "oci.linux.id-mapping.host-range.unique",
+                    rules::ID_MAPPING_HOST_RANGE_UNIQUE,
                     format!("host ID range overlaps mapping at index {}", left.index),
                 );
             }
@@ -245,7 +245,7 @@ fn validate_mount_id_mappings(
         if idmap && recursive_idmap {
             collector.invalid(
                 format!("{base_path}/options"),
-                "oci.linux.mount.idmap.mode.unique",
+                rules::MOUNT_IDMAP_MODE_UNIQUE,
                 "mount options must not contain both idmap and ridmap",
             );
         }
@@ -255,7 +255,7 @@ fn validate_mount_id_mappings(
         {
             collector.invalid(
                 format!("{base_path}/options"),
-                "oci.linux.mount.idmap.mapping-required",
+                rules::MOUNT_IDMAP_MAPPING_REQUIRED,
                 "idmapped mounts require paired mount mappings or complete container user mappings",
             );
         }
@@ -269,7 +269,7 @@ fn validate_container_paths(linux: &Map<String, Value>, collector: &mut Violatio
                 validate_posix_path(
                     path,
                     &format!("/linux/devices/{index}/path"),
-                    "oci.linux.device.path.absolute",
+                    rules::DEVICE_PATH_ABSOLUTE,
                     "Linux device paths must be absolute",
                     collector,
                 );
@@ -284,7 +284,7 @@ fn validate_container_paths(linux: &Map<String, Value>, collector: &mut Violatio
             validate_posix_path(
                 path,
                 &format!("/linux/{field}/{index}"),
-                "oci.linux.container-path.absolute",
+                rules::CONTAINER_PATH_ABSOLUTE,
                 "Linux masked and read-only paths must be absolute",
                 collector,
             );
@@ -295,7 +295,7 @@ fn validate_container_paths(linux: &Map<String, Value>, collector: &mut Violatio
 fn validate_posix_path(
     value: &str,
     instance_path: &str,
-    rule: &'static str,
+    rule: OciSemanticRule,
     message: &'static str,
     collector: &mut ViolationCollector,
 ) {
@@ -305,7 +305,7 @@ fn validate_posix_path(
     if contains_nul(value) {
         collector.invalid(
             instance_path,
-            "oci.common.path.no-nul",
+            rules::PATH_NO_NUL,
             "Linux container paths must not contain a NUL byte",
         );
     }
@@ -325,7 +325,7 @@ fn validate_namespace_dependent_fields(
     {
         collector.invalid(
             "/hostname",
-            "oci.linux.hostname.requires-uts-namespace",
+            rules::HOSTNAME_REQUIRES_UTS_NAMESPACE,
             "hostname requires an explicit Linux UTS namespace",
         );
     }
@@ -337,7 +337,7 @@ fn validate_namespace_dependent_fields(
     {
         collector.invalid(
             "/domainname",
-            "oci.linux.domainname.requires-uts-namespace",
+            rules::DOMAINNAME_REQUIRES_UTS_NAMESPACE,
             "domainname requires an explicit Linux UTS namespace",
         );
     }
@@ -350,7 +350,7 @@ fn validate_namespace_dependent_fields(
     if restricts_paths && !namespaces.contains("mount") {
         collector.invalid(
             "/linux/namespaces",
-            "oci.linux.restricted-path.requires-mount-namespace",
+            rules::RESTRICTED_PATH_REQUIRES_MOUNT_NAMESPACE,
             "maskedPaths and readonlyPaths require an explicit Linux mount namespace",
         );
     }
@@ -367,7 +367,7 @@ fn validate_net_devices(
     if !devices.is_empty() && !namespaces.contains("network") {
         collector.invalid(
             "/linux/netDevices",
-            "oci.linux.net-device.requires-network-namespace",
+            rules::NET_DEVICE_REQUIRES_NETWORK_NAMESPACE,
             "netDevices requires an explicit Linux network namespace",
         );
     }
@@ -375,14 +375,14 @@ fn validate_net_devices(
         if !valid_network_device_name(host_name) {
             collector.invalid(
                 format!("/linux/netDevices/{}", escape_pointer(host_name)),
-                "oci.linux.net-device.host-name.valid",
+                rules::NET_DEVICE_HOST_NAME_VALID,
                 "host network device names must be 1-16 bytes and contain no slash, colon, or space",
             );
         }
         if contains_nul(host_name) {
             collector.invalid(
                 format!("/linux/netDevices/{}", escape_pointer(host_name)),
-                "oci.linux.net-device.name.no-nul",
+                rules::NET_DEVICE_NAME_NO_NUL,
                 "network device names must not contain a NUL byte",
             );
         }
@@ -394,14 +394,14 @@ fn validate_net_devices(
             if !name.is_empty() && !valid_network_device_name(name) {
                 collector.invalid(
                     format!("/linux/netDevices/{}/name", escape_pointer(host_name)),
-                    "oci.linux.net-device.container-name.valid",
+                    rules::NET_DEVICE_CONTAINER_NAME_VALID,
                     "container network device names must be 1-16 bytes and contain no slash, colon, or space",
                 );
             }
             if contains_nul(name) {
                 collector.invalid(
                     format!("/linux/netDevices/{}/name", escape_pointer(host_name)),
-                    "oci.linux.net-device.name.no-nul",
+                    rules::NET_DEVICE_NAME_NO_NUL,
                     "network device names must not contain a NUL byte",
                 );
             }
@@ -425,7 +425,7 @@ fn validate_time_offsets(
     if has_offsets && !namespaces.creates("time") {
         collector.invalid(
             "/linux/timeOffsets",
-            "oci.linux.time-offset.requires-new-time-namespace",
+            rules::TIME_OFFSET_REQUIRES_NEW_TIME_NAMESPACE,
             "timeOffsets requires a newly created Linux time namespace",
         );
     }
@@ -456,7 +456,7 @@ fn validate_sysctls(
         if contains_nul(raw_key) || value.as_str().is_some_and(contains_nul) {
             collector.invalid(
                 &path,
-                "oci.linux.sysctl.no-nul",
+                rules::SYSCTL_NO_NUL,
                 "sysctl keys and values must not contain a NUL byte",
             );
             continue;
@@ -465,7 +465,7 @@ fn validate_sysctls(
             if !namespaces.contains("ipc") {
                 collector.invalid(
                     path,
-                    "oci.linux.sysctl.requires-ipc-namespace",
+                    rules::SYSCTL_REQUIRES_IPC_NAMESPACE,
                     format!("sysctl {key} requires an explicit IPC namespace"),
                 );
             }
@@ -475,7 +475,7 @@ fn validate_sysctls(
             if !namespaces.contains("network") {
                 collector.invalid(
                     path,
-                    "oci.linux.sysctl.requires-network-namespace",
+                    rules::SYSCTL_REQUIRES_NETWORK_NAMESPACE,
                     format!("sysctl {key} requires an explicit network namespace"),
                 );
             }
@@ -485,7 +485,7 @@ fn validate_sysctls(
             if !namespaces.contains("uts") {
                 collector.invalid(
                     path,
-                    "oci.linux.sysctl.requires-uts-namespace",
+                    rules::SYSCTL_REQUIRES_UTS_NAMESPACE,
                     "kernel.domainname requires an explicit UTS namespace",
                 );
             }
@@ -494,7 +494,7 @@ fn validate_sysctls(
         if key == "kernel.hostname" {
             collector.invalid(
                 path,
-                "oci.linux.sysctl.hostname-conflict",
+                rules::SYSCTL_HOSTNAME_CONFLICT,
                 "kernel.hostname conflicts with the dedicated OCI hostname field",
             );
             continue;
@@ -503,7 +503,7 @@ fn validate_sysctls(
             if !namespaces.contains("user") {
                 collector.invalid(
                     path,
-                    "oci.linux.sysctl.requires-user-namespace",
+                    rules::SYSCTL_REQUIRES_USER_NAMESPACE,
                     format!("sysctl {key} requires an explicit user namespace"),
                 );
             }
@@ -511,7 +511,7 @@ fn validate_sysctls(
         }
         collector.invalid(
             path,
-            "oci.linux.sysctl.not-namespaced",
+            rules::SYSCTL_NOT_NAMESPACED,
             format!("sysctl {key} is not known to be isolated by a configured namespace"),
         );
     }
@@ -541,7 +541,7 @@ fn validate_seccomp(linux: &Map<String, Value>, collector: &mut ViolationCollect
     if seccomp.contains_key("listenerMetadata") && !seccomp.contains_key("listenerPath") {
         collector.invalid(
             "/linux/seccomp/listenerMetadata",
-            "oci.linux.seccomp.listener-metadata.requires-path",
+            rules::SECCOMP_LISTENER_METADATA_REQUIRES_PATH,
             "seccomp listenerMetadata must not be set without listenerPath",
         );
     }
@@ -553,7 +553,7 @@ fn validate_seccomp(linux: &Map<String, Value>, collector: &mut ViolationCollect
     {
         collector.invalid(
             "/linux/seccomp/defaultErrnoRet",
-            "oci.linux.seccomp.errno-action",
+            rules::SECCOMP_ERRNO_ACTION,
             "defaultErrnoRet is valid only for SCMP_ACT_ERRNO or SCMP_ACT_TRACE",
         );
     }
@@ -569,7 +569,7 @@ fn validate_seccomp(linux: &Map<String, Value>, collector: &mut ViolationCollect
         {
             collector.invalid(
                 format!("/linux/seccomp/syscalls/{index}/errnoRet"),
-                "oci.linux.seccomp.errno-action",
+                rules::SECCOMP_ERRNO_ACTION,
                 "errnoRet is valid only for SCMP_ACT_ERRNO or SCMP_ACT_TRACE",
             );
         }
@@ -600,7 +600,7 @@ fn validate_cpu(resources: &Map<String, Value>, collector: &mut ViolationCollect
         if quota > 0 && burst > quota as u64 {
             collector.invalid(
                 "/linux/resources/cpu/burst",
-                "oci.linux.cpu.burst-at-most-quota",
+                rules::CPU_BURST_AT_MOST_QUOTA,
                 format!("CPU burst {burst} exceeds positive quota {quota}"),
             );
         }
@@ -612,7 +612,7 @@ fn validate_cpu(resources: &Map<String, Value>, collector: &mut ViolationCollect
         if runtime > 0 && runtime as u64 > period {
             collector.invalid(
                 "/linux/resources/cpu/realtimeRuntime",
-                "oci.linux.cpu.realtime-runtime-at-most-period",
+                rules::CPU_REALTIME_RUNTIME_AT_MOST_PERIOD,
                 format!("realtime runtime {runtime} exceeds period {period}"),
             );
         }
@@ -632,7 +632,7 @@ fn validate_block_io(resources: &Map<String, Value>, collector: &mut ViolationCo
         if !device.contains_key("weight") && !device.contains_key("leafWeight") {
             collector.invalid(
                 format!("/linux/resources/blockIO/weightDevice/{index}"),
-                "oci.linux.block-io.weight-device.weight-required",
+                rules::BLOCK_IO_WEIGHT_DEVICE_WEIGHT_REQUIRED,
                 "weightDevice entries require weight, leafWeight, or both",
             );
         }
@@ -649,7 +649,7 @@ fn validate_rdma(resources: &Map<String, Value>, collector: &mut ViolationCollec
         }) {
             collector.invalid(
                 format!("/linux/resources/rdma/{}", escape_pointer(device)),
-                "oci.linux.rdma.limit-required",
+                rules::RDMA_LIMIT_REQUIRED,
                 "RDMA entries require hcaHandles, hcaObjects, or both",
             );
         }
@@ -667,7 +667,7 @@ fn validate_intel_rdt(linux: &Map<String, Value>, collector: &mut ViolationColle
         {
             collector.invalid(
                 "/linux/intelRdt/closID",
-                "oci.linux.intel-rdt.clos-id.safe-name",
+                rules::INTEL_RDT_CLOS_ID_SAFE_NAME,
                 "Intel RDT closID must be a safe resctrl directory name or /",
             );
         }
@@ -677,7 +677,7 @@ fn validate_intel_rdt(linux: &Map<String, Value>, collector: &mut ViolationColle
             if line.contains('\r') || line.contains('\n') {
                 collector.invalid(
                     format!("/linux/intelRdt/schemata/{index}"),
-                    "oci.linux.intel-rdt.schemata.single-line",
+                    rules::INTEL_RDT_SCHEMATA_SINGLE_LINE,
                     "Intel RDT schemata entries must not contain newlines",
                 );
             }
@@ -687,7 +687,7 @@ fn validate_intel_rdt(linux: &Map<String, Value>, collector: &mut ViolationColle
         if !schema.starts_with("L3:") || schema.contains('\r') || schema.contains('\n') {
             collector.invalid(
                 "/linux/intelRdt/l3CacheSchema",
-                "oci.linux.intel-rdt.l3-schema",
+                rules::INTEL_RDT_L3_SCHEMA,
                 "l3CacheSchema must start with L3: and contain no newlines",
             );
         }
@@ -696,7 +696,7 @@ fn validate_intel_rdt(linux: &Map<String, Value>, collector: &mut ViolationColle
         if !schema.starts_with("MB:") || schema.contains('\r') || schema.contains('\n') {
             collector.invalid(
                 "/linux/intelRdt/memBwSchema",
-                "oci.linux.intel-rdt.memory-bandwidth-schema",
+                rules::INTEL_RDT_MEMORY_BANDWIDTH_SCHEMA,
                 "memBwSchema must start with MB: and contain no newlines",
             );
         }
@@ -718,7 +718,7 @@ fn validate_memory_policy(linux: &Map<String, Value>, collector: &mut ViolationC
     if matches!(mode, "MPOL_DEFAULT" | "MPOL_LOCAL") && nodes.is_some() {
         collector.invalid(
             "/linux/memoryPolicy/nodes",
-            "oci.linux.memory-policy.nodes-forbidden",
+            rules::MEMORY_POLICY_NODES_FORBIDDEN,
             format!("{mode} must not specify memory nodes"),
         );
     }
@@ -729,7 +729,7 @@ fn validate_memory_policy(linux: &Map<String, Value>, collector: &mut ViolationC
     {
         collector.invalid(
             "/linux/memoryPolicy/nodes",
-            "oci.linux.memory-policy.nodes-required",
+            rules::MEMORY_POLICY_NODES_REQUIRED,
             format!("{mode} requires at least one memory node"),
         );
     }

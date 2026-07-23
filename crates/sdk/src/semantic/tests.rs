@@ -18,6 +18,20 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 }
 
 #[test]
+fn semantic_rule_registry_is_complete_and_unique() {
+    let registry = OciSemanticValidator::rules();
+    assert_eq!(registry.len(), 67);
+    assert_eq!(
+        registry
+            .iter()
+            .map(|rule| rule.id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        registry.len()
+    );
+}
+
+#[test]
 fn accepts_upstream_minimal_linux_configuration_and_start_fixtures() {
     let minimal: Value = serde_json::from_str(include_str!(
         "../../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal.json"
@@ -63,6 +77,84 @@ fn start_requires_a_process_but_configuration_loading_does_not() {
     assert!(error
         .message
         .contains("oci.common.process.required-for-start"));
+}
+
+#[test]
+fn requires_a_root_for_linux_workloads() {
+    let value = json!({"ociVersion": "1.3.0"});
+    let rules = rules(&value, OciSemanticPhase::Configuration);
+    assert!(rules.contains("oci.common.root.required"));
+}
+
+#[test]
+fn accepts_validated_normative_cross_field_boundaries() {
+    let value = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "process": {
+            "cwd": "/",
+            "args": ["/bin/true"],
+            "user": {"uid": 0, "gid": 0},
+            "ioPriority": {
+                "class": "IOPRIO_CLASS_BE",
+                "priority": 4
+            },
+            "rlimits": [{
+                "type": "RLIMIT_NOFILE",
+                "soft": 1024,
+                "hard": 1024
+            }]
+        },
+        "mounts": [{
+            "destination": "relative-is-valid-but-deprecated",
+            "uidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}],
+            "gidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}]
+        }],
+        "hooks": {
+            "createRuntime": [{
+                "path": "/bin/true",
+                "env": ["VALID=yes"]
+            }]
+        },
+        "annotations": {"com.example.valid": "yes"},
+        "linux": {
+            "uidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}],
+            "gidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}],
+            "namespaces": [
+                {"type": "pid", "path": "/proc/1/ns/pid"},
+                {"type": "user"},
+                {"type": "mount"}
+            ],
+            "maskedPaths": ["/proc/kcore"],
+            "readonlyPaths": ["/proc/sys"],
+            "resources": {
+                "cpu": {"quota": 20, "burst": 10},
+                "blockIO": {
+                    "weightDevice": [{
+                        "major": 8,
+                        "minor": 0,
+                        "weight": 100
+                    }]
+                },
+                "rdma": {"mlx5_0": {"hcaHandles": 1}}
+            }
+        },
+        "vm": {
+            "hypervisor": {"path": "/usr/bin/a3s-vmm"},
+            "kernel": {
+                "path": "/usr/lib/a3s/vmlinux",
+                "initrd": "/usr/lib/a3s/initrd"
+            },
+            "image": {
+                "path": "/var/lib/a3s/root.raw",
+                "format": "raw"
+            }
+        }
+    });
+    OciSemanticValidator::new()
+        .expect("construct validator")
+        .validate(OciSemanticPhase::Start, &value)
+        .expect("normative semantic boundaries must accept valid relationships");
 }
 
 #[test]

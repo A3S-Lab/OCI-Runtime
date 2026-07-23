@@ -26,8 +26,8 @@ pub use bundle::{
 pub use client::RuntimeClient;
 pub use conformance::{
     OciNormativeCoverageItem, OciNormativeCoverageManifest, OciNormativeDisposition,
-    OciNormativeDocument, OciNormativeInventory, OciNormativeKeyword, OciNormativeRequirement,
-    OciSpecificationScope,
+    OciNormativeDocument, OciNormativeEvidenceBinding, OciNormativeEvidenceManifest,
+    OciNormativeInventory, OciNormativeKeyword, OciNormativeRequirement, OciSpecificationScope,
 };
 pub use error::{Error, ErrorCode, Result};
 pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
@@ -43,8 +43,8 @@ pub use schema::{
     OciSchemaViolation,
 };
 pub use semantic::{
-    OciSemanticPhase, OciSemanticValidationReport, OciSemanticValidator, OciSemanticViolation,
-    OciSemanticViolationKind,
+    OciSemanticPhase, OciSemanticRule, OciSemanticRuleKind, OciSemanticValidationReport,
+    OciSemanticValidator, OciSemanticViolation, OciSemanticViolationKind,
 };
 pub use service::OciRuntimeService;
 pub use transport::{
