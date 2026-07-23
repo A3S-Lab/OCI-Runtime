@@ -50,6 +50,8 @@ Completed:
 - pinned OCI Runtime Specification 1.3.0 schemas and upstream fixtures;
 - offline configuration, state, and features schema validation;
 - a CI-checked coverage lock for all 423 schema properties and enum values;
+- a CI-checked inventory of all 764 RFC 2119 occurrences across the 15
+  normative OCI 1.3.0 documents;
 - rejection of unknown configuration properties;
 - immutable SHA-256 binding of the loaded `config.json`;
 - exact `config.json` retention and fail-closed SDK wire deserialization;
@@ -88,10 +90,12 @@ The WHPX driver remains `probe-only`, and the host service advertises only the
 - [x] Import the pinned OCI 1.3.0 JSON schemas and fixture inventory.
 - [x] Generate and verify a schema-property and enum-value coverage manifest
   in CI.
+- [x] Generate and verify a SHA-256-bound normative requirement inventory in
+  CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Complete the generated normative semantic-rule manifest and its
-  positive and negative fixture coverage.
+- [ ] Review and bind all 655 pending common, Linux, and VM normative entries
+  to exact rules, enforcement owners, and positive and negative evidence.
 - [x] Add version-negotiated local IPC transport for out-of-process callers.
 
 Exit gate: every OCI 1.3.0 schema property is accounted for as accepted,

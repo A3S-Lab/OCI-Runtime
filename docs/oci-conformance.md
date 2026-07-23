@@ -19,6 +19,11 @@ The validator applies one explicit in-memory compatibility correction for the
 release's single legacy `#definitions/uint32` fragment and fails compilation
 if that upstream condition changes.
 
+The 15 Markdown documents linked by the same release's `spec.md` table of
+contents are also vendored without modification. Their document digests and
+all 764 RFC 2119 keyword occurrences are locked in
+`conformance/oci-1.3.0-normative-coverage.json`.
+
 ## Meaning Of Complete
 
 There are five separate states for an OCI property:
@@ -139,27 +144,32 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
 
 1. a generated and checked-in inventory of all 423 named JSON Schema
    properties and enum values;
-2. upstream positive and negative schema fixture tests;
-3. strict typed round-trip tests for applicable upstream Linux, state, and
+2. a generated and checked-in inventory of all 764 RFC 2119 occurrences from
+   the 15 normative source documents, including source-document SHA-256
+   digests and stable requirement IDs;
+3. upstream positive and negative schema fixture tests;
+4. strict typed round-trip tests for applicable upstream Linux, state, and
    feature fixtures;
-4. positive and negative semantic fixtures with stable rule identifiers;
-5. request-validation tests, including an untrusted raw-wire rejection test;
-6. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
+5. positive and negative semantic fixtures with stable rule identifiers;
+6. request-validation tests, including an untrusted raw-wire rejection test;
+7. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
    socket connector tests.
 
 Remaining evidence includes:
 
 1. positive decode/round-trip fixtures for every applicable property;
 2. negative cross-field and semantic fixtures;
-3. one enforcement owner and test ID for every applicable normative
-   requirement;
+3. promotion of all 655 pending common, Linux, and VM normative entries to
+   exact rule IDs, enforcement owners, and test IDs;
 4. lifecycle and hook-order traces;
 5. feature-report comparisons against actual driver behavior;
 6. crash-recovery and cleanup evidence;
 7. differential results against certified `crun` for shared behavior.
 
 CI must fail when a pinned schema property has no classification or when code
-advertises an operation without a passing implementation test.
+advertises an operation without a passing implementation test. It also fails
+when a normative source document changes digest or a coverage item is missing,
+duplicated, or claims implementation without rule and test evidence.
 
 ## Update Policy
 

@@ -1,7 +1,8 @@
 # Vendored OCI Runtime Specification
 
-This directory is an unmodified import of the schema directory and license
-from the Open Container Initiative Runtime Specification v1.3.0 release.
+This directory is an unmodified import of the normative Markdown corpus,
+schema directory, and license from the Open Container Initiative Runtime
+Specification v1.3.0 release.
 
 | Item | Value |
 | --- | --- |
@@ -12,6 +13,8 @@ from the Open Container Initiative Runtime Specification v1.3.0 release.
 | Published | `2025-11-04` |
 | License | Apache-2.0 |
 
-Only this A3S provenance file is added. Files below `schema/` and `LICENSE`
-retain their upstream contents. Runtime validation is offline and resolves
-schema references only from this pinned directory.
+Only this A3S provenance file is added. The 15 Markdown documents linked by
+the upstream `spec.md` table of contents, files below `schema/`, and `LICENSE`
+retain their upstream contents. Runtime validation and normative-requirement
+inventory generation are offline and resolve input only from this pinned
+directory.

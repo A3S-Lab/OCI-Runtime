@@ -54,6 +54,9 @@ The project is experimental. The current Windows milestone implements:
   and feature documents;
 - a checked-in coverage lock classifying all 423 named schema properties and
   enum values;
+- a SHA-256-locked inventory of all 764 RFC 2119 keyword occurrences in the
+  15 normative OCI 1.3.0 documents, with CI rejection of missing or stale
+  entries;
 - phase-aware, bounded semantic reports with an initial fail-closed rule set
   for common, Linux, and VM cross-field requirements;
 - SDK request validation at the in-process client, IPC client, and
@@ -80,7 +83,10 @@ See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
 and current field-by-field implementation status. The machine-readable
 [schema coverage lock](conformance/oci-1.3.0-schema-coverage.json) fails tests
-if an upstream field or enum value is missing or unclassified.
+if an upstream field or enum value is missing or unclassified. The separate
+[normative coverage lock](conformance/oci-1.3.0-normative-coverage.json)
+tracks specification statements through validation, enforcement, and retained
+conformance evidence.
 
 ## Quick Start
 
@@ -376,6 +382,7 @@ crates/
 |   `-- src/
 |       |-- bundle.rs      # Strict, digest-bound complete OCI spec loading
 |       |-- client.rs      # Cloneable in-process or local-IPC A3S Box client
+|       |-- conformance.rs # Pinned normative requirement inventory
 |       |-- schema.rs      # Offline pinned OCI schema validation
 |       |-- semantic/      # Phase-aware common, Linux, and VM semantics
 |       |-- service.rs     # Async full lifecycle and process-control contract
@@ -409,6 +416,19 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
 ```
+
+Regenerate review baselines only when intentionally updating the pinned
+conformance inputs:
+
+```sh
+cargo run -p a3s-oci-sdk --example generate_schema_coverage -- \
+  conformance/oci-1.3.0-schema-coverage.json
+cargo run -p a3s-oci-sdk --example generate_normative_coverage -- \
+  conformance/oci-1.3.0-normative-coverage.json
+```
+
+The normative generator creates a review baseline. It must not overwrite
+manually promoted rule and test evidence during routine development.
 
 On Windows, also run the real host probe:
 
@@ -454,6 +474,12 @@ requires a runnable process. The current rule set establishes the mandatory
 fail-closed boundary, while the generated normative-requirement manifest and
 driver enforcement evidence remain release gates.
 
+`OciNormativeInventory` exposes the pinned specification-document digests and
+all RFC 2119 occurrences to conformance tooling. Its verifier requires a
+one-to-one match between the embedded corpus and the checked-in coverage lock,
+rejects duplicate IDs, and requires rule and test evidence before an item can
+claim validation or enforcement.
+
 `OciBundle` retains the exact validated `config.json` text in addition to its
 typed `Spec`. Its custom wire decoder reconstructs the typed model and rejects
 relative paths, digest tampering, invalid schemas, unknown fields, and
@@ -490,7 +516,9 @@ and conformance tests land; they are never reported as available early.
 See [SDK Transport](docs/sdk-transport.md) for the Box-facing connection
 contract and platform examples, and
 [OCI Semantic Validation](docs/semantic-validation.md) for the current
-phase/rule boundary and remaining conformance work.
+phase/rule boundary, and
+[Normative Coverage](docs/normative-coverage.md) for the generated
+requirements lock and promotion rules.
 
 ```rust
 use a3s_oci_runtime::HostRuntimeService;

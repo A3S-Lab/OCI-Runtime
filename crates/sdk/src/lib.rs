@@ -5,6 +5,7 @@
 
 mod bundle;
 mod client;
+mod conformance;
 mod error;
 mod id;
 mod model;
@@ -23,6 +24,11 @@ pub use bundle::{
     OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 pub use client::RuntimeClient;
+pub use conformance::{
+    OciNormativeCoverageItem, OciNormativeCoverageManifest, OciNormativeDisposition,
+    OciNormativeDocument, OciNormativeInventory, OciNormativeKeyword, OciNormativeRequirement,
+    OciSpecificationScope,
+};
 pub use error::{Error, ErrorCode, Result};
 pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
 pub use model::*;
