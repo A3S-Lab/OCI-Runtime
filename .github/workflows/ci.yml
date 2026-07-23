@@ -26,3 +26,5 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
       - run: cargo run -p a3s-oci-cli -- features
+      - if: runner.os == 'Windows'
+        run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke

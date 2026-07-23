@@ -2,6 +2,7 @@
 members = [
     "crates/core",
     "crates/sdk",
+    "crates/krun",
     "crates/runtime",
     "crates/cli",
 ]
@@ -15,6 +16,7 @@ license = "MIT"
 repository = "https://github.com/A3S-Lab/OCI-Runtime"
 
 [workspace.dependencies]
+a3s-libkrun-sys = "=3.1.0"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
 oci-spec = { version = "0.10", default-features = false, features = ["runtime"] }

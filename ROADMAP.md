@@ -39,6 +39,9 @@ Completed:
 - versioned driver status, readiness, isolation, and evidence;
 - secure WHPX DLL loading and hypervisor capability probe;
 - WHPX partition-object create/delete smoke on Windows;
+- isolated libkrun shim with a pinned, checksum-verified Windows runtime
+  bundle;
+- libkrun context create/configure/release smoke on Windows;
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
@@ -100,8 +103,11 @@ and host/agent transition.
 
 - [x] Load and probe Windows Hypervisor Platform securely.
 - [x] Create and delete a real WHPX partition object.
-- [ ] Add a version-pinned `a3s-libkrun-sys` dependency and artifact manifest.
-- [ ] Create a libkrun context backed by WHPX.
+- [x] Pin `a3s-libkrun-sys 3.1.0` and stage its checksum-verified Windows
+  runtime bundle only for the isolated shim.
+- [x] Create, configure, and release a real context using the Windows WHPX
+  libkrun build.
+- [ ] Enter the VM and execute guest instructions through WHPX.
 - [ ] Configure one vCPU, memory, protected runtime share, and console.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [ ] Establish the named-pipe/vsock bridge.

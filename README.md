@@ -46,6 +46,9 @@ The project is experimental. The current Windows milestone implements:
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
+- an isolated shim pinned to `a3s-libkrun-sys 3.1.0` and its
+  checksum-verified `krun.dll`/`libkrunfw.dll` bundle;
+- a real libkrun context create/configure/release smoke;
 - the pure OCI `creating -> created -> running -> stopped` state contract;
 - Windows and Linux CI scaffolding.
 
@@ -117,6 +120,28 @@ A successful result is:
 The command exits with status `2` when WHPX is unsupported or unavailable.
 See [Windows WHPX Development](docs/windows-whpx.md) for the exact evidence
 boundary and the next workload gate.
+
+Run the libkrun context smoke without entering a VM:
+
+```sh
+cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+```
+
+The successful Windows report is:
+
+```json
+{
+  "schema_version": "a3s.oci.krun-context-smoke.v1",
+  "platform": "windows",
+  "status": "available",
+  "runtime_bundle_loaded": true,
+  "context_created": true,
+  "vm_configured": true,
+  "context_released": true,
+  "vcpus": 1,
+  "memory_mib": 128
+}
+```
 
 ## Capability And Readiness
 
@@ -199,16 +224,22 @@ The Windows probe loads `WinHvPlatform.dll` with
 `LOAD_LIBRARY_SEARCH_SYSTEM32`, resolves only the required documented symbols,
 and records contextual HRESULT or Win32 errors.
 
-The current smoke verifies:
+The current WHPX smoke verifies:
 
 - the WHPX API DLL is available from the Windows system directory;
 - the required capability and partition symbols exist;
 - the Windows hypervisor reports itself present;
 - the process can create and release a WHPX partition object.
 
-It does not verify:
+The separate libkrun smoke also verifies:
 
-- libkrun context creation or VM entry;
+- the pinned Windows libkrun runtime bundle loads;
+- one context can be created, configured for the certified one-vCPU path, and
+  released without a leak.
+
+Neither smoke verifies:
+
+- libkrun VM entry or guest instruction execution;
 - the pinned A3S kernel or guest agent;
 - virtio-fs, vsock, named-pipe transport, networking, or process I/O;
 - OCI bundle validation or lifecycle commands;
@@ -264,7 +295,7 @@ state, and cleanup.
 
 | Host | Execution path | Current state |
 | --- | --- | --- |
-| Windows x86_64 | libkrun + WHPX utility VM | WHPX capability and partition-object smoke implemented; driver is `probe-only` |
+| Windows x86_64 | libkrun + WHPX utility VM | WHPX partition and libkrun context smokes implemented; VM entry pending; driver is `probe-only` |
 | Linux x86_64/aarch64 without KVM | Native Linux executor | Required before `crun` removal; not implemented |
 | Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Planned after the shared executor contract |
 | macOS arm64 | libkrun + HVF utility VM | Planned after the shared executor contract |
@@ -307,6 +338,9 @@ crates/
 |       |-- bundle.rs      # Strict, digest-bound complete OCI spec loading
 |       |-- service.rs     # Async full lifecycle and process-control contract
 |       `-- client.rs      # Cloneable A3S Box client
+|-- krun/
+|   |-- src/lib.rs         # Safe shim-local libkrun context boundary
+|   `-- src/main.rs        # Isolated a3s-oci-krun-shim process
 |-- runtime/
 |   `-- src/
 |       |-- platform/      # Windows WHPX and unsupported-host probes
@@ -336,6 +370,7 @@ On Windows, also run the real host probe:
 ```sh
 cargo run -p a3s-oci-cli -- features
 cargo run -p a3s-oci-cli -- whpx-smoke
+cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
 ```
 
 Cross-check the non-Windows capability path when the target is installed:

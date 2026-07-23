@@ -1,0 +1,26 @@
+[package]
+name = "a3s-oci-krun"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Isolated libkrun platform boundary for A3S OCI Runtime"
+build = "build.rs"
+
+[[bin]]
+name = "a3s-oci-krun-shim"
+path = "src/main.rs"
+
+[dependencies]
+a3s-oci-core = { path = "../core" }
+a3s-oci-sdk = { path = "../sdk" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
+a3s-libkrun-sys.workspace = true
+
+[lints]
+workspace = true
