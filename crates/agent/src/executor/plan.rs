@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 const MAX_ARGUMENTS: usize = 4_096;
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
 const MAX_EXEC_BYTES: usize = 1024 * 1024;
-const LINUX_HOST_NAME_MAX: usize = 64;
+const LINUX_UTS_NAME_MAX: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitPlan {
@@ -24,6 +24,7 @@ pub(super) struct InitPlan {
     pub(super) no_new_privileges: bool,
     pub(super) new_uts_namespace: bool,
     pub(super) hostname: Option<String>,
+    pub(super) domainname: Option<String>,
 }
 
 impl InitPlan {
@@ -103,12 +104,17 @@ impl InitPlan {
         let hostname = spec
             .hostname()
             .as_deref()
-            .map(validate_hostname)
+            .map(|value| validate_uts_name("hostname", value))
             .transpose()?;
-        if hostname.is_some() && !new_uts_namespace {
+        let domainname = spec
+            .domainname()
+            .as_deref()
+            .map(|value| validate_uts_name("domainname", value))
+            .transpose()?;
+        if (hostname.is_some() || domainname.is_some()) && !new_uts_namespace {
             return Err(unsupported(
-                "hostname",
-                "the bootstrap executor changes it only in a newly created UTS namespace",
+                "hostname/domainname",
+                "the bootstrap executor changes UTS names only in a newly created UTS namespace",
             ));
         }
 
@@ -125,6 +131,7 @@ impl InitPlan {
             no_new_privileges: true,
             new_uts_namespace,
             hostname,
+            domainname,
         })
     }
 }
@@ -134,7 +141,14 @@ fn validate_profile(raw: &Value) -> Result<()> {
     reject_unimplemented_keys(
         root,
         "config",
-        &["ociVersion", "root", "process", "hostname", "linux"],
+        &[
+            "ociVersion",
+            "root",
+            "process",
+            "hostname",
+            "domainname",
+            "linux",
+        ],
     )?;
 
     let root_config = object(
@@ -229,13 +243,13 @@ fn validate_linux_namespaces(
     Ok(true)
 }
 
-fn validate_hostname(hostname: &str) -> Result<String> {
-    if hostname.len() > LINUX_HOST_NAME_MAX || hostname.as_bytes().contains(&0) {
+fn validate_uts_name(field: &str, value: &str) -> Result<String> {
+    if value.len() > LINUX_UTS_NAME_MAX || value.as_bytes().contains(&0) {
         return Err(invalid(format!(
-            "hostname must contain at most {LINUX_HOST_NAME_MAX} bytes and no NUL"
+            "{field} must contain at most {LINUX_UTS_NAME_MAX} bytes and no NUL"
         )));
     }
-    Ok(hostname.to_string())
+    Ok(value.to_string())
 }
 
 fn object<'a>(value: &'a Value, field: &str) -> Result<&'a Map<String, Value>> {

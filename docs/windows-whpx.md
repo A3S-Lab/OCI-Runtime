@@ -103,8 +103,8 @@ A successful end-to-end agent VM smoke additionally proves that:
 A successful fixed OCI VM smoke additionally proves that:
 
 - the accepted bundle is a strict descendant of the supplied VM rootfs;
-- create establishes a new UTS namespace, applies the configured hostname,
-  and reports ready only afterward;
+- create establishes a new UTS namespace, applies the configured hostname and
+  domainname, and reports ready only afterward;
 - create returns `created` and a positive guest PID without running the
   configured process;
 - state and an exact create retry match the original result;
@@ -126,9 +126,9 @@ minirootfs archive with SHA-256
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
 
-The fixed OCI lifecycle qualification used the 6,290,296-byte static musl agent
+The fixed OCI lifecycle qualification used the 6,289,496-byte static musl agent
 with SHA-256
-`217029c1d7fb94b9f318ec8cf42c741bcb81869d68ebdc0d2ad826fb3925227f`.
+`79c25a5c46664b516c5575622321f56c63f2ac665d2b7af68e42040695f825c7`.
 Its report selected protocol version 1, identified the guest as `x86_64`,
 verified every fixed lifecycle field, retained the complete successful shim
 report, and returned exit status zero.
@@ -137,10 +137,11 @@ A companion real-WHPX negative run added an otherwise valid `proc` mount.
 Create returned `Unsupported` for `config.mounts` before starting a process,
 and the report still verified marker and guest-runtime cleanup.
 
-The UTS qualification configured hostname `a3s-smoke` and checked it from the
-workload before writing the marker. A companion bundle added a PID namespace;
-create returned `Unsupported` for `linux.namespaces` and left no runtime
-state.
+The UTS qualification configured hostname `a3s-smoke` and domainname
+`runtime.test`, checked the hostname from the workload, and crossed the create
+barrier only after the wrapper read both applied values back with `uname`. A
+companion bundle added a PID namespace; create returned `Unsupported` for
+`linux.namespaces` and left no runtime state.
 
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target

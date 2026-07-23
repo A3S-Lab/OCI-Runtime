@@ -1,5 +1,6 @@
 use std::ffi::{CString, OsStr};
 use std::io::{self, Read, Write};
+use std::mem::MaybeUninit;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixStream};
@@ -128,7 +129,59 @@ fn prepare_create_environment(plan: &InitPlan) -> Result<()> {
             return Err(last_os_error("set container hostname"));
         }
     }
+    if let Some(domainname) = &plan.domainname {
+        if !plan.new_uts_namespace {
+            return Err(init_error(
+                ErrorCode::FailedPrecondition,
+                "refusing to change domainname outside a new UTS namespace",
+            ));
+        }
+        // SAFETY: the byte slice remains live for the call and its exact
+        // length was bounded by the validated init plan.
+        if unsafe { libc::setdomainname(domainname.as_bytes().as_ptr().cast(), domainname.len()) }
+            != 0
+        {
+            return Err(last_os_error("set container domainname"));
+        }
+    }
+    verify_uts_names(plan)
+}
+
+fn verify_uts_names(plan: &InitPlan) -> Result<()> {
+    if plan.hostname.is_none() && plan.domainname.is_none() {
+        return Ok(());
+    }
+    let mut names = MaybeUninit::<libc::utsname>::uninit();
+    // SAFETY: `names` points to writable storage for one complete `utsname`.
+    // A successful `uname` initializes the entire structure.
+    if unsafe { libc::uname(names.as_mut_ptr()) } != 0 {
+        return Err(last_os_error("read configured UTS names"));
+    }
+    // SAFETY: the successful `uname` call above initialized `names`.
+    let names = unsafe { names.assume_init() };
+    if let Some(expected) = &plan.hostname {
+        verify_uts_name("hostname", expected, &names.nodename)?;
+    }
+    if let Some(expected) = &plan.domainname {
+        verify_uts_name("domainname", expected, &names.domainname)?;
+    }
     Ok(())
+}
+
+fn verify_uts_name(field: &str, expected: &str, actual: &[libc::c_char]) -> Result<()> {
+    let actual = actual
+        .iter()
+        .take_while(|byte| **byte != 0)
+        .map(|byte| *byte as u8)
+        .collect::<Vec<_>>();
+    if actual == expected.as_bytes() {
+        Ok(())
+    } else {
+        Err(init_error(
+            ErrorCode::Internal,
+            format!("{field} did not match after applying the OCI UTS configuration"),
+        ))
+    }
 }
 
 fn read_bounded_config(path: &Path) -> Result<String> {

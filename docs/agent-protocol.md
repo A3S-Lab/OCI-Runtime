@@ -87,9 +87,9 @@ proves a fixed bundle through create, state, exact create replay, start,
 running observation, marker verification, signal delivery, exact kill replay,
 stopped observation, stopped-only delete, exact delete replay, and a final
 NotFound state query. The marker proves that the workload did not run before
-start and did run afterward. The qualified workload also verifies the
-configured hostname inside a new UTS namespace established before create
-returns. The host verifies marker removal and that VM shutdown leaves no new
+start and did run afterward. The init wrapper reads both configured UTS names
+back before create returns, and the workload independently checks its
+hostname. The host verifies marker removal and that VM shutdown leaves no new
 guest-agent runtime directory.
 
 This is the first Linux executor vertical slice, not complete OCI

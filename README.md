@@ -59,9 +59,9 @@ The project is experimental. The current Windows milestone implements:
   executor active;
 - a root-only guest bootstrap executor with exact-generation state,
   session-bounded idempotency, a PID-authenticated abstract Unix start
-  barrier, a create-time UTS namespace and hostname, `chroot`, credentials,
-  umask, `no_new_privileges`, `execve`, signaling, stopped observation, and
-  scoped cleanup;
+  barrier, a create-time UTS namespace with hostname and domainname, `chroot`,
+  credentials, umask, `no_new_privileges`, `execve`, signaling, stopped
+  observation, and scoped cleanup;
 - the complete pinned OCI Runtime Specification 1.3.0 schema and upstream
   fixture set, compiled into an offline validator for configuration, state,
   and feature documents;
@@ -392,8 +392,8 @@ The end-to-end agent smoke additionally verifies:
 The fixed OCI VM smoke additionally verifies:
 
 - the host accepts only a bundle strictly contained by the VM rootfs;
-- create establishes a new UTS namespace and the configured hostname before
-  returning;
+- create establishes a new UTS namespace and its configured hostname and
+  domainname before returning;
 - create returns `created` with a positive guest PID while the configured
   process remains blocked;
 - state and an exact create retry reproduce the created state;

@@ -25,6 +25,7 @@ const UTS_CONFIG: &str = r#"{
     "noNewPrivileges": true
   },
   "hostname": "a3s-smoke",
+  "domainname": "runtime.test",
   "linux": {"namespaces": [{"type": "uts"}]}
 }"#;
 
@@ -91,43 +92,67 @@ fn rejects_non_null_process_io() {
 }
 
 #[test]
-fn accepts_a_new_uts_namespace_and_bounded_hostname() {
+fn accepts_a_new_uts_namespace_and_bounded_uts_names() {
     let plan =
         InitPlan::from_bundle(&bundle(UTS_CONFIG), &null_io()).expect("UTS namespace profile");
     assert!(plan.new_uts_namespace);
     assert_eq!(plan.hostname.as_deref(), Some("a3s-smoke"));
+    assert_eq!(plan.domainname.as_deref(), Some("runtime.test"));
 
     let maximum = "h".repeat(64);
-    let config = UTS_CONFIG.replace("a3s-smoke", &maximum);
-    let plan = InitPlan::from_bundle(&bundle(&config), &null_io()).expect("64-byte hostname");
+    let config = UTS_CONFIG
+        .replace("a3s-smoke", &maximum)
+        .replace("runtime.test", &maximum);
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io()).expect("64-byte UTS names");
     assert_eq!(plan.hostname.as_deref(), Some(maximum.as_str()));
+    assert_eq!(plan.domainname.as_deref(), Some(maximum.as_str()));
 }
 
 #[test]
-fn rejects_hostname_outside_the_supported_uts_profile() {
+fn rejects_uts_names_outside_the_supported_profile() {
     let too_long = UTS_CONFIG.replace("a3s-smoke", &"h".repeat(65));
     let error =
         InitPlan::from_bundle(&bundle(&too_long), &null_io()).expect_err("65-byte hostname");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("at most 64 bytes"));
 
+    let too_long = UTS_CONFIG.replace("runtime.test", &"d".repeat(65));
+    let error =
+        InitPlan::from_bundle(&bundle(&too_long), &null_io()).expect_err("65-byte domainname");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("domainname"));
+
     let empty_without_uts = FIXED_CONFIG.replace(
         r#""ociVersion": "1.3.0","#,
-        r#""ociVersion": "1.3.0", "hostname": "","#,
+        r#""ociVersion": "1.3.0", "hostname": "", "domainname": "","#,
     );
     let error = InitPlan::from_bundle(&bundle(&empty_without_uts), &null_io())
-        .expect_err("hostname field outside UTS profile");
+        .expect_err("UTS name fields outside UTS profile");
     assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("hostname"));
+    assert!(error.message.contains("hostname/domainname"));
 }
 
 #[test]
 fn rejects_unimplemented_or_joined_namespaces() {
-    let pid = UTS_CONFIG.replace(r#""type": "uts""#, r#""type": "pid""#);
-    let error =
-        InitPlan::from_bundle(&bundle(&pid), &null_io()).expect_err("PID namespace unsupported");
+    let mut pid: serde_json::Value =
+        serde_json::from_str(UTS_CONFIG).expect("decode test configuration");
+    let root = pid
+        .as_object_mut()
+        .expect("test configuration must be an object");
+    root.remove("hostname");
+    root.remove("domainname");
+    pid["linux"]["namespaces"][0]["type"] = serde_json::Value::String("pid".into());
+    let pid = serde_json::to_string(&pid).expect("encode PID namespace test");
+    let error = InitPlan::from_bundle(&bundle(&pid), &null_io())
+        .expect_err("single PID namespace unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("namespaces[0].type"));
+
+    let multiple = UTS_CONFIG.replace(r#""type": "uts""#, r#""type": "uts"}, {"type": "pid""#);
+    let error = InitPlan::from_bundle(&bundle(&multiple), &null_io())
+        .expect_err("mixed UTS and PID namespaces unsupported");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("linux.namespaces"));
 
     let joined = UTS_CONFIG.replace(
         r#""type": "uts""#,

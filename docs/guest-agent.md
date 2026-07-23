@@ -32,8 +32,8 @@ than the final OCI executor and rejects every property it cannot enforce.
 
 The accepted bootstrap profile requires:
 
-- only `ociVersion`, `root`, `process`, optional `hostname`, and optional
-  `linux` at the configuration root;
+- only `ociVersion`, `root`, `process`, optional `hostname`, optional
+  `domainname`, and optional `linux` at the configuration root;
 - a writable normalized relative `root.path` equal to `rootfs`;
 - `terminal: false` and null stdin, stdout, and stderr;
 - `noNewPrivileges: true`;
@@ -42,10 +42,11 @@ The accepted bootstrap profile requires:
 - bounded arguments and environment with unique environment names.
 
 When `linux` is present, it currently accepts exactly one newly created UTS
-namespace and no join path. A configured hostname is bounded to the Linux
-kernel limit and requires that new UTS namespace. The wrapper calls
-`unshare(CLONE_NEWUTS)` and `sethostname` before reporting ready, so both are
-part of the create barrier rather than deferred until start.
+namespace and no join path. Configured hostname and domainname values are
+bounded to the Linux kernel limit and require that new UTS namespace. The
+wrapper calls `unshare(CLONE_NEWUTS)`, `sethostname`, and `setdomainname`
+and verifies both values with `uname` before reporting ready, so the UTS
+configuration is part of the create barrier rather than deferred until start.
 
 Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits for that wrapper on a randomly named Linux abstract Unix
@@ -87,8 +88,8 @@ observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
-minirootfs and the 6,290,296-byte static agent with SHA-256
-`217029c1d7fb94b9f318ec8cf42c741bcb81869d68ebdc0d2ad826fb3925227f`.
+minirootfs and the 6,289,496-byte static agent with SHA-256
+`79c25a5c46664b516c5575622321f56c63f2ac665d2b7af68e42040695f825c7`.
 This proves the fixed bootstrap slice, not the immutable A3S system image,
 complete OCI enforcement, process I/O, networking, restart recovery, or
 fault-injected cleanup. The WHPX driver therefore remains `probe-only`.
