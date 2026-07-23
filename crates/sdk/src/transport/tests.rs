@@ -6,9 +6,9 @@ use serde_json::json;
 
 use crate::{
     ContainerId, ContainerRecord, CreateRequest, DeleteRequest, DriverKind, Error, ErrorCode,
-    Generation, IsolationClass, IsolationRequest, KillRequest, OciBundle, OciRuntimeService,
-    OperationContext, OperationId, ProcessIo, Result, RuntimeFeatures, RuntimeInfo,
-    RuntimeOperation, StartRequest, StateRequest,
+    EventsRequest, Generation, IsolationClass, IsolationRequest, KillRequest, OciBundle,
+    OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, RuntimeFeatures,
+    RuntimeInfo, RuntimeOperation, StartRequest, StateRequest,
 };
 
 use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireResult};
@@ -95,7 +95,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let bundle_directory = std::env::current_dir()
         .expect("current directory")
         .join("transport-bundle");
-    let exact_config = " {\n \"ociVersion\": \"1.3.0\"\n}\n";
+    let exact_config = " {\n \"ociVersion\": \"1.3.0\",\n \"root\": {\"path\": \"rootfs\"}\n}\n";
     let bundle = OciBundle::from_json(bundle_directory, exact_config).expect("build bundle");
     let expected_digest = bundle.config_digest().to_string();
     let record = client
@@ -267,4 +267,60 @@ async fn server_rejects_the_reserved_zero_request_id() {
         .expect_err("zero request ID must fail");
     assert_eq!(error.code, ErrorCode::Internal);
     assert!(error.message.contains("zero SDK request ID"));
+}
+
+#[tokio::test]
+async fn server_validates_untrusted_wire_requests_before_dispatch() {
+    let (mut client_io, server_io) = tokio::io::duplex(4096);
+    let service: Arc<dyn OciRuntimeService> = Arc::new(EchoService::default());
+    let server = tokio::spawn(async move { serve_transport_connection(service, server_io).await });
+
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Hello {
+            protocol_min: 1,
+            protocol_max: 1,
+        },
+    )
+    .await
+    .expect("write client hello");
+    let welcome = read_frame::<ServerMessage>(&mut client_io)
+        .await
+        .expect("read welcome")
+        .expect("welcome frame");
+    assert_eq!(welcome, ServerMessage::Welcome { protocol: 1 });
+
+    write_frame(
+        &mut client_io,
+        &ClientMessage::Request {
+            protocol: 1,
+            request_id: 1,
+            request: Box::new(super::wire::WireRequest::Events(EventsRequest {
+                container: None,
+                after_sequence: 0,
+                limit: 0,
+                wait_timeout_ms: None,
+            })),
+        },
+    )
+    .await
+    .expect("write invalid request");
+    let response = read_frame::<ServerMessage>(&mut client_io)
+        .await
+        .expect("read validation response")
+        .expect("validation response frame");
+    let ServerMessage::Response { result, .. } = response else {
+        panic!("expected SDK response");
+    };
+    let WireResult::Error { error } = *result else {
+        panic!("invalid request must return an error");
+    };
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert_eq!(error.operation.as_deref(), Some("validate-sdk-request"));
+
+    drop(client_io);
+    server
+        .await
+        .expect("server task must join")
+        .expect("server connection must close cleanly");
 }

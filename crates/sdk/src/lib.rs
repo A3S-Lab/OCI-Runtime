@@ -9,8 +9,10 @@ mod error;
 mod id;
 mod model;
 mod schema;
+mod semantic;
 mod service;
 mod transport;
+mod validation;
 
 pub use a3s_oci_core::{
     DriverCapability, DriverKind, DriverReadiness, IsolationClass, RuntimeFeatures,
@@ -34,8 +36,15 @@ pub use schema::{
     OciSchemaInventoryItem, OciSchemaInventoryKind, OciSchemaValidationReport, OciSchemaValidator,
     OciSchemaViolation,
 };
+pub use semantic::{
+    OciSemanticPhase, OciSemanticValidationReport, OciSemanticValidator, OciSemanticViolation,
+    OciSemanticViolationKind,
+};
 pub use service::OciRuntimeService;
 pub use transport::{
     serve_transport_connection, LocalIpcEndpoint, RuntimeTransportClient, SDK_PROTOCOL_VERSION_MAX,
     SDK_PROTOCOL_VERSION_MIN,
+};
+pub use validation::{
+    ValidateRequest, MAX_EVENT_BATCH_ITEMS, MAX_OUTPUT_READ_BYTES, MAX_STDIN_WRITE_BYTES,
 };

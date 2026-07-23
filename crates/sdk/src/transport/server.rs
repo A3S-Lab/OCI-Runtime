@@ -71,9 +71,12 @@ where
         }
 
         let result = if request_protocol == protocol {
-            match dispatch(service.as_ref(), request).await {
-                Ok(response) => WireResult::Ok {
-                    response: Box::new(response),
+            match request.validate() {
+                Ok(()) => match dispatch(service.as_ref(), request).await {
+                    Ok(response) => WireResult::Ok {
+                        response: Box::new(response),
+                    },
+                    Err(error) => WireResult::Error { error },
                 },
                 Err(error) => WireResult::Error { error },
             }

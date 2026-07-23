@@ -6,7 +6,8 @@ use crate::{
     ExitStatus, KillRequest, ListRequest, LocalIpcEndpoint, OciRuntimeService, OutputChunk,
     ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
     RuntimeInfo, RuntimeTransportClient, SignalProcessRequest, StartRequest, StateRequest,
-    StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest,
 };
 
 /// Cloneable, transport-independent Rust SDK client.
@@ -40,90 +41,112 @@ impl RuntimeClient {
     }
 
     pub async fn create(&self, request: CreateRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.create(request).await
     }
 
     pub async fn state(&self, request: StateRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.state(request).await
     }
 
     pub async fn start(&self, request: StartRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.start(request).await
     }
 
     pub async fn kill(&self, request: KillRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.kill(request).await
     }
 
     pub async fn delete(&self, request: DeleteRequest) -> Result<()> {
+        request.validate()?;
         self.service.delete(request).await
     }
 
     pub async fn exec(&self, request: ExecRequest) -> Result<ProcessRecord> {
+        request.validate()?;
         self.service.exec(request).await
     }
 
     pub async fn wait(&self, request: WaitRequest) -> Result<ExitStatus> {
+        request.validate()?;
         self.service.wait(request).await
     }
 
     pub async fn list(&self, request: ListRequest) -> Result<Vec<ContainerRecord>> {
+        request.validate()?;
         self.service.list(request).await
     }
 
     pub async fn pause(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.pause(request).await
     }
 
     pub async fn resume(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.resume(request).await
     }
 
     pub async fn update(&self, request: UpdateRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.update(request).await
     }
 
     pub async fn processes(&self, request: ProcessesRequest) -> Result<Vec<ProcessRecord>> {
+        request.validate()?;
         self.service.processes(request).await
     }
 
     pub async fn stats(&self, request: StatsRequest) -> Result<ContainerStats> {
+        request.validate()?;
         self.service.stats(request).await
     }
 
     pub async fn events(&self, request: EventsRequest) -> Result<EventBatch> {
+        request.validate()?;
         self.service.events(request).await
     }
 
     pub async fn read_output(&self, request: ReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        request.validate()?;
         self.service.read_output(request).await
     }
 
     pub async fn write_stdin(&self, request: WriteStdinRequest) -> Result<()> {
+        request.validate()?;
         self.service.write_stdin(request).await
     }
 
     pub async fn close_stdin(&self, request: CloseStdinRequest) -> Result<()> {
+        request.validate()?;
         self.service.close_stdin(request).await
     }
 
     pub async fn resize(&self, request: ResizeRequest) -> Result<()> {
+        request.validate()?;
         self.service.resize(request).await
     }
 
     pub async fn signal_process(&self, request: SignalProcessRequest) -> Result<()> {
+        request.validate()?;
         self.service.signal_process(request).await
     }
 
     pub async fn wait_process(&self, request: WaitProcessRequest) -> Result<ExitStatus> {
+        request.validate()?;
         self.service.wait_process(request).await
     }
 
     pub async fn checkpoint(&self, request: CheckpointRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.checkpoint(request).await
     }
 
     pub async fn restore(&self, request: RestoreRequest) -> Result<ContainerRecord> {
+        request.validate()?;
         self.service.restore(request).await
     }
 }

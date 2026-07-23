@@ -54,6 +54,11 @@ The project is experimental. The current Windows milestone implements:
   and feature documents;
 - a checked-in coverage lock classifying all 423 named schema properties and
   enum values;
+- phase-aware, bounded semantic reports with an initial fail-closed rule set
+  for common, Linux, and VM cross-field requirements;
+- SDK request validation at the in-process client, IPC client, and
+  authenticated server boundaries, including bounded event, output, and stdin
+  payloads;
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
@@ -372,8 +377,10 @@ crates/
 |       |-- bundle.rs      # Strict, digest-bound complete OCI spec loading
 |       |-- client.rs      # Cloneable in-process or local-IPC A3S Box client
 |       |-- schema.rs      # Offline pinned OCI schema validation
+|       |-- semantic/      # Phase-aware common, Linux, and VM semantics
 |       |-- service.rs     # Async full lifecycle and process-control contract
-|       `-- transport/     # Negotiated framing and platform IPC connectors
+|       |-- transport/     # Negotiated framing and platform IPC connectors
+|       `-- validation.rs  # Fail-closed validation for every SDK request
 |-- krun/
 |   |-- src/lib.rs         # Safe shim-local libkrun context and VM smoke boundary
 |   |-- build.rs           # Hash-verified native runtime extraction and staging
@@ -439,6 +446,14 @@ The SDK also exposes `OciSchemaValidator`. It validates raw JSON or typed
 without filesystem or network resolution and returns bounded, structured
 violations with instance and schema paths.
 
+`OciSemanticValidator` performs the cross-field checks that JSON Schema cannot
+express. Its configuration, create, and start phases return bounded,
+machine-readable violations with stable rule identifiers. Bundle construction
+always applies the configuration phase; start-time validation additionally
+requires a runnable process. The current rule set establishes the mandatory
+fail-closed boundary, while the generated normative-requirement manifest and
+driver enforcement evidence remain release gates.
+
 `OciBundle` retains the exact validated `config.json` text in addition to its
 typed `Spec`. Its custom wire decoder reconstructs the typed model and rejects
 relative paths, digest tampering, invalid schemas, unknown fields, and
@@ -451,6 +466,11 @@ every response with a nonzero request ID, preserves stable typed service
 errors, and permanently closes a connection after framing or correlation
 failure. The runtime owns listener access control and passes each authenticated
 stream to `serve_transport_connection`.
+
+Every request type implements `ValidateRequest`. `RuntimeClient`, the IPC
+client, and the server all invoke it, so an untrusted peer cannot bypass
+semantic process/resource checks, terminal consistency, path requirements, or
+the public event/output/input bounds by constructing wire JSON directly.
 
 Its operation surface includes:
 
@@ -468,7 +488,9 @@ methods deliberately return `unsupported` until their durable implementation
 and conformance tests land; they are never reported as available early.
 
 See [SDK Transport](docs/sdk-transport.md) for the Box-facing connection
-contract and platform examples.
+contract and platform examples, and
+[OCI Semantic Validation](docs/semantic-validation.md) for the current
+phase/rule boundary and remaining conformance work.
 
 ```rust
 use a3s_oci_runtime::HostRuntimeService;

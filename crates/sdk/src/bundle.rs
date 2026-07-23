@@ -6,7 +6,10 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
-use crate::{Error, ErrorCode, OciSchemaDocument, OciSchemaValidator, Result};
+use crate::{
+    Error, ErrorCode, OciSchemaDocument, OciSchemaValidator, OciSemanticPhase,
+    OciSemanticValidator, Result,
+};
 
 /// File containing the OCI runtime configuration in a bundle.
 pub const CONFIG_FILE_NAME: &str = "config.json";
@@ -128,8 +131,6 @@ impl OciBundle {
 
     /// Construct an immutable bundle from an already decoded complete OCI spec.
     pub fn from_spec(directory: impl Into<PathBuf>, spec: Spec) -> Result<Self> {
-        validate_version(&spec)?;
-        OciSchemaValidator::new()?.validate_spec(&spec)?;
         let config_json = serde_json::to_string(&spec).map_err(|error| {
             Error::new(
                 ErrorCode::InvalidArgument,
@@ -166,7 +167,6 @@ impl OciBundle {
             ));
         }
         let spec = decode_spec(config_bytes, &directory.join(CONFIG_FILE_NAME))?;
-        validate_version(&spec)?;
 
         Ok(Self {
             directory,
@@ -204,6 +204,25 @@ impl OciBundle {
     #[must_use]
     pub const fn spec(&self) -> &Spec {
         &self.spec
+    }
+
+    /// Revalidate this immutable bundle for one OCI lifecycle phase.
+    ///
+    /// Construction has already applied configuration semantics, so create is
+    /// a no-op for the immutable value. Start reparses the retained exact
+    /// document and additionally requires a runnable process.
+    pub fn validate_for_phase(&self, phase: OciSemanticPhase) -> Result<()> {
+        if phase != OciSemanticPhase::Start {
+            return Ok(());
+        }
+        let raw = serde_json::from_str(&self.config_json).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!("validated OCI configuration could not be decoded again: {error}"),
+            )
+            .for_operation("validate-bundle")
+        })?;
+        OciSemanticValidator::new()?.validate(phase, &raw)
     }
 }
 
@@ -318,6 +337,9 @@ fn decode_spec(bytes: &[u8], path: &Path) -> Result<Spec> {
         .for_operation("load-bundle"));
     }
 
+    validate_version(&spec)?;
+    OciSemanticValidator::new()?.validate_schema_valid(OciSemanticPhase::Configuration, &raw)?;
+
     Ok(spec)
 }
 
@@ -366,10 +388,11 @@ fn digest(bytes: &[u8]) -> String {
 mod tests {
     use std::path::Path;
 
+    use oci_spec::runtime::Spec;
     use serde_json::json;
 
-    use super::{decode_spec, OciBundle, OCI_RUNTIME_SPEC_VERSION_MAX};
-    use crate::ErrorCode;
+    use super::{OciBundle, OCI_RUNTIME_SPEC_VERSION_MAX};
+    use crate::{ErrorCode, OciSemanticPhase};
 
     fn complete_v1_3_fixture() -> serde_json::Value {
         json!({
@@ -393,7 +416,8 @@ mod tests {
             "linux": {
                 "namespaces": [
                     { "type": "pid" },
-                    { "type": "mount" }
+                    { "type": "mount" },
+                    { "type": "uts" }
                 ],
                 "resources": {
                     "memory": { "limit": 134217728 },
@@ -501,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_every_explicit_field_in_upstream_linux_fixtures() {
+    fn typed_model_preserves_every_explicit_field_in_upstream_linux_fixtures() {
         const FIXTURES: &[(&str, &str)] = &[
             (
                 "linux-netdevice.json",
@@ -532,7 +556,7 @@ mod tests {
         for (name, source) in FIXTURES {
             let original: serde_json::Value =
                 serde_json::from_str(source).expect("upstream fixture must be JSON");
-            let spec = decode_spec(source.as_bytes(), Path::new(name))
+            let spec: Spec = serde_json::from_str(source)
                 .unwrap_or_else(|error| panic!("{name} must decode without loss: {error}"));
             let encoded = serde_json::to_value(spec).expect("encode decoded OCI spec");
             assert_explicit_fields_preserved(&original, &encoded, "");
@@ -544,7 +568,8 @@ mod tests {
         let absolute = std::env::current_dir()
             .expect("current directory")
             .join("wire-bundle");
-        let config_json = " {\n  \"ociVersion\": \"1.3.0\"\n}\n";
+        let config_json =
+            " {\n  \"ociVersion\": \"1.3.0\",\n  \"root\": {\"path\": \"rootfs\"}\n}\n";
         let bundle =
             OciBundle::from_json(absolute, config_json).expect("build exact immutable bundle");
         let encoded = serde_json::to_vec(&bundle).expect("serialize bundle");
@@ -559,8 +584,11 @@ mod tests {
         let absolute = std::env::current_dir()
             .expect("current directory")
             .join("wire-bundle");
-        let bundle =
-            OciBundle::from_json(absolute, r#"{"ociVersion":"1.3.0"}"#).expect("build bundle");
+        let bundle = OciBundle::from_json(
+            absolute,
+            r#"{"ociVersion":"1.3.0","root":{"path":"rootfs"}}"#,
+        )
+        .expect("build bundle");
         let mut encoded = serde_json::to_value(bundle).expect("serialize bundle");
         encoded["config_digest"] =
             json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
@@ -571,12 +599,38 @@ mod tests {
     }
 
     #[test]
+    fn start_phase_revalidates_the_immutable_bundle_process() {
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("phase-bundle");
+        let bundle = OciBundle::from_json(
+            absolute,
+            r#"{"ociVersion":"1.3.0","root":{"path":"rootfs"}}"#,
+        )
+        .expect("configuration without process is valid");
+
+        bundle
+            .validate_for_phase(OciSemanticPhase::Create)
+            .expect("create may omit process");
+        let error = bundle
+            .validate_for_phase(OciSemanticPhase::Start)
+            .expect_err("start requires process");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error
+            .message
+            .contains("oci.common.process.required-for-start"));
+    }
+
+    #[test]
     fn wire_deserialization_cannot_bypass_absolute_path_validation() {
         let absolute = std::env::current_dir()
             .expect("current directory")
             .join("wire-bundle");
-        let bundle =
-            OciBundle::from_json(absolute, r#"{"ociVersion":"1.3.0"}"#).expect("build bundle");
+        let bundle = OciBundle::from_json(
+            absolute,
+            r#"{"ociVersion":"1.3.0","root":{"path":"rootfs"}}"#,
+        )
+        .expect("build bundle");
         let mut encoded = serde_json::to_value(bundle).expect("serialize bundle");
         encoded["directory"] = json!("relative/bundle");
 

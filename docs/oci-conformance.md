@@ -68,17 +68,17 @@ does not make it a native Windows container.
 
 | Area | Represented | Validated | Enforced | Conformant |
 | --- | --- | --- | --- | --- |
-| Complete `Spec` object | Yes | Official schema, version range, unknown fields | No | No |
-| Common root, mounts, process, hostname, annotations | Yes | Pending semantic validators | No | No |
-| POSIX hooks | Yes | Pending | No | No |
-| Linux namespaces and ID mappings | Yes | Pending | No | No |
-| Linux devices, seccomp, capabilities, LSM, sysctl | Yes | Pending | No | No |
-| Linux cgroup resources | Yes | Pending | No | No |
-| Linux Intel RDT, memory policy, time offsets, net devices | Yes | Pending | No | No |
-| VM hypervisor, kernel, initrd, image, and parameters | Yes | Pending allowlist validator | No | No |
+| Complete `Spec` object | Yes | Official schema, version range, unknown fields, initial semantics | No | No |
+| Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | No | No |
+| POSIX hooks | Yes | Initial path and environment rules | No | No |
+| Linux namespaces and ID mappings | Yes | Initial relationship and range rules | No | No |
+| Linux devices, seccomp, capabilities, LSM, sysctl | Yes | Initial path, seccomp, and namespaced-sysctl rules; capability/LSM rules pending | No | No |
+| Linux cgroup resources | Yes | Initial CPU, block I/O, and RDMA relationships | No | No |
+| Linux Intel RDT, memory policy, time offsets, net devices | Yes | Initial cross-field and path rules | No | No |
+| VM hypervisor, kernel, initrd, image, and parameters | Yes | Initial absolute-path and NUL rules; driver policy pending | No | No |
 | OCI `State` | Yes | Official schema and typed lifecycle transition contract | No durable state | No |
 | OCI `Features` | Yes | Official schema, version and operation separation | Feature-only service | No |
-| `create/state/start/kill/delete` | SDK contract | Request types | No | No |
+| `create/state/start/kill/delete` | SDK contract | Exhaustive request boundary; durable start validation pending | No | No |
 | Hooks and rollback ordering | SDK contract | Pending | No | No |
 | Exec, I/O, PTY, wait, pause/resume, update | SDK contract | Typed requests | No | No |
 | Checkpoint and restore | SDK contract | Typed requests | No | No |
@@ -112,6 +112,15 @@ protocol violation poisons the connection. Transport decoding invokes
 `OciBundle`'s custom fail-closed decoder, so crossing a named pipe, Unix
 socket, or guest bridge cannot bypass bundle validation.
 
+`OciSemanticValidator` returns bounded, phase-aware reports with stable rule
+identifiers. It currently covers an initial set of common process, mount,
+hook, Linux namespace, ID mapping, sysctl, seccomp, resource, Intel RDT,
+memory-policy, time-offset, network-device, and VM path relationships.
+`ValidateRequest` applies the relevant bundle, process, resource, I/O, path,
+and payload checks at the in-process client, IPC client, and server
+boundaries. This is a fail-closed foundation, not a claim that every normative
+requirement is already conformant.
+
 The SDK adds only runtime-call metadata that OCI intentionally leaves
 implementation-specific:
 
@@ -133,7 +142,9 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
 2. upstream positive and negative schema fixture tests;
 3. strict typed round-trip tests for applicable upstream Linux, state, and
    feature fixtures;
-4. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
+4. positive and negative semantic fixtures with stable rule identifiers;
+5. request-validation tests, including an untrusted raw-wire rejection test;
+6. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
    socket connector tests.
 
 Remaining evidence includes:

@@ -6,8 +6,8 @@ use crate::{
     ContainerStats, CreateRequest, DeleteRequest, Error, EventBatch, EventsRequest, ExecRequest,
     ExitStatus, KillRequest, ListRequest, OutputChunk, ProcessRecord, ProcessesRequest,
     ReadOutputRequest, ResizeRequest, RestoreRequest, RuntimeInfo, SignalProcessRequest,
-    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest,
+    StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest,
+    WaitRequest, WriteStdinRequest,
 };
 
 use super::{protocol_error, transport_error};
@@ -79,6 +79,35 @@ pub(super) enum WireRequest {
     WaitProcess(WaitProcessRequest),
     Checkpoint(CheckpointRequest),
     Restore(RestoreRequest),
+}
+
+impl WireRequest {
+    pub(super) fn validate(&self) -> crate::Result<()> {
+        match self {
+            Self::Features => Ok(()),
+            Self::Create(request) => request.validate(),
+            Self::State(request) => request.validate(),
+            Self::Start(request) => request.validate(),
+            Self::Kill(request) => request.validate(),
+            Self::Delete(request) => request.validate(),
+            Self::Exec(request) => request.validate(),
+            Self::Wait(request) => request.validate(),
+            Self::List(request) => request.validate(),
+            Self::Pause(request) | Self::Resume(request) => request.validate(),
+            Self::Update(request) => request.validate(),
+            Self::Processes(request) => request.validate(),
+            Self::Stats(request) => request.validate(),
+            Self::Events(request) => request.validate(),
+            Self::ReadOutput(request) => request.validate(),
+            Self::WriteStdin(request) => request.validate(),
+            Self::CloseStdin(request) => request.validate(),
+            Self::Resize(request) => request.validate(),
+            Self::SignalProcess(request) => request.validate(),
+            Self::WaitProcess(request) => request.validate(),
+            Self::Checkpoint(request) => request.validate(),
+            Self::Restore(request) => request.validate(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

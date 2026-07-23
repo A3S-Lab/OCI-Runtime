@@ -18,7 +18,8 @@ The current wire contract is protocol version 1:
    request ID;
 6. stable SDK errors cross the boundary without being converted to strings;
 7. framing, version, or correlation failures permanently poison the
-   connection.
+   connection;
+8. every decoded request is validated before service dispatch.
 
 Calls from cloned clients are serialized on one connection. This guarantees
 deterministic response correlation while retaining an async, `Send + Sync`
@@ -96,6 +97,16 @@ version, official schema, unknown-property policy, and SHA-256 digest before
 the service receives the request. The transport therefore cannot be used to
 bypass the SDK's bundle checks.
 
-Schema validity is not the final conformance gate. Semantic validation,
-driver enforcement, durable lifecycle behavior, and upstream OCI conformance
-remain tracked in the project roadmap.
+Every request implements `ValidateRequest`. The in-process `RuntimeClient`,
+transport client, and server call it independently. The server-side check is
+the trust boundary: manually encoded wire requests cannot bypass OCI
+process/resource semantics, terminal consistency, absolute checkpoint paths,
+or the 4,096-event and 16 MiB output/stdin limits.
+
+Bundle construction also applies the configuration phase of
+`OciSemanticValidator`. The start phase adds the OCI requirement for a
+runnable process and must be applied to the durable bundle snapshot by the
+lifecycle implementation. Schema and initial semantic validity are not the
+final conformance gate; complete normative-rule coverage, driver enforcement,
+durable lifecycle behavior, and upstream OCI conformance remain tracked in
+the project roadmap.

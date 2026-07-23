@@ -111,6 +111,7 @@ impl RuntimeTransportClient {
     }
 
     async fn call(&self, request: WireRequest) -> Result<WireResponse> {
+        request.validate()?;
         let request_id = self
             .inner
             .next_request_id
