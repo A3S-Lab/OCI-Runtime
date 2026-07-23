@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::VmConfig;
 
 /// Schema emitted by the libkrun context smoke.
-pub const KRUN_CONTEXT_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-context-smoke.v1";
+pub const KRUN_CONTEXT_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-context-smoke.v2";
 /// Schema emitted by the real utility-VM entry smoke.
 pub const KRUN_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-vm-smoke.v1";
 
@@ -17,6 +17,7 @@ pub struct KrunContextSmokeReport {
     pub runtime_bundle_loaded: bool,
     pub context_created: bool,
     pub vm_configured: bool,
+    pub agent_vsock_configured: bool,
     pub context_released: bool,
     pub vcpus: u8,
     pub memory_mib: u32,
@@ -34,6 +35,7 @@ impl KrunContextSmokeReport {
             runtime_bundle_loaded: option_env!("A3S_OCI_KRUN_RUNTIME_DIR").is_some(),
             context_created: false,
             vm_configured: false,
+            agent_vsock_configured: false,
             context_released: false,
             vcpus: config.vcpus(),
             memory_mib: config.memory_mib(),
@@ -50,6 +52,7 @@ impl KrunContextSmokeReport {
             runtime_bundle_loaded: option_env!("A3S_OCI_KRUN_RUNTIME_DIR").is_some(),
             context_created: false,
             vm_configured: false,
+            agent_vsock_configured: false,
             context_released: false,
             vcpus: 1,
             memory_mib: 128,
@@ -64,6 +67,7 @@ impl KrunContextSmokeReport {
             && self.runtime_bundle_loaded
             && self.context_created
             && self.vm_configured
+            && self.agent_vsock_configured
             && self.context_released
     }
 }

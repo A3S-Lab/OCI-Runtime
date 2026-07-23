@@ -5,12 +5,13 @@ use std::ptr;
 use std::rc::Rc;
 
 use a3s_libkrun_sys::{
-    krun_create_ctx, krun_free_ctx, krun_set_console_output, krun_set_exec, krun_set_root,
-    krun_set_vm_config, krun_set_workdir, krun_start_enter,
+    krun_add_vsock, krun_add_vsock_port_windows, krun_create_ctx, krun_disable_implicit_vsock,
+    krun_free_ctx, krun_set_console_output, krun_set_exec, krun_set_root, krun_set_vm_config,
+    krun_set_workdir, krun_start_enter,
 };
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
-use crate::VmConfig;
+use crate::{AgentVsockEndpoint, VmConfig};
 
 // libkrun reads exactly MAX_ARGS pointer slots with `slice::from_raw_parts`.
 // Allocate the complete table even for short arrays so the foreign function
@@ -70,6 +71,42 @@ impl KrunContext {
             "krun_set_root",
             status,
             "failed to configure the libkrun root filesystem",
+        )
+    }
+
+    pub(crate) fn set_agent_vsock(&mut self, endpoint: &AgentVsockEndpoint) -> Result<()> {
+        let id = self.active_id("configure-agent-vsock")?;
+        // The implicit device enables TSI according to libkrun policy. Replace
+        // it with an explicit device whose zero flags expose only vsock.
+        // SAFETY: `id` is a live, exclusively owned libkrun context.
+        let status = unsafe { krun_disable_implicit_vsock(id) };
+        check_status(
+            "krun_disable_implicit_vsock",
+            status,
+            "failed to disable the implicit libkrun vsock device",
+        )?;
+        // SAFETY: `id` remains live and zero is the documented plain-vsock
+        // feature mask.
+        let status = unsafe { krun_add_vsock(id, 0) };
+        check_status(
+            "krun_add_vsock",
+            status,
+            "failed to configure a plain agent vsock device",
+        )?;
+
+        let pipe_name = value_to_cstring(
+            "krun_add_vsock_port_windows",
+            "agent pipe name",
+            endpoint.pipe_name(),
+        )?;
+        // SAFETY: the context remains live and `pipe_name` is a validated,
+        // NUL-terminated bare name retained for the duration of the call.
+        let status =
+            unsafe { krun_add_vsock_port_windows(id, endpoint.port(), pipe_name.as_ptr()) };
+        check_status(
+            "krun_add_vsock_port_windows",
+            status,
+            "failed to map the guest agent port to a Windows named pipe",
         )
     }
 

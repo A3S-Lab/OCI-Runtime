@@ -82,7 +82,8 @@ The project is experimental. The current Windows milestone implements:
 - a real WHPX partition-object create/delete smoke;
 - an isolated shim pinned to the `a3s-libkrun-sys 3.1.0` FFI ABI and a
   runtime-owned native bundle imported from `A3S-Lab/Box@46e17a8`;
-- a real libkrun context create/configure/release smoke;
+- a real libkrun context create/configure/release smoke that replaces implicit
+  TSI with plain vsock and configures the fixed guest port-to-pipe mapping;
 - a real WHPX utility-VM entry smoke that boots the packaged Linux kernel,
   executes `/bin/sh` in an untouched Alpine rootfs, and verifies a
   guest-written marker on the host;
@@ -176,12 +177,13 @@ The successful Windows report is:
 
 ```json
 {
-  "schema_version": "a3s.oci.krun-context-smoke.v1",
+  "schema_version": "a3s.oci.krun-context-smoke.v2",
   "platform": "windows",
   "status": "available",
   "runtime_bundle_loaded": true,
   "context_created": true,
   "vm_configured": true,
+  "agent_vsock_configured": true,
   "context_released": true,
   "vcpus": 1,
   "memory_mib": 128

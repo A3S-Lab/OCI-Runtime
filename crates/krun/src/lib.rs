@@ -21,6 +21,57 @@ pub use report::{
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const VM_SMOKE_TOKEN: &str = "a3s-oci-whpx-vm-smoke-v1";
 
+/// Guest control port reserved by the pinned Windows libkrun bridge.
+pub const AGENT_VSOCK_PORT: u32 = 4_093;
+
+/// Exact Windows named-pipe mapping for the guest-agent vsock port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentVsockEndpoint {
+    pipe_name: String,
+}
+
+impl AgentVsockEndpoint {
+    /// Validate a bare pipe name that the pinned libkrun fork preserves.
+    pub fn new(pipe_name: impl Into<String>) -> Result<Self> {
+        let pipe_name = pipe_name.into();
+        if pipe_name.is_empty()
+            || pipe_name.len() > 128
+            || !pipe_name
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_alphanumeric())
+            || !pipe_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "agent pipe name must be a 1..=128 byte ASCII basename starting with an alphanumeric character and containing only alphanumerics, `_`, or `-`",
+            )
+            .for_operation("configure-agent-vsock"));
+        }
+        Ok(Self { pipe_name })
+    }
+
+    /// Bare name passed to `krun_add_vsock_port_windows`.
+    #[must_use]
+    pub fn pipe_name(&self) -> &str {
+        &self.pipe_name
+    }
+
+    /// Full local Windows named-pipe path used by the host server.
+    #[must_use]
+    pub fn windows_pipe_path(&self) -> String {
+        format!(r"\\.\pipe\{}", self.pipe_name)
+    }
+
+    /// Fixed guest vsock port.
+    #[must_use]
+    pub const fn port(&self) -> u32 {
+        AGENT_VSOCK_PORT
+    }
+}
+
 /// Validated utility-VM resource configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VmConfig {
@@ -87,6 +138,7 @@ pub fn context_smoke() -> KrunContextSmokeReport {
             runtime_bundle_loaded: false,
             context_created: false,
             vm_configured: false,
+            agent_vsock_configured: false,
             context_released: false,
             vcpus: 1,
             memory_mib: 128,
@@ -124,6 +176,22 @@ fn context_smoke_windows() -> KrunContextSmokeReport {
         return report;
     }
     report.vm_configured = true;
+
+    let endpoint =
+        match AgentVsockEndpoint::new(format!("a3s-oci-context-smoke-{}", std::process::id())) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                report.context_released = context.close().is_ok();
+                report.reason = Some(error.to_string());
+                return report;
+            }
+        };
+    if let Err(error) = context.set_agent_vsock(&endpoint) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.agent_vsock_configured = true;
 
     match context.close() {
         Ok(()) => {
@@ -334,7 +402,7 @@ fn vm_smoke_windows(rootfs: &Path, console: &Path, config: VmConfig) -> KrunVmSm
 
 #[cfg(test)]
 mod tests {
-    use super::{fallback_config, VmConfig};
+    use super::{fallback_config, AgentVsockEndpoint, VmConfig, AGENT_VSOCK_PORT};
 
     #[test]
     fn rejects_zero_resources() {
@@ -354,6 +422,28 @@ mod tests {
         let config = fallback_config();
         assert_eq!(config.vcpus(), 1);
         assert_eq!(config.memory_mib(), 512);
+    }
+
+    #[test]
+    fn validates_an_exact_windows_agent_pipe_basename() {
+        let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-123").expect("valid agent endpoint");
+        assert_eq!(endpoint.pipe_name(), "a3s-oci-agent-123");
+        assert_eq!(endpoint.port(), AGENT_VSOCK_PORT);
+        assert_eq!(endpoint.windows_pipe_path(), r"\\.\pipe\a3s-oci-agent-123");
+
+        for name in [
+            "",
+            "-a3s",
+            "a3s.agent",
+            r"a3s\agent",
+            r"\\.\pipe\a3s-agent",
+            "a3s agent",
+        ] {
+            assert!(
+                AgentVsockEndpoint::new(name).is_err(),
+                "{name:?} must be rejected"
+            );
+        }
     }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

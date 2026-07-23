@@ -149,6 +149,8 @@ and host/agent transition.
   for the isolated shim.
 - [x] Create, configure, and release a real context using the Windows WHPX
   libkrun build.
+- [x] Configure a plain-vsock device and the fixed guest control port through
+  the Windows named-pipe mapping ABI without enabling TSI.
 - [x] Enter the VM and execute a guest command through WHPX.
 - [x] Configure one vCPU, bounded memory, a diagnostic rootfs share, and
   console output.

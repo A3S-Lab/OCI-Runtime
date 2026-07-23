@@ -16,8 +16,10 @@ The runtime:
 5. links the `a3s-libkrun-sys 3.1.0` FFI ABI only into an isolated shim and
    stages a runtime-owned, checksum-verified native bundle imported from
    `A3S-Lab/Box@46e17a8`;
-6. creates, configures for one vCPU and 128 MiB, and releases one real libkrun
-   context without entering a VM;
+6. creates, configures for one vCPU and 128 MiB, replaces implicit TSI with a
+   zero-feature plain-vsock device, maps guest port 4093 to a validated bare
+   Windows pipe name, and releases one real libkrun context without entering a
+   VM;
 7. enters a one-vCPU, 512 MiB utility VM, executes `/bin/sh` from a supplied
    Linux rootfs, and verifies a guest-written marker through virtiofs;
 8. emits stable JSON evidence through `a3s-oci features`,
@@ -43,6 +45,8 @@ A successful libkrun context smoke additionally proves that:
 - the exact packaged native runtime pair can be loaded;
 - `krun_create_ctx` succeeds;
 - `krun_set_vm_config` accepts the certified single-vCPU configuration;
+- `krun_disable_implicit_vsock`, `krun_add_vsock(..., 0)`, and
+  `krun_add_vsock_port_windows` accept the fixed agent mapping;
 - `krun_free_ctx` releases the context.
 
 A successful libkrun VM smoke additionally proves that:
@@ -69,7 +73,8 @@ does not build it.
 The smokes do not prove that:
 
 - the static A3S guest agent or its system image boots;
-- vsock, named-pipe transport, networking, or complete process I/O works;
+- a guest connects through vsock to an access-controlled named-pipe server;
+- networking or complete process I/O works;
 - OCI create/start ordering is implemented;
 - one or multiple Linux containers can execute;
 - the driver is production ready.
