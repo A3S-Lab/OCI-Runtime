@@ -10,6 +10,7 @@ mod id;
 mod model;
 mod schema;
 mod service;
+mod transport;
 
 pub use a3s_oci_core::{
     DriverCapability, DriverKind, DriverReadiness, IsolationClass, RuntimeFeatures,
@@ -34,3 +35,7 @@ pub use schema::{
     OciSchemaViolation,
 };
 pub use service::OciRuntimeService;
+pub use transport::{
+    serve_transport_connection, LocalIpcEndpoint, RuntimeTransportClient, SDK_PROTOCOL_VERSION_MAX,
+    SDK_PROTOCOL_VERSION_MIN,
+};

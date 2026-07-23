@@ -45,6 +45,10 @@ The project is experimental. The current Windows milestone implements:
   SHA-256 configuration digest;
 - wire-safe bundle serialization that carries the exact validated
   `config.json` text and rechecks schema, version, path, and digest on decode;
+- a version-negotiated, 64 MiB-bounded local IPC transport that maps every SDK
+  operation, preserves typed service errors, and fails closed on correlation
+  or protocol mismatches;
+- tested Windows named-pipe and Unix-domain-socket client connectors;
 - the complete pinned OCI Runtime Specification 1.3.0 schema and upstream
   fixture set, compiled into an offline validator for configuration, state,
   and feature documents;
@@ -366,8 +370,10 @@ crates/
 |-- sdk/
 |   `-- src/
 |       |-- bundle.rs      # Strict, digest-bound complete OCI spec loading
+|       |-- client.rs      # Cloneable in-process or local-IPC A3S Box client
+|       |-- schema.rs      # Offline pinned OCI schema validation
 |       |-- service.rs     # Async full lifecycle and process-control contract
-|       `-- client.rs      # Cloneable A3S Box client
+|       `-- transport/     # Negotiated framing and platform IPC connectors
 |-- krun/
 |   |-- src/lib.rs         # Safe shim-local libkrun context and VM smoke boundary
 |   |-- build.rs           # Hash-verified native runtime extraction and staging
@@ -438,6 +444,14 @@ typed `Spec`. Its custom wire decoder reconstructs the typed model and rejects
 relative paths, digest tampering, invalid schemas, unknown fields, and
 unsupported specification versions before a request reaches a service.
 
+Out-of-process callers use `RuntimeClient::connect` with a validated Windows
+local named pipe or absolute Unix-domain socket. Protocol version 1 negotiates
+before the first call, uses bounded length-delimited JSON frames, correlates
+every response with a nonzero request ID, preserves stable typed service
+errors, and permanently closes a connection after framing or correlation
+failure. The runtime owns listener access control and passes each authenticated
+stream to `serve_transport_connection`.
+
 Its operation surface includes:
 
 - required OCI `features`, `create`, `state`, `start`, `kill`, and `delete`;
@@ -452,6 +466,9 @@ Its operation surface includes:
 Current host integration supports feature discovery through the SDK. Other
 methods deliberately return `unsupported` until their durable implementation
 and conformance tests land; they are never reported as available early.
+
+See [SDK Transport](docs/sdk-transport.md) for the Box-facing connection
+contract and platform examples.
 
 ```rust
 use a3s_oci_runtime::HostRuntimeService;

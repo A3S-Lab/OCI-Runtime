@@ -105,6 +105,13 @@ version. The create implementation must durably retain those bytes or a
 cryptographically equivalent immutable snapshot before returning `created`.
 Changes to the source bundle after create must not affect the container.
 
+The SDK transport maps every service method to a protocol-versioned request
+and response variant. Its length-delimited frames are bounded before
+allocation, request IDs are correlated, service errors remain typed, and a
+protocol violation poisons the connection. Transport decoding invokes
+`OciBundle`'s custom fail-closed decoder, so crossing a named pipe, Unix
+socket, or guest bridge cannot bypass bundle validation.
+
 The SDK adds only runtime-call metadata that OCI intentionally leaves
 implementation-specific:
 
@@ -125,7 +132,9 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
    properties and enum values;
 2. upstream positive and negative schema fixture tests;
 3. strict typed round-trip tests for applicable upstream Linux, state, and
-   feature fixtures.
+   feature fixtures;
+4. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
+   socket connector tests.
 
 Remaining evidence includes:
 

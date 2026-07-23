@@ -3,10 +3,10 @@ use std::sync::Arc;
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
     ContainerStats, CreateRequest, DeleteRequest, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessRecord,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ExitStatus, KillRequest, ListRequest, LocalIpcEndpoint, OciRuntimeService, OutputChunk,
+    ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
+    RuntimeInfo, RuntimeTransportClient, SignalProcessRequest, StartRequest, StateRequest,
+    StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 /// Cloneable, transport-independent Rust SDK client.
@@ -16,6 +16,11 @@ pub struct RuntimeClient {
 }
 
 impl RuntimeClient {
+    /// Connect to an out-of-process runtime over a validated local IPC endpoint.
+    pub async fn connect(endpoint: &LocalIpcEndpoint) -> Result<Self> {
+        Ok(Self::new(RuntimeTransportClient::connect(endpoint).await?))
+    }
+
     /// Wrap an in-process or transported runtime service.
     #[must_use]
     pub fn new(service: impl OciRuntimeService + 'static) -> Self {

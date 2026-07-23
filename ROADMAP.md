@@ -53,6 +53,8 @@ Completed:
 - rejection of unknown configuration properties;
 - immutable SHA-256 binding of the loaded `config.json`;
 - exact `config.json` retention and fail-closed SDK wire deserialization;
+- version-negotiated, length-delimited transport for every SDK operation;
+- tested Windows named-pipe and Unix-domain-socket client connectors;
 - existing `features` CLI path routed through the Rust SDK;
 - Windows and Linux CI.
 
@@ -85,7 +87,7 @@ The WHPX driver remains `probe-only`, and the host service advertises only the
 - [x] Generate and verify a schema-property and enum-value coverage manifest
   in CI.
 - [ ] Add semantic validators for common, Linux, and VM configuration.
-- [ ] Add version-negotiated local IPC transport for out-of-process callers.
+- [x] Add version-negotiated local IPC transport for out-of-process callers.
 
 Exit gate: every OCI 1.3.0 schema property is accounted for as accepted,
 rejected as inapplicable, or rejected because the selected driver cannot
