@@ -46,15 +46,19 @@ The project is experimental. The current Windows milestone implements:
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
-- an isolated shim pinned to `a3s-libkrun-sys 3.1.0` and its
-  checksum-verified `krun.dll`/`libkrunfw.dll` bundle;
+- an isolated shim pinned to the `a3s-libkrun-sys 3.1.0` FFI ABI and a
+  runtime-owned native bundle imported from `A3S-Lab/Box@46e17a8`;
 - a real libkrun context create/configure/release smoke;
+- a real WHPX utility-VM entry smoke that boots the packaged Linux kernel,
+  executes `/bin/sh` in an untouched Alpine rootfs, and verifies a
+  guest-written marker on the host;
 - the pure OCI `creating -> created -> running -> stopped` state contract;
 - Windows and Linux CI scaffolding.
 
-It does **not** yet boot an A3S Linux kernel or create, start, or execute an OCI
-container. The WHPX driver therefore reports `probe-only` readiness even when
-the host capability and partition-object smoke succeed.
+It does **not** yet boot the A3S guest agent or create, start, or execute an
+OCI container. The WHPX driver therefore reports `probe-only` readiness even
+when the host capability, partition-object, context, and guest-command smokes
+succeed.
 
 See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
@@ -142,6 +146,18 @@ The successful Windows report is:
   "memory_mib": 128
 }
 ```
+
+Run a real guest command against an extracted Linux rootfs:
+
+```sh
+cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- \
+  vm-smoke --rootfs C:\path\to\rootfs --console C:\path\to\console.log
+```
+
+This command succeeds only after `/bin/sh` runs in the guest, writes a unique
+marker through virtiofs, the host verifies and removes that marker, and
+libkrun reports exit code zero. A VM API return alone is not accepted as
+workload evidence.
 
 ## Capability And Readiness
 
@@ -235,20 +251,25 @@ The separate libkrun smoke also verifies:
 
 - the pinned Windows libkrun runtime bundle loads;
 - one context can be created, configured for the certified one-vCPU path, and
-  released without a leak.
+  released without a leak;
+- the utility VM enters through WHPX with one vCPU and bounded memory;
+- `/bin/sh` executes from an unmodified Linux rootfs, including its normal
+  absolute `/bin/sh -> /bin/busybox` symlink;
+- the guest can write a marker through virtiofs and the host can verify and
+  remove it;
+- a fatal WHPX exit is not misreported as a successful guest exit.
 
-Neither smoke verifies:
+The smokes do not yet verify:
 
-- libkrun VM entry or guest instruction execution;
-- the pinned A3S kernel or guest agent;
-- virtio-fs, vsock, named-pipe transport, networking, or process I/O;
+- the A3S guest agent or its pinned system image;
+- vsock, named-pipe transport, networking, or full process I/O;
 - OCI bundle validation or lifecycle commands;
 - single-container or shared-guest-kernel execution.
 
-The next Windows gate boots a one-vCPU utility VM through
-`a3s-libkrun-sys`, negotiates a versioned guest protocol, mounts one protected
-runtime root, and runs a fixed local Alpine bundle with an exact create/start
-barrier. Only that gate may promote WHPX readiness to `experimental`.
+The next Windows gate adds the static guest agent, negotiates a versioned
+protocol, mounts a protected runtime root, and runs a fixed local Alpine OCI
+bundle with an exact create/start barrier. Only that gate may promote WHPX
+readiness to `experimental`.
 
 ## Target Architecture
 
@@ -295,7 +316,7 @@ state, and cleanup.
 
 | Host | Execution path | Current state |
 | --- | --- | --- |
-| Windows x86_64 | libkrun + WHPX utility VM | WHPX partition and libkrun context smokes implemented; VM entry pending; driver is `probe-only` |
+| Windows x86_64 | libkrun + WHPX utility VM | Real guest command and virtiofs marker smoke pass; OCI guest agent/lifecycle pending; driver is `probe-only` |
 | Linux x86_64/aarch64 without KVM | Native Linux executor | Required before `crun` removal; not implemented |
 | Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Planned after the shared executor contract |
 | macOS arm64 | libkrun + HVF utility VM | Planned after the shared executor contract |
@@ -339,7 +360,9 @@ crates/
 |       |-- service.rs     # Async full lifecycle and process-control contract
 |       `-- client.rs      # Cloneable A3S Box client
 |-- krun/
-|   |-- src/lib.rs         # Safe shim-local libkrun context boundary
+|   |-- src/lib.rs         # Safe shim-local libkrun context and VM smoke boundary
+|   |-- build.rs           # Hash-verified native runtime extraction and staging
+|   `-- RUNTIME-PROVENANCE.md
 |   `-- src/main.rs        # Isolated a3s-oci-krun-shim process
 |-- runtime/
 |   `-- src/
@@ -371,6 +394,8 @@ On Windows, also run the real host probe:
 cargo run -p a3s-oci-cli -- features
 cargo run -p a3s-oci-cli -- whpx-smoke
 cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- \
+  vm-smoke --rootfs C:\path\to\rootfs --console C:\path\to\console.log
 ```
 
 Cross-check the non-Windows capability path when the target is installed:

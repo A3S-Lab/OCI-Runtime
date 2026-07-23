@@ -4,15 +4,22 @@
 //! process depends on the native library, so feature inspection and native
 //! Linux execution remain independent of KVM, HVF, or WHPX.
 
+use std::path::Path;
+
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod context;
 mod report;
 
 use a3s_oci_core::CapabilityStatus;
-#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
 use a3s_oci_core::HostPlatform;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
-pub use report::{KrunContextSmokeReport, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION};
+pub use report::{
+    KrunContextSmokeReport, KrunVmSmokeReport, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,
+    KRUN_VM_SMOKE_SCHEMA_VERSION,
+};
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+const VM_SMOKE_TOKEN: &str = "a3s-oci-whpx-vm-smoke-v1";
 
 /// Validated utility-VM resource configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,9 +135,206 @@ fn context_smoke_windows() -> KrunContextSmokeReport {
     report
 }
 
+/// Enter a real utility VM, execute `/bin/sh`, and verify a guest-written marker.
+///
+/// This is intentionally a shim-only validation API. `krun_start_enter`
+/// consumes the process-local libkrun context and must never run inside an SDK
+/// client process.
+#[must_use]
+pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
+    let config = match VmConfig::new(1, 512) {
+        Ok(config) => config,
+        Err(error) => {
+            let mut report = KrunVmSmokeReport::initial(HostPlatform::current(), fallback_config());
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        vm_smoke_windows(rootfs, console, config)
+    }
+
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = (rootfs, console);
+        KrunVmSmokeReport::unsupported(HostPlatform::current(), config)
+    }
+}
+
+fn fallback_config() -> VmConfig {
+    VmConfig {
+        vcpus: 1,
+        memory_mib: 512,
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn vm_smoke_windows(rootfs: &Path, console: &Path, config: VmConfig) -> KrunVmSmokeReport {
+    use std::fs;
+
+    use context::KrunContext;
+
+    let mut report = KrunVmSmokeReport::initial(HostPlatform::Windows, config);
+    let rootfs = match rootfs.canonicalize() {
+        Ok(path) if path.is_dir() => path,
+        Ok(path) => {
+            report.reason = Some(format!("rootfs is not a directory: {}", path.display()));
+            return report;
+        }
+        Err(error) => {
+            report.reason = Some(format!(
+                "failed to resolve rootfs {}: {error}",
+                rootfs.display()
+            ));
+            return report;
+        }
+    };
+
+    let console_parent = match console.parent() {
+        Some(parent) => parent,
+        None => {
+            report.reason = Some(format!(
+                "console path has no parent directory: {}",
+                console.display()
+            ));
+            return report;
+        }
+    };
+    if let Err(error) = fs::create_dir_all(console_parent) {
+        report.reason = Some(format!(
+            "failed to create console directory {}: {error}",
+            console_parent.display()
+        ));
+        return report;
+    }
+
+    let marker_name = format!(".a3s-oci-vm-smoke-{}", std::process::id());
+    let marker_host_path = rootfs.join(&marker_name);
+    if marker_host_path.exists() {
+        report.reason = Some(format!(
+            "refusing to overwrite an existing smoke marker: {}",
+            marker_host_path.display()
+        ));
+        return report;
+    }
+
+    let mut context = match KrunContext::create() {
+        Ok(context) => {
+            report.context_created = true;
+            context
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+
+    if let Err(error) = context.set_vm_config(config) {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.vm_configured = true;
+
+    if let Err(error) = context.set_root(&rootfs) {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.rootfs_configured = true;
+
+    if let Err(error) = context.set_workdir("/") {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+
+    let marker_guest_path = format!("/{marker_name}");
+    let command = format!(
+        "printf '%s\\n' '{VM_SMOKE_TOKEN}' > '{marker_guest_path}' && \
+         printf '%s\\n' '{VM_SMOKE_TOKEN}'"
+    );
+    let arguments = vec!["-c".to_string(), command];
+    if let Err(error) = context.set_exec("/bin/sh", &arguments, &[]) {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.workload_configured = true;
+
+    if let Err(error) = context.set_console_output(console) {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.console_configured = true;
+
+    // A3S's Windows libkrun build exposes an opt-in return path so this
+    // one-shot diagnostic can verify guest effects before the shim exits.
+    std::env::set_var("LIBKRUN_WINDOWS_RETURN_ON_EXIT", "1");
+    match context.start_enter() {
+        Ok(exit_code) => {
+            report.vm_entered = true;
+            report.guest_exit_code = Some(exit_code);
+            if exit_code != 0 {
+                report.reason = Some(format!(
+                    "guest workload returned non-zero exit code {exit_code}"
+                ));
+            }
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    }
+
+    report.console_created = console.is_file();
+    match fs::read_to_string(&marker_host_path) {
+        Ok(contents) if contents == format!("{VM_SMOKE_TOKEN}\n") => {
+            report.marker_verified = true;
+        }
+        Ok(contents) => {
+            report.reason = Some(format!(
+                "guest marker had unexpected contents ({} bytes)",
+                contents.len()
+            ));
+        }
+        Err(error) => {
+            report.reason = Some(format!(
+                "failed to read guest marker {}: {error}",
+                marker_host_path.display()
+            ));
+        }
+    }
+
+    if marker_host_path.exists() {
+        match fs::remove_file(&marker_host_path) {
+            Ok(()) => report.marker_removed = true,
+            Err(error) => {
+                report.reason.get_or_insert_with(|| {
+                    format!(
+                        "failed to remove guest marker {}: {error}",
+                        marker_host_path.display()
+                    )
+                });
+            }
+        }
+    }
+
+    if report.guest_exit_code == Some(0)
+        && report.marker_verified
+        && report.marker_removed
+        && report.console_created
+    {
+        report.status = CapabilityStatus::Available;
+        report.reason = None;
+    } else if report.reason.is_none() {
+        report.reason = Some("guest workload did not satisfy the smoke-test contract".into());
+    }
+
+    report
+}
+
 #[cfg(test)]
 mod tests {
-    use super::VmConfig;
+    use super::{fallback_config, VmConfig};
 
     #[test]
     fn rejects_zero_resources() {
@@ -143,6 +347,13 @@ mod tests {
         let config = VmConfig::new(1, 128).expect("smoke config must be valid");
         assert_eq!(config.vcpus(), 1);
         assert_eq!(config.memory_mib(), 128);
+    }
+
+    #[test]
+    fn fallback_config_matches_vm_smoke_resources() {
+        let config = fallback_config();
+        assert_eq!(config.vcpus(), 1);
+        assert_eq!(config.memory_mib(), 512);
     }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

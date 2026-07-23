@@ -42,6 +42,8 @@ Completed:
 - isolated libkrun shim with a pinned, checksum-verified Windows runtime
   bundle;
 - libkrun context create/configure/release smoke on Windows;
+- real WHPX VM entry, Linux userspace command, virtiofs marker, and natural
+  exit-code smoke on Windows;
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
@@ -53,7 +55,6 @@ Completed:
 Not yet complete:
 
 - durable container state and operation journal;
-- a libkrun/WHPX VM boot;
 - guest protocol and Linux executor;
 - any workload lifecycle operation;
 - OCI hook execution;
@@ -103,12 +104,15 @@ and host/agent transition.
 
 - [x] Load and probe Windows Hypervisor Platform securely.
 - [x] Create and delete a real WHPX partition object.
-- [x] Pin `a3s-libkrun-sys 3.1.0` and stage its checksum-verified Windows
-  runtime bundle only for the isolated shim.
+- [x] Pin the `a3s-libkrun-sys 3.1.0` FFI ABI and stage a runtime-owned,
+  checksum-verified Windows bundle imported from `A3S-Lab/Box@46e17a8` only
+  for the isolated shim.
 - [x] Create, configure, and release a real context using the Windows WHPX
   libkrun build.
-- [ ] Enter the VM and execute guest instructions through WHPX.
-- [ ] Configure one vCPU, memory, protected runtime share, and console.
+- [x] Enter the VM and execute a guest command through WHPX.
+- [x] Configure one vCPU, bounded memory, a diagnostic rootfs share, and
+  console output.
+- [ ] Replace the diagnostic path with a protected runtime-owned share.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [ ] Establish the named-pipe/vsock bridge.
 - [ ] Negotiate the guest protocol and retain boot evidence.
