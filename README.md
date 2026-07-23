@@ -43,6 +43,8 @@ The project is experimental. The current Windows milestone implements:
   lifecycle and A3S Box process-control surface;
 - strict, size-bounded OCI 1.0.0 through 1.3.0 bundle loading with an immutable
   SHA-256 configuration digest;
+- wire-safe bundle serialization that carries the exact validated
+  `config.json` text and rechecks schema, version, path, and digest on decode;
 - the complete pinned OCI Runtime Specification 1.3.0 schema and upstream
   fixture set, compiled into an offline validator for configuration, state,
   and feature documents;
@@ -430,6 +432,11 @@ The SDK also exposes `OciSchemaValidator`. It validates raw JSON or typed
 `Spec`, `State`, and `Features` values against the pinned official schemas
 without filesystem or network resolution and returns bounded, structured
 violations with instance and schema paths.
+
+`OciBundle` retains the exact validated `config.json` text in addition to its
+typed `Spec`. Its custom wire decoder reconstructs the typed model and rejects
+relative paths, digest tampering, invalid schemas, unknown fields, and
+unsupported specification versions before a request reaches a service.
 
 Its operation surface includes:
 

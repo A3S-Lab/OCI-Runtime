@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use oci_spec::runtime::Spec;
 use semver::Version;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
@@ -18,10 +18,11 @@ pub const OCI_RUNTIME_SPEC_VERSION_MIN: &str = "1.0.0";
 pub const OCI_RUNTIME_SPEC_VERSION_MAX: &str = "1.3.0";
 
 /// Immutable, digest-bound OCI bundle submitted to the runtime service.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OciBundle {
     directory: PathBuf,
     config_digest: String,
+    config_json: String,
     spec: Spec,
 }
 
@@ -112,18 +113,41 @@ impl OciBundle {
             return Err(config_too_large(&config_path, bytes.len() as u64));
         }
 
-        let spec = decode_spec(&bytes, &config_path)?;
-        validate_version(&spec)?;
-
-        Ok(Self {
-            directory,
-            config_digest: digest(&bytes),
-            spec,
-        })
+        let config_json = String::from_utf8(bytes).map_err(|error| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "OCI configuration {} is not valid UTF-8: {error}",
+                    config_path.display()
+                ),
+            )
+            .for_operation("load-bundle")
+        })?;
+        Self::from_json(directory, config_json)
     }
 
     /// Construct an immutable bundle from an already decoded complete OCI spec.
     pub fn from_spec(directory: impl Into<PathBuf>, spec: Spec) -> Result<Self> {
+        validate_version(&spec)?;
+        OciSchemaValidator::new()?.validate_spec(&spec)?;
+        let config_json = serde_json::to_string(&spec).map_err(|error| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!("failed to encode OCI configuration: {error}"),
+            )
+            .for_operation("build-bundle")
+        })?;
+        Self::from_json(directory, config_json)
+    }
+
+    /// Construct an immutable bundle from exact UTF-8 `config.json` contents.
+    ///
+    /// Whitespace and property ordering are retained so the digest and
+    /// durable snapshot bind the exact caller-provided document.
+    pub fn from_json(
+        directory: impl Into<PathBuf>,
+        config_json: impl Into<String>,
+    ) -> Result<Self> {
         let directory = directory.into();
         if !directory.is_absolute() {
             return Err(Error::new(
@@ -132,19 +156,22 @@ impl OciBundle {
             )
             .for_operation("build-bundle"));
         }
+
+        let config_json = config_json.into();
+        let config_bytes = config_json.as_bytes();
+        if config_bytes.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(config_too_large(
+                &directory.join(CONFIG_FILE_NAME),
+                config_bytes.len() as u64,
+            ));
+        }
+        let spec = decode_spec(config_bytes, &directory.join(CONFIG_FILE_NAME))?;
         validate_version(&spec)?;
-        OciSchemaValidator::new()?.validate_spec(&spec)?;
-        let bytes = serde_json::to_vec(&spec).map_err(|error| {
-            Error::new(
-                ErrorCode::InvalidArgument,
-                format!("failed to encode OCI configuration: {error}"),
-            )
-            .for_operation("build-bundle")
-        })?;
 
         Ok(Self {
             directory,
-            config_digest: digest(&bytes),
+            config_digest: digest(config_bytes),
+            config_json,
             spec,
         })
     }
@@ -161,11 +188,70 @@ impl OciBundle {
         &self.config_digest
     }
 
+    /// Exact validated `config.json` text retained for durable snapshotting.
+    #[must_use]
+    pub fn config_json(&self) -> &str {
+        &self.config_json
+    }
+
+    /// Exact validated `config.json` bytes retained for durable snapshotting.
+    #[must_use]
+    pub fn config_bytes(&self) -> &[u8] {
+        self.config_json.as_bytes()
+    }
+
     /// Complete typed OCI runtime configuration.
     #[must_use]
     pub const fn spec(&self) -> &Spec {
         &self.spec
     }
+}
+
+impl Serialize for OciBundle {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SerializedOciBundleRef {
+            directory: &self.directory,
+            config_digest: &self.config_digest,
+            config_json: &self.config_json,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OciBundle {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let serialized = SerializedOciBundle::deserialize(deserializer)?;
+        let bundle = Self::from_json(serialized.directory, serialized.config_json)
+            .map_err(de::Error::custom)?;
+        if serialized.config_digest != bundle.config_digest {
+            return Err(de::Error::custom(format!(
+                "OCI configuration digest mismatch: expected {}, found {}",
+                bundle.config_digest, serialized.config_digest
+            )));
+        }
+        Ok(bundle)
+    }
+}
+
+#[derive(Serialize)]
+struct SerializedOciBundleRef<'a> {
+    directory: &'a Path,
+    config_digest: &'a str,
+    config_json: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SerializedOciBundle {
+    directory: PathBuf,
+    config_digest: String,
+    config_json: String,
 }
 
 fn decode_spec(bytes: &[u8], path: &Path) -> Result<Spec> {
@@ -330,11 +416,8 @@ mod tests {
     async fn loads_v1_3_fields_without_losing_them() {
         let temporary = tempfile::tempdir().expect("create temporary bundle");
         let config = complete_v1_3_fixture();
-        std::fs::write(
-            temporary.path().join("config.json"),
-            serde_json::to_vec_pretty(&config).expect("encode fixture"),
-        )
-        .expect("write fixture");
+        let config_json = serde_json::to_string_pretty(&config).expect("encode fixture");
+        std::fs::write(temporary.path().join("config.json"), &config_json).expect("write fixture");
 
         let bundle = OciBundle::load(temporary.path())
             .await
@@ -350,6 +433,8 @@ mod tests {
             json!("full-spec-pass-through")
         );
         assert!(bundle.config_digest().starts_with("sha256:"));
+        assert_eq!(bundle.config_json(), config_json);
+        assert_eq!(bundle.config_bytes(), config_json.as_bytes());
         assert!(bundle.directory().is_absolute());
     }
 
@@ -452,6 +537,52 @@ mod tests {
             let encoded = serde_json::to_value(spec).expect("encode decoded OCI spec");
             assert_explicit_fields_preserved(&original, &encoded, "");
         }
+    }
+
+    #[test]
+    fn wire_round_trip_revalidates_and_preserves_exact_configuration() {
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("wire-bundle");
+        let config_json = " {\n  \"ociVersion\": \"1.3.0\"\n}\n";
+        let bundle =
+            OciBundle::from_json(absolute, config_json).expect("build exact immutable bundle");
+        let encoded = serde_json::to_vec(&bundle).expect("serialize bundle");
+        let decoded: OciBundle = serde_json::from_slice(&encoded).expect("deserialize bundle");
+
+        assert_eq!(decoded, bundle);
+        assert_eq!(decoded.config_json(), config_json);
+    }
+
+    #[test]
+    fn wire_deserialization_rejects_digest_tampering() {
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("wire-bundle");
+        let bundle =
+            OciBundle::from_json(absolute, r#"{"ociVersion":"1.3.0"}"#).expect("build bundle");
+        let mut encoded = serde_json::to_value(bundle).expect("serialize bundle");
+        encoded["config_digest"] =
+            json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+
+        let error = serde_json::from_value::<OciBundle>(encoded)
+            .expect_err("tampered digest must be rejected");
+        assert!(error.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn wire_deserialization_cannot_bypass_absolute_path_validation() {
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("wire-bundle");
+        let bundle =
+            OciBundle::from_json(absolute, r#"{"ociVersion":"1.3.0"}"#).expect("build bundle");
+        let mut encoded = serde_json::to_value(bundle).expect("serialize bundle");
+        encoded["directory"] = json!("relative/bundle");
+
+        let error = serde_json::from_value::<OciBundle>(encoded)
+            .expect_err("relative wire path must be rejected");
+        assert!(error.to_string().contains("must be absolute"));
     }
 
     fn assert_explicit_fields_preserved(

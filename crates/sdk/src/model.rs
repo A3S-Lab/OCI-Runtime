@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use a3s_oci_core::{DriverKind, IsolationClass, RuntimeFeatures};
 use oci_spec::runtime::{Features, LinuxResources, Process, State};
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 
 use crate::{
     ContainerId, Error, ErrorCode, Generation, OciBundle, OperationId, ProcessId, Result,
@@ -174,7 +174,7 @@ impl Default for ProcessIo {
 }
 
 /// Positive Linux signal number delivered by a runtime driver or guest agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct Signal(i32);
 
@@ -194,6 +194,16 @@ impl Signal {
     #[must_use]
     pub const fn get(self) -> i32 {
         self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Signal {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let number = i32::deserialize(deserializer)?;
+        Self::new(number).map_err(de::Error::custom)
     }
 }
 
@@ -493,4 +503,21 @@ pub struct RuntimeEvent {
 pub struct EventBatch {
     pub events: Vec<RuntimeEvent>,
     pub next_sequence: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Signal;
+
+    #[test]
+    fn signal_deserialization_cannot_bypass_validation() {
+        assert_eq!(
+            serde_json::from_str::<Signal>("9")
+                .expect("positive signal")
+                .get(),
+            9
+        );
+        assert!(serde_json::from_str::<Signal>("0").is_err());
+        assert!(serde_json::from_str::<Signal>("-9").is_err());
+    }
 }

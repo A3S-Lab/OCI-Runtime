@@ -52,6 +52,7 @@ Completed:
 - a CI-checked coverage lock for all 423 schema properties and enum values;
 - rejection of unknown configuration properties;
 - immutable SHA-256 binding of the loaded `config.json`;
+- exact `config.json` retention and fail-closed SDK wire deserialization;
 - existing `features` CLI path routed through the Rust SDK;
 - Windows and Linux CI.
 

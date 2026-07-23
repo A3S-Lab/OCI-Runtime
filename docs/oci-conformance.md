@@ -97,9 +97,11 @@ oci_spec::runtime::State
 oci_spec::runtime::Features
 ```
 
-`OciBundle` holds the complete decoded `Spec`, a canonical absolute bundle
-directory, and a SHA-256 digest of the exact `config.json` bytes. The create
-implementation must durably retain either those exact bytes or a
+`OciBundle` holds the complete decoded `Spec`, the exact validated
+`config.json` text, an absolute bundle directory, and a SHA-256 digest of
+those exact bytes. Its wire decoder recomputes all derived state and rejects a
+relative path, digest mismatch, invalid schema, unknown field, or unsupported
+version. The create implementation must durably retain those bytes or a
 cryptographically equivalent immutable snapshot before returning `created`.
 Changes to the source bundle after create must not affect the container.
 
