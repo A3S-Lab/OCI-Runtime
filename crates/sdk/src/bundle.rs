@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
-use crate::{Error, ErrorCode, Result};
+use crate::{Error, ErrorCode, OciSchemaDocument, OciSchemaValidator, Result};
 
 /// File containing the OCI runtime configuration in a bundle.
 pub const CONFIG_FILE_NAME: &str = "config.json";
@@ -133,6 +133,7 @@ impl OciBundle {
             .for_operation("build-bundle"));
         }
         validate_version(&spec)?;
+        OciSchemaValidator::new()?.validate_spec(&spec)?;
         let bytes = serde_json::to_vec(&spec).map_err(|error| {
             Error::new(
                 ErrorCode::InvalidArgument,
@@ -175,6 +176,7 @@ fn decode_spec(bytes: &[u8], path: &Path) -> Result<Spec> {
         )
         .for_operation("load-bundle")
     })?;
+    OciSchemaValidator::new()?.validate(OciSchemaDocument::Configuration, &raw)?;
     if let Some(object) = raw.as_object() {
         let invalid_top_level_mappings = ["uidMappings", "gidMappings"]
             .into_iter()
@@ -280,7 +282,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{OciBundle, OCI_RUNTIME_SPEC_VERSION_MAX};
+    use super::{decode_spec, OciBundle, OCI_RUNTIME_SPEC_VERSION_MAX};
     use crate::ErrorCode;
 
     fn complete_v1_3_fixture() -> serde_json::Value {
@@ -411,5 +413,79 @@ mod tests {
         let error =
             OciBundle::from_spec(absolute, spec).expect_err("future version must be rejected");
         assert_eq!(error.code, ErrorCode::Unsupported);
+    }
+
+    #[test]
+    fn preserves_every_explicit_field_in_upstream_linux_fixtures() {
+        const FIXTURES: &[(&str, &str)] = &[
+            (
+                "linux-netdevice.json",
+                include_str!(
+                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-netdevice.json"
+                ),
+            ),
+            (
+                "linux-rdma.json",
+                include_str!(
+                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-rdma.json"
+                ),
+            ),
+            (
+                "minimal-for-start.json",
+                include_str!(
+                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal-for-start.json"
+                ),
+            ),
+            (
+                "minimal.json",
+                include_str!(
+                    "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal.json"
+                ),
+            ),
+        ];
+
+        for (name, source) in FIXTURES {
+            let original: serde_json::Value =
+                serde_json::from_str(source).expect("upstream fixture must be JSON");
+            let spec = decode_spec(source.as_bytes(), Path::new(name))
+                .unwrap_or_else(|error| panic!("{name} must decode without loss: {error}"));
+            let encoded = serde_json::to_value(spec).expect("encode decoded OCI spec");
+            assert_explicit_fields_preserved(&original, &encoded, "");
+        }
+    }
+
+    fn assert_explicit_fields_preserved(
+        original: &serde_json::Value,
+        encoded: &serde_json::Value,
+        path: &str,
+    ) {
+        match original {
+            serde_json::Value::Object(object) => {
+                let encoded = encoded
+                    .as_object()
+                    .unwrap_or_else(|| panic!("{path} changed from an object"));
+                for (key, value) in object {
+                    let child_path = format!("{path}/{key}");
+                    let encoded_value = encoded
+                        .get(key)
+                        .unwrap_or_else(|| panic!("{child_path} disappeared during round trip"));
+                    assert_explicit_fields_preserved(value, encoded_value, &child_path);
+                }
+            }
+            serde_json::Value::Array(array) => {
+                let encoded = encoded
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{path} changed from an array"));
+                assert_eq!(encoded.len(), array.len(), "{path} changed array length");
+                for (index, value) in array.iter().enumerate() {
+                    assert_explicit_fields_preserved(
+                        value,
+                        &encoded[index],
+                        &format!("{path}/{index}"),
+                    );
+                }
+            }
+            value => assert_eq!(encoded, value, "{path} changed value"),
+        }
     }
 }

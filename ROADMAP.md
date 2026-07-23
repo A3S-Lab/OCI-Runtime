@@ -47,6 +47,9 @@ Completed:
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
+- pinned OCI Runtime Specification 1.3.0 schemas and upstream fixtures;
+- offline configuration, state, and features schema validation;
+- a CI-checked coverage lock for all 423 schema properties and enum values;
 - rejection of unknown configuration properties;
 - immutable SHA-256 binding of the loaded `config.json`;
 - existing `features` CLI path routed through the Rust SDK;
@@ -77,8 +80,9 @@ The WHPX driver remains `probe-only`, and the host service advertises only the
 - [x] Add typed IDs, operation IDs, generation fencing, deadlines, isolation,
   I/O, stats, events, checkpoint, restore, and stable errors.
 - [x] Strictly load and digest-bind OCI bundles.
-- [ ] Import the pinned OCI 1.3.0 JSON schemas and fixture inventory.
-- [ ] Generate a schema-property coverage manifest in CI.
+- [x] Import the pinned OCI 1.3.0 JSON schemas and fixture inventory.
+- [x] Generate and verify a schema-property and enum-value coverage manifest
+  in CI.
 - [ ] Add semantic validators for common, Linux, and VM configuration.
 - [ ] Add version-negotiated local IPC transport for out-of-process callers.
 

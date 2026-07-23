@@ -8,6 +8,7 @@ mod client;
 mod error;
 mod id;
 mod model;
+mod schema;
 mod service;
 
 pub use a3s_oci_core::{
@@ -26,5 +27,10 @@ pub use oci_spec;
 pub use oci_spec::runtime::{
     ContainerState as OciContainerState, Features as OciFeatures, LinuxResources, Process, Spec,
     State as OciState,
+};
+pub use schema::{
+    OciSchemaCoverageItem, OciSchemaCoverageManifest, OciSchemaDisposition, OciSchemaDocument,
+    OciSchemaInventoryItem, OciSchemaInventoryKind, OciSchemaValidationReport, OciSchemaValidator,
+    OciSchemaViolation,
 };
 pub use service::OciRuntimeService;

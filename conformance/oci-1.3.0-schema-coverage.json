@@ -1,0 +1,2968 @@
+{
+  "schemaVersion": "a3s.oci.schema-coverage.v1",
+  "ociRuntimeSpec": "1.3.0",
+  "upstreamCommit": "92249139eea7161e13745abd4cb6d0ea02a3227a",
+  "items": [
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/devices",
+      "kind": "property",
+      "value": "devices",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail",
+      "kind": "property",
+      "value": "jail",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow",
+      "kind": "property",
+      "value": "allow",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/chflags",
+      "kind": "property",
+      "value": "chflags",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/mlock",
+      "kind": "property",
+      "value": "mlock",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/mount",
+      "kind": "property",
+      "value": "mount",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/quotas",
+      "kind": "property",
+      "value": "quotas",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/rawSockets",
+      "kind": "property",
+      "value": "rawSockets",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/reservedPorts",
+      "kind": "property",
+      "value": "reservedPorts",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/setHostname",
+      "kind": "property",
+      "value": "setHostname",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/socketAf",
+      "kind": "property",
+      "value": "socketAf",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/allow/properties/suser",
+      "kind": "property",
+      "value": "suser",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/enforceStatfs",
+      "kind": "property",
+      "value": "enforceStatfs",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/host",
+      "kind": "property",
+      "value": "host",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/interface",
+      "kind": "property",
+      "value": "interface",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/ip4",
+      "kind": "property",
+      "value": "ip4",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/ip4Addr",
+      "kind": "property",
+      "value": "ip4Addr",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/ip6",
+      "kind": "property",
+      "value": "ip6",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/ip6Addr",
+      "kind": "property",
+      "value": "ip6Addr",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/parent",
+      "kind": "property",
+      "value": "parent",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/sysvmsg",
+      "kind": "property",
+      "value": "sysvmsg",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/sysvsem",
+      "kind": "property",
+      "value": "sysvsem",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/sysvshm",
+      "kind": "property",
+      "value": "sysvshm",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/vnet",
+      "kind": "property",
+      "value": "vnet",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-freebsd.json",
+      "pointer": "/freebsd/properties/jail/properties/vnetInterfaces",
+      "kind": "property",
+      "value": "vnetInterfaces",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/cgroupsPath",
+      "kind": "property",
+      "value": "cgroupsPath",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/devices",
+      "kind": "property",
+      "value": "devices",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/gidMappings",
+      "kind": "property",
+      "value": "gidMappings",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/intelRdt",
+      "kind": "property",
+      "value": "intelRdt",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/intelRdt/properties/closID",
+      "kind": "property",
+      "value": "closID",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/intelRdt/properties/enableMonitoring",
+      "kind": "property",
+      "value": "enableMonitoring",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/intelRdt/properties/l3CacheSchema",
+      "kind": "property",
+      "value": "l3CacheSchema",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/intelRdt/properties/memBwSchema",
+      "kind": "property",
+      "value": "memBwSchema",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/intelRdt/properties/schemata",
+      "kind": "property",
+      "value": "schemata",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/maskedPaths",
+      "kind": "property",
+      "value": "maskedPaths",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/memoryPolicy",
+      "kind": "property",
+      "value": "memoryPolicy",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/memoryPolicy/properties/flags",
+      "kind": "property",
+      "value": "flags",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/memoryPolicy/properties/mode",
+      "kind": "property",
+      "value": "mode",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/memoryPolicy/properties/nodes",
+      "kind": "property",
+      "value": "nodes",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/mountLabel",
+      "kind": "property",
+      "value": "mountLabel",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/namespaces",
+      "kind": "property",
+      "value": "namespaces",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/netDevices",
+      "kind": "property",
+      "value": "netDevices",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/personality",
+      "kind": "property",
+      "value": "personality",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/readonlyPaths",
+      "kind": "property",
+      "value": "readonlyPaths",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources",
+      "kind": "property",
+      "value": "resources",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO",
+      "kind": "property",
+      "value": "blockIO",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO/properties/leafWeight",
+      "kind": "property",
+      "value": "leafWeight",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO/properties/throttleReadBpsDevice",
+      "kind": "property",
+      "value": "throttleReadBpsDevice",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO/properties/throttleReadIOPSDevice",
+      "kind": "property",
+      "value": "throttleReadIOPSDevice",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO/properties/throttleWriteBpsDevice",
+      "kind": "property",
+      "value": "throttleWriteBpsDevice",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO/properties/throttleWriteIOPSDevice",
+      "kind": "property",
+      "value": "throttleWriteIOPSDevice",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO/properties/weight",
+      "kind": "property",
+      "value": "weight",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/blockIO/properties/weightDevice",
+      "kind": "property",
+      "value": "weightDevice",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu",
+      "kind": "property",
+      "value": "cpu",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/burst",
+      "kind": "property",
+      "value": "burst",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/cpus",
+      "kind": "property",
+      "value": "cpus",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/idle",
+      "kind": "property",
+      "value": "idle",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/mems",
+      "kind": "property",
+      "value": "mems",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/period",
+      "kind": "property",
+      "value": "period",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/quota",
+      "kind": "property",
+      "value": "quota",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/realtimePeriod",
+      "kind": "property",
+      "value": "realtimePeriod",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/realtimeRuntime",
+      "kind": "property",
+      "value": "realtimeRuntime",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/cpu/properties/shares",
+      "kind": "property",
+      "value": "shares",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/devices",
+      "kind": "property",
+      "value": "devices",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/hugepageLimits",
+      "kind": "property",
+      "value": "hugepageLimits",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/hugepageLimits/items/properties/limit",
+      "kind": "property",
+      "value": "limit",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/hugepageLimits/items/properties/pageSize",
+      "kind": "property",
+      "value": "pageSize",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory",
+      "kind": "property",
+      "value": "memory",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/checkBeforeUpdate",
+      "kind": "property",
+      "value": "checkBeforeUpdate",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/disableOOMKiller",
+      "kind": "property",
+      "value": "disableOOMKiller",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/kernel",
+      "kind": "property",
+      "value": "kernel",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/kernelTCP",
+      "kind": "property",
+      "value": "kernelTCP",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/limit",
+      "kind": "property",
+      "value": "limit",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/reservation",
+      "kind": "property",
+      "value": "reservation",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/swap",
+      "kind": "property",
+      "value": "swap",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/swappiness",
+      "kind": "property",
+      "value": "swappiness",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/memory/properties/useHierarchy",
+      "kind": "property",
+      "value": "useHierarchy",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/network",
+      "kind": "property",
+      "value": "network",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/network/properties/classID",
+      "kind": "property",
+      "value": "classID",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/network/properties/priorities",
+      "kind": "property",
+      "value": "priorities",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/pids",
+      "kind": "property",
+      "value": "pids",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/pids/properties/limit",
+      "kind": "property",
+      "value": "limit",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/rdma",
+      "kind": "property",
+      "value": "rdma",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/resources/properties/unified",
+      "kind": "property",
+      "value": "unified",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/rootfsPropagation",
+      "kind": "property",
+      "value": "rootfsPropagation",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp",
+      "kind": "property",
+      "value": "seccomp",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/architectures",
+      "kind": "property",
+      "value": "architectures",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/defaultAction",
+      "kind": "property",
+      "value": "defaultAction",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/defaultErrnoRet",
+      "kind": "property",
+      "value": "defaultErrnoRet",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/flags",
+      "kind": "property",
+      "value": "flags",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/listenerMetadata",
+      "kind": "property",
+      "value": "listenerMetadata",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/listenerPath",
+      "kind": "property",
+      "value": "listenerPath",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/syscalls",
+      "kind": "property",
+      "value": "syscalls",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/sysctl",
+      "kind": "property",
+      "value": "sysctl",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/timeOffsets",
+      "kind": "property",
+      "value": "timeOffsets",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/timeOffsets/properties/boottime",
+      "kind": "property",
+      "value": "boottime",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/timeOffsets/properties/monotonic",
+      "kind": "property",
+      "value": "monotonic",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-linux.json",
+      "pointer": "/linux/properties/uidMappings",
+      "kind": "property",
+      "value": "uidMappings",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/annotations",
+      "kind": "property",
+      "value": "annotations",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/domainname",
+      "kind": "property",
+      "value": "domainname",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/freebsd",
+      "kind": "property",
+      "value": "freebsd",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hooks",
+      "kind": "property",
+      "value": "hooks",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hooks/properties/createContainer",
+      "kind": "property",
+      "value": "createContainer",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hooks/properties/createRuntime",
+      "kind": "property",
+      "value": "createRuntime",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hooks/properties/poststart",
+      "kind": "property",
+      "value": "poststart",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hooks/properties/poststop",
+      "kind": "property",
+      "value": "poststop",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hooks/properties/prestart",
+      "kind": "property",
+      "value": "prestart",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hooks/properties/startContainer",
+      "kind": "property",
+      "value": "startContainer",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/hostname",
+      "kind": "property",
+      "value": "hostname",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/linux",
+      "kind": "property",
+      "value": "linux",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/mounts",
+      "kind": "property",
+      "value": "mounts",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/ociVersion",
+      "kind": "property",
+      "value": "ociVersion",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process",
+      "kind": "property",
+      "value": "process",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/apparmorProfile",
+      "kind": "property",
+      "value": "apparmorProfile",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/args",
+      "kind": "property",
+      "value": "args",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/capabilities",
+      "kind": "property",
+      "value": "capabilities",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/capabilities/properties/ambient",
+      "kind": "property",
+      "value": "ambient",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/capabilities/properties/bounding",
+      "kind": "property",
+      "value": "bounding",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/capabilities/properties/effective",
+      "kind": "property",
+      "value": "effective",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/capabilities/properties/inheritable",
+      "kind": "property",
+      "value": "inheritable",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/capabilities/properties/permitted",
+      "kind": "property",
+      "value": "permitted",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/commandLine",
+      "kind": "property",
+      "value": "commandLine",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/consoleSize",
+      "kind": "property",
+      "value": "consoleSize",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/consoleSize/properties/height",
+      "kind": "property",
+      "value": "height",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/consoleSize/properties/width",
+      "kind": "property",
+      "value": "width",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/cwd",
+      "kind": "property",
+      "value": "cwd",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/env",
+      "kind": "property",
+      "value": "env",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/execCPUAffinity",
+      "kind": "property",
+      "value": "execCPUAffinity",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/execCPUAffinity/properties/final",
+      "kind": "property",
+      "value": "final",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/execCPUAffinity/properties/initial",
+      "kind": "property",
+      "value": "initial",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/ioPriority",
+      "kind": "property",
+      "value": "ioPriority",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/ioPriority/properties/class",
+      "kind": "property",
+      "value": "class",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/ioPriority/properties/class/enum/0",
+      "kind": "enum-value",
+      "value": "\"IOPRIO_CLASS_RT\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/ioPriority/properties/class/enum/1",
+      "kind": "enum-value",
+      "value": "\"IOPRIO_CLASS_BE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/ioPriority/properties/class/enum/2",
+      "kind": "enum-value",
+      "value": "\"IOPRIO_CLASS_IDLE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/ioPriority/properties/priority",
+      "kind": "property",
+      "value": "priority",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/noNewPrivileges",
+      "kind": "property",
+      "value": "noNewPrivileges",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/oomScoreAdj",
+      "kind": "property",
+      "value": "oomScoreAdj",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/rlimits",
+      "kind": "property",
+      "value": "rlimits",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/rlimits/items/properties/hard",
+      "kind": "property",
+      "value": "hard",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/rlimits/items/properties/soft",
+      "kind": "property",
+      "value": "soft",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/rlimits/items/properties/type",
+      "kind": "property",
+      "value": "type",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler",
+      "kind": "property",
+      "value": "scheduler",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler/properties/deadline",
+      "kind": "property",
+      "value": "deadline",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler/properties/flags",
+      "kind": "property",
+      "value": "flags",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler/properties/nice",
+      "kind": "property",
+      "value": "nice",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler/properties/period",
+      "kind": "property",
+      "value": "period",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler/properties/policy",
+      "kind": "property",
+      "value": "policy",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler/properties/priority",
+      "kind": "property",
+      "value": "priority",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/scheduler/properties/runtime",
+      "kind": "property",
+      "value": "runtime",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/selinuxLabel",
+      "kind": "property",
+      "value": "selinuxLabel",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/terminal",
+      "kind": "property",
+      "value": "terminal",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/user",
+      "kind": "property",
+      "value": "user",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/user/properties/additionalGids",
+      "kind": "property",
+      "value": "additionalGids",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/user/properties/gid",
+      "kind": "property",
+      "value": "gid",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/user/properties/uid",
+      "kind": "property",
+      "value": "uid",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/user/properties/umask",
+      "kind": "property",
+      "value": "umask",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/process/properties/user/properties/username",
+      "kind": "property",
+      "value": "username",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/root",
+      "kind": "property",
+      "value": "root",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/root/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/root/properties/readonly",
+      "kind": "property",
+      "value": "readonly",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/solaris",
+      "kind": "property",
+      "value": "solaris",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/vm",
+      "kind": "property",
+      "value": "vm",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/windows",
+      "kind": "property",
+      "value": "windows",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-schema.json",
+      "pointer": "/properties/zos",
+      "kind": "property",
+      "value": "zos",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet",
+      "kind": "property",
+      "value": "anet",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet/items/properties/allowedAddress",
+      "kind": "property",
+      "value": "allowedAddress",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet/items/properties/configureAllowedAddress",
+      "kind": "property",
+      "value": "configureAllowedAddress",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet/items/properties/defrouter",
+      "kind": "property",
+      "value": "defrouter",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet/items/properties/linkProtection",
+      "kind": "property",
+      "value": "linkProtection",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet/items/properties/linkname",
+      "kind": "property",
+      "value": "linkname",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet/items/properties/lowerLink",
+      "kind": "property",
+      "value": "lowerLink",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/anet/items/properties/macAddress",
+      "kind": "property",
+      "value": "macAddress",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/cappedCPU",
+      "kind": "property",
+      "value": "cappedCPU",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/cappedCPU/properties/ncpus",
+      "kind": "property",
+      "value": "ncpus",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/cappedMemory",
+      "kind": "property",
+      "value": "cappedMemory",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/cappedMemory/properties/physical",
+      "kind": "property",
+      "value": "physical",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/cappedMemory/properties/swap",
+      "kind": "property",
+      "value": "swap",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/limitpriv",
+      "kind": "property",
+      "value": "limitpriv",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/maxShmMemory",
+      "kind": "property",
+      "value": "maxShmMemory",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-solaris.json",
+      "pointer": "/solaris/properties/milestone",
+      "kind": "property",
+      "value": "milestone",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hwConfig",
+      "kind": "property",
+      "value": "hwConfig",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hwConfig/properties/deviceTree",
+      "kind": "property",
+      "value": "deviceTree",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hwConfig/properties/dtdevs",
+      "kind": "property",
+      "value": "dtdevs",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hwConfig/properties/iomems",
+      "kind": "property",
+      "value": "iomems",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hwConfig/properties/irqs",
+      "kind": "property",
+      "value": "irqs",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hwConfig/properties/memory",
+      "kind": "property",
+      "value": "memory",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hwConfig/properties/vcpus",
+      "kind": "property",
+      "value": "vcpus",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hypervisor",
+      "kind": "property",
+      "value": "hypervisor",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hypervisor/properties/parameters",
+      "kind": "property",
+      "value": "parameters",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/hypervisor/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/image",
+      "kind": "property",
+      "value": "image",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/image/properties/format",
+      "kind": "property",
+      "value": "format",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/image/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/kernel",
+      "kind": "property",
+      "value": "kernel",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/kernel/properties/initrd",
+      "kind": "property",
+      "value": "initrd",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/kernel/properties/parameters",
+      "kind": "property",
+      "value": "parameters",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-vm.json",
+      "pointer": "/vm/properties/kernel/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/credentialSpec",
+      "kind": "property",
+      "value": "credentialSpec",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/devices",
+      "kind": "property",
+      "value": "devices",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/hyperv",
+      "kind": "property",
+      "value": "hyperv",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/hyperv/properties/utilityVMPath",
+      "kind": "property",
+      "value": "utilityVMPath",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/ignoreFlushesDuringBoot",
+      "kind": "property",
+      "value": "ignoreFlushesDuringBoot",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/layerFolders",
+      "kind": "property",
+      "value": "layerFolders",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/network",
+      "kind": "property",
+      "value": "network",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/network/properties/DNSSearchList",
+      "kind": "property",
+      "value": "DNSSearchList",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/network/properties/allowUnqualifiedDNSQuery",
+      "kind": "property",
+      "value": "allowUnqualifiedDNSQuery",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/network/properties/endpointList",
+      "kind": "property",
+      "value": "endpointList",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/network/properties/networkNamespace",
+      "kind": "property",
+      "value": "networkNamespace",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/network/properties/networkSharedContainerName",
+      "kind": "property",
+      "value": "networkSharedContainerName",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources",
+      "kind": "property",
+      "value": "resources",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/cpu",
+      "kind": "property",
+      "value": "cpu",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/cpu/properties/affinity",
+      "kind": "property",
+      "value": "affinity",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/cpu/properties/affinity/properties/group",
+      "kind": "property",
+      "value": "group",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/cpu/properties/affinity/properties/mask",
+      "kind": "property",
+      "value": "mask",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/cpu/properties/count",
+      "kind": "property",
+      "value": "count",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/cpu/properties/maximum",
+      "kind": "property",
+      "value": "maximum",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/cpu/properties/shares",
+      "kind": "property",
+      "value": "shares",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/memory",
+      "kind": "property",
+      "value": "memory",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/memory/properties/limit",
+      "kind": "property",
+      "value": "limit",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/storage",
+      "kind": "property",
+      "value": "storage",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/storage/properties/bps",
+      "kind": "property",
+      "value": "bps",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/storage/properties/iops",
+      "kind": "property",
+      "value": "iops",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/resources/properties/storage/properties/sandboxSize",
+      "kind": "property",
+      "value": "sandboxSize",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-windows.json",
+      "pointer": "/windows/properties/servicing",
+      "kind": "property",
+      "value": "servicing",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "config-zos.json",
+      "pointer": "/zos/properties/namespaces",
+      "kind": "property",
+      "value": "namespaces",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-freebsd.json",
+      "pointer": "/definitions/Device/properties/mode",
+      "kind": "property",
+      "value": "mode",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-freebsd.json",
+      "pointer": "/definitions/Device/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-freebsd.json",
+      "pointer": "/definitions/SharingMode/enum/0",
+      "kind": "enum-value",
+      "value": "\"disable\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-freebsd.json",
+      "pointer": "/definitions/SharingMode/enum/1",
+      "kind": "enum-value",
+      "value": "\"new\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-freebsd.json",
+      "pointer": "/definitions/SharingMode/enum/2",
+      "kind": "enum-value",
+      "value": "\"inherit\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-freebsd.json",
+      "pointer": "/definitions/SharingModeNoDisable/enum/0",
+      "kind": "enum-value",
+      "value": "\"new\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-freebsd.json",
+      "pointer": "/definitions/SharingModeNoDisable/enum/1",
+      "kind": "enum-value",
+      "value": "\"inherit\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Device/properties/fileMode",
+      "kind": "property",
+      "value": "fileMode",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Device/properties/gid",
+      "kind": "property",
+      "value": "gid",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Device/properties/major",
+      "kind": "property",
+      "value": "major",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Device/properties/minor",
+      "kind": "property",
+      "value": "minor",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Device/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Device/properties/type",
+      "kind": "property",
+      "value": "type",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Device/properties/uid",
+      "kind": "property",
+      "value": "uid",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/DeviceCgroup/properties/access",
+      "kind": "property",
+      "value": "access",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/DeviceCgroup/properties/allow",
+      "kind": "property",
+      "value": "allow",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/DeviceCgroup/properties/major",
+      "kind": "property",
+      "value": "major",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/DeviceCgroup/properties/minor",
+      "kind": "property",
+      "value": "minor",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/DeviceCgroup/properties/type",
+      "kind": "property",
+      "value": "type",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyFlag/enum/0",
+      "kind": "enum-value",
+      "value": "\"MPOL_F_NUMA_BALANCING\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyFlag/enum/1",
+      "kind": "enum-value",
+      "value": "\"MPOL_F_RELATIVE_NODES\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyFlag/enum/2",
+      "kind": "enum-value",
+      "value": "\"MPOL_F_STATIC_NODES\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyMode/enum/0",
+      "kind": "enum-value",
+      "value": "\"MPOL_DEFAULT\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyMode/enum/1",
+      "kind": "enum-value",
+      "value": "\"MPOL_BIND\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyMode/enum/2",
+      "kind": "enum-value",
+      "value": "\"MPOL_INTERLEAVE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyMode/enum/3",
+      "kind": "enum-value",
+      "value": "\"MPOL_WEIGHTED_INTERLEAVE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyMode/enum/4",
+      "kind": "enum-value",
+      "value": "\"MPOL_PREFERRED\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyMode/enum/5",
+      "kind": "enum-value",
+      "value": "\"MPOL_PREFERRED_MANY\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/MemoryPolicyMode/enum/6",
+      "kind": "enum-value",
+      "value": "\"MPOL_LOCAL\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceReference/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceReference/properties/type",
+      "kind": "property",
+      "value": "type",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/0",
+      "kind": "enum-value",
+      "value": "\"mount\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/1",
+      "kind": "enum-value",
+      "value": "\"pid\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/2",
+      "kind": "enum-value",
+      "value": "\"network\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/3",
+      "kind": "enum-value",
+      "value": "\"uts\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/4",
+      "kind": "enum-value",
+      "value": "\"ipc\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/5",
+      "kind": "enum-value",
+      "value": "\"user\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/6",
+      "kind": "enum-value",
+      "value": "\"cgroup\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NamespaceType/enum/7",
+      "kind": "enum-value",
+      "value": "\"time\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NetDevice/properties/name",
+      "kind": "property",
+      "value": "name",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NetworkInterfacePriority/properties/name",
+      "kind": "property",
+      "value": "name",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/NetworkInterfacePriority/properties/priority",
+      "kind": "property",
+      "value": "priority",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Personality/properties/domain",
+      "kind": "property",
+      "value": "domain",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Personality/properties/flags",
+      "kind": "property",
+      "value": "flags",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/PersonalityDomain/enum/0",
+      "kind": "enum-value",
+      "value": "\"LINUX\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/PersonalityDomain/enum/1",
+      "kind": "enum-value",
+      "value": "\"LINUX32\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Rdma/properties/hcaHandles",
+      "kind": "property",
+      "value": "hcaHandles",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Rdma/properties/hcaObjects",
+      "kind": "property",
+      "value": "hcaObjects",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/RootfsPropagation/enum/0",
+      "kind": "enum-value",
+      "value": "\"private\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/RootfsPropagation/enum/1",
+      "kind": "enum-value",
+      "value": "\"shared\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/RootfsPropagation/enum/2",
+      "kind": "enum-value",
+      "value": "\"slave\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/RootfsPropagation/enum/3",
+      "kind": "enum-value",
+      "value": "\"unbindable\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerFlag/enum/0",
+      "kind": "enum-value",
+      "value": "\"SCHED_FLAG_RESET_ON_FORK\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerFlag/enum/1",
+      "kind": "enum-value",
+      "value": "\"SCHED_FLAG_RECLAIM\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerFlag/enum/2",
+      "kind": "enum-value",
+      "value": "\"SCHED_FLAG_DL_OVERRUN\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerFlag/enum/3",
+      "kind": "enum-value",
+      "value": "\"SCHED_FLAG_KEEP_POLICY\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerFlag/enum/4",
+      "kind": "enum-value",
+      "value": "\"SCHED_FLAG_KEEP_PARAMS\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerFlag/enum/5",
+      "kind": "enum-value",
+      "value": "\"SCHED_FLAG_UTIL_CLAMP_MIN\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerFlag/enum/6",
+      "kind": "enum-value",
+      "value": "\"SCHED_FLAG_UTIL_CLAMP_MAX\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerPolicy/enum/0",
+      "kind": "enum-value",
+      "value": "\"SCHED_OTHER\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerPolicy/enum/1",
+      "kind": "enum-value",
+      "value": "\"SCHED_FIFO\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerPolicy/enum/2",
+      "kind": "enum-value",
+      "value": "\"SCHED_RR\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerPolicy/enum/3",
+      "kind": "enum-value",
+      "value": "\"SCHED_BATCH\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerPolicy/enum/4",
+      "kind": "enum-value",
+      "value": "\"SCHED_ISO\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerPolicy/enum/5",
+      "kind": "enum-value",
+      "value": "\"SCHED_IDLE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SchedulerPolicy/enum/6",
+      "kind": "enum-value",
+      "value": "\"SCHED_DEADLINE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/0",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_KILL\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/1",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_KILL_PROCESS\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/2",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_KILL_THREAD\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/3",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_TRAP\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/4",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_ERRNO\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/5",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_TRACE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/6",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_ALLOW\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/7",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_LOG\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompAction/enum/8",
+      "kind": "enum-value",
+      "value": "\"SCMP_ACT_NOTIFY\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/0",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_X86\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/1",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_X86_64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/10",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_MIPSEL\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/11",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_MIPSEL64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/12",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_MIPSEL64N32\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/13",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_PPC\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/14",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_PPC64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/15",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_PPC64LE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/16",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_S390\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/17",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_S390X\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/18",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_SH\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/19",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_SHEB\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/2",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_X32\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/20",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_PARISC\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/21",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_PARISC64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/22",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_RISCV64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/3",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_ARM\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/4",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_AARCH64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/5",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_LOONGARCH64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/6",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_M68K\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/7",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_MIPS\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/8",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_MIPS64\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompArch/enum/9",
+      "kind": "enum-value",
+      "value": "\"SCMP_ARCH_MIPS64N32\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompFlag/enum/0",
+      "kind": "enum-value",
+      "value": "\"SECCOMP_FILTER_FLAG_TSYNC\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompFlag/enum/1",
+      "kind": "enum-value",
+      "value": "\"SECCOMP_FILTER_FLAG_LOG\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompFlag/enum/2",
+      "kind": "enum-value",
+      "value": "\"SECCOMP_FILTER_FLAG_SPEC_ALLOW\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompFlag/enum/3",
+      "kind": "enum-value",
+      "value": "\"SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompOperators/enum/0",
+      "kind": "enum-value",
+      "value": "\"SCMP_CMP_NE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompOperators/enum/1",
+      "kind": "enum-value",
+      "value": "\"SCMP_CMP_LT\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompOperators/enum/2",
+      "kind": "enum-value",
+      "value": "\"SCMP_CMP_LE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompOperators/enum/3",
+      "kind": "enum-value",
+      "value": "\"SCMP_CMP_EQ\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompOperators/enum/4",
+      "kind": "enum-value",
+      "value": "\"SCMP_CMP_GE\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompOperators/enum/5",
+      "kind": "enum-value",
+      "value": "\"SCMP_CMP_GT\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SeccompOperators/enum/6",
+      "kind": "enum-value",
+      "value": "\"SCMP_CMP_MASKED_EQ\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Syscall/properties/action",
+      "kind": "property",
+      "value": "action",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Syscall/properties/args",
+      "kind": "property",
+      "value": "args",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Syscall/properties/errnoRet",
+      "kind": "property",
+      "value": "errnoRet",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/Syscall/properties/names",
+      "kind": "property",
+      "value": "names",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SyscallArg/properties/index",
+      "kind": "property",
+      "value": "index",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SyscallArg/properties/op",
+      "kind": "property",
+      "value": "op",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SyscallArg/properties/value",
+      "kind": "property",
+      "value": "value",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/SyscallArg/properties/valueTwo",
+      "kind": "property",
+      "value": "valueTwo",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/TimeOffsets/properties/nanosecs",
+      "kind": "property",
+      "value": "nanosecs",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/TimeOffsets/properties/secs",
+      "kind": "property",
+      "value": "secs",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/blockIODevice/properties/major",
+      "kind": "property",
+      "value": "major",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/blockIODevice/properties/minor",
+      "kind": "property",
+      "value": "minor",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/blockIODeviceThrottle/allOf/1/properties/rate",
+      "kind": "property",
+      "value": "rate",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/blockIODeviceWeight/allOf/1/properties/leafWeight",
+      "kind": "property",
+      "value": "leafWeight",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-linux.json",
+      "pointer": "/definitions/blockIODeviceWeight/allOf/1/properties/weight",
+      "kind": "property",
+      "value": "weight",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/IOMemEntryFormat/properties/firstGFN",
+      "kind": "property",
+      "value": "firstGFN",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/IOMemEntryFormat/properties/firstMFN",
+      "kind": "property",
+      "value": "firstMFN",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/IOMemEntryFormat/properties/nrMFNs",
+      "kind": "property",
+      "value": "nrMFNs",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/RootImageFormat/enum/0",
+      "kind": "enum-value",
+      "value": "\"raw\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/RootImageFormat/enum/1",
+      "kind": "enum-value",
+      "value": "\"qcow2\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/RootImageFormat/enum/2",
+      "kind": "enum-value",
+      "value": "\"vdi\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/RootImageFormat/enum/3",
+      "kind": "enum-value",
+      "value": "\"vmdk\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-vm.json",
+      "pointer": "/definitions/RootImageFormat/enum/4",
+      "kind": "enum-value",
+      "value": "\"vhd\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs-windows.json",
+      "pointer": "/definitions/Device/properties/id",
+      "kind": "property",
+      "value": "id",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-windows.json",
+      "pointer": "/definitions/Device/properties/idType",
+      "kind": "property",
+      "value": "idType",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-windows.json",
+      "pointer": "/definitions/Device/properties/idType/enum/0",
+      "kind": "enum-value",
+      "value": "\"class\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-zos.json",
+      "pointer": "/definitions/NamespaceReference/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-zos.json",
+      "pointer": "/definitions/NamespaceReference/properties/type",
+      "kind": "property",
+      "value": "type",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-zos.json",
+      "pointer": "/definitions/NamespaceType/enum/0",
+      "kind": "enum-value",
+      "value": "\"mount\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-zos.json",
+      "pointer": "/definitions/NamespaceType/enum/1",
+      "kind": "enum-value",
+      "value": "\"pid\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-zos.json",
+      "pointer": "/definitions/NamespaceType/enum/2",
+      "kind": "enum-value",
+      "value": "\"uts\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs-zos.json",
+      "pointer": "/definitions/NamespaceType/enum/3",
+      "kind": "enum-value",
+      "value": "\"ipc\"",
+      "disposition": "schema-validated-rejected-inapplicable-platform"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Hook/properties/args",
+      "kind": "property",
+      "value": "args",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Hook/properties/env",
+      "kind": "property",
+      "value": "env",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Hook/properties/path",
+      "kind": "property",
+      "value": "path",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Hook/properties/timeout",
+      "kind": "property",
+      "value": "timeout",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/IDMapping/properties/containerID",
+      "kind": "property",
+      "value": "containerID",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/IDMapping/properties/hostID",
+      "kind": "property",
+      "value": "hostID",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/IDMapping/properties/size",
+      "kind": "property",
+      "value": "size",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Mount/properties/destination",
+      "kind": "property",
+      "value": "destination",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Mount/properties/gidMappings",
+      "kind": "property",
+      "value": "gidMappings",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Mount/properties/options",
+      "kind": "property",
+      "value": "options",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Mount/properties/source",
+      "kind": "property",
+      "value": "source",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Mount/properties/type",
+      "kind": "property",
+      "value": "type",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "defs.json",
+      "pointer": "/definitions/Mount/properties/uidMappings",
+      "kind": "property",
+      "value": "uidMappings",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/apparmor",
+      "kind": "property",
+      "value": "apparmor",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/apparmor/properties/enabled",
+      "kind": "property",
+      "value": "enabled",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/capabilities",
+      "kind": "property",
+      "value": "capabilities",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/cgroup",
+      "kind": "property",
+      "value": "cgroup",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/cgroup/properties/rdma",
+      "kind": "property",
+      "value": "rdma",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/cgroup/properties/systemd",
+      "kind": "property",
+      "value": "systemd",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/cgroup/properties/systemdUser",
+      "kind": "property",
+      "value": "systemdUser",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/cgroup/properties/v1",
+      "kind": "property",
+      "value": "v1",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/cgroup/properties/v2",
+      "kind": "property",
+      "value": "v2",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/intelRdt",
+      "kind": "property",
+      "value": "intelRdt",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/intelRdt/properties/enabled",
+      "kind": "property",
+      "value": "enabled",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/mountExtensions",
+      "kind": "property",
+      "value": "mountExtensions",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/mountExtensions/properties/idmap",
+      "kind": "property",
+      "value": "idmap",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/mountExtensions/properties/idmap/properties/enabled",
+      "kind": "property",
+      "value": "enabled",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/namespaces",
+      "kind": "property",
+      "value": "namespaces",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/netDevices",
+      "kind": "property",
+      "value": "netDevices",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/netDevices/properties/enabled",
+      "kind": "property",
+      "value": "enabled",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/seccomp",
+      "kind": "property",
+      "value": "seccomp",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/actions",
+      "kind": "property",
+      "value": "actions",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/archs",
+      "kind": "property",
+      "value": "archs",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/enabled",
+      "kind": "property",
+      "value": "enabled",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/knownFlags",
+      "kind": "property",
+      "value": "knownFlags",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/operators",
+      "kind": "property",
+      "value": "operators",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/seccomp/properties/supportedFlags",
+      "kind": "property",
+      "value": "supportedFlags",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/selinux",
+      "kind": "property",
+      "value": "selinux",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-linux.json",
+      "pointer": "/linux/properties/selinux/properties/enabled",
+      "kind": "property",
+      "value": "enabled",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-schema.json",
+      "pointer": "/properties/annotations",
+      "kind": "property",
+      "value": "annotations",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-schema.json",
+      "pointer": "/properties/hooks",
+      "kind": "property",
+      "value": "hooks",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-schema.json",
+      "pointer": "/properties/linux",
+      "kind": "property",
+      "value": "linux",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-schema.json",
+      "pointer": "/properties/mountOptions",
+      "kind": "property",
+      "value": "mountOptions",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-schema.json",
+      "pointer": "/properties/ociVersionMax",
+      "kind": "property",
+      "value": "ociVersionMax",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-schema.json",
+      "pointer": "/properties/ociVersionMin",
+      "kind": "property",
+      "value": "ociVersionMin",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "features-schema.json",
+      "pointer": "/properties/potentiallyUnsafeConfigAnnotations",
+      "kind": "property",
+      "value": "potentiallyUnsafeConfigAnnotations",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/annotations",
+      "kind": "property",
+      "value": "annotations",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/bundle",
+      "kind": "property",
+      "value": "bundle",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/id",
+      "kind": "property",
+      "value": "id",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/ociVersion",
+      "kind": "property",
+      "value": "ociVersion",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/pid",
+      "kind": "property",
+      "value": "pid",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/status",
+      "kind": "property",
+      "value": "status",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/status/enum/0",
+      "kind": "enum-value",
+      "value": "\"creating\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/status/enum/1",
+      "kind": "enum-value",
+      "value": "\"created\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/status/enum/2",
+      "kind": "enum-value",
+      "value": "\"running\"",
+      "disposition": "schema-validated-pending-enforcement"
+    },
+    {
+      "schema": "state-schema.json",
+      "pointer": "/properties/status/enum/3",
+      "kind": "enum-value",
+      "value": "\"stopped\"",
+      "disposition": "schema-validated-pending-enforcement"
+    }
+  ]
+}

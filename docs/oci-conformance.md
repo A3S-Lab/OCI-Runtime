@@ -11,6 +11,14 @@ The SDK currently uses `oci-spec` 0.10.0 for complete Rust data models. A3S
 defines its supported range explicitly as 1.0.0 through 1.3.0 and does not use
 that dependency's older `runtime::VERSION` constant as a conformance claim.
 
+The complete upstream `schema/` tree and fixtures are vendored without
+modification from release commit
+`92249139eea7161e13745abd4cb6d0ea02a3227a`. Schema references resolve only
+from embedded bytes; validation performs no filesystem or network retrieval.
+The validator applies one explicit in-memory compatibility correction for the
+release's single legacy `#definitions/uint32` fragment and fails compilation
+if that upstream condition changes.
+
 ## Meaning Of Complete
 
 There are five separate states for an OCI property:
@@ -60,7 +68,7 @@ does not make it a native Windows container.
 
 | Area | Represented | Validated | Enforced | Conformant |
 | --- | --- | --- | --- | --- |
-| Complete `Spec` object | Yes | Syntax, version range, unknown fields | No | No |
+| Complete `Spec` object | Yes | Official schema, version range, unknown fields | No | No |
 | Common root, mounts, process, hostname, annotations | Yes | Pending semantic validators | No | No |
 | POSIX hooks | Yes | Pending | No | No |
 | Linux namespaces and ID mappings | Yes | Pending | No | No |
@@ -68,8 +76,8 @@ does not make it a native Windows container.
 | Linux cgroup resources | Yes | Pending | No | No |
 | Linux Intel RDT, memory policy, time offsets, net devices | Yes | Pending | No | No |
 | VM hypervisor, kernel, initrd, image, and parameters | Yes | Pending allowlist validator | No | No |
-| OCI `State` | Yes | Typed lifecycle transition contract | No durable state | No |
-| OCI `Features` | Yes | Version and operation separation | Feature-only service | No |
+| OCI `State` | Yes | Official schema and typed lifecycle transition contract | No durable state | No |
+| OCI `Features` | Yes | Official schema, version and operation separation | Feature-only service | No |
 | `create/state/start/kill/delete` | SDK contract | Request types | No | No |
 | Hooks and rollback ordering | SDK contract | Pending | No | No |
 | Exec, I/O, PTY, wait, pause/resume, update | SDK contract | Typed requests | No | No |
@@ -109,17 +117,24 @@ These additions do not replace or reinterpret OCI configuration fields.
 
 ## Automated Evidence
 
-The conformance pipeline will pin the OCI 1.3.0 release and produce:
+The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
 
-1. a generated inventory of every JSON Schema property and enum value;
-2. positive decode/round-trip fixtures for every property;
-3. negative schema and cross-field fixtures;
-4. one enforcement owner and test ID for every applicable normative
+1. a generated and checked-in inventory of all 423 named JSON Schema
+   properties and enum values;
+2. upstream positive and negative schema fixture tests;
+3. strict typed round-trip tests for applicable upstream Linux, state, and
+   feature fixtures.
+
+Remaining evidence includes:
+
+1. positive decode/round-trip fixtures for every applicable property;
+2. negative cross-field and semantic fixtures;
+3. one enforcement owner and test ID for every applicable normative
    requirement;
-5. lifecycle and hook-order traces;
-6. feature-report comparisons against actual driver behavior;
-7. crash-recovery and cleanup evidence;
-8. differential results against certified `crun` for shared behavior.
+4. lifecycle and hook-order traces;
+5. feature-report comparisons against actual driver behavior;
+6. crash-recovery and cleanup evidence;
+7. differential results against certified `crun` for shared behavior.
 
 CI must fail when a pinned schema property has no classification or when code
 advertises an operation without a passing implementation test.
