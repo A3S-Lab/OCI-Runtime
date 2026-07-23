@@ -5,10 +5,10 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{addr_of, null, null_mut};
 
-use a3s_oci_sdk::{ErrorCode, Result};
+use a3s_oci_sdk::{Error, ErrorCode, Result};
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
+    GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT, SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
     AddAccessAllowedAceEx, CopySid, CreateWellKnownSid, EqualSid, GetAce, GetLengthSid,
@@ -25,24 +25,13 @@ use windows_sys::Win32::System::SystemServices::{
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-use super::filesystem::state_error;
-
-const PRIVATE_ACE_FLAGS: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
+const PRIVATE_DIRECTORY_ACE_FLAGS: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
 
 pub(super) fn create_private_directory(path: &Path) -> Result<()> {
     let path_wide = wide_path(path)?;
-    let mut security = PrivateSecurityDescriptor::new()?;
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).map_err(|error| {
-            windows_error(
-                "create-state-directory",
-                path,
-                format!("invalid security-attributes size: {error}"),
-            )
-        })?,
-        lpSecurityDescriptor: (&mut security.descriptor as *mut SECURITY_DESCRIPTOR).cast(),
-        bInheritHandle: 0,
-    };
+    let mut security =
+        PrivateSecurityDescriptor::new(PRIVATE_DIRECTORY_ACE_FLAGS, "build-state-dacl", path)?;
+    let attributes = security.security_attributes("create-state-directory", path)?;
 
     // SAFETY: `path_wide` is NUL-terminated and the security descriptor,
     // DACL, and copied SIDs remain live and immutable for the call.
@@ -55,7 +44,19 @@ pub(super) fn create_private_directory(path: &Path) -> Result<()> {
 
 pub(super) fn protect_path(path: &Path) -> Result<()> {
     let mut path_wide = wide_path(path)?;
-    let security = PrivateSecurityDescriptor::new()?;
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        windows_error(
+            "protect-state-path",
+            path,
+            format!("failed to inspect protected path: {error}"),
+        )
+    })?;
+    let ace_flags = if metadata.is_dir() {
+        PRIVATE_DIRECTORY_ACE_FLAGS
+    } else {
+        0
+    };
+    let security = PrivateSecurityDescriptor::new(ace_flags, "build-state-dacl", path)?;
 
     // SAFETY: `path_wide` is NUL-terminated and mutable for APIs that use the
     // historical `PWSTR` signature. The ACL remains live for the call.
@@ -75,10 +76,10 @@ pub(super) fn protect_path(path: &Path) -> Result<()> {
     if status != 0 {
         return Err(status_error("protect-state-path", path, status));
     }
-    verify_private_dacl(path, &security.allowed_sids)
+    verify_private_path_dacl(path, &security.allowed_sids, ace_flags)
 }
 
-struct PrivateSecurityDescriptor {
+pub(crate) struct PrivateSecurityDescriptor {
     _acl_storage: AlignedBuffer,
     acl: *mut ACL,
     descriptor: SECURITY_DESCRIPTOR,
@@ -86,7 +87,11 @@ struct PrivateSecurityDescriptor {
 }
 
 impl PrivateSecurityDescriptor {
-    fn new() -> Result<Self> {
+    pub(crate) fn for_kernel_object(object: &str) -> Result<Self> {
+        Self::new(0, "build-kernel-object-dacl", Path::new(object))
+    }
+
+    fn new(ace_flags: u32, operation: &'static str, object: &Path) -> Result<Self> {
         let user = current_user_sid()?;
         let system = well_known_sid(WinLocalSystemSid)?;
         let same_principal = unsafe {
@@ -114,15 +119,15 @@ impl PrivateSecurityDescriptor {
             )
             .map_err(|error| {
                 windows_error(
-                    "build-state-dacl",
-                    Path::new("<runtime-state>"),
+                    operation,
+                    object,
                     format!("private DACL size overflow: {error}"),
                 )
             })?;
         let acl_length = u32::try_from(acl_bytes).map_err(|error| {
             windows_error(
-                "build-state-dacl",
-                Path::new("<runtime-state>"),
+                operation,
+                object,
                 format!("private DACL is too large: {error}"),
             )
         })?;
@@ -132,28 +137,16 @@ impl PrivateSecurityDescriptor {
         // SAFETY: `acl_storage` is aligned, zero-initialized, writable, and at
         // least `acl_length` bytes long.
         if unsafe { InitializeAcl(acl, acl_length, ACL_REVISION) } == 0 {
-            return Err(last_windows_error(
-                "build-state-dacl",
-                Path::new("<runtime-state>"),
-            ));
+            return Err(last_windows_error(operation, object));
         }
         for sid in &allowed_sids {
             // SAFETY: the ACL has exact capacity for every copied SID and each
             // SID buffer remains live for the duration of this call.
             if unsafe {
-                AddAccessAllowedAceEx(
-                    acl,
-                    ACL_REVISION,
-                    PRIVATE_ACE_FLAGS,
-                    FILE_ALL_ACCESS,
-                    sid.as_ptr(),
-                )
+                AddAccessAllowedAceEx(acl, ACL_REVISION, ace_flags, FILE_ALL_ACCESS, sid.as_ptr())
             } == 0
             {
-                return Err(last_windows_error(
-                    "build-state-dacl",
-                    Path::new("<runtime-state>"),
-                ));
+                return Err(last_windows_error(operation, object));
             }
         }
 
@@ -168,10 +161,7 @@ impl PrivateSecurityDescriptor {
             )
         } == 0
         {
-            return Err(last_windows_error(
-                "build-state-security-descriptor",
-                Path::new("<runtime-state>"),
-            ));
+            return Err(last_windows_error(operation, object));
         }
         // SAFETY: `descriptor` is initialized and `acl` points to a valid ACL
         // whose backing allocation is retained in the returned value.
@@ -184,10 +174,7 @@ impl PrivateSecurityDescriptor {
             )
         } == 0
         {
-            return Err(last_windows_error(
-                "build-state-security-descriptor",
-                Path::new("<runtime-state>"),
-            ));
+            return Err(last_windows_error(operation, object));
         }
         // SAFETY: `descriptor` is initialized and the current-principal SID
         // remains live in `allowed_sids` for the descriptor's lifetime.
@@ -199,10 +186,7 @@ impl PrivateSecurityDescriptor {
             )
         } == 0
         {
-            return Err(last_windows_error(
-                "build-state-security-descriptor",
-                Path::new("<runtime-state>"),
-            ));
+            return Err(last_windows_error(operation, object));
         }
         // SAFETY: `descriptor` is initialized and the control mask changes
         // only the DACL inheritance bit.
@@ -214,10 +198,7 @@ impl PrivateSecurityDescriptor {
             )
         } == 0
         {
-            return Err(last_windows_error(
-                "build-state-security-descriptor",
-                Path::new("<runtime-state>"),
-            ));
+            return Err(last_windows_error(operation, object));
         }
 
         Ok(Self {
@@ -226,6 +207,62 @@ impl PrivateSecurityDescriptor {
             descriptor,
             allowed_sids,
         })
+    }
+
+    pub(crate) fn security_attributes(
+        &mut self,
+        operation: &'static str,
+        object: &Path,
+    ) -> Result<SECURITY_ATTRIBUTES> {
+        let n_length = u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).map_err(|error| {
+            windows_error(
+                operation,
+                object,
+                format!("invalid security-attributes size: {error}"),
+            )
+        })?;
+        Ok(SECURITY_ATTRIBUTES {
+            nLength: n_length,
+            lpSecurityDescriptor: (&mut self.descriptor as *mut SECURITY_DESCRIPTOR).cast(),
+            bInheritHandle: 0,
+        })
+    }
+
+    pub(crate) fn verify_kernel_object(&self, handle: HANDLE, object: &str) -> Result<()> {
+        let mut owner = null_mut();
+        let mut dacl = null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: `handle` is a live kernel-object handle and all output
+        // pointers are valid for the duration of the call.
+        let status = unsafe {
+            GetSecurityInfo(
+                handle,
+                SE_KERNEL_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
+                null_mut(),
+                &mut dacl,
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status != 0 {
+            return Err(status_error(
+                "verify-kernel-object-dacl",
+                Path::new(object),
+                status,
+            ));
+        }
+        verify_private_dacl(
+            descriptor,
+            owner,
+            dacl,
+            &self.allowed_sids,
+            0,
+            "verify-kernel-object-dacl",
+            Path::new(object),
+            "kernel object",
+        )
     }
 }
 
@@ -319,21 +356,11 @@ fn copy_sid(source: PSID, operation: &'static str) -> Result<Sid> {
     })
 }
 
-fn verify_private_dacl(path: &Path, allowed_sids: &[Sid]) -> Result<()> {
-    let expected_ace_flags = if std::fs::metadata(path)
-        .map_err(|error| {
-            windows_error(
-                "verify-state-dacl",
-                path,
-                format!("failed to inspect protected path: {error}"),
-            )
-        })?
-        .is_dir()
-    {
-        PRIVATE_ACE_FLAGS
-    } else {
-        0
-    };
+fn verify_private_path_dacl(
+    path: &Path,
+    allowed_sids: &[Sid],
+    expected_ace_flags: u32,
+) -> Result<()> {
     let mut path_wide = wide_path(path)?;
     let mut owner = null_mut();
     let mut dacl = null_mut();
@@ -354,34 +381,71 @@ fn verify_private_dacl(path: &Path, allowed_sids: &[Sid]) -> Result<()> {
     if status != 0 {
         return Err(status_error("verify-state-dacl", path, status));
     }
+    verify_private_dacl(
+        descriptor,
+        owner,
+        dacl,
+        allowed_sids,
+        expected_ace_flags,
+        "verify-state-dacl",
+        path,
+        "runtime state path",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_private_dacl(
+    descriptor: PSECURITY_DESCRIPTOR,
+    owner: PSID,
+    dacl: *mut ACL,
+    allowed_sids: &[Sid],
+    expected_ace_flags: u32,
+    operation: &'static str,
+    object: &Path,
+    object_kind: &'static str,
+) -> Result<()> {
     let descriptor = LocalSecurityDescriptor(descriptor);
     if owner.is_null() || dacl.is_null() || descriptor.0.is_null() {
-        return Err(insecure_dacl(path, "the owner or DACL is absent"));
+        return Err(insecure_dacl(
+            operation,
+            object,
+            object_kind,
+            "the owner or DACL is absent",
+        ));
     }
     // SAFETY: both SIDs belong to live security descriptors or owned buffers.
     if unsafe { EqualSid(owner, allowed_sids[0].as_ptr()) } == 0 {
         return Err(insecure_dacl(
-            path,
+            operation,
+            object,
+            object_kind,
             "the owner is not the runtime process principal",
         ));
     }
 
     let mut control = 0;
     let mut revision = 0;
-    // SAFETY: `descriptor` was allocated by GetNamedSecurityInfoW and remains
-    // live through the guard.
+    // SAFETY: `descriptor` was allocated by a Windows security-info API and
+    // remains live through the guard.
     if unsafe { GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision) } == 0 {
-        return Err(last_windows_error("verify-state-dacl", path));
+        return Err(last_windows_error(operation, object));
     }
     if control & SE_DACL_PROTECTED == 0 {
-        return Err(insecure_dacl(path, "the DACL inherits permissions"));
+        return Err(insecure_dacl(
+            operation,
+            object,
+            object_kind,
+            "the DACL inherits permissions",
+        ));
     }
 
     // SAFETY: `dacl` belongs to the live security descriptor.
     let ace_count = unsafe { (*dacl).AceCount };
     if usize::from(ace_count) != allowed_sids.len() {
         return Err(insecure_dacl(
-            path,
+            operation,
+            object,
+            object_kind,
             format!(
                 "expected {} access entries, found {ace_count}",
                 allowed_sids.len()
@@ -394,7 +458,7 @@ fn verify_private_dacl(path: &Path, allowed_sids: &[Sid]) -> Result<()> {
         // SAFETY: the index is less than AceCount and the output pointer is
         // valid.
         if unsafe { GetAce(dacl, index, &mut raw_ace) } == 0 || raw_ace.is_null() {
-            return Err(last_windows_error("verify-state-dacl", path));
+            return Err(last_windows_error(operation, object));
         }
         // SAFETY: GetAce returned a valid ACE pointer for the live DACL.
         let ace = unsafe { &*raw_ace.cast::<windows_sys::Win32::Security::ACCESS_ALLOWED_ACE>() };
@@ -403,7 +467,9 @@ fn verify_private_dacl(path: &Path, allowed_sids: &[Sid]) -> Result<()> {
             || u32::from(ace.Header.AceFlags) != expected_ace_flags
         {
             return Err(insecure_dacl(
-                path,
+                operation,
+                object,
+                object_kind,
                 format!(
                     "unexpected access entry type={}, mask={:#x}, flags={:#x}; expected type={}, mask={:#x}, flags={:#x}",
                     ace.Header.AceType,
@@ -422,19 +488,31 @@ fn verify_private_dacl(path: &Path, allowed_sids: &[Sid]) -> Result<()> {
             EqualSid(sid, allowed.as_ptr()) != 0
         }) else {
             return Err(insecure_dacl(
-                path,
+                operation,
+                object,
+                object_kind,
                 "an access entry grants an unexpected principal",
             ));
         };
         if seen[position] {
-            return Err(insecure_dacl(path, "a principal has duplicate entries"));
+            return Err(insecure_dacl(
+                operation,
+                object,
+                object_kind,
+                "a principal has duplicate entries",
+            ));
         }
         seen[position] = true;
     }
     if seen.into_iter().all(|value| value) {
         Ok(())
     } else {
-        Err(insecure_dacl(path, "an allowed principal is missing"))
+        Err(insecure_dacl(
+            operation,
+            object,
+            object_kind,
+            "an allowed principal is missing",
+        ))
     }
 }
 
@@ -505,19 +583,24 @@ fn wide_path(path: &Path) -> Result<Vec<u16>> {
     Ok(wide)
 }
 
-fn insecure_dacl(path: &Path, detail: impl Into<String>) -> a3s_oci_sdk::Error {
+fn insecure_dacl(
+    operation: &'static str,
+    object: &Path,
+    object_kind: &'static str,
+    detail: impl Into<String>,
+) -> Error {
     windows_error(
-        "verify-state-dacl",
-        path,
-        format!("runtime state path has an insecure DACL: {}", detail.into()),
+        operation,
+        object,
+        format!("{object_kind} has an insecure DACL: {}", detail.into()),
     )
 }
 
-fn last_windows_error(operation: &'static str, path: &Path) -> a3s_oci_sdk::Error {
+fn last_windows_error(operation: &'static str, path: &Path) -> Error {
     windows_error(operation, path, io::Error::last_os_error().to_string())
 }
 
-fn status_error(operation: &'static str, path: &Path, status: u32) -> a3s_oci_sdk::Error {
+fn status_error(operation: &'static str, path: &Path, status: u32) -> Error {
     let code = i32::try_from(status).unwrap_or(i32::MAX);
     windows_error(
         operation,
@@ -526,14 +609,10 @@ fn status_error(operation: &'static str, path: &Path, status: u32) -> a3s_oci_sd
     )
 }
 
-fn windows_error(
-    operation: &'static str,
-    path: &Path,
-    detail: impl Into<String>,
-) -> a3s_oci_sdk::Error {
-    state_error(
+fn windows_error(operation: &'static str, path: &Path, detail: impl Into<String>) -> Error {
+    Error::new(
         ErrorCode::FailedPrecondition,
-        operation,
         format!("{}: {}", path.display(), detail.into()),
     )
+    .for_operation(operation)
 }

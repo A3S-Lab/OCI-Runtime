@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Cross-platform host runtime for A3S OCI workloads"
 
 [dependencies]
+a3s-oci-agent-protocol = { path = "../agent-protocol" }
 a3s-oci-core = { path = "../core" }
 a3s-oci-sdk = { path = "../sdk" }
 fs2.workspace = true

@@ -8,8 +8,6 @@ mod observe;
 mod oci_state;
 mod operation;
 mod start;
-#[cfg(windows)]
-mod windows_security;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

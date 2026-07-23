@@ -7,14 +7,20 @@ A3S Box.
 
 ## Version 1 Contract
 
-Before connection, the host generates a nonzero 256-bit `SessionToken` with
-its operating-system CSPRNG and provisions it to the pinned guest through a
-protected bootstrap channel. The token is redacted from Rust debug output.
+Before connection, the host calls `SessionToken::generate` to obtain a
+nonzero 256-bit token from the operating system's preferred random source and
+provisions it to the pinned guest through a protected bootstrap channel.
+Callers may also import exactly 32 bytes from an equivalent protected
+bootstrap. The token is redacted from Rust debug output.
 
 The host opens one authenticated byte stream and sends its inclusive protocol
 range plus the token. The guest selects the highest common version and returns
 its agent version, architecture, operation set, and frame limit. Authentication
 or negotiation failure closes the stream.
+
+A guest may advertise an empty operation set during transport-only bootstrap.
+That proves negotiation without claiming an OCI executor. The client rejects
+every lifecycle call not present in the negotiated operation set.
 
 After negotiation:
 
@@ -62,7 +68,15 @@ In-memory duplex tests cover:
 - response correlation failure and permanent connection poisoning;
 - secret redaction and guest-path normalization.
 
-This proves the protocol implementation, not the WHPX transport or Linux
-executor. The Windows named-pipe/vsock bridge, pinned guest-agent image, real
-bundle execution, process I/O, and recovery evidence remain required before
-the WHPX driver can advance beyond `probe-only`.
+Windows tests additionally create the real host-side named-pipe endpoint,
+verify its live kernel-object owner and protected DACL, reject a second owner
+of the same name, generate both an unguessable endpoint nonce and the session
+token from the OS, reject a connected process whose PID is not the expected
+libkrun shim, and complete authenticated negotiation with a local simulated
+guest. PID verification occurs before the host sends the session token. The
+endpoint type and fixed port 4093 are shared with the libkrun shim.
+
+This proves the protocol and the Windows host half of the bridge, not a guest
+vsock connection or Linux executor. The static guest-agent image, real
+vsock-to-pipe connection, bundle execution, process I/O, and recovery evidence
+remain required before the WHPX driver can advance beyond `probe-only`.

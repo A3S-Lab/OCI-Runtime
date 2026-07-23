@@ -13,6 +13,7 @@ name = "a3s-oci-krun-shim"
 path = "src/main.rs"
 
 [dependencies]
+a3s-oci-agent-protocol = { path = "../agent-protocol" }
 a3s-oci-core = { path = "../core" }
 a3s-oci-sdk = { path = "../sdk" }
 clap.workspace = true

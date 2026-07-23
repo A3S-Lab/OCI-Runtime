@@ -10,6 +10,7 @@ description = "Versioned host-to-guest protocol for A3S OCI Runtime"
 [dependencies]
 a3s-oci-sdk = { path = "../sdk" }
 async-trait.workspace = true
+getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

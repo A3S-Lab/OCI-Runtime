@@ -20,9 +20,14 @@ The runtime:
    zero-feature plain-vsock device, maps guest port 4093 to a validated bare
    Windows pipe name, and releases one real libkrun context without entering a
    VM;
-7. enters a one-vCPU, 512 MiB utility VM, executes `/bin/sh` from a supplied
+7. creates the host side of that mapping as a first-instance-only local named
+   pipe, limits its protected DACL to the runtime principal and LocalSystem,
+   verifies the live handle's owner and access entries, requires the connected
+   client PID to equal the previously spawned shim PID, and negotiates the
+   authenticated agent protocol with a simulated local guest;
+8. enters a one-vCPU, 512 MiB utility VM, executes `/bin/sh` from a supplied
    Linux rootfs, and verifies a guest-written marker through virtiofs;
-8. emits stable JSON evidence through `a3s-oci features`,
+9. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`.
 
@@ -49,6 +54,20 @@ A successful libkrun context smoke additionally proves that:
   `krun_add_vsock_port_windows` accept the fixed agent mapping;
 - `krun_free_ctx` releases the context.
 
+The real Windows host-pipe test additionally proves that:
+
+- the runtime and shim consume one validated endpoint type and fixed port;
+- the runtime obtains an unguessable endpoint nonce and a nonzero 256-bit
+  session token from the OS random source;
+- the pipe rejects remote clients and competing first-instance ownership;
+- the live pipe owner is the runtime principal;
+- its protected DACL contains only full-access entries for that principal and
+  LocalSystem, with no inherited or unexpected entries;
+- an unexpected connected process is rejected before the session token is
+  written;
+- protocol version negotiation and token authentication succeed over the
+  protected pipe without advertising unimplemented executor operations.
+
 A successful libkrun VM smoke additionally proves that:
 
 - the packaged kernel reaches Linux userspace through WHPX;
@@ -73,7 +92,8 @@ does not build it.
 The smokes do not prove that:
 
 - the static A3S guest agent or its system image boots;
-- a guest connects through vsock to an access-controlled named-pipe server;
+- libkrun carries a real Linux guest's vsock connection to the protected
+  named-pipe server;
 - networking or complete process I/O works;
 - OCI create/start ordering is implemented;
 - one or multiple Linux containers can execute;

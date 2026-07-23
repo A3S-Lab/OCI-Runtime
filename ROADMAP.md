@@ -156,6 +156,10 @@ and host/agent transition.
   console output.
 - [x] Define and test the versioned host/guest lifecycle protocol over a
   transport-independent byte stream.
+- [x] Bind the host half of the Windows agent bridge with a verified protected
+  DACL, first-instance ownership, remote-client rejection, expected-shim PID
+  verification, and authenticated protocol negotiation over a real named
+  pipe.
 - [ ] Replace the diagnostic path with a protected runtime-owned share.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [ ] Establish the named-pipe/vsock bridge.

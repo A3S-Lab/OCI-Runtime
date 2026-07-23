@@ -7,6 +7,7 @@
 mod client;
 mod model;
 mod server;
+mod transport;
 mod validation;
 mod wire;
 
@@ -18,6 +19,7 @@ pub use model::{
     AGENT_PROTOCOL_VERSION_MIN, AGENT_SESSION_TOKEN_BYTES,
 };
 pub use server::{serve_agent_connection, GuestAgentService};
+pub use transport::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
 
 #[cfg(test)]
 mod tests;

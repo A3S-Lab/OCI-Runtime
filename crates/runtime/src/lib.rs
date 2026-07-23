@@ -1,11 +1,17 @@
 //! Cross-platform host orchestration and platform capability probing.
 
+#[cfg(windows)]
+mod agent_pipe;
 mod driver;
 mod platform;
 mod report;
 mod service;
 mod state;
+#[cfg(windows)]
+mod windows_security;
 
+#[cfg(windows)]
+pub use agent_pipe::WindowsAgentPipeListener;
 pub use driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
     RuntimeDriver,

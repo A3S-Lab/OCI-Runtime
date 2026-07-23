@@ -200,7 +200,7 @@ pub(super) async fn set_private_directory_permissions(path: &Path) -> Result<()>
 #[cfg(windows)]
 pub(super) async fn create_private_directory(path: &Path) -> Result<()> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || super::windows_security::create_private_directory(&path))
+    tokio::task::spawn_blocking(move || crate::windows_security::create_private_directory(&path))
         .await
         .map_err(|error| {
             state_error(
@@ -214,7 +214,7 @@ pub(super) async fn create_private_directory(path: &Path) -> Result<()> {
 #[cfg(windows)]
 pub(super) async fn set_private_directory_permissions(path: &Path) -> Result<()> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || super::windows_security::protect_path(&path))
+    tokio::task::spawn_blocking(move || crate::windows_security::protect_path(&path))
         .await
         .map_err(|error| {
             state_error(
@@ -545,7 +545,7 @@ async fn set_private_file_permissions(_path: &Path) -> Result<()> {
 #[cfg(windows)]
 async fn set_private_file_permissions(path: &Path) -> Result<()> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || super::windows_security::protect_path(&path))
+    tokio::task::spawn_blocking(move || crate::windows_security::protect_path(&path))
         .await
         .map_err(|error| {
             state_error(

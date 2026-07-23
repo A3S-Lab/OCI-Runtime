@@ -29,6 +29,26 @@ const MAX_CAPABILITY_TEXT_BYTES: usize = 128;
 pub struct SessionToken([u8; AGENT_SESSION_TOKEN_BYTES]);
 
 impl SessionToken {
+    /// Generate a token from the operating system's preferred random source.
+    pub fn generate() -> Result<Self> {
+        let mut bytes = [0_u8; AGENT_SESSION_TOKEN_BYTES];
+        getrandom::fill(&mut bytes).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!("operating-system random source failed: {error}"),
+            )
+            .for_operation("generate-agent-session-token")
+        })?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(Error::new(
+                ErrorCode::Internal,
+                "operating-system random source returned an all-zero session token",
+            )
+            .for_operation("generate-agent-session-token"));
+        }
+        Ok(Self(bytes))
+    }
+
     /// Construct a token from 256 bits supplied by the host CSPRNG.
     pub fn from_bytes(bytes: [u8; AGENT_SESSION_TOKEN_BYTES]) -> Result<Self> {
         if bytes.iter().all(|byte| *byte == 0) {
@@ -214,18 +234,42 @@ pub struct AgentCapabilities {
 }
 
 impl AgentCapabilities {
+    /// Construct a negotiation-only capability report.
+    ///
+    /// This is used while the transport and authenticated bootstrap are
+    /// available but no OCI executor operations are ready.
+    pub fn handshake_only(
+        agent_version: impl Into<String>,
+        architecture: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(agent_version, architecture, Vec::new())
+    }
+
     /// Construct a protocol-v1 capability report.
     pub fn core(agent_version: impl Into<String>, architecture: impl Into<String>) -> Result<Self> {
-        let capabilities = Self {
-            agent_version: agent_version.into(),
-            architecture: architecture.into(),
-            operations: vec![
+        Self::new(
+            agent_version,
+            architecture,
+            vec![
                 AgentOperation::Create,
                 AgentOperation::State,
                 AgentOperation::Start,
                 AgentOperation::Kill,
                 AgentOperation::Delete,
             ],
+        )
+    }
+
+    /// Construct an exact protocol-v1 capability report.
+    pub fn new(
+        agent_version: impl Into<String>,
+        architecture: impl Into<String>,
+        operations: Vec<AgentOperation>,
+    ) -> Result<Self> {
+        let capabilities = Self {
+            agent_version: agent_version.into(),
+            architecture: architecture.into(),
+            operations,
             max_frame_bytes: AGENT_MAX_FRAME_BYTES,
         };
         capabilities.validate()?;
@@ -259,12 +303,6 @@ impl AgentCapabilities {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_capability_text("agentVersion", &self.agent_version)?;
         validate_capability_text("architecture", &self.architecture)?;
-        if self.operations.is_empty() {
-            return Err(protocol_error(
-                ErrorCode::InvalidArgument,
-                "guest advertises no agent operations",
-            ));
-        }
         for (index, operation) in self.operations.iter().enumerate() {
             if self.operations[..index].contains(operation) {
                 return Err(protocol_error(

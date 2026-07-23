@@ -21,6 +21,7 @@ a3s-libkrun-sys = "=3.1.0"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
 fs2 = "0.4"
+getrandom = "0.3"
 jsonschema = { version = "0.48.5", default-features = false }
 oci-spec = { version = "0.10", default-features = false, features = ["runtime"] }
 semver = "1.0"
@@ -36,6 +37,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
 ] }

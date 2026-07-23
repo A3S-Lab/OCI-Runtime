@@ -77,6 +77,9 @@ The project is experimental. The current Windows milestone implements:
   `delete` only for an explicitly supplied launch-ready enforcing driver;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem;
+- a first-instance, remote-client-rejecting Windows guest-agent pipe whose
+  protected DACL is verified from the live kernel handle and whose connected
+  peer must match the previously spawned libkrun shim PID before use;
 - secure loading of the system `WinHvPlatform.dll`;
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
@@ -84,6 +87,9 @@ The project is experimental. The current Windows milestone implements:
   runtime-owned native bundle imported from `A3S-Lab/Box@46e17a8`;
 - a real libkrun context create/configure/release smoke that replaces implicit
   TSI with plain vsock and configures the fixed guest port-to-pipe mapping;
+- a real local Windows agent-pipe test covering OS-generated session tokens,
+  authenticated protocol negotiation, exact endpoint sharing, and pipe-name
+  squatting rejection;
 - a real WHPX utility-VM entry smoke that boots the packaged Linux kernel,
   executes `/bin/sh` in an untouched Alpine rootfs, and verifies a
   guest-written marker on the host;
