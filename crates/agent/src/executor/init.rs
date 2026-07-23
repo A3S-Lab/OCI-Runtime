@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
+use super::control::{write_rejection, READY_BYTE, START_BYTE};
 use super::plan::InitPlan;
-use super::process::{READY_BYTE, START_BYTE};
 
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let mut arguments = std::env::args_os().skip(1);
@@ -40,6 +40,58 @@ fn run_container_init(
     bundle_directory: PathBuf,
     control_name: std::ffi::OsString,
 ) -> Result<()> {
+    let control_address =
+        StdSocketAddr::from_abstract_name(control_name.as_bytes()).map_err(|error| {
+            init_error(
+                ErrorCode::InvalidArgument,
+                format!("invalid abstract init control address: {error}"),
+            )
+        })?;
+    let mut control = UnixStream::connect_addr(&control_address).map_err(|error| {
+        init_error(
+            ErrorCode::Unavailable,
+            format!("failed to connect abstract prepared init control socket: {error}"),
+        )
+    })?;
+    let (plan, rootfs) = match prepare_container_init(config_snapshot, bundle_directory) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if let Err(report) = write_rejection(&mut control, &error) {
+                return Err(init_error(
+                    ErrorCode::Internal,
+                    format!("{error}; failed to report the exact rejection: {report}"),
+                ));
+            }
+            return Err(error);
+        }
+    };
+    control.write_all(&[READY_BYTE]).map_err(|error| {
+        init_error(
+            ErrorCode::Unavailable,
+            format!("failed to report prepared init readiness: {error}"),
+        )
+    })?;
+    let mut start = [0_u8; 1];
+    control.read_exact(&mut start).map_err(|error| {
+        init_error(
+            ErrorCode::Unavailable,
+            format!("prepared init start barrier closed: {error}"),
+        )
+    })?;
+    if start[0] != START_BYTE {
+        return Err(init_error(
+            ErrorCode::FailedPrecondition,
+            "prepared init received an invalid start byte",
+        ));
+    }
+    drop(control);
+    enter_rootfs_and_exec(&plan, &rootfs)
+}
+
+fn prepare_container_init(
+    config_snapshot: PathBuf,
+    bundle_directory: PathBuf,
+) -> Result<(InitPlan, PathBuf)> {
     let config_json = read_bounded_config(&config_snapshot)?;
     let bundle = OciBundle::from_json(bundle_directory, config_json)?;
     let plan = InitPlan::from_bundle(&bundle, &null_io())?;
@@ -71,41 +123,7 @@ fn run_container_init(
         ));
     }
     prepare_create_environment(&plan)?;
-
-    let control_address =
-        StdSocketAddr::from_abstract_name(control_name.as_bytes()).map_err(|error| {
-            init_error(
-                ErrorCode::InvalidArgument,
-                format!("invalid abstract init control address: {error}"),
-            )
-        })?;
-    let mut control = UnixStream::connect_addr(&control_address).map_err(|error| {
-        init_error(
-            ErrorCode::Unavailable,
-            format!("failed to connect abstract prepared init control socket: {error}"),
-        )
-    })?;
-    control.write_all(&[READY_BYTE]).map_err(|error| {
-        init_error(
-            ErrorCode::Unavailable,
-            format!("failed to report prepared init readiness: {error}"),
-        )
-    })?;
-    let mut start = [0_u8; 1];
-    control.read_exact(&mut start).map_err(|error| {
-        init_error(
-            ErrorCode::Unavailable,
-            format!("prepared init start barrier closed: {error}"),
-        )
-    })?;
-    if start[0] != START_BYTE {
-        return Err(init_error(
-            ErrorCode::FailedPrecondition,
-            "prepared init received an invalid start byte",
-        ));
-    }
-    drop(control);
-    enter_rootfs_and_exec(&plan, &rootfs)
+    Ok((plan, rootfs))
 }
 
 fn prepare_create_environment(plan: &InitPlan) -> Result<()> {

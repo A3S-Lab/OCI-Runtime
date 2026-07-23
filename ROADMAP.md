@@ -50,7 +50,8 @@ Completed:
 - root-only Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
   create-time UTS namespace with hostname and domainname, exact-generation
-  state, session idempotency, signaling, and cleanup;
+  state, bounded typed init rejection reporting, session idempotency,
+  signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak

@@ -60,8 +60,9 @@ The project is experimental. The current Windows milestone implements:
 - a root-only guest bootstrap executor with exact-generation state,
   session-bounded idempotency, a PID-authenticated abstract Unix start
   barrier, a create-time UTS namespace with hostname and domainname, `chroot`,
-  credentials, umask, `no_new_privileges`, `execve`, signaling, stopped
-  observation, and scoped cleanup;
+  bounded typed init rejection reporting, credentials, umask,
+  `no_new_privileges`, `execve`, signaling, stopped observation, and scoped
+  cleanup;
 - the complete pinned OCI Runtime Specification 1.3.0 schema and upstream
   fixture set, compiled into an offline validator for configuration, state,
   and feature documents;

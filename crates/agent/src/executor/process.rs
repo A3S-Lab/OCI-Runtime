@@ -7,15 +7,14 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::AgentVsockEndpoint;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
+use super::control::{read_outcome, InitOutcome, START_BYTE};
 use super::plan::InitPlan;
 
-pub(super) const READY_BYTE: u8 = 0xA3;
-pub(super) const START_BYTE: u8 = 0x5A;
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
@@ -129,22 +128,15 @@ impl PreparedProcess {
                 ),
             ));
         }
-        let mut ready_byte = [0_u8; 1];
-        match timeout(INIT_READY_TIMEOUT, control.read_exact(&mut ready_byte)).await {
-            Ok(Ok(_)) if ready_byte[0] == READY_BYTE => {}
-            Ok(Ok(_)) => {
+        match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
+            Ok(Ok(InitOutcome::Ready)) => {}
+            Ok(Ok(InitOutcome::Rejected(error))) => {
                 terminate(&mut child).await;
-                return Err(process_error(
-                    ErrorCode::FailedPrecondition,
-                    "prepared container init returned an invalid readiness byte",
-                ));
+                return Err(error);
             }
             Ok(Err(error)) => {
                 terminate(&mut child).await;
-                return Err(process_error(
-                    ErrorCode::FailedPrecondition,
-                    format!("prepared container init closed before readiness: {error}"),
-                ));
+                return Err(error);
             }
             Err(_) => {
                 terminate(&mut child).await;
@@ -285,7 +277,8 @@ mod tests {
 
     use tokio::io::AsyncReadExt;
 
-    use super::{bind_control_listener, READY_BYTE};
+    use super::bind_control_listener;
+    use crate::executor::control::READY_BYTE;
 
     #[tokio::test(flavor = "current_thread")]
     async fn abstract_control_listener_reports_the_kernel_peer_pid() {

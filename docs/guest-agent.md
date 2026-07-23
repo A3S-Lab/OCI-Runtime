@@ -49,13 +49,13 @@ and verifies both values with `uname` before reporting ready, so the UTS
 configuration is part of the create barrier rather than deferred until start.
 
 Create snapshots the exact digest-bound configuration, starts an internal init
-wrapper, and waits for that wrapper on a randomly named Linux abstract Unix
-socket. The parent accepts only the exact kernel-reported child PID. The
-wrapper reports ready and remains blocked, so create returns `created` before
-the configured process runs. Start sends the one-byte release signal; the
-wrapper then revalidates the bundle, resolves a contained rootfs, applies
-`chroot`, working directory, groups, GID, UID, umask, and
-`PR_SET_NO_NEW_PRIVS`, and calls `execve`.
+wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
+accepts only the exact kernel-reported child PID. The wrapper revalidates the
+bundle, resolves a contained rootfs, and returns either a bounded typed error
+or readiness before blocking. Create therefore preserves the exact rejection
+or returns `created` before the configured process runs. Start sends the
+one-byte release signal; the wrapper then applies `chroot`, working directory,
+groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
 
 State observes the init process, kill delivers one positive Linux signal, and
 delete supports stopped-only and force cleanup. Exact request retries are
@@ -88,8 +88,8 @@ observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
-minirootfs and the 6,289,496-byte static agent with SHA-256
-`79c25a5c46664b516c5575622321f56c63f2ac665d2b7af68e42040695f825c7`.
+minirootfs and the 6,293,664-byte static agent with SHA-256
+`3f7dc4357ad655674203303f9ade255d9ad39c2b8a0ae4dc60759e02ca8a619c`.
 This proves the fixed bootstrap slice, not the immutable A3S system image,
 complete OCI enforcement, process I/O, networking, restart recovery, or
 fault-injected cleanup. The WHPX driver therefore remains `probe-only`.

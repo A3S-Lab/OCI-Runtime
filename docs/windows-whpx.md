@@ -126,9 +126,9 @@ minirootfs archive with SHA-256
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
 
-The fixed OCI lifecycle qualification used the 6,289,496-byte static musl agent
+The fixed OCI lifecycle qualification used the 6,293,664-byte static musl agent
 with SHA-256
-`79c25a5c46664b516c5575622321f56c63f2ac665d2b7af68e42040695f825c7`.
+`3f7dc4357ad655674203303f9ade255d9ad39c2b8a0ae4dc60759e02ca8a619c`.
 Its report selected protocol version 1, identified the guest as `x86_64`,
 verified every fixed lifecycle field, retained the complete successful shim
 report, and returned exit status zero.

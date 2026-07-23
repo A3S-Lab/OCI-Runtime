@@ -92,6 +92,11 @@ back before create returns, and the workload independently checks its
 hostname. The host verifies marker removal and that VM shutdown leaves no new
 guest-agent runtime directory.
 
+The private parent/init control channel reports either readiness or a bounded,
+typed SDK error. The parent validates the kernel-reported peer PID before
+reading that outcome, so create-time namespace and rootfs failures retain
+their exact error class and context without trusting a pathname socket.
+
 This is the first Linux executor vertical slice, not complete OCI
 enforcement. A pinned immutable system image, complete process I/O, remaining
 namespaces, mounts, resources, hooks, recovery, negative isolation cases,
