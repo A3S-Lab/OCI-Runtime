@@ -103,10 +103,9 @@ and runs `hvf-smoke`.
 - Otherwise CI requires exit status `2`, `status = unavailable`, and both VM
   lifecycle fields to remain false.
 
-GitHub-hosted macOS currently reports `kern.hv_support = 0`, so hosted CI
-retains the fail-closed branch. The signed local Apple Silicon run supplies
-the positive host lifecycle evidence until a virtualization-capable CI runner
-is available.
+Hosted-runner virtualization availability can vary, so CI retains both the
+positive and fail-closed branches. Signed local Apple Silicon runs retain the
+positive host lifecycle evidence independently of hosted-runner policy.
 
 ## Isolated libkrun context gate
 
@@ -260,23 +259,130 @@ pre-entry configuration evidence, no guest exit code, no marker, and no false
 success. The parent terminates and reaps a worker that exceeds the bounded
 startup interval.
 
+## Authenticated guest-agent bridge
+
+The `agent-vm-smoke` command now crosses the authenticated host/guest boundary
+without promoting HVF to a workload driver. It reuses the same protocol and
+static Linux executor used by WHPX; there is no macOS-specific guest protocol.
+
+The host runtime establishes the trust chain in this order:
+
+1. generate an unguessable portable endpoint name and a one-time 256-bit
+   session token;
+2. atomically create `/private/tmp/<endpoint>` with mode `0700`;
+3. bind `<endpoint>/agent.sock`, set mode `0600`, and verify that both entries
+   are non-symlinks owned by the effective runtime user;
+4. start the public shim as an isolated process-group leader;
+5. let the shim spawn the direct worker that owns `krun_start_enter`;
+6. accept the libkrun Unix connection and read its PID through
+   `LOCAL_PEERPID`;
+7. query `PROC_PIDTBSDINFO` through `proc_pidinfo` and require that the peer's
+   parent is the exact public shim PID;
+8. remove the socket and private directory while retaining the accepted
+   stream;
+9. send the token only after process identity verification, negotiate protocol
+   version 1, and require the static arm64 guest to advertise exactly
+   `create`, `state`, `start`, `kill`, and `delete`.
+
+The parent shim validates the rootfs, fixed
+`/usr/bin/a3s-oci-agent`, console, and protected socket before spawning the
+worker. The worker validates them again, removes the bootstrap token from its
+own environment, configures plain vsock port 4093, passes the token only to
+the fixed guest executable, and emits bounded pre-entry evidence. Closing the
+negotiated connection shuts down the guest executor and returns the natural
+guest exit status through the worker and parent shim.
+
+Build and install the static guest:
+
+```sh
+rustup target add aarch64-unknown-linux-musl
+host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+rust_lld="$(
+  rustc --print sysroot
+)/lib/rustlib/$host_triple/bin/rust-lld"
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld" \
+  cargo build -p a3s-oci-agent --release \
+    --target aarch64-unknown-linux-musl
+cargo build -p a3s-oci-cli -p a3s-oci-krun
+
+install -d "$rootfs/usr/bin"
+install -m 0755 \
+  target/aarch64-unknown-linux-musl/release/a3s-oci-agent \
+  "$rootfs/usr/bin/a3s-oci-agent"
+```
+
+Use the signed relocatable shim prepared above:
+
+```sh
+target/debug/a3s-oci agent-vm-smoke \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --rootfs "$rootfs" \
+  --console "$asset_dir/agent-console.log"
+```
+
+The top-level report is `a3s.oci.agent-vm-smoke.v2`. A successful local Apple
+Silicon qualification run retained the following contract:
+
+```json
+{
+  "schema_version": "a3s.oci.agent-vm-smoke.v2",
+  "platform": "macos",
+  "status": "available",
+  "endpoint_bound": true,
+  "shim_spawned": true,
+  "shim_process_id": 12345,
+  "bridge_process_id": 12346,
+  "shim_client_verified": true,
+  "protocol_negotiated": true,
+  "selected_protocol": 1,
+  "agent_version": "0.1.0",
+  "guest_architecture": "aarch64",
+  "advertised_operations": [
+    "create",
+    "state",
+    "start",
+    "kill",
+    "delete"
+  ],
+  "shim_report_verified": true,
+  "shim_exit_code": 0,
+  "console_created": true
+}
+```
+
+The numeric PIDs are observations rather than stable values. Success requires
+both to be nonzero and different: the first identifies the public shim and the
+second the kernel-identified direct worker child.
+
+The same local build without the Hypervisor entitlement completed all bounded
+shim configuration, failed `krun_start_enter`, returned status `2`, reported
+`protocol_negotiated = false`, and left neither a worker process nor an
+`a3s-oci-agent-*` directory below `/private/tmp`. Tests also reject an
+unrelated Unix peer before reading protocol bytes, reject a wrong token after
+direct-child verification, prevent endpoint collisions, and terminate and
+reap the entire shim process group on timeout.
+
+macOS CI builds the static aarch64 musl agent and runs both signed and
+missing-entitlement paths. A virtualization-capable runner must complete the
+full authenticated report. An unavailable host must remain fail closed. Every
+branch requires the private endpoint inventory before and after the command to
+match exactly.
+
 ## Remaining workload gates
 
-The marker smoke proves real Linux guest execution, but it is not an
-authenticated A3S guest or an OCI lifecycle. The current gates do not:
+The authenticated smoke proves the real static A3S Linux guest and transport
+boundary, but it is not yet an arbitrary OCI workload driver. The current
+gates do not:
 
 - boot the production A3S immutable Linux system image;
-- bind the real host Unix socket or authenticate a guest-agent session;
 - execute any OCI lifecycle operation.
 
 The next macOS increments must add, in order:
 
 1. the production A3S immutable system root;
-2. authenticated guest-agent negotiation over the macOS Unix-socket bridge;
-3. the same fixed OCI create/start/kill/delete lifecycle used by WHPX;
-4. deterministic descriptor and runtime-root cleanup around that lifecycle;
-5. negative tests for agent startup, isolation weakening,
-   and recovery.
+2. the same fixed OCI create/start/kill/delete lifecycle used by WHPX;
+3. deterministic descriptor and runtime-root cleanup around that lifecycle;
+4. negative tests for isolation weakening and recovery.
 
 Only after those gates and the shared Linux executor requirements pass may
 the HVF driver move from `probe-only` to `experimental`.

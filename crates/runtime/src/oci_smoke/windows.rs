@@ -8,7 +8,7 @@ use a3s_oci_sdk::{ContainerId, ContainerTarget, Generation, OciBundle};
 use tokio::io::AsyncReadExt;
 
 use super::OciVmSmokeReport;
-use crate::agent_session::WindowsAgentVmSession;
+use crate::agent_session::AgentVmSession;
 
 const MARKER_NAME: &str = ".a3s-oci-create-start-smoke";
 const MAX_MARKER_BYTES: u64 = 1_024;
@@ -95,7 +95,7 @@ pub(super) async fn run(
         Err(reason) => return failed(report, reason),
     };
 
-    let session = match WindowsAgentVmSession::connect(shim, &vm_rootfs, console).await {
+    let session = match AgentVmSession::connect(shim, &vm_rootfs, console).await {
         Ok(session) => session,
         Err(bridge) => {
             report.reason = bridge.reason.clone();

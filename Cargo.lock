@@ -73,6 +73,7 @@ dependencies = [
  "a3s-oci-core",
  "a3s-oci-sdk",
  "clap",
+ "libc",
  "libloading",
  "serde",
  "serde_json",

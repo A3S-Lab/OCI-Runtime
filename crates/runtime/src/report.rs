@@ -10,7 +10,7 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v1";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v2";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v2";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
@@ -144,7 +144,7 @@ impl HvfSmokeReport {
     }
 }
 
-/// End-to-end evidence from host pipe binding through guest-agent negotiation.
+/// End-to-end evidence from host endpoint binding through guest-agent negotiation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentVmSmokeReport {
     /// Version of this JSON-compatible schema.
@@ -157,10 +157,16 @@ pub struct AgentVmSmokeReport {
     pub endpoint_bound: bool,
     /// Whether the isolated libkrun shim process was started.
     pub shim_spawned: bool,
-    /// Process ID used for named-pipe peer authentication.
+    /// Process ID of the public libkrun shim parent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shim_process_id: Option<u32>,
-    /// Whether the connected pipe client matched the exact shim PID.
+    /// Process ID of the verified bridge peer.
+    ///
+    /// This is the shim itself on Windows and its direct VM worker child on
+    /// macOS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_process_id: Option<u32>,
+    /// Whether the connected bridge peer matched the required process identity.
     pub shim_client_verified: bool,
     /// Whether token authentication and protocol negotiation succeeded.
     pub protocol_negotiated: bool,
@@ -199,6 +205,7 @@ impl AgentVmSmokeReport {
             endpoint_bound: false,
             shim_spawned: false,
             shim_process_id: None,
+            bridge_process_id: None,
             shim_client_verified: false,
             protocol_negotiated: false,
             selected_protocol: None,
@@ -213,12 +220,16 @@ impl AgentVmSmokeReport {
         }
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     pub(crate) fn unsupported(platform: HostPlatform) -> Self {
         let mut report = Self::initial(platform);
         report.status = CapabilityStatus::Unsupported;
         report.reason = Some(
-            "the authenticated guest-agent VM smoke is implemented only for Windows x86_64/WHPX"
+            "the authenticated guest-agent VM smoke is implemented only for Windows x86_64/WHPX \
+             and macOS aarch64/HVF"
                 .into(),
         );
         report
@@ -227,17 +238,28 @@ impl AgentVmSmokeReport {
     /// Return whether host authentication, guest negotiation, and VM exit succeeded.
     #[must_use]
     pub fn is_success(&self) -> bool {
+        let process_identity_matches =
+            match (self.platform, self.shim_process_id, self.bridge_process_id) {
+                (HostPlatform::Windows, Some(shim), Some(bridge)) => shim != 0 && bridge == shim,
+                (HostPlatform::Macos, Some(shim), Some(bridge)) => {
+                    shim != 0 && bridge != 0 && bridge != shim
+                }
+                _ => false,
+            };
+        let expected_architecture = match self.platform {
+            HostPlatform::Windows => Some("x86_64"),
+            HostPlatform::Macos => Some("aarch64"),
+            _ => None,
+        };
         matches!(self.status, CapabilityStatus::Available)
             && self.endpoint_bound
             && self.shim_spawned
-            && self
-                .shim_process_id
-                .is_some_and(|process_id| process_id != 0)
+            && process_identity_matches
             && self.shim_client_verified
             && self.protocol_negotiated
             && self.selected_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
             && self.agent_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))
-            && self.guest_architecture.as_deref() == Some("x86_64")
+            && self.guest_architecture.as_deref() == expected_architecture
             && self.advertised_operations
                 == [
                     AgentOperation::Create,
@@ -463,7 +485,9 @@ impl OciVmSmokeReport {
     pub(crate) fn unsupported(platform: HostPlatform) -> Self {
         let mut report = Self::initial(platform);
         report.status = CapabilityStatus::Unsupported;
-        report.bridge = AgentVmSmokeReport::unsupported(platform);
+        report.bridge.status = CapabilityStatus::Unsupported;
+        report.bridge.reason =
+            Some("the authenticated guest bridge was not attempted for this OCI VM smoke".into());
         report.reason =
             Some("the fixed OCI VM smoke is implemented only for Windows x86_64/WHPX".into());
         report

@@ -168,6 +168,118 @@ jobs:
             find "$rootfs_dir" -maxdepth 1 \
               -name '.a3s-oci-hvf-vm-smoke-*' -print -quit
           )"
+      - if: runner.os == 'macOS'
+        name: Authenticated macOS guest agent or fail-closed worker
+        shell: bash
+        run: |
+          rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
+          signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
+          unsigned_dir="$RUNNER_TEMP/a3s-oci-agent-vm-unsigned"
+          signed_console="$RUNNER_TEMP/a3s-oci-agent-vm-signed.log"
+          unsigned_console="$RUNNER_TEMP/a3s-oci-agent-vm-unsigned.log"
+          mkdir -p "$rootfs_dir/usr/bin" "$signed_dir" "$unsigned_dir"
+
+          rustup target add aarch64-unknown-linux-musl
+          host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+          rust_lld="$(
+            rustc --print sysroot
+          )/lib/rustlib/$host_triple/bin/rust-lld"
+          test -x "$rust_lld"
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld" \
+            cargo build -p a3s-oci-agent --release \
+              --target aarch64-unknown-linux-musl
+          agent=target/aarch64-unknown-linux-musl/release/a3s-oci-agent
+          agent_version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq --raw-output \
+                '.packages[] | select(.name == "a3s-oci-agent") | .version'
+          )"
+          file "$agent"
+          cp "$agent" "$rootfs_dir/usr/bin/a3s-oci-agent"
+          chmod 0755 "$rootfs_dir/usr/bin/a3s-oci-agent"
+
+          cp target/debug/a3s-oci-krun-shim "$signed_dir/"
+          cp -R target/debug/a3s-oci-krun-runtime "$signed_dir/"
+          codesign --force --sign - \
+            --entitlements packaging/macos/a3s-oci-hvf.entitlements \
+            "$signed_dir/a3s-oci-krun-shim"
+          codesign --verify --strict "$signed_dir/a3s-oci-krun-shim"
+
+          endpoint_baseline="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          set +e
+          output="$(
+            target/debug/a3s-oci agent-vm-smoke \
+              --shim "$signed_dir/a3s-oci-krun-shim" \
+              --rootfs "$rootfs_dir" \
+              --console "$signed_console"
+          )"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+
+          support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+          if [[ "$support" == "1" ]]; then
+            test "$status" -eq 0
+            jq --exit-status --arg agent_version "$agent_version" \
+              '.schema_version == "a3s.oci.agent-vm-smoke.v2"
+               and .platform == "macos" and .status == "available"
+               and .endpoint_bound and .shim_spawned
+               and (.shim_process_id > 0)
+               and (.bridge_process_id > 0)
+               and (.bridge_process_id != .shim_process_id)
+               and .shim_client_verified and .protocol_negotiated
+               and .selected_protocol == 1
+               and .agent_version == $agent_version
+               and .guest_architecture == "aarch64"
+               and .advertised_operations
+                   == ["create", "state", "start", "kill", "delete"]
+               and .shim_report_verified and .shim_exit_code == 0
+               and .console_created
+               and .shim_report.platform == "macos"
+               and .shim_report.status == "available"
+               and .shim_report.guest_exit_code == 0' \
+              <<<"$output" >/dev/null
+          else
+            test "$status" -eq 2
+            jq --exit-status \
+              '.schema_version == "a3s.oci.agent-vm-smoke.v2"
+               and .platform == "macos" and .status == "unavailable"
+               and (.protocol_negotiated | not)
+               and (.shim_report_verified | not)
+               and (.reason | length > 0)' \
+              <<<"$output" >/dev/null
+          fi
+
+          cp target/debug/a3s-oci-krun-shim "$unsigned_dir/"
+          cp -R target/debug/a3s-oci-krun-runtime "$unsigned_dir/"
+          set +e
+          unsigned_output="$(
+            target/debug/a3s-oci agent-vm-smoke \
+              --shim "$unsigned_dir/a3s-oci-krun-shim" \
+              --rootfs "$rootfs_dir" \
+              --console "$unsigned_console"
+          )"
+          unsigned_status=$?
+          set -e
+          printf '%s\n' "$unsigned_output"
+          test "$unsigned_status" -eq 2
+          jq --exit-status \
+            '.schema_version == "a3s.oci.agent-vm-smoke.v2"
+             and .platform == "macos" and .status == "unavailable"
+             and .endpoint_bound and .shim_spawned
+             and (.protocol_negotiated | not)
+             and (.shim_report_verified | not)
+             and (.reason | length > 0)' \
+            <<<"$unsigned_output" >/dev/null
+
+          endpoint_after="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          test "$endpoint_after" = "$endpoint_baseline"
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
         run: bash .github/scripts/native-linux-smoke.sh
@@ -191,15 +303,28 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --yes musl-tools
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - run: >-
           cargo build -p a3s-oci-agent --release
           --target x86_64-unknown-linux-musl
+      - name: Build static aarch64 guest agent
+        shell: bash
+        run: |
+          host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+          rust_lld="$(
+            rustc --print sysroot
+          )/lib/rustlib/$host_triple/bin/rust-lld"
+          test -x "$rust_lld"
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld" \
+            cargo build -p a3s-oci-agent --release \
+              --target aarch64-unknown-linux-musl
       - name: Verify static guest artifact
         shell: bash
         run: |
-          agent=target/x86_64-unknown-linux-musl/release/a3s-oci-agent
-          file "$agent"
-          ! readelf --program-headers "$agent" | grep --quiet INTERP
-          ! readelf --dynamic "$agent" | grep --quiet NEEDED
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            agent="target/$target/release/a3s-oci-agent"
+            file "$agent"
+            ! readelf --program-headers "$agent" | grep --quiet INTERP
+            ! readelf --dynamic "$agent" | grep --quiet NEEDED
+          done

@@ -35,9 +35,13 @@ enum Command {
         /// Host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
-        /// Bare Windows pipe name shared with the host runtime.
+        /// Portable endpoint name used as the pipe or private-directory basename.
         #[arg(long, value_name = "NAME")]
         pipe_name: String,
+        /// Private host Unix socket mapped to the guest control port.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[arg(long, value_name = "FILE")]
+        socket_path: PathBuf,
     },
     /// Internal process-takeover boundary for the macOS VM smoke.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -49,6 +53,17 @@ enum Command {
         console: PathBuf,
         #[arg(long, value_name = "NAME")]
         marker_name: String,
+    },
+    /// Internal process-takeover boundary for the macOS guest-agent VM.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[command(name = "__macos-agent-vm-worker", hide = true)]
+    MacosAgentVmWorker {
+        #[arg(long, value_name = "DIR")]
+        rootfs: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        socket_path: PathBuf,
     },
 }
 
@@ -84,6 +99,8 @@ fn main() -> ExitCode {
             rootfs,
             console,
             pipe_name,
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            socket_path,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
                 Ok(endpoint) => endpoint,
@@ -92,22 +109,19 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let encoded = match std::env::var(a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_ENV) {
-                Ok(encoded) => Zeroizing::new(encoded),
-                Err(error) => {
-                    eprintln!("a3s-oci-krun-shim: guest bootstrap token is unavailable: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            std::env::remove_var(a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_ENV);
-            let token = match a3s_oci_agent_protocol::SessionToken::from_hex(encoded.as_str()) {
+            let token = match take_session_token() {
                 Ok(token) => token,
                 Err(error) => {
-                    eprintln!("a3s-oci-krun-shim: guest bootstrap token is invalid: {error}");
+                    eprintln!("a3s-oci-krun-shim: {error}");
                     return ExitCode::FAILURE;
                 }
             };
-            let report = a3s_oci_krun::agent_vm_smoke(&rootfs, &console, &endpoint, &token);
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            let socket_path = Some(socket_path.as_path());
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            let socket_path = None;
+            let report =
+                a3s_oci_krun::agent_vm_smoke(&rootfs, &console, &endpoint, socket_path, &token);
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
                 eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");
@@ -131,7 +145,36 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        Command::MacosAgentVmWorker {
+            rootfs,
+            console,
+            socket_path,
+        } => {
+            let token = match take_session_token() {
+                Ok(token) => token,
+                Err(error) => {
+                    eprintln!("a3s-oci-krun-shim: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if a3s_oci_krun::run_macos_agent_vm_worker(&rootfs, &console, &socket_path, &token) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            }
+        }
     }
+}
+
+fn take_session_token() -> Result<a3s_oci_agent_protocol::SessionToken, String> {
+    let encoded = Zeroizing::new(
+        std::env::var(a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_ENV)
+            .map_err(|error| format!("guest bootstrap token is unavailable: {error}"))?,
+    );
+    std::env::remove_var(a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_ENV);
+    a3s_oci_agent_protocol::SessionToken::from_hex(encoded.as_str())
+        .map_err(|error| format!("guest bootstrap token is invalid: {error}"))
 }
 
 fn write_json(value: &impl Serialize) -> Result<(), serde_json::Error> {

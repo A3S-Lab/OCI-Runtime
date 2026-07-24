@@ -5,22 +5,25 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use a3s_oci_agent_protocol::{
+    AgentVsockEndpoint, SessionToken, AGENT_SESSION_TOKEN_ENV, AGENT_VSOCK_PORT,
+};
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::macos_context::{KrunContext, MacosKrunApi};
 use crate::macos_process::{
-    canonical_rootfs, read_bounded_worker_output, require_absent, resolve_console,
+    canonical_rootfs, read_bounded_worker_output, resolve_agent_socket, resolve_console,
     resolve_guest_regular_file, terminate_and_wait, wait_for_worker,
 };
-use crate::{KrunVmSmokeReport, VmConfig};
+use crate::{KrunAgentVmSmokeReport, VmConfig};
 
-const MACOS_VM_SMOKE_TOKEN: &str = "a3s-oci-hvf-vm-smoke-v1";
-const WORKER_COMMAND: &str = "__macos-vm-smoke-worker";
-const WORKER_SCHEMA_VERSION: &str = "a3s.oci.macos-vm-smoke-worker.v1";
-const WORKER_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_GUEST_PATH: &str = "/usr/bin/a3s-oci-agent";
+const WORKER_COMMAND: &str = "__macos-agent-vm-worker";
+const WORKER_SCHEMA_VERSION: &str = "a3s.oci.macos-agent-vm-worker.v1";
+const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_WORKER_OUTPUT_BYTES: u64 = 64 * 1024;
-const MARKER_PREFIX: &str = ".a3s-oci-hvf-vm-smoke-";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct WorkerEvidence {
@@ -29,6 +32,8 @@ struct WorkerEvidence {
     context_created: bool,
     vm_configured: bool,
     rootfs_configured: bool,
+    agent_binary_present: bool,
+    agent_vsock_configured: bool,
     workload_configured: bool,
     console_configured: bool,
     enter_attempted: bool,
@@ -44,6 +49,8 @@ impl WorkerEvidence {
             context_created: false,
             vm_configured: false,
             rootfs_configured: false,
+            agent_binary_present: false,
+            agent_vsock_configured: false,
             workload_configured: false,
             console_configured: false,
             enter_attempted: false,
@@ -52,13 +59,23 @@ impl WorkerEvidence {
     }
 }
 
-pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunVmSmokeReport {
-    let mut report = KrunVmSmokeReport::initial(HostPlatform::Macos, config);
-    // The parent does not load libkrun. Only bounded evidence from the private
-    // worker may advance this field from staged-at-build-time to loaded.
+pub(crate) fn agent_vm_smoke(
+    rootfs: &Path,
+    console: &Path,
+    endpoint: &AgentVsockEndpoint,
+    socket: &Path,
+    token: &SessionToken,
+    config: VmConfig,
+) -> KrunAgentVmSmokeReport {
+    let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
+    // The parent intentionally does not load libkrun. Only bounded worker
+    // evidence may advance the native setup fields.
     report.runtime_bundle_loaded = false;
     let rootfs = match resolve_rootfs(rootfs) {
-        Ok(rootfs) => rootfs,
+        Ok(rootfs) => {
+            report.agent_binary_present = true;
+            rootfs
+        }
         Err(reason) => {
             report.reason = Some(reason);
             return report;
@@ -71,14 +88,22 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
             return report;
         }
     };
-
-    let marker_name = format!("{MARKER_PREFIX}{}", std::process::id());
-    let marker_path = rootfs.join(&marker_name);
-    if let Err(reason) = require_absent(&marker_path, "smoke marker") {
-        report.reason = Some(reason);
+    let socket = match resolve_agent_socket(socket) {
+        Ok(socket) => socket,
+        Err(reason) => {
+            report.reason = Some(reason);
+            return report;
+        }
+    };
+    if socket.parent().and_then(Path::file_name) != Some(std::ffi::OsStr::new(endpoint.pipe_name()))
+    {
+        report.reason = Some(format!(
+            "agent socket directory does not match endpoint {}: {}",
+            endpoint.pipe_name(),
+            socket.display()
+        ));
         return report;
     }
-
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
         Err(error) => {
@@ -89,24 +114,30 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
         }
     };
 
-    let mut child = match Command::new(executable)
+    let encoded_token = token.expose_hex();
+    let mut command = Command::new(executable);
+    command
         .arg(WORKER_COMMAND)
         .arg("--rootfs")
         .arg(&rootfs)
         .arg("--console")
         .arg(&console)
-        .arg("--marker-name")
-        .arg(&marker_name)
+        .arg("--socket-path")
+        .arg(&socket)
+        .env(AGENT_SESSION_TOKEN_ENV, encoded_token.as_str())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            report.reason = Some(format!("failed to start the macOS VM worker: {error}"));
+            report.reason = Some(format!(
+                "failed to start the macOS guest-agent VM worker: {error}"
+            ));
             return report;
         }
     };
+    drop(command);
+    drop(encoded_token);
 
     let output_reader = child.stdout.take().map(|stdout| {
         thread::spawn(move || read_bounded_worker_output(stdout, MAX_WORKER_OUTPUT_BYTES))
@@ -117,10 +148,10 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
             let cleanup_error = terminate_and_wait(&mut child).err();
             report.reason = Some(match cleanup_error {
                 Some(cleanup_error) => format!(
-                    "failed to wait for the macOS VM worker: {error}; \
+                    "failed to wait for the macOS guest-agent VM worker: {error}; \
                      worker cleanup also failed: {cleanup_error}"
                 ),
-                None => format!("failed to wait for the macOS VM worker: {error}"),
+                None => format!("failed to wait for the macOS guest-agent VM worker: {error}"),
             });
             None
         }
@@ -132,6 +163,8 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
             report.context_created = evidence.context_created;
             report.vm_configured = evidence.vm_configured;
             report.rootfs_configured = evidence.rootfs_configured;
+            report.agent_binary_present = evidence.agent_binary_present;
+            report.agent_vsock_configured = evidence.agent_vsock_configured;
             report.workload_configured = evidence.workload_configured;
             report.console_configured = evidence.console_configured;
             if let Some(reason) = evidence.reason.clone() {
@@ -149,7 +182,8 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
         if worker_exit.timed_out {
             report.reason.get_or_insert_with(|| {
                 format!(
-                    "macOS VM worker exceeded the {} second startup timeout and was terminated",
+                    "macOS guest-agent VM worker exceeded the {} second timeout and was \
+                     terminated",
                     WORKER_TIMEOUT.as_secs()
                 )
             });
@@ -162,7 +196,7 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
             if report.guest_exit_code.is_none() {
                 report.reason.get_or_insert_with(|| {
                     format!(
-                        "macOS VM worker exited without a guest status: {}",
+                        "macOS guest-agent VM worker exited without a guest status: {}",
                         worker_exit.status
                     )
                 });
@@ -170,15 +204,12 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
         }
     }
 
-    verify_and_remove_marker(&marker_path, &mut report);
-    report.vm_entered |= report.marker_verified;
     report.console_created =
         fs::symlink_metadata(&console).is_ok_and(|metadata| metadata.file_type().is_file());
-
     if let Some(exit_code) = report.guest_exit_code {
         if exit_code != 0 {
             report.reason.get_or_insert_with(|| {
-                format!("guest workload returned non-zero exit code {exit_code}")
+                format!("guest agent returned non-zero exit code {exit_code}")
             });
         }
     }
@@ -187,40 +218,44 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
         && report.context_created
         && report.vm_configured
         && report.rootfs_configured
+        && report.agent_binary_present
+        && report.agent_vsock_configured
         && report.workload_configured
         && report.console_configured
         && report.vm_entered
         && report.guest_exit_code == Some(0)
-        && report.marker_verified
-        && report.marker_removed
         && report.console_created
     {
         report.status = CapabilityStatus::Available;
         report.reason = None;
     } else if report.reason.is_none() {
-        report.reason = Some("guest workload did not satisfy the smoke-test contract".into());
+        report.reason = Some("guest agent did not satisfy the shim smoke contract".into());
     }
-
     report
 }
 
-pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bool {
+pub(crate) fn run_worker(
+    rootfs: &Path,
+    console: &Path,
+    socket: &Path,
+    token: &SessionToken,
+) -> bool {
     let mut evidence = WorkerEvidence::initial();
     let rootfs = match resolve_rootfs(rootfs) {
-        Ok(rootfs) => rootfs,
+        Ok(rootfs) => {
+            evidence.agent_binary_present = true;
+            rootfs
+        }
         Err(reason) => return fail_worker(&mut evidence, reason),
     };
     let console = match resolve_console(console) {
         Ok(console) => console,
         Err(reason) => return fail_worker(&mut evidence, reason),
     };
-    if let Err(reason) = validate_marker_name(marker_name) {
-        return fail_worker(&mut evidence, reason);
-    }
-    let marker_path = rootfs.join(marker_name);
-    if let Err(reason) = require_absent(&marker_path, "smoke marker") {
-        return fail_worker(&mut evidence, reason);
-    }
+    let socket = match resolve_agent_socket(socket) {
+        Ok(socket) => socket,
+        Err(reason) => return fail_worker(&mut evidence, reason),
+    };
 
     let api = match MacosKrunApi::load() {
         Ok(api) => {
@@ -237,7 +272,6 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
         }
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
-
     if let Err(error) = context.set_vm_config(config) {
         return fail_worker(&mut evidence, error.to_string());
     }
@@ -246,17 +280,20 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.rootfs_configured = true;
+    if let Err(error) = context.set_agent_vsock(&socket, AGENT_VSOCK_PORT) {
+        return fail_worker(&mut evidence, error.to_string());
+    }
+    evidence.agent_vsock_configured = true;
     if let Err(error) = context.set_workdir("/") {
         return fail_worker(&mut evidence, error.to_string());
     }
 
-    let marker_guest_path = format!("/{marker_name}");
-    let command = format!(
-        "printf '%s\\n' '{MACOS_VM_SMOKE_TOKEN}' > '{marker_guest_path}' && \
-         printf '%s\\n' '{MACOS_VM_SMOKE_TOKEN}'"
-    );
-    let arguments = vec!["-c".to_string(), command];
-    if let Err(error) = context.set_exec("/bin/sh", &arguments, &[]) {
+    let token_hex = token.expose_hex();
+    let environment = Zeroizing::new(vec![(
+        AGENT_SESSION_TOKEN_ENV.to_string(),
+        token_hex.as_str().to_string(),
+    )]);
+    if let Err(error) = context.set_exec(AGENT_GUEST_PATH, &[], &environment) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.workload_configured = true;
@@ -270,7 +307,6 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
         evidence.reason = Some(format!("failed to emit pre-entry worker evidence: {error}"));
         return false;
     }
-
     match context.start_enter() {
         Ok(status) => fail_worker(
             &mut evidence,
@@ -282,29 +318,19 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
 
 fn resolve_rootfs(rootfs: &Path) -> Result<std::path::PathBuf, String> {
     let rootfs = canonical_rootfs(rootfs)?;
-    resolve_guest_regular_file(&rootfs, Path::new("/bin/sh"), "guest shell")?;
+    resolve_guest_regular_file(&rootfs, Path::new(AGENT_GUEST_PATH), "fixed guest agent")?;
     Ok(rootfs)
-}
-
-fn validate_marker_name(marker_name: &str) -> Result<(), String> {
-    let suffix = marker_name
-        .strip_prefix(MARKER_PREFIX)
-        .ok_or_else(|| "macOS VM smoke marker has an invalid prefix".to_string())?;
-    if suffix.is_empty() || suffix.len() > 20 || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err("macOS VM smoke marker has an invalid process identifier".into());
-    }
-    Ok(())
 }
 
 fn collect_worker_evidence(
     output_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
 ) -> Result<WorkerEvidence, String> {
-    let output_reader =
-        output_reader.ok_or_else(|| "macOS VM worker stdout was unavailable".to_string())?;
+    let output_reader = output_reader
+        .ok_or_else(|| "macOS guest-agent VM worker stdout was unavailable".to_string())?;
     let output = output_reader
         .join()
-        .map_err(|_| "macOS VM worker output reader panicked".to_string())?
-        .map_err(|error| format!("failed to read macOS VM worker evidence: {error}"))?;
+        .map_err(|_| "macOS guest-agent VM worker output reader panicked".to_string())?
+        .map_err(|error| format!("failed to read macOS guest-agent VM worker evidence: {error}"))?;
     parse_worker_evidence(&output)
 }
 
@@ -314,17 +340,18 @@ fn parse_worker_evidence(output: &[u8]) -> Result<WorkerEvidence, String> {
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
     {
-        let evidence: WorkerEvidence = serde_json::from_slice(line)
-            .map_err(|error| format!("macOS VM worker emitted invalid evidence: {error}"))?;
+        let evidence: WorkerEvidence = serde_json::from_slice(line).map_err(|error| {
+            format!("macOS guest-agent VM worker emitted invalid evidence: {error}")
+        })?;
         if evidence.schema_version != WORKER_SCHEMA_VERSION {
             return Err(format!(
-                "macOS VM worker emitted unsupported schema {}",
+                "macOS guest-agent VM worker emitted unsupported schema {}",
                 evidence.schema_version
             ));
         }
         latest = Some(evidence);
     }
-    latest.ok_or_else(|| "macOS VM worker emitted no setup evidence".to_string())
+    latest.ok_or_else(|| "macOS guest-agent VM worker emitted no setup evidence".to_string())
 }
 
 fn emit_worker_evidence(evidence: &WorkerEvidence) -> io::Result<()> {
@@ -343,68 +370,9 @@ fn fail_worker(evidence: &mut WorkerEvidence, reason: String) -> bool {
     false
 }
 
-fn verify_and_remove_marker(marker_path: &Path, report: &mut KrunVmSmokeReport) {
-    match fs::read_to_string(marker_path) {
-        Ok(contents) if contents == format!("{MACOS_VM_SMOKE_TOKEN}\n") => {
-            report.marker_verified = true;
-        }
-        Ok(contents) => {
-            report.reason.get_or_insert_with(|| {
-                format!(
-                    "guest marker had unexpected contents ({} bytes)",
-                    contents.len()
-                )
-            });
-        }
-        Err(error) => {
-            report.reason.get_or_insert_with(|| {
-                format!(
-                    "failed to read guest marker {}: {error}",
-                    marker_path.display()
-                )
-            });
-        }
-    }
-
-    match fs::symlink_metadata(marker_path) {
-        Ok(metadata) if metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
-            match fs::remove_file(marker_path) {
-                Ok(()) => report.marker_removed = true,
-                Err(error) => {
-                    report.reason.get_or_insert_with(|| {
-                        format!(
-                            "failed to remove guest marker {}: {error}",
-                            marker_path.display()
-                        )
-                    });
-                }
-            }
-        }
-        Ok(_) => {
-            report.reason.get_or_insert_with(|| {
-                format!(
-                    "guest marker is not a removable file: {}",
-                    marker_path.display()
-                )
-            });
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            report.reason.get_or_insert_with(|| {
-                format!(
-                    "failed to inspect guest marker {} for cleanup: {error}",
-                    marker_path.display()
-                )
-            });
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_worker_evidence, validate_marker_name, WorkerEvidence, WORKER_SCHEMA_VERSION,
-    };
+    use super::{parse_worker_evidence, WorkerEvidence, WORKER_SCHEMA_VERSION};
 
     #[test]
     fn worker_evidence_uses_the_latest_valid_record() {
@@ -421,12 +389,5 @@ mod tests {
         let parsed = parse_worker_evidence(output.as_bytes()).expect("worker evidence must parse");
         assert_eq!(parsed.schema_version, WORKER_SCHEMA_VERSION);
         assert_eq!(parsed.reason.as_deref(), Some("entry failed"));
-    }
-
-    #[test]
-    fn marker_name_rejects_path_and_shell_injection() {
-        validate_marker_name(".a3s-oci-hvf-vm-smoke-123").expect("generated marker must pass");
-        assert!(validate_marker_name("../marker").is_err());
-        assert!(validate_marker_name(".a3s-oci-hvf-vm-smoke-1';reboot").is_err());
     }
 }

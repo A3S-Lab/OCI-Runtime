@@ -51,6 +51,10 @@ Completed:
 - real macOS HVF guest entry using the pinned libkrun firmware kernel and a
   digest-verified Alpine arm64 userspace, with natural exit status, exact
   host-visible marker verification, bounded worker reap, and marker cleanup;
+- real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
+  socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
+  one-time token authentication, protocol-v1 negotiation, exact core
+  operation advertisement, process-group termination, and endpoint cleanup;
 - explicit rootful native Linux driver integration that reuses the shared
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
@@ -228,12 +232,15 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [x] Retain fail-closed unavailable-HVF and missing-entitlement evidence
   without accepting pre-entry configuration as guest execution.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
-- [ ] Establish the macOS host endpoint and AF_VSOCK guest-agent bridge.
+- [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
+  bridge, verify that the peer is the shim's direct VM worker child, and
+  authenticate protocol-v1 negotiation with a one-time token.
 - [ ] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
   WHPX.
 - [ ] Prove deterministic VM, process, descriptor, and filesystem cleanup.
-- [ ] Retain negative evidence for unavailable virtualization and failed guest
-  startup. Missing-entitlement and invalid-runtime-asset evidence is complete.
+- [x] Retain fail-closed unavailable-virtualization, missing-entitlement,
+  invalid-runtime-asset, missing-agent-rootfs, wrong-token, and unexpected-peer
+  evidence without reporting false negotiation.
 
 Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
 fixed OCI lifecycle through the authenticated guest agent, validates negative

@@ -2,11 +2,19 @@
 
 #[cfg(windows)]
 mod agent_pipe;
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 mod agent_session;
 mod agent_smoke;
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 mod agent_smoke_process;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod agent_socket;
 mod driver;
 #[cfg(target_os = "linux")]
 mod native_linux_driver;
@@ -22,6 +30,8 @@ mod windows_security;
 #[cfg(windows)]
 pub use agent_pipe::WindowsAgentPipeListener;
 pub use agent_smoke::agent_vm_smoke;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub use agent_socket::MacosAgentSocketListener;
 pub use driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
     RuntimeDriver,

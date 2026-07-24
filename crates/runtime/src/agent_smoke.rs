@@ -1,6 +1,9 @@
 use std::path::Path;
 
-#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+#[cfg(not(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+)))]
 use a3s_oci_core::HostPlatform;
 
 use crate::report::AgentVmSmokeReport;
@@ -12,15 +15,21 @@ use crate::report::AgentVmSmokeReport;
 /// negotiation authenticates the supplied guest agent with a one-time token.
 #[must_use]
 pub async fn agent_vm_smoke(shim: &Path, rootfs: &Path, console: &Path) -> AgentVmSmokeReport {
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     {
-        match crate::agent_session::WindowsAgentVmSession::connect(shim, rootfs, console).await {
+        match crate::agent_session::AgentVmSession::connect(shim, rootfs, console).await {
             Ok(session) => session.finish().await,
             Err(report) => report,
         }
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     {
         let _ = (shim, rootfs, console);
         AgentVmSmokeReport::unsupported(HostPlatform::current())
