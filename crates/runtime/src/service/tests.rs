@@ -8,15 +8,15 @@ use a3s_oci_core::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error,
-    ErrorCode, Generation, IsolationRequest, KillRequest, ListRequest, OciBundle,
+    ErrorCode, ExitStatus, Generation, IsolationRequest, KillRequest, ListRequest, OciBundle,
     OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, RuntimeOperation, Signal,
-    StartRequest, StateRequest, TrustDomainId,
+    StartRequest, StateRequest, TrustDomainId, WaitRequest,
 };
 
 use super::HostRuntimeService;
 use crate::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
-    RuntimeDriver,
+    DriverWaitRequest, RuntimeDriver,
 };
 
 mod fault_matrix;
@@ -41,13 +41,16 @@ enum DriverCall {
     Start(DriverStartRequest),
     Kill(DriverKillRequest),
     Delete(DriverDeleteRequest),
+    Wait(DriverWaitRequest),
 }
 
 #[derive(Debug)]
 struct RecordingDriver {
     capability: DriverCapability,
+    operations: Vec<RuntimeOperation>,
     calls: Mutex<Vec<DriverCall>>,
     states: Mutex<HashMap<ContainerId, (Generation, DriverState)>>,
+    exits: Mutex<HashMap<ContainerId, ExitStatus>>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
 }
 
@@ -62,8 +65,17 @@ impl RecordingDriver {
                 reason: None,
                 evidence: BTreeMap::from([("test-driver".to_string(), "in-process".to_string())]),
             },
+            operations: vec![
+                RuntimeOperation::Create,
+                RuntimeOperation::State,
+                RuntimeOperation::Start,
+                RuntimeOperation::Kill,
+                RuntimeOperation::Delete,
+                RuntimeOperation::Wait,
+            ],
             calls: Mutex::new(Vec::new()),
             states: Mutex::new(HashMap::new()),
+            exits: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
         }
     }
@@ -71,6 +83,12 @@ impl RecordingDriver {
     fn probe_only() -> Self {
         let mut driver = Self::supported();
         driver.capability.readiness = DriverReadiness::ProbeOnly;
+        driver
+    }
+
+    fn without_wait() -> Self {
+        let mut driver = Self::supported();
+        driver.operations.pop();
         driver
     }
 
@@ -113,6 +131,10 @@ impl RuntimeDriver for RecordingDriver {
         self.capability.clone()
     }
 
+    fn operations(&self) -> &[RuntimeOperation] {
+        &self.operations
+    }
+
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
         self.calls
             .lock()
@@ -126,7 +148,11 @@ impl RuntimeDriver for RecordingDriver {
         self.states
             .lock()
             .expect("driver states lock")
-            .insert(request.target.id, (generation, state));
+            .insert(request.target.id.clone(), (generation, state));
+        self.exits
+            .lock()
+            .expect("driver exits lock")
+            .remove(&request.target.id);
         Ok(state)
     }
 
@@ -180,7 +206,11 @@ impl RuntimeDriver for RecordingDriver {
         self.states
             .lock()
             .expect("driver states lock")
-            .insert(request.target.id, (generation, state));
+            .insert(request.target.id.clone(), (generation, state));
+        self.exits.lock().expect("driver exits lock").insert(
+            request.target.id,
+            ExitStatus::signaled(request.signal.get(), false)?,
+        );
         Ok(state)
     }
 
@@ -196,7 +226,52 @@ impl RuntimeDriver for RecordingDriver {
             .lock()
             .expect("driver states lock")
             .remove(&request.target.id);
+        self.exits
+            .lock()
+            .expect("driver exits lock")
+            .remove(&request.target.id);
         Ok(())
+    }
+
+    async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Wait(request.clone()));
+        if let Some(error) = self.take_failure("wait") {
+            return Err(error);
+        }
+        let generation = Self::exact_generation(&request.target)?;
+        let states = self.states.lock().expect("driver states lock");
+        let (actual_generation, state) =
+            states.get(&request.target.id).copied().ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "driver container does not exist")
+                    .for_operation("driver-wait")
+            })?;
+        if generation != actual_generation {
+            return Err(
+                Error::new(ErrorCode::Conflict, "driver container generation mismatch")
+                    .for_operation("driver-wait"),
+            );
+        }
+        if state.status() != ContainerState::Stopped {
+            return Err(Error::new(
+                ErrorCode::DeadlineExceeded,
+                "driver process is still running",
+            )
+            .for_operation("driver-wait")
+            .retryable(true));
+        }
+        drop(states);
+        self.exits
+            .lock()
+            .expect("driver exits lock")
+            .get(&request.target.id)
+            .cloned()
+            .ok_or_else(|| {
+                Error::new(ErrorCode::Internal, "driver lost the init exit status")
+                    .for_operation("driver-wait")
+            })
     }
 }
 
@@ -245,6 +320,55 @@ async fn reports_only_operations_that_are_currently_implemented() {
 }
 
 #[tokio::test]
+async fn rejects_invalid_driver_operation_inventories_before_opening_state() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let inventories = [
+        (
+            "missing-core",
+            vec![
+                RuntimeOperation::State,
+                RuntimeOperation::Start,
+                RuntimeOperation::Kill,
+                RuntimeOperation::Delete,
+            ],
+        ),
+        (
+            "duplicate",
+            vec![
+                RuntimeOperation::Create,
+                RuntimeOperation::State,
+                RuntimeOperation::Start,
+                RuntimeOperation::Kill,
+                RuntimeOperation::Delete,
+                RuntimeOperation::Delete,
+            ],
+        ),
+        (
+            "unsupported",
+            vec![
+                RuntimeOperation::Create,
+                RuntimeOperation::State,
+                RuntimeOperation::Start,
+                RuntimeOperation::Kill,
+                RuntimeOperation::Delete,
+                RuntimeOperation::Exec,
+            ],
+        ),
+    ];
+
+    for (name, operations) in inventories {
+        let root = temporary.path().join(name);
+        let mut driver = RecordingDriver::supported();
+        driver.operations = operations;
+        let error = HostRuntimeService::open(&root, Arc::new(driver))
+            .await
+            .expect_err("invalid driver operation inventory must fail");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(!root.exists(), "{name} created durable state");
+    }
+}
+
+#[tokio::test]
 async fn incomplete_lifecycle_fails_explicitly() {
     let error = HostRuntimeService::new()
         .list(ListRequest::default())
@@ -273,6 +397,7 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
             RuntimeOperation::Start,
             RuntimeOperation::Kill,
             RuntimeOperation::Delete,
+            RuntimeOperation::Wait,
         ]
     );
 
@@ -315,6 +440,20 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
     assert_eq!(*stopped.state.status(), ContainerState::Stopped);
     assert_eq!(service.kill(kill).await.expect("replay kill"), stopped);
 
+    let wait = WaitRequest {
+        target: target.clone(),
+        timeout_ms: Some(1_000),
+    };
+    let expected_exit = ExitStatus::signaled(15, false).expect("signal exit");
+    assert_eq!(
+        service.wait(wait.clone()).await.expect("wait for init"),
+        expected_exit
+    );
+    assert_eq!(
+        service.wait(wait).await.expect("repeat wait for init"),
+        expected_exit
+    );
+
     let delete = DeleteRequest {
         context: OperationContext::new(operation_id("delete-1")),
         target,
@@ -352,6 +491,13 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
             .count(),
         1
     );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Wait(_)))
+            .count(),
+        2
+    );
     let DriverCall::Create(driver_create) = &calls[0] else {
         panic!("create must be the first driver call");
     };
@@ -365,6 +511,25 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
         .await
         .expect_err("deleted state must not remain visible");
     assert_eq!(error.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn wait_is_exposed_only_when_the_driver_advertises_it() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let driver = Arc::new(RecordingDriver::without_wait());
+    let service = open_service(&temporary, driver).await;
+    let info = service.features().await.expect("configured features");
+    assert!(!info.operations.contains(&RuntimeOperation::Wait));
+
+    let error = service
+        .wait(WaitRequest {
+            target: ContainerTarget::current(container_id("missing")),
+            timeout_ms: Some(0),
+        })
+        .await
+        .expect_err("unadvertised wait must fail before state lookup");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.operation.as_deref(), Some("wait"));
 }
 
 #[tokio::test]

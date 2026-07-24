@@ -8,8 +8,8 @@ use a3s_oci_sdk::{
 use crate::model::{
     protocol_error, AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentHello,
     AgentKillRequest, AgentRequest, AgentResponse, AgentStartRequest, AgentState,
-    AgentStateRequest, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
-    AGENT_MAX_FRAME_BYTES,
+    AgentStateRequest, AgentWaitRequest, ProtocolRange, RequestEnvelope, ResponseEnvelope,
+    ResponseOutcome, AGENT_MAX_FRAME_BYTES,
 };
 
 impl AgentBundle {
@@ -50,6 +50,12 @@ impl AgentStateRequest {
     }
 }
 
+impl AgentWaitRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_target(&self.target)
+    }
+}
+
 impl AgentStartRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(&self.target)?;
@@ -77,6 +83,30 @@ impl AgentRequest {
             Self::Start(request) => request.validate(),
             Self::Kill(request) => request.validate(),
             Self::Delete(request) => request.validate(),
+            Self::Wait(request) => request.validate(),
+        }
+    }
+
+    pub(crate) fn validate_for_protocol(&self, selected_version: u16) -> Result<()> {
+        self.validate()?;
+        if selected_version < self.minimum_protocol_version() {
+            return Err(protocol_error(
+                ErrorCode::Unsupported,
+                format!(
+                    "agent request requires protocol version {}, negotiated {selected_version}",
+                    self.minimum_protocol_version()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    const fn minimum_protocol_version(&self) -> u16 {
+        match self {
+            Self::Create(_) | Self::State(_) | Self::Start(_) | Self::Kill(_) | Self::Delete(_) => {
+                1
+            }
+            Self::Wait(_) => 2,
         }
     }
 }
@@ -101,7 +131,19 @@ impl AgentResponse {
         match self {
             Self::State(state) => state.validate(),
             Self::Deleted => Ok(()),
+            Self::ExitStatus(status) => status.validate(),
         }
+    }
+
+    pub(crate) fn validate_for_protocol(&self, selected_version: u16) -> Result<()> {
+        self.validate()?;
+        if selected_version == 1 && matches!(self, Self::ExitStatus(_)) {
+            return Err(protocol_error(
+                ErrorCode::Unsupported,
+                "protocol version 1 cannot carry an exit-status response",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -121,7 +163,8 @@ impl AgentHello {
                 ),
             ));
         }
-        self.capabilities().validate()
+        self.capabilities()
+            .validate_for_protocol(self.selected_version())
     }
 }
 
@@ -142,7 +185,7 @@ impl RequestEnvelope {
                 "agent request ID zero is reserved",
             ));
         }
-        self.request.validate()
+        self.request.validate_for_protocol(selected_version)
     }
 }
 
@@ -167,7 +210,7 @@ impl ResponseEnvelope {
             ));
         }
         if let ResponseOutcome::Succeeded { response } = &self.outcome {
-            response.validate()?;
+            response.validate_for_protocol(selected_version)?;
         }
         Ok(())
     }

@@ -4,16 +4,27 @@ use std::sync::Arc;
 use a3s_oci_agent::LinuxExecutor;
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, GuestAgentService, GuestPath,
+    AgentState, AgentStateRequest, AgentWaitRequest, GuestAgentService, GuestPath,
 };
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{async_trait, ContainerTarget, Error, ErrorCode, Result};
+use a3s_oci_sdk::{
+    async_trait, ContainerTarget, Error, ErrorCode, ExitStatus, Result, RuntimeOperation,
+};
 
 use crate::driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
-    RuntimeDriver,
+    DriverWaitRequest, RuntimeDriver,
 };
+
+const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 6] = [
+    RuntimeOperation::Create,
+    RuntimeOperation::State,
+    RuntimeOperation::Start,
+    RuntimeOperation::Kill,
+    RuntimeOperation::Delete,
+    RuntimeOperation::Wait,
+];
 
 /// Explicitly opted-in native Linux runtime driver.
 ///
@@ -84,6 +95,10 @@ impl RuntimeDriver for NativeLinuxDriver {
         self.capability.clone()
     }
 
+    fn operations(&self) -> &[RuntimeOperation] {
+        &NATIVE_LINUX_OPERATIONS
+    }
+
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
         if request.isolation.class() != IsolationClass::SharedHostKernel {
             return Err(Error::new(
@@ -151,6 +166,15 @@ impl RuntimeDriver for NativeLinuxDriver {
                 context: request.context,
                 target: request.target,
                 mode: request.mode,
+            })
+            .await
+    }
+
+    async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        self.executor
+            .wait(AgentWaitRequest {
+                target: request.target,
+                timeout_ms: request.timeout_ms,
             })
             .await
     }

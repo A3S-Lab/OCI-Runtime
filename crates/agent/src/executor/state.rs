@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use a3s_oci_agent_protocol::AgentState;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ErrorCode, OperationId, Result};
+use a3s_oci_sdk::{ErrorCode, ExitStatus, OperationId, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -110,10 +110,16 @@ pub(super) struct ContainerRecord {
 
 impl ContainerRecord {
     pub(super) fn refresh(&mut self) -> Result<()> {
-        if self.process.try_wait()?.is_some() {
+        self.poll_wait()?;
+        Ok(())
+    }
+
+    pub(super) fn poll_wait(&mut self) -> Result<Option<ExitStatus>> {
+        let status = self.process.try_wait()?;
+        if status.is_some() {
             self.status = ContainerState::Stopped;
         }
-        Ok(())
+        Ok(status)
     }
 
     pub(super) fn state(&self) -> Result<AgentState> {

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use a3s_oci_sdk::{async_trait, Error, ErrorCode, Result};
+use a3s_oci_sdk::{async_trait, Error, ErrorCode, ExitStatus, Result};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::model::{
     protocol_error, AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentHello,
     AgentKillRequest, AgentRequest, AgentResponse, AgentStartRequest, AgentState,
-    AgentStateRequest, HelloOutcome, HostHello, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
-    SessionToken,
+    AgentStateRequest, AgentWaitRequest, HelloOutcome, HostHello, RequestEnvelope,
+    ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::validation::negotiate_protocol;
 use crate::wire::{read_frame, write_frame};
@@ -36,6 +36,11 @@ pub trait GuestAgentService: Send + Sync {
 
     /// Delete only resources owned by the requested generation.
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()>;
+
+    /// Wait for the exact container init process.
+    async fn wait(&self, _request: AgentWaitRequest) -> Result<ExitStatus> {
+        Err(Error::unsupported("agent-wait"))
+    }
 }
 
 /// Authenticate, negotiate, and serve one host connection until clean EOF.
@@ -66,7 +71,19 @@ where
             return Err(error);
         }
     };
-    let capabilities = service.capabilities();
+    let capabilities = match service.capabilities().for_protocol(selected_version) {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            write_frame(
+                &mut stream,
+                &HelloOutcome::Rejected {
+                    error: error.clone(),
+                },
+            )
+            .await?;
+            return Err(error);
+        }
+    };
     let hello = AgentHello::new(selected_version, capabilities);
     write_frame(&mut stream, &HelloOutcome::Accepted { hello }).await?;
 
@@ -128,6 +145,7 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             service.delete(request).await?;
             Ok(AgentResponse::Deleted)
         }
+        AgentRequest::Wait(request) => service.wait(request).await.map(AgentResponse::ExitStatus),
     }
 }
 

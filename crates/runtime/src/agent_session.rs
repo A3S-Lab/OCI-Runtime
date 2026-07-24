@@ -237,7 +237,9 @@ impl AgentVmSession {
             return Some("guest selected an unexpected protocol version".into());
         }
         if self.report.advertised_operations != expected_operations() {
-            return Some("guest agent did not advertise the exact core lifecycle".into());
+            return Some(
+                "guest agent did not advertise the exact lifecycle and wait contract".into(),
+            );
         }
         if self.report.agent_version.as_deref() != Some(env!("CARGO_PKG_VERSION")) {
             return Some("guest agent version does not match the host runtime version".into());
@@ -440,6 +442,7 @@ fn expected_operations() -> Vec<AgentOperation> {
         AgentOperation::Start,
         AgentOperation::Kill,
         AgentOperation::Delete,
+        AgentOperation::Wait,
     ]
 }
 

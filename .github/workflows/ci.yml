@@ -226,7 +226,7 @@ jobs:
           if [[ "$support" == "1" ]]; then
             test "$status" -eq 0
             jq --exit-status --arg agent_version "$agent_version" \
-              '.schema_version == "a3s.oci.agent-vm-smoke.v3"
+              '.schema_version == "a3s.oci.agent-vm-smoke.v4"
                and .platform == "macos" and .status == "available"
                and .endpoint_bound and .shim_spawned
                and (.endpoint_name | startswith("a3s-oci-agent-"))
@@ -234,11 +234,11 @@ jobs:
                and (.bridge_process_id > 0)
                and (.bridge_process_id != .shim_process_id)
                and .shim_client_verified and .protocol_negotiated
-               and .selected_protocol == 1
+               and .selected_protocol == 2
                and .agent_version == $agent_version
                and .guest_architecture == "aarch64"
                and .advertised_operations
-                   == ["create", "state", "start", "kill", "delete"]
+                   == ["create", "state", "start", "kill", "delete", "wait"]
                and .shim_report_verified and .shim_exit_code == 0
                and .console_created
                and .shim_report.platform == "macos"
@@ -256,7 +256,7 @@ jobs:
           else
             test "$status" -eq 2
             jq --exit-status \
-              '.schema_version == "a3s.oci.agent-vm-smoke.v3"
+              '.schema_version == "a3s.oci.agent-vm-smoke.v4"
                and .platform == "macos" and .status == "unavailable"
                and (.endpoint_name | startswith("a3s-oci-agent-"))
                and (.protocol_negotiated | not)
@@ -287,7 +287,7 @@ jobs:
           printf '%s\n' "$unsigned_output"
           test "$unsigned_status" -eq 2
           jq --exit-status \
-            '.schema_version == "a3s.oci.agent-vm-smoke.v3"
+            '.schema_version == "a3s.oci.agent-vm-smoke.v4"
              and .platform == "macos" and .status == "unavailable"
              and .endpoint_bound and .shim_spawned
              and (.endpoint_name | startswith("a3s-oci-agent-"))
@@ -346,7 +346,7 @@ jobs:
           if [[ "$support" == "1" ]]; then
             test "$status" -eq 0
             jq --exit-status \
-              '.schema_version == "a3s.oci.oci-vm-smoke.v3"
+              '.schema_version == "a3s.oci.oci-vm-smoke.v4"
                and .platform == "macos" and .status == "available"
                and .bundle_loaded
                and .create_returned_created and .create_replayed
@@ -354,6 +354,10 @@ jobs:
                and .marker_absent_after_create
                and .start_released and .running_observed
                and .kill_delivered and .kill_replayed
+               and .wait_timeout_enforced
+               and .wait_exit_status
+                   == {"exit_code": 0, "oom_killed": false}
+               and .wait_replayed
                and .stopped_observed and .marker_verified
                and .delete_succeeded and .delete_replayed
                and .state_missing_after_delete
@@ -369,10 +373,10 @@ jobs:
                     != .bridge.shim_process_id)
                and .bridge.shim_client_verified
                and .bridge.protocol_negotiated
-               and .bridge.selected_protocol == 1
+               and .bridge.selected_protocol == 2
                and .bridge.guest_architecture == "aarch64"
                and .bridge.advertised_operations
-                   == ["create", "state", "start", "kill", "delete"]
+                   == ["create", "state", "start", "kill", "delete", "wait"]
                and .bridge.shim_report_verified
                and .bridge.shim_exit_code == 0
                and .bridge.console_created
@@ -388,7 +392,7 @@ jobs:
           else
             test "$status" -eq 2
             jq --exit-status \
-              '.schema_version == "a3s.oci.oci-vm-smoke.v3"
+              '.schema_version == "a3s.oci.oci-vm-smoke.v4"
                and .platform == "macos" and .status == "unavailable"
                and .bundle_loaded
                and .bridge.platform == "macos"
@@ -421,7 +425,7 @@ jobs:
           printf '%s\n' "$unsigned_output"
           test "$unsigned_status" -eq 2
           jq --exit-status \
-            '.schema_version == "a3s.oci.oci-vm-smoke.v3"
+            '.schema_version == "a3s.oci.oci-vm-smoke.v4"
              and .platform == "macos" and .status == "unavailable"
              and .bundle_loaded
              and (.create_returned_created | not)
@@ -490,7 +494,7 @@ jobs:
           if [[ "$support" == "1" ]]; then
             test "$status" -eq 0
             jq --exit-status \
-              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v1"
+              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v2"
                and .platform == "macos" and .status == "available"
                and .bundles_loaded
                and .lifecycle.distinct_bundle_directories
@@ -508,8 +512,12 @@ jobs:
                and .lifecycle.marker_a_verified
                and .lifecycle.b_unchanged_after_a_start
                and .lifecycle.marker_b_absent_after_a_start
+               and .lifecycle.wait_a_did_not_block_b
                and .lifecycle.kill_a_replayed
                and .lifecycle.a_stopped
+               and .lifecycle.wait_status_a
+                   == {"exit_code": 0, "oom_killed": false}
+               and .lifecycle.wait_a_replayed
                and .lifecycle.b_unchanged_after_a_kill
                and .lifecycle.marker_b_absent_after_a_kill
                and .lifecycle.delete_a_replayed
@@ -526,14 +534,18 @@ jobs:
                and .lifecycle.marker_b_verified
                and .lifecycle.kill_b_replayed
                and .lifecycle.b_stopped
+               and .lifecycle.wait_status_b
+                   == {"exit_code": 0, "oom_killed": false}
+               and .lifecycle.wait_b_replayed
                and .lifecycle.delete_b_replayed
                and .lifecycle.b_missing_after_delete
                and .markers_removed and .guest_runtime_clean
                and .bridge.platform == "macos"
                and .bridge.status == "available"
                and .bridge.protocol_negotiated
+               and .bridge.selected_protocol == 2
                and .bridge.advertised_operations
-                   == ["create", "state", "start", "kill", "delete"]
+                   == ["create", "state", "start", "kill", "delete", "wait"]
                and .bridge.shim_report_verified
                and .bridge.shim_exit_code == 0
                and .bridge.macos_cleanup.endpoint_removed
@@ -549,7 +561,7 @@ jobs:
           else
             test "$status" -eq 2
             jq --exit-status \
-              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v1"
+              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v2"
                and .platform == "macos" and .status == "unavailable"
                and .bundles_loaded
                and .bridge.platform == "macos"
@@ -615,7 +627,7 @@ jobs:
             if [[ "$support" == "1" ]]; then
               test "$status" -eq 0
               jq --exit-status --arg phase "$phase" \
-                '.schema_version == "a3s.oci.oci-vm-fault-cleanup.v1"
+                '.schema_version == "a3s.oci.oci-vm-fault-cleanup.v2"
                  and .platform == "macos" and .status == "available"
                  and .bundle_loaded
                  and .lifecycle.requested_fault == $phase
@@ -640,6 +652,9 @@ jobs:
                  and .marker_removed and .guest_runtime_clean
                  and .bridge.status == "available"
                  and .bridge.protocol_negotiated
+                 and .bridge.selected_protocol == 2
+                 and .bridge.advertised_operations
+                     == ["create", "state", "start", "kill", "delete", "wait"]
                  and .bridge.shim_report_verified
                  and .bridge.shim_exit_code == 0
                  and .bridge.macos_cleanup.endpoint_removed
@@ -655,7 +670,7 @@ jobs:
             else
               test "$status" -eq 2
               jq --exit-status --arg phase "$phase" \
-                '.schema_version == "a3s.oci.oci-vm-fault-cleanup.v1"
+                '.schema_version == "a3s.oci.oci-vm-fault-cleanup.v2"
                  and .platform == "macos" and .status == "unavailable"
                  and .bundle_loaded
                  and .lifecycle.requested_fault == $phase

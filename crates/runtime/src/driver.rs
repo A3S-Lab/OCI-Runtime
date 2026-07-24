@@ -1,9 +1,17 @@
 use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerTarget, DeleteMode, Error, ErrorCode, IsolationRequest, OciBundle,
-    OperationContext, ProcessIo, Result, Signal,
+    async_trait, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IsolationRequest,
+    OciBundle, OperationContext, ProcessIo, Result, RuntimeOperation, Signal,
 };
+
+const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
+    RuntimeOperation::Create,
+    RuntimeOperation::State,
+    RuntimeOperation::Start,
+    RuntimeOperation::Kill,
+    RuntimeOperation::Delete,
+];
 
 /// Driver-reported init-process state at one exact container generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +118,15 @@ pub struct DriverDeleteRequest {
     pub mode: DeleteMode,
 }
 
+/// Exact init-process wait input passed to a driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverWaitRequest {
+    /// Container ID plus its exact generation.
+    pub target: ContainerTarget,
+    /// Maximum wait duration. `None` waits until the process terminates.
+    pub timeout_ms: Option<u64>,
+}
+
 /// Platform executor behind durable OCI lifecycle orchestration.
 ///
 /// Mutating calls must be idempotent by `OperationContext::operation_id`.
@@ -126,6 +143,15 @@ pub trait RuntimeDriver: Send + Sync {
     /// Current availability, maturity, isolation, and probe evidence.
     fn capability(&self) -> DriverCapability;
 
+    /// Runtime operations implemented by this exact driver.
+    ///
+    /// The five core lifecycle operations are required by the current host
+    /// orchestrator. Optional operations must be advertised before the host
+    /// exposes or dispatches them.
+    fn operations(&self) -> &[RuntimeOperation] {
+        &CORE_DRIVER_OPERATIONS
+    }
+
     /// Prepare all OCI create-time resources and return the blocked init PID.
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState>;
 
@@ -140,4 +166,9 @@ pub trait RuntimeDriver: Send + Sync {
 
     /// Delete only resources owned by this container generation.
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()>;
+
+    /// Wait for the exact init process and return its stable terminal result.
+    async fn wait(&self, _request: DriverWaitRequest) -> Result<ExitStatus> {
+        Err(Error::unsupported("wait"))
+    }
 }

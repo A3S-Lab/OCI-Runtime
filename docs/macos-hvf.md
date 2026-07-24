@@ -281,8 +281,8 @@ The host runtime establishes the trust chain in this order:
 8. remove the socket and private directory while retaining the accepted
    stream;
 9. send the token only after process identity verification, negotiate protocol
-   version 1, and require the static arm64 guest to advertise exactly
-   `create`, `state`, `start`, `kill`, and `delete`.
+   version 2, and require the static arm64 guest to advertise exactly
+   `create`, `state`, `start`, `kill`, `delete`, and `wait`.
 
 The parent shim validates the rootfs, fixed
 `/usr/bin/a3s-oci-agent`, console, and protected socket before spawning the
@@ -320,12 +320,12 @@ target/debug/a3s-oci agent-vm-smoke \
   --console "$asset_dir/agent-console.log"
 ```
 
-The top-level report is `a3s.oci.agent-vm-smoke.v3`. A successful local Apple
-Silicon qualification run retained the following contract:
+The top-level report is `a3s.oci.agent-vm-smoke.v4`. A successful Apple Silicon
+qualification must retain the following contract:
 
 ```json
 {
-  "schema_version": "a3s.oci.agent-vm-smoke.v3",
+  "schema_version": "a3s.oci.agent-vm-smoke.v4",
   "platform": "macos",
   "status": "available",
   "endpoint_bound": true,
@@ -335,7 +335,7 @@ Silicon qualification run retained the following contract:
   "bridge_process_id": 12346,
   "shim_client_verified": true,
   "protocol_negotiated": true,
-  "selected_protocol": 1,
+  "selected_protocol": 2,
   "agent_version": "0.1.0",
   "guest_architecture": "aarch64",
   "advertised_operations": [
@@ -343,7 +343,8 @@ Silicon qualification run retained the following contract:
     "state",
     "start",
     "kill",
-    "delete"
+    "delete",
+    "wait"
   ],
   "shim_report_verified": true,
   "shim_exit_code": 0,
@@ -404,15 +405,16 @@ target/debug/a3s-oci oci-vm-smoke \
   --console "$asset_dir/oci-console.log"
 ```
 
-The signed Apple Silicon qualification completed all fields in
-`a3s.oci.oci-vm-smoke.v3`: bundle loading, created state, exact create replay,
-pre-start marker absence, start, running observation, exact kill replay,
-stopped observation, marker verification, stopped-only delete, exact delete
-replay, post-delete NotFound, marker removal, guest-runtime cleanup, and the
-complete nested authenticated bridge report. The observed container PID was
-positive, and the nested report proved exact endpoint removal, complete
-current-process descriptor-inventory restoration, and disappearance of both
-shim/worker PIDs after exit.
+The signed Apple Silicon qualification contract is
+`a3s.oci.oci-vm-smoke.v4`: bundle loading, created state, exact create replay,
+pre-start marker absence, start, running observation, a bounded wait that must
+time out while running, exact kill replay, exact normal exit status from the
+SIGTERM trap, repeated wait, stopped observation, marker verification,
+stopped-only delete, exact delete replay, post-delete NotFound, marker removal,
+guest-runtime cleanup, and the complete nested authenticated bridge report.
+The observed container PID must be positive, and the nested report must prove
+exact endpoint removal, complete current-process descriptor-inventory
+restoration, and disappearance of both shim/worker PIDs after exit.
 
 The guest opens a pidfd for the authenticated namespace PID 1 before returning
 created state. The lifecycle `SIGTERM` and all forced cleanup therefore target
@@ -430,8 +432,9 @@ pre-entry behavior.
 `oci-vm-multi-container-smoke` submits two distinct contained bundles over one
 authenticated guest-agent connection. Both init processes must remain behind
 their create barriers with distinct positive guest-visible PIDs. Starting,
-killing, and deleting A must preserve B's exact created state and leave B's
-marker absent.
+killing, waiting for, and deleting A must preserve B's exact created state and
+leave B's marker absent. A bounded wait on running A must return
+`DeadlineExceeded` without preventing a concurrent state query for B.
 
 The command then rejects A generation 1 after delete, recreates A as generation
 2, rejects cross-container reuse of A's operation ID for B, removes recreated
@@ -446,12 +449,13 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$asset_dir/oci-multi-container.log"
 ```
 
-The `a3s.oci.oci-vm-multi-container-smoke.v1` report also requires exact
-mutation replay, both marker removals, no new guest runtime root, exact host
-endpoint removal, shim and direct VM-worker reap, and full descriptor-inventory
-restoration. The Apple Silicon HVF qualification and macOS CI both run this
-gate; an unavailable-hypervisor branch must fail before negotiation while
-retaining the same host cleanup evidence.
+The `a3s.oci.oci-vm-multi-container-smoke.v2` report also requires exact
+mutation replay, exact repeated normal-exit results for A and B, independent
+wait/state progress, both marker removals, no new guest runtime root, exact
+host endpoint removal, shim and direct VM-worker reap, and full
+descriptor-inventory restoration. The Apple Silicon HVF qualification and
+macOS CI both run this gate; an unavailable-hypervisor branch must fail before
+negotiation while retaining the same host cleanup evidence.
 
 The pidfd requalification used the 8,493,136-byte static arm64 agent with
 SHA-256
@@ -478,13 +482,13 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-Each `a3s.oci.oci-vm-fault-cleanup.v1` success retains the exact requested and
+Each `a3s.oci.oci-vm-fault-cleanup.v2` success retains the exact requested and
 injected boundary, a positive guest init PID, pre-start non-execution, and
 `normal_delete_attempted: false`. Closing the authenticated connection must
 then make the guest executor force-stop any live init and remove its runtime
 root before the agent and VM exit.
 
-The nested `a3s.oci.agent-vm-smoke.v3` report independently requires exact
+The nested `a3s.oci.agent-vm-smoke.v4` report independently requires exact
 endpoint removal, shim and direct VM-worker PID disappearance, and complete
 `(fd, fd_type)` inventory restoration. The outer report additionally requires
 marker removal and no new `a3s-oci-agent-*` directory under the guest `/run`.

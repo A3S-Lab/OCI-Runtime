@@ -1,18 +1,21 @@
 use std::fmt;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{Error, ErrorCode, Result};
+use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, Result};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 use crate::model::{
     protocol_error, AgentCreateRequest, AgentDeleteRequest, AgentHello, AgentKillRequest,
     AgentOperation, AgentRequest, AgentResponse, AgentStartRequest, AgentState, AgentStateRequest,
-    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
-    SessionToken,
+    AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope,
+    ResponseOutcome, SessionToken,
 };
 use crate::wire::{read_frame, write_frame};
+
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Authenticated, correlated client for one guest-agent stream.
 pub struct AgentClient<T> {
@@ -116,10 +119,49 @@ where
     pub async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
         match self.call(AgentRequest::Delete(request)).await? {
             AgentResponse::Deleted => Ok(()),
-            AgentResponse::State(_) => Err(protocol_error(
+            AgentResponse::State(_) | AgentResponse::ExitStatus(_) => Err(protocol_error(
                 ErrorCode::Internal,
-                "guest returned state for an OCI delete request",
+                "guest returned the wrong response for an OCI delete request",
             )),
+        }
+    }
+
+    /// Wait for one exact init process and return its stable terminal result.
+    pub async fn wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
+        let limit = request.timeout_ms.map(Duration::from_millis);
+        let started = Instant::now();
+        loop {
+            let poll_timeout = match limit {
+                Some(limit) => WAIT_POLL_INTERVAL.min(limit.saturating_sub(started.elapsed())),
+                None => WAIT_POLL_INTERVAL,
+            };
+            let poll = AgentWaitRequest {
+                target: request.target.clone(),
+                timeout_ms: Some(duration_millis(poll_timeout)),
+            };
+            match self.call(AgentRequest::Wait(poll)).await {
+                Ok(AgentResponse::ExitStatus(status)) => return Ok(status),
+                Ok(AgentResponse::State(_) | AgentResponse::Deleted) => {
+                    return Err(protocol_error(
+                        ErrorCode::Internal,
+                        "guest returned the wrong response for an OCI wait request",
+                    ));
+                }
+                Err(error) if error.code == ErrorCode::DeadlineExceeded => {
+                    if limit.is_some_and(|limit| started.elapsed() >= limit) {
+                        return Err(protocol_error(
+                            ErrorCode::DeadlineExceeded,
+                            format!(
+                                "timed out after {} ms waiting for container {}",
+                                request.timeout_ms.unwrap_or_default(),
+                                request.target.id
+                            ),
+                        )
+                        .retryable(true));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 
@@ -187,6 +229,10 @@ where
     }
 }
 
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> Result<()> {
     let required = match request {
         AgentRequest::Create(_) => AgentOperation::Create,
@@ -194,6 +240,7 @@ fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> R
         AgentRequest::Start(_) => AgentOperation::Start,
         AgentRequest::Kill(_) => AgentOperation::Kill,
         AgentRequest::Delete(_) => AgentOperation::Delete,
+        AgentRequest::Wait(_) => AgentOperation::Wait,
     };
     if operations.contains(&required) {
         Ok(())
@@ -237,6 +284,7 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
             validate_state_target(&request.target, state)
         }
         (AgentRequest::Delete(_), AgentResponse::Deleted) => Ok(()),
+        (AgentRequest::Wait(_), AgentResponse::ExitStatus(status)) => status.validate(),
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
             format!(
@@ -267,7 +315,7 @@ fn validate_state_target(
 fn expect_state(response: AgentResponse, operation: &'static str) -> Result<AgentState> {
     match response {
         AgentResponse::State(state) => Ok(state),
-        AgentResponse::Deleted => Err(protocol_error(
+        AgentResponse::Deleted | AgentResponse::ExitStatus(_) => Err(protocol_error(
             ErrorCode::Internal,
             format!("guest returned delete acknowledgement for OCI {operation}"),
         )),
@@ -295,6 +343,7 @@ const fn request_name(request: &AgentRequest) -> &'static str {
         AgentRequest::Start(_) => "start",
         AgentRequest::Kill(_) => "kill",
         AgentRequest::Delete(_) => "delete",
+        AgentRequest::Wait(_) => "wait",
     }
 }
 

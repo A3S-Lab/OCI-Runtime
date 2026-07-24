@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerTarget, DeleteMode, Error, ErrorCode, OciBundle, OperationContext, ProcessIo, Result,
-    Signal,
+    ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, OciBundle, OperationContext,
+    ProcessIo, Result, Signal,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 1;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 2;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Required session-token entropy supplied by the host.
@@ -238,7 +238,7 @@ impl AgentBundle {
     }
 }
 
-/// Guest operations available in protocol version 1.
+/// Guest operations available in the negotiated protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentOperation {
@@ -247,6 +247,8 @@ pub enum AgentOperation {
     Start,
     Kill,
     Delete,
+    /// Wait for init termination. Available from protocol version 2.
+    Wait,
 }
 
 /// Runtime properties reported by the guest during negotiation.
@@ -286,7 +288,26 @@ impl AgentCapabilities {
         )
     }
 
-    /// Construct an exact protocol-v1 capability report.
+    /// Construct the Linux executor capability report, including protocol-v2 wait.
+    pub fn linux_executor(
+        agent_version: impl Into<String>,
+        architecture: impl Into<String>,
+    ) -> Result<Self> {
+        Self::new(
+            agent_version,
+            architecture,
+            vec![
+                AgentOperation::Create,
+                AgentOperation::State,
+                AgentOperation::Start,
+                AgentOperation::Kill,
+                AgentOperation::Delete,
+                AgentOperation::Wait,
+            ],
+        )
+    }
+
+    /// Construct an exact capability report.
     pub fn new(
         agent_version: impl Into<String>,
         architecture: impl Into<String>,
@@ -340,7 +361,35 @@ impl AgentCapabilities {
         if self.max_frame_bytes != AGENT_MAX_FRAME_BYTES {
             return Err(protocol_error(
                 ErrorCode::InvalidArgument,
-                format!("protocol v1 requires maxFrameBytes={AGENT_MAX_FRAME_BYTES}"),
+                format!("agent protocol requires maxFrameBytes={AGENT_MAX_FRAME_BYTES}"),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn for_protocol(&self, selected_version: u16) -> Result<Self> {
+        let mut capabilities = self.clone();
+        if selected_version == 1 {
+            capabilities
+                .operations
+                .retain(|operation| *operation != AgentOperation::Wait);
+        }
+        capabilities.validate_for_protocol(selected_version)?;
+        Ok(capabilities)
+    }
+
+    pub(crate) fn validate_for_protocol(&self, selected_version: u16) -> Result<()> {
+        self.validate()?;
+        if !(AGENT_PROTOCOL_VERSION_MIN..=AGENT_PROTOCOL_VERSION_MAX).contains(&selected_version) {
+            return Err(protocol_error(
+                ErrorCode::FailedPrecondition,
+                format!("unsupported agent protocol version {selected_version}"),
+            ));
+        }
+        if selected_version == 1 && self.operations.contains(&AgentOperation::Wait) {
+            return Err(protocol_error(
+                ErrorCode::FailedPrecondition,
+                "protocol version 1 cannot advertise wait",
             ));
         }
         Ok(())
@@ -398,6 +447,17 @@ pub struct AgentStateRequest {
     pub target: ContainerTarget,
 }
 
+/// Wait for one exact container init process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWaitRequest {
+    /// Container ID plus a positive exact generation.
+    pub target: ContainerTarget,
+    /// Maximum wait duration. `None` waits without a protocol-imposed deadline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
 /// OCI start input sent to the guest executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -445,6 +505,7 @@ pub enum AgentRequest {
     Start(AgentStartRequest),
     Kill(AgentKillRequest),
     Delete(AgentDeleteRequest),
+    Wait(AgentWaitRequest),
 }
 
 /// Guest-observed init-process state for one exact generation.
@@ -507,6 +568,7 @@ impl AgentState {
 pub enum AgentResponse {
     State(AgentState),
     Deleted,
+    ExitStatus(ExitStatus),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

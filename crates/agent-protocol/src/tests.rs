@@ -1,17 +1,18 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerTarget, DeleteMode, Error, ErrorCode, Generation, OciBundle,
-    OperationContext, OperationId, ProcessIo, Result, Signal,
+    async_trait, ContainerId, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
+    Generation, OciBundle, OperationContext, OperationId, ProcessIo, Result, Signal,
 };
 use tokio::io::{AsyncWriteExt, DuplexStream};
 
 use crate::model::{
     AgentCreateRequest, AgentDeleteRequest, AgentHello, AgentKillRequest, AgentRequest,
-    AgentResponse, AgentStartRequest, AgentState, AgentStateRequest, HelloOutcome, HostHello,
-    RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    AgentResponse, AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest,
+    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
 };
 use crate::wire::{read_frame, read_frame_for_test, write_frame};
 use crate::{
@@ -35,19 +36,21 @@ const TEST_CONFIG: &str = concat!(
 #[derive(Debug, Default)]
 struct TestAgent {
     state: Mutex<TestAgentState>,
+    wait_dispatches: AtomicUsize,
 }
 
 #[derive(Debug, Default)]
 struct TestAgentState {
     states: HashMap<ContainerId, AgentState>,
     highest_generations: HashMap<ContainerId, Generation>,
+    exits: HashMap<ContainerId, ExitStatus>,
     next_pid: i32,
 }
 
 #[async_trait]
 impl GuestAgentService for TestAgent {
     fn capabilities(&self) -> AgentCapabilities {
-        AgentCapabilities::core("0.1.0-test", std::env::consts::ARCH)
+        AgentCapabilities::linux_executor("0.1.0-test", std::env::consts::ARCH)
             .expect("valid test capabilities")
     }
 
@@ -157,8 +160,31 @@ impl GuestAgentService for TestAgent {
             None,
             digest,
         )?;
+        agent.exits.insert(
+            request.target.id.clone(),
+            ExitStatus::signaled(request.signal.get(), false)?,
+        );
         agent.states.insert(request.target.id, state.clone());
         Ok(state)
+    }
+
+    async fn wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
+        self.wait_dispatches.fetch_add(1, Ordering::SeqCst);
+        let agent = self.state.lock().expect("agent state lock");
+        let current = agent
+            .states
+            .get(&request.target.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        agent.exits.get(&request.target.id).cloned().ok_or_else(|| {
+            Error::new(ErrorCode::DeadlineExceeded, "test container has not exited")
+                .for_operation("agent-wait")
+        })
     }
 
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
@@ -216,18 +242,22 @@ fn spawn_server(
     stream: DuplexStream,
     expected_token: SessionToken,
 ) -> tokio::task::JoinHandle<Result<()>> {
-    tokio::spawn(serve_agent_connection(
-        stream,
-        expected_token,
-        Arc::new(TestAgent::default()),
-    ))
+    spawn_server_with_agent(stream, expected_token, Arc::new(TestAgent::default()))
+}
+
+fn spawn_server_with_agent(
+    stream: DuplexStream,
+    expected_token: SessionToken,
+    agent: Arc<TestAgent>,
+) -> tokio::task::JoinHandle<Result<()>> {
+    tokio::spawn(serve_agent_connection(stream, expected_token, agent))
 }
 
 #[tokio::test]
 async fn negotiates_and_round_trips_the_core_oci_lifecycle() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let server = spawn_server(guest, token(7));
-    let client = AgentClient::connect(host, token(7))
+    let client = AgentClient::connect_for_test(host, token(7), 1, 1)
         .await
         .expect("connect agent client");
     assert_eq!(client.hello().selected_version(), 1);
@@ -284,6 +314,134 @@ async fn negotiates_and_round_trips_the_core_oci_lifecycle() {
         .await
         .expect("server task")
         .expect("clean server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v2_wait_returns_and_replays_the_exact_exit_status() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let server = spawn_server(guest, token(18));
+    let client = AgentClient::connect(host, token(18))
+        .await
+        .expect("connect protocol-v2 client");
+    assert_eq!(client.hello().selected_version(), 2);
+    assert_eq!(
+        client.hello().capabilities().operations(),
+        &[
+            crate::AgentOperation::Create,
+            crate::AgentOperation::State,
+            crate::AgentOperation::Start,
+            crate::AgentOperation::Kill,
+            crate::AgentOperation::Delete,
+            crate::AgentOperation::Wait,
+        ]
+    );
+
+    let create = create_request_for("wait-container", 1, "wait-create");
+    let target = create.target.clone();
+    let digest = create.bundle.config_digest().to_string();
+    client.create(create).await.expect("create wait container");
+    client
+        .start(AgentStartRequest {
+            context: OperationContext::new(operation_id("wait-start")),
+            target: target.clone(),
+            expected_config_digest: digest,
+        })
+        .await
+        .expect("start wait container");
+    client
+        .kill(AgentKillRequest {
+            context: OperationContext::new(operation_id("wait-kill")),
+            target: target.clone(),
+            signal: Signal::new(9).expect("signal"),
+            all: false,
+        })
+        .await
+        .expect("kill wait container");
+    let request = AgentWaitRequest {
+        target: target.clone(),
+        timeout_ms: Some(1_000),
+    };
+    let expected = ExitStatus::signaled(9, false).expect("exit status");
+    assert_eq!(
+        client.wait(request.clone()).await.expect("first wait"),
+        expected
+    );
+    assert_eq!(client.wait(request).await.expect("repeated wait"), expected);
+
+    client
+        .delete(AgentDeleteRequest {
+            context: OperationContext::new(operation_id("wait-delete")),
+            target,
+            mode: DeleteMode::StoppedOnly,
+        })
+        .await
+        .expect("delete wait container");
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v2 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v1_rejects_a_forged_wait_before_service_dispatch() {
+    let (mut host, guest) = tokio::io::duplex(64 * 1024);
+    let agent = Arc::new(TestAgent::default());
+    let expected_token = token(19);
+    let server = spawn_server_with_agent(guest, expected_token.clone(), agent.clone());
+
+    write_frame(
+        &mut host,
+        &HostHello {
+            protocols: ProtocolRange { min: 1, max: 1 },
+            token: expected_token,
+        },
+    )
+    .await
+    .expect("write protocol-v1 hello");
+    let hello: HelloOutcome = read_frame(&mut host)
+        .await
+        .expect("read protocol-v1 hello")
+        .expect("server returned protocol-v1 hello");
+    let HelloOutcome::Accepted { hello } = hello else {
+        panic!("protocol-v1 negotiation was rejected");
+    };
+    assert_eq!(hello.selected_version(), 1);
+    assert!(!hello
+        .capabilities()
+        .operations()
+        .contains(&crate::AgentOperation::Wait));
+
+    write_frame(
+        &mut host,
+        &RequestEnvelope {
+            version: 1,
+            request_id: 41,
+            request: AgentRequest::Wait(AgentWaitRequest {
+                target: ContainerTarget::exact(container_id("forged-wait"), Generation(1)),
+                timeout_ms: Some(1),
+            }),
+        },
+    )
+    .await
+    .expect("write forged protocol-v1 wait");
+    let response: ResponseEnvelope = read_frame(&mut host)
+        .await
+        .expect("read forged wait response")
+        .expect("server returned forged wait response");
+    assert_eq!(response.version, 1);
+    assert_eq!(response.request_id, 41);
+    let ResponseOutcome::Failed { error } = response.outcome else {
+        panic!("forged protocol-v1 wait unexpectedly succeeded");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(agent.wait_dispatches.load(Ordering::SeqCst), 0);
+
+    drop(host);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v1 server shutdown");
 }
 
 #[tokio::test]
@@ -432,7 +590,7 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 2, 2)
+    let error = AgentClient::connect_for_test(host, token(9), 3, 3)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);

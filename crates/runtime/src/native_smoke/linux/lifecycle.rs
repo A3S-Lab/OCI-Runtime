@@ -5,8 +5,8 @@ use std::time::Duration;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessIo,
-    RuntimeClient, Signal, StartRequest, StateRequest,
+    ExitStatus, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessIo,
+    RuntimeClient, Signal, StartRequest, StateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -88,6 +88,10 @@ pub(super) async fn exercise(
         return Err("native start did not leave the workload running".into());
     }
     wait_for_marker(client, &target, marker, report).await?;
+    report.wait_timeout_enforced = wait_times_out_while_running(client, &target).await?;
+    if !report.wait_timeout_enforced {
+        return Err("native wait returned before the running init process exited".into());
+    }
 
     let kill = KillRequest {
         context: operation(nonce, "kill")?,
@@ -112,6 +116,27 @@ pub(super) async fn exercise(
     if !report.kill_replayed {
         return Err("native runtime did not exactly replay kill".into());
     }
+    let wait = WaitRequest {
+        target: target.clone(),
+        timeout_ms: Some(
+            u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                .map_err(|_| "native lifecycle timeout does not fit wait request".to_string())?,
+        ),
+    };
+    let waited = native_call("wait", client.wait(wait.clone())).await?;
+    let expected_exit = ExitStatus::signaled(libc::SIGKILL, false)
+        .map_err(|error| format!("failed to construct expected native exit status: {error}"))?;
+    report.wait_exit_status = Some(waited.clone());
+    if waited != expected_exit {
+        return Err(format!(
+            "native wait returned {waited:?}, expected {expected_exit:?}"
+        ));
+    }
+    let replayed_wait = native_call("repeated wait", client.wait(wait)).await?;
+    report.wait_replayed = replayed_wait == waited;
+    if !report.wait_replayed {
+        return Err("native repeated wait returned a different exit status".into());
+    }
     report.stopped_observed = wait_until_stopped(client, &target).await?;
 
     let delete = DeleteRequest {
@@ -128,6 +153,28 @@ pub(super) async fn exercise(
         return Err("native state remained visible after delete".into());
     }
     Ok(())
+}
+
+async fn wait_times_out_while_running(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+) -> Result<bool, String> {
+    match timeout(
+        CALL_TIMEOUT,
+        client.wait(WaitRequest {
+            target: target.clone(),
+            timeout_ms: Some(50),
+        }),
+    )
+    .await
+    {
+        Ok(Err(error)) if error.code == ErrorCode::DeadlineExceeded => Ok(true),
+        Ok(Err(error)) => Err(native_error("bounded wait while running", &error)),
+        Ok(Ok(status)) => Err(format!(
+            "bounded wait returned {status:?} while the native workload was running"
+        )),
+        Err(_) => Err("bounded native wait exceeded its outer call timeout".into()),
+    }
 }
 
 pub(super) async fn exercise_until_fault(

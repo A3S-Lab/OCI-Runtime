@@ -27,8 +27,9 @@ exact libkrun shim PID before it sends the token.
 ## Current Executor Boundary
 
 The current root-only bootstrap executor advertises
-`create`, `state`, `start`, `kill`, and `delete`. It is intentionally narrower
-than the final OCI executor and rejects every property it cannot enforce.
+`create`, `state`, `start`, `kill`, `delete`, and `wait`. It is intentionally
+narrower than the final OCI executor and rejects every property it cannot
+enforce.
 
 The accepted bootstrap profile requires:
 
@@ -95,9 +96,19 @@ through the retained pidfd, and delete supports stopped-only and force
 cleanup. Cleanup also signals through the pidfd and always reaps the
 authenticated wrapper before removing its runtime directory. Numeric PID
 reuse can therefore never redirect a lifecycle signal to an unrelated
-process. Exact request retries are fingerprinted by `OperationId`, and reused
-IDs with different requests fail. Generation fences remain in memory after
-delete.
+process.
+
+The PID-namespace supervisor preserves the configured namespace-PID-1
+process's terminal outcome: it exits with the same normal code or resets,
+unblocks, and re-raises the same terminating signal. The executor converts
+that raw Linux status into exactly one SDK exit code or signal, caches it per
+generation, and returns it from every repeated init wait. A bounded wait
+returns `DeadlineExceeded` while the process is still running, and the
+executor releases its registry lock between observations so another
+container remains independently queryable.
+
+Exact request retries are fingerprinted by `OperationId`, and reused IDs with
+different requests fail. Generation fences remain in memory after delete.
 
 All guest registry, generation, and idempotency state is session-local. A
 closed host connection force-stops remaining init processes and removes the
@@ -121,18 +132,20 @@ cargo zigbuild -p a3s-oci-agent --release `
 ```
 
 `a3s-oci agent-vm-smoke` proves the authenticated
-guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact core
-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a bundle
+guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact
+six-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a bundle
 below the VM rootfs and proves the distinct create/start barrier, state
-observation, exact create/kill/delete replay, signal-driven stop, post-delete
-NotFound, marker cleanup, and nominal guest runtime cleanup.
+observation, exact create/kill/delete replay, bounded running wait, exact
+repeated terminal status, signal-driven stop, post-delete NotFound, marker
+cleanup, and nominal guest runtime cleanup.
 
 `a3s-oci oci-vm-multi-container-smoke` keeps two distinct bundle rootfs and
 runtime slots live behind the create barrier, proves that A's start, kill,
-delete, recreation, stale generation, and replay conflicts do not alter B,
-then completes B independently. The macOS HVF gate sends both init signals
-through distinct retained pidfds and retains both per-container markers
-together with guest-runtime and host-process cleanup evidence.
+wait, delete, recreation, stale generation, and replay conflicts do not alter
+or block B, then completes B independently. The macOS HVF gate sends both init
+signals through distinct retained pidfds and retains both exact repeated exit
+statuses and per-container markers together with guest-runtime and
+host-process cleanup evidence.
 
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
 records that delete was not attempted, and requires guest executor shutdown to

@@ -13,16 +13,19 @@ mod rootfs;
 mod state;
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, GuestAgentService,
+    AgentState, AgentStateRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, OperationContext, Result};
+use a3s_oci_sdk::{
+    async_trait, DeleteMode, Error, ErrorCode, ExitStatus, OperationContext, Result,
+};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+use tokio::time::{sleep, Instant};
 
 use crate::AGENT_VERSION;
 use pidfd::SignalOutcome;
@@ -37,6 +40,7 @@ pub(crate) use pidfd::verify_support as verify_pidfd_support;
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const MAX_OPERATION_RECORDS: usize = 4_096;
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Fail-closed Linux OCI executor shared by native and utility-VM drivers.
 #[derive(Debug)]
@@ -147,7 +151,7 @@ impl LinuxExecutor {
         })?;
 
         Ok(Self {
-            capabilities: AgentCapabilities::core(AGENT_VERSION, std::env::consts::ARCH)?,
+            capabilities: AgentCapabilities::linux_executor(AGENT_VERSION, std::env::consts::ARCH)?,
             init_executable,
             runtime_root,
             state: Mutex::new(ExecutorState::default()),
@@ -386,6 +390,51 @@ impl LinuxExecutor {
         state.containers.remove(&key);
         Ok(())
     }
+
+    async fn wait_new(&self, request: &AgentWaitRequest) -> Result<ExitStatus> {
+        let key = ContainerKey::from_target(&request.target)?;
+        let timeout = request.timeout_ms.map(Duration::from_millis);
+        let started = Instant::now();
+        loop {
+            let status = {
+                let mut state = self.state.lock().await;
+                let record = state.containers.get_mut(&key).ok_or_else(|| {
+                    executor_error(
+                        ErrorCode::NotFound,
+                        format!(
+                            "container {} generation {} does not exist",
+                            key.id, key.generation
+                        ),
+                    )
+                })?;
+                record.poll_wait()?
+            };
+            if let Some(status) = status {
+                return Ok(status);
+            }
+
+            let delay = match timeout {
+                Some(limit) => {
+                    let elapsed = started.elapsed();
+                    if elapsed >= limit {
+                        return Err(executor_error(
+                            ErrorCode::DeadlineExceeded,
+                            format!(
+                                "timed out after {} ms waiting for container {} generation {}",
+                                request.timeout_ms.unwrap_or_default(),
+                                key.id,
+                                key.generation
+                            ),
+                        )
+                        .retryable(true));
+                    }
+                    WAIT_POLL_INTERVAL.min(limit - elapsed)
+                }
+                None => WAIT_POLL_INTERVAL,
+            };
+            sleep(delay).await;
+        }
+    }
 }
 
 #[async_trait]
@@ -465,6 +514,10 @@ impl GuestAgentService for LinuxExecutor {
             RecordedOutcome::Deleted(result.clone()),
         );
         result
+    }
+
+    async fn wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
+        self.wait_new(&request).await
     }
 }
 

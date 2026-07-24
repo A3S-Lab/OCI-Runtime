@@ -80,11 +80,11 @@ submitted bundle is strictly loaded before the lifecycle begins, and the
 driver translates the durable host contract directly to the shared
 `LinuxExecutor`.
 
-The versioned `a3s.oci.native-linux-smoke.v1` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v2` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
-   `kill`, and `delete`;
+   `kill`, `delete`, and `wait`;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
 3. create returns a positive host-visible PID in the exact OCI `created`
@@ -92,12 +92,16 @@ following:
 4. the workload marker is absent before start;
 5. retrying create replays its exact result;
 6. start releases the prepared init and the marker is observed;
-7. `SIGKILL` reaches the namespace PID 1 through its retained pidfd, and
+7. a 50-millisecond wait returns `DeadlineExceeded` while the init process is
+   still running;
+8. `SIGKILL` reaches the namespace PID 1 through its retained pidfd, and
    retrying kill replays its exact result;
-8. state reaches `stopped`;
-9. stopped-only delete and its exact retry succeed;
-10. state returns `NotFound` after delete;
-11. the marker, executor root, and complete smoke session are removed.
+9. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
+   the same terminal result;
+10. state reaches `stopped`;
+11. stopped-only delete and its exact retry succeed;
+12. state returns `NotFound` after delete;
+13. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` because Linux protects a PID-namespace init from
 default-action signals such as `SIGTERM`. General PID 1 supervision and signal
@@ -126,14 +130,17 @@ executes both KVM-independent cases.
 shared `LinuxExecutor` for two distinct bundles. Both containers must return
 positive, different PIDs in `created` before either workload marker exists.
 Starting A must leave B's complete created record and marker unchanged;
-killing and deleting A must do the same.
+killing, waiting for, and deleting A must do the same. A bounded wait on the
+running A must return `DeadlineExceeded` without preventing a concurrent state
+query for B.
 
 After deleting A generation 1, the diagnostic removes only A's marker and
 recreates the same container ID. The durable host must allocate generation 2,
 reject an exact generation-1 state request, and reject reuse of A's create
 operation ID for B without changing B. Recreated A is force-deleted while B
 remains created, then B independently completes start, kill, stopped-only
-delete, and post-delete `NotFound`.
+delete, and post-delete `NotFound`. Both killed containers must return and
+replay the exact signal-9 terminal result.
 
 Run it with a second bundle containing its own rootfs:
 
@@ -145,11 +152,12 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
-The `a3s.oci.native-linux-multi-container-smoke.v1` success additionally
-requires exact create/start/kill/delete replay through each retained pidfd,
-both marker removals, executor shutdown, and complete durable-session removal.
-GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
-with a present but unusable placeholder at that path.
+The `a3s.oci.native-linux-multi-container-smoke.v2` success additionally
+requires exact create/start/kill/delete replay, stable repeated wait results,
+independent wait/state progress, both marker removals, executor shutdown, and
+complete durable-session removal. GitHub Actions runs the gate on x86_64 and
+aarch64 both without `/dev/kvm` and with a present but unusable placeholder at
+that path.
 
 ## Fault-injected shutdown cleanup
 
@@ -167,9 +175,10 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-The versioned `a3s.oci.native-linux-fault-cleanup.v1` report requires:
+The versioned `a3s.oci.native-linux-fault-cleanup.v2` report requires:
 
-1. the exact requested prefix and a positive runtime-visible init PID;
+1. the exact seven-operation service inventory, requested prefix, and a
+   positive runtime-visible init PID;
 2. marker absence behind create and exact marker contents after start;
 3. `normal_delete_attempted: false`;
 4. successful executor shutdown and disappearance of the init PID;
@@ -189,7 +198,8 @@ The default driver must remain `probe-only` until at least the following pass:
 - namespace joins, time namespaces, and security-negative cases;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
-- init supervision, zombie reaping, exec, wait, and complete process I/O;
+- namespace-internal init supervision and orphan/zombie reaping, exec,
+  per-process wait, and complete process I/O;
 - hooks, exhaustive durable-write and driver-error recovery injection,
   descriptor-relative path handling, and adversarial cleanup;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on

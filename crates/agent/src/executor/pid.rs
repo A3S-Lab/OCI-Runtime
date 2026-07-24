@@ -11,6 +11,12 @@ pub(super) enum ForkRole {
     Init { runtime_pid: libc::pid_t },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChildOutcome {
+    Exited(i32),
+    Signaled(i32),
+}
+
 pub(super) fn fork_namespace_init() -> Result<ForkRole> {
     let (mut supervisor_channel, mut init_channel) = UnixStream::pair().map_err(|error| {
         pid_error(
@@ -64,19 +70,69 @@ pub(super) fn fork_namespace_init() -> Result<ForkRole> {
     Ok(ForkRole::Supervisor { child_pid })
 }
 
-pub(super) fn wait_for_child(pid: libc::pid_t) -> Result<()> {
+pub(super) fn wait_for_child(pid: libc::pid_t) -> Result<ChildOutcome> {
     loop {
         let mut status = 0;
         // SAFETY: `status` points to writable storage and `pid` is the
         // positive child PID returned by `fork`.
         let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
         if waited == pid {
-            return Ok(());
+            return decode_wait_status(status);
         }
         if waited < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
             continue;
         }
         return Err(last_os_error("reap PID namespace init process"));
+    }
+}
+
+pub(super) fn mirror_child_outcome(outcome: ChildOutcome) -> ! {
+    match outcome {
+        ChildOutcome::Exited(exit_code) => {
+            // SAFETY: `_exit` has no memory-safety preconditions and bypasses
+            // Rust destructors intentionally in this dedicated wrapper.
+            unsafe { libc::_exit(exit_code) }
+        }
+        ChildOutcome::Signaled(signal) => mirror_signal(signal),
+    }
+}
+
+fn decode_wait_status(status: i32) -> Result<ChildOutcome> {
+    if libc::WIFEXITED(status) {
+        return Ok(ChildOutcome::Exited(libc::WEXITSTATUS(status)));
+    }
+    if libc::WIFSIGNALED(status) {
+        return Ok(ChildOutcome::Signaled(libc::WTERMSIG(status)));
+    }
+    Err(pid_error(
+        ErrorCode::Internal,
+        format!("PID namespace init produced unsupported wait status {status:#x}"),
+    ))
+}
+
+fn mirror_signal(signal: i32) -> ! {
+    // SIGKILL and SIGSTOP cannot be caught, ignored, or blocked. Other
+    // terminating signals are reset and unblocked so the supervisor has the
+    // same externally observable outcome as namespace PID 1.
+    if !matches!(signal, libc::SIGKILL | libc::SIGSTOP) {
+        // SAFETY: `signal` came from `waitpid`; SIG_DFL is a valid disposition.
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+        }
+        // SAFETY: the signal-set pointer is initialized before it is supplied
+        // to `sigprocmask`, and the old mask is intentionally not retained.
+        unsafe {
+            let mut set = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, signal);
+            libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+        }
+    }
+    // SAFETY: `getpid` has no preconditions and `signal` is the positive value
+    // reported by `waitpid`.
+    unsafe {
+        libc::kill(libc::getpid(), signal);
+        libc::_exit(128_i32.saturating_add(signal).min(255));
     }
 }
 
@@ -247,7 +303,7 @@ fn pid_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pid_identity, PidIdentity};
+    use super::{decode_wait_status, parse_pid_identity, ChildOutcome, PidIdentity};
 
     #[test]
     fn parses_supervisor_and_nested_pid_namespace_identity() {
@@ -271,5 +327,17 @@ mod tests {
             let error = parse_pid_identity(status).expect_err("invalid PID identity must fail");
             assert_eq!(error.code, a3s_oci_sdk::ErrorCode::FailedPrecondition);
         }
+    }
+
+    #[test]
+    fn decodes_normal_and_signal_wait_statuses() {
+        assert_eq!(
+            decode_wait_status(42 << 8).expect("normal exit status"),
+            ChildOutcome::Exited(42)
+        );
+        assert_eq!(
+            decode_wait_status(libc::SIGKILL).expect("signal status"),
+            ChildOutcome::Signaled(libc::SIGKILL)
+        );
     }
 }

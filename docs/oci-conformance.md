@@ -83,9 +83,9 @@ does not make it a native Windows container.
 | VM hypervisor, kernel, initrd, image, and parameters | Yes | Initial absolute-path and NUL rules; driver policy pending | No | No |
 | OCI `State` | Yes | Official schema, typed transitions, and generation fences | Durable core `creating`/`created`/`running`/`stopped` records | No |
 | OCI `Features` | Yes | Official schema, version and operation separation | Default service is feature-only; configured service reports only its implemented operations | No |
-| `create/state/start/kill/delete` | SDK contract | Exhaustive request boundary, durable lifecycle tests, and fixed WHPX guest lifecycle smoke | Driver-independent orchestration plus a fail-closed guest bootstrap slice; no built-in launch-ready driver | No |
+| `create/state/start/kill/delete` plus init `wait` | SDK contract | Exhaustive request boundary, durable lifecycle tests, protocol-v2 compatibility tests, and native/utility-VM lifecycle gates | Driver-independent core orchestration plus driver-advertised stable init wait and a fail-closed guest bootstrap slice; no built-in launch-ready driver | No |
 | Hooks and rollback ordering | SDK contract | Pending | No | No |
-| Exec, I/O, PTY, wait, pause/resume, update | SDK contract | Typed requests | No | No |
+| Exec, I/O, PTY, per-process wait, pause/resume, update | SDK contract | Typed requests | No | No |
 | Checkpoint and restore | SDK contract | Typed requests | No | No |
 
 The current runtime must therefore remain `probe-only`.

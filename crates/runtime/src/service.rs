@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
@@ -16,7 +16,8 @@ use a3s_oci_sdk::{
 };
 
 use crate::driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, RuntimeDriver,
+    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest,
+    DriverWaitRequest, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
@@ -33,6 +34,7 @@ struct LifecycleHost {
     store: DurableStateStore,
     driver: Arc<dyn RuntimeDriver>,
     capability: DriverCapability,
+    operations: BTreeSet<RuntimeOperation>,
     faults: Arc<dyn FaultInjector>,
 }
 
@@ -105,6 +107,7 @@ impl HostRuntimeService {
             )
             .for_operation("open-host-runtime"));
         }
+        let operations = validate_driver_operations(driver.operations())?;
         let store =
             DurableStateStore::open_with_fault_injector(state_root, Arc::clone(&faults)).await?;
         Ok(Self {
@@ -112,6 +115,7 @@ impl HostRuntimeService {
                 store,
                 driver,
                 capability,
+                operations,
                 faults,
             })),
         })
@@ -166,6 +170,14 @@ impl LifecycleHost {
         }
     }
 
+    fn ensure_operation(&self, operation: RuntimeOperation, name: &'static str) -> Result<()> {
+        if self.operations.contains(&operation) {
+            Ok(())
+        } else {
+            Err(Error::unsupported(name))
+        }
+    }
+
     async fn fail_driver_operation<T>(
         &self,
         operation_id: &a3s_oci_sdk::OperationId,
@@ -177,6 +189,55 @@ impl LifecycleHost {
         self.store.fail_operation(operation_id, &error).await?;
         Err(error)
     }
+}
+
+fn validate_driver_operations(
+    operations: &[RuntimeOperation],
+) -> Result<BTreeSet<RuntimeOperation>> {
+    const REQUIRED: [RuntimeOperation; 5] = [
+        RuntimeOperation::Create,
+        RuntimeOperation::State,
+        RuntimeOperation::Start,
+        RuntimeOperation::Kill,
+        RuntimeOperation::Delete,
+    ];
+    const HOST_SUPPORTED: [RuntimeOperation; 6] = [
+        RuntimeOperation::Create,
+        RuntimeOperation::State,
+        RuntimeOperation::Start,
+        RuntimeOperation::Kill,
+        RuntimeOperation::Delete,
+        RuntimeOperation::Wait,
+    ];
+    let reported = operations.iter().copied().collect::<BTreeSet<_>>();
+    if reported.len() != operations.len() {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            "runtime driver advertises duplicate operations",
+        )
+        .for_operation("open-host-runtime"));
+    }
+    if let Some(operation) = operations
+        .iter()
+        .find(|operation| !HOST_SUPPORTED.contains(operation))
+    {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!("runtime driver advertises unsupported host operation {operation:?}"),
+        )
+        .for_operation("open-host-runtime"));
+    }
+    if let Some(operation) = REQUIRED
+        .iter()
+        .find(|operation| !reported.contains(operation))
+    {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!("runtime driver does not advertise required operation {operation:?}"),
+        )
+        .for_operation("open-host-runtime"));
+    }
+    Ok(reported)
 }
 
 fn driver_state_error(
@@ -226,18 +287,10 @@ impl OciRuntimeService for HostRuntimeService {
                 .for_operation("features")
             })?;
 
-        let operations = if self.lifecycle.is_some() {
-            vec![
-                RuntimeOperation::Features,
-                RuntimeOperation::Create,
-                RuntimeOperation::State,
-                RuntimeOperation::Start,
-                RuntimeOperation::Kill,
-                RuntimeOperation::Delete,
-            ]
-        } else {
-            vec![RuntimeOperation::Features]
-        };
+        let mut operations = vec![RuntimeOperation::Features];
+        if let Some(lifecycle) = &self.lifecycle {
+            operations.extend(lifecycle.operations.iter().copied());
+        }
         Ok(RuntimeInfo {
             oci,
             drivers: self.runtime_features(),
@@ -434,8 +487,28 @@ impl OciRuntimeService for HostRuntimeService {
         Err(Error::unsupported("exec"))
     }
 
-    async fn wait(&self, _request: WaitRequest) -> Result<ExitStatus> {
-        Err(Error::unsupported("wait"))
+    async fn wait(&self, request: WaitRequest) -> Result<ExitStatus> {
+        let lifecycle = self.lifecycle("wait")?;
+        lifecycle.ensure_operation(RuntimeOperation::Wait, "wait")?;
+        request.validate()?;
+        let durable = lifecycle.store.state(&request.target).await?;
+        let target = ContainerTarget::exact(request.target.id, durable.generation);
+        lifecycle.driver_boundary(DriverOperation::Wait, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .wait(DriverWaitRequest {
+                target: target.clone(),
+                timeout_ms: request.timeout_ms,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Wait, DriverBoundaryStage::AfterCall)?;
+        let status = result?;
+        status.validate()?;
+        lifecycle
+            .store
+            .observe_state(&target, ContainerState::Stopped, None)
+            .await?;
+        Ok(status)
     }
 
     async fn list(&self, _request: ListRequest) -> Result<Vec<ContainerRecord>> {

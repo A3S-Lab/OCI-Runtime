@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        12,
+        14,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -41,7 +41,10 @@ async fn exercise_driver_boundary(point: FaultPoint) {
             .await
             .expect("create setup container");
         let target = ContainerTarget::exact(create.id.clone(), created.generation);
-        if matches!(operation, DriverOperation::Kill | DriverOperation::Delete) {
+        if matches!(
+            operation,
+            DriverOperation::Kill | DriverOperation::Delete | DriverOperation::Wait
+        ) {
             setup
                 .start(StartRequest {
                     context: OperationContext::new(operation_id("boundary-setup-start")),
@@ -50,7 +53,7 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 .await
                 .expect("start setup container");
         }
-        if operation == DriverOperation::Delete {
+        if matches!(operation, DriverOperation::Delete | DriverOperation::Wait) {
             setup
                 .kill(KillRequest {
                     context: OperationContext::new(operation_id("boundary-setup-kill")),
@@ -130,6 +133,7 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::Start
             | DriverOperation::Kill
             | DriverOperation::Delete
+            | DriverOperation::Wait
     )
 }
 
@@ -141,6 +145,7 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::Start(_), DriverOperation::Start)
             | (DriverCall::Kill(_), DriverOperation::Kill)
             | (DriverCall::Delete(_), DriverOperation::Delete)
+            | (DriverCall::Wait(_), DriverOperation::Wait)
     )
 }
 
@@ -192,6 +197,15 @@ async fn invoke_operation(
                     mode: DeleteMode::StoppedOnly,
                 })
                 .await
+        }
+        DriverOperation::Wait => {
+            service
+                .wait(WaitRequest {
+                    target: target.expect("wait target").clone(),
+                    timeout_ms: Some(1_000),
+                })
+                .await?;
+            Ok(())
         }
     }
 }
