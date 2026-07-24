@@ -3,6 +3,7 @@ mod init;
 mod mount;
 #[cfg(test)]
 mod mount_tests;
+mod namespace;
 mod pid;
 mod pidfd;
 mod plan;

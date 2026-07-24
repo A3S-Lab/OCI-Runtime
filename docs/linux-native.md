@@ -26,6 +26,8 @@ The native probe performs read-only inspection of:
 - `/proc/self/ns/mnt`;
 - `/proc/self/ns/net`;
 - `/proc/self/ns/pid`;
+- `/proc/self/ns/time`;
+- `/proc/self/ns/time_for_children`;
 - `/proc/self/ns/user`;
 - `/proc/self/ns/uts`;
 - `/sys/fs/cgroup/cgroup.controllers`.
@@ -91,7 +93,9 @@ following:
    state;
 4. the workload marker is absent before start;
 5. retrying create replays its exact result;
-6. start releases the prepared init and the marker is observed;
+6. start releases the prepared init; the workload verifies exact rootful
+   UID/GID maps plus monotonic and boottime namespace offsets before the marker
+   is observed;
 7. a 50-millisecond wait returns `DeadlineExceeded` while the init process is
    still running;
 8. `SIGKILL` reaches the namespace PID 1 through its retained pidfd, and
@@ -121,8 +125,9 @@ bash .github/scripts/native-linux-smoke.sh
 ```
 
 The script installs `busybox-static` and `jq`, builds the matching
-`a3s-oci-agent` and CLI binaries, constructs the checked-in fixture, and
-executes both KVM-independent cases.
+`a3s-oci-agent` and CLI binaries, constructs the checked-in fixture with a
+root-owned rootfs and `/proc` mount target, and executes both KVM-independent
+cases.
 
 ## Multi-container generation gate
 
@@ -194,8 +199,9 @@ every command.
 This evidence proves one rootful bootstrap profile, not general OCI support.
 The default driver must remain `probe-only` until at least the following pass:
 
-- rootless lifecycle using user namespaces and UID/GID mappings;
-- namespace joins, time namespaces, and security-negative cases;
+- rootless lifecycle using subordinate UID/GID mappings and the
+  `setgroups=deny` flow;
+- namespace joins and lifecycle-level namespace security-negative cases;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
 - namespace-internal init supervision and orphan/zombie reaping, exec,

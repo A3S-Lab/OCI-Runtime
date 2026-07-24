@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use a3s_oci_sdk::oci_spec::runtime::LinuxNamespaceType;
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result};
 use serde_json::{Map, Value};
 
 use super::mount::{self, MountPlan};
+use super::namespace::NamespacePlan;
 
 const MAX_ARGUMENTS: usize = 4_096;
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
@@ -24,12 +24,7 @@ pub(super) struct InitPlan {
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
-    pub(super) new_uts_namespace: bool,
-    pub(super) new_mount_namespace: bool,
-    pub(super) new_ipc_namespace: bool,
-    pub(super) new_network_namespace: bool,
-    pub(super) new_cgroup_namespace: bool,
-    pub(super) new_pid_namespace: bool,
+    pub(super) namespaces: NamespacePlan,
     pub(super) mounts: Vec<MountPlan>,
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
@@ -108,9 +103,14 @@ impl InitPlan {
                 "process.user.umask must fit the POSIX permission mask",
             ));
         }
-        let namespaces = validate_linux_namespaces(spec.linux().as_ref())?;
+        let namespaces = NamespacePlan::from_linux(
+            spec.linux().as_ref(),
+            user.uid(),
+            user.gid(),
+            &additional_gids,
+        )?;
         let mounts = mount::plan_all(spec.mounts().as_deref())?;
-        if !mounts.is_empty() && !namespaces.new_mount {
+        if !mounts.is_empty() && !namespaces.new_mount() {
             return Err(unsupported(
                 "mounts",
                 "the bootstrap executor applies mounts only in a newly created mount namespace",
@@ -126,7 +126,7 @@ impl InitPlan {
             .as_deref()
             .map(|value| validate_uts_name("domainname", value))
             .transpose()?;
-        if (hostname.is_some() || domainname.is_some()) && !namespaces.new_uts {
+        if (hostname.is_some() || domainname.is_some()) && !namespaces.new_uts() {
             return Err(unsupported(
                 "hostname/domainname",
                 "the bootstrap executor changes UTS names only in a newly created UTS namespace",
@@ -144,12 +144,7 @@ impl InitPlan {
             additional_gids,
             umask: user.umask(),
             no_new_privileges: true,
-            new_uts_namespace: namespaces.new_uts,
-            new_mount_namespace: namespaces.new_mount,
-            new_ipc_namespace: namespaces.new_ipc,
-            new_network_namespace: namespaces.new_network,
-            new_cgroup_namespace: namespaces.new_cgroup,
-            new_pid_namespace: namespaces.new_pid,
+            namespaces,
             mounts,
             hostname,
             domainname,
@@ -223,11 +218,11 @@ fn validate_profile(raw: &Value) -> Result<()> {
             .ok_or_else(|| invalid(format!("{field}.type must be a string")))?;
         if !matches!(
             namespace_type,
-            "uts" | "mount" | "ipc" | "network" | "cgroup" | "pid"
+            "uts" | "mount" | "ipc" | "network" | "cgroup" | "pid" | "user" | "time"
         ) {
             return Err(unsupported(
                 &format!("{field}.type"),
-                "only new UTS, mount, IPC, network, cgroup, and PID namespaces are implemented",
+                "only Linux OCI namespace types are accepted",
             ));
         }
         if namespace.contains_key("path") {
@@ -237,59 +232,11 @@ fn validate_profile(raw: &Value) -> Result<()> {
             ));
         }
     }
-    reject_unimplemented_keys(linux, "linux", &["namespaces"])
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct NamespacePlan {
-    new_uts: bool,
-    new_mount: bool,
-    new_ipc: bool,
-    new_network: bool,
-    new_cgroup: bool,
-    new_pid: bool,
-}
-
-fn validate_linux_namespaces(
-    linux: Option<&a3s_oci_sdk::oci_spec::runtime::Linux>,
-) -> Result<NamespacePlan> {
-    let Some(linux) = linux else {
-        return Ok(NamespacePlan::default());
-    };
-    let Some(namespaces) = linux.namespaces().as_deref() else {
-        return Ok(NamespacePlan::default());
-    };
-    let mut plan = NamespacePlan::default();
-    for (index, namespace) in namespaces.iter().enumerate() {
-        if namespace.path().is_some() {
-            return Err(unsupported(
-                &format!("linux.namespaces[{index}].path"),
-                "joining an existing namespace is not implemented",
-            ));
-        }
-        let present = match namespace.typ() {
-            LinuxNamespaceType::Uts => &mut plan.new_uts,
-            LinuxNamespaceType::Mount => &mut plan.new_mount,
-            LinuxNamespaceType::Ipc => &mut plan.new_ipc,
-            LinuxNamespaceType::Network => &mut plan.new_network,
-            LinuxNamespaceType::Cgroup => &mut plan.new_cgroup,
-            LinuxNamespaceType::Pid => &mut plan.new_pid,
-            _ => {
-                return Err(unsupported(
-                    &format!("linux.namespaces[{index}].type"),
-                    "only new UTS, mount, IPC, network, cgroup, and PID namespaces are implemented",
-                ));
-            }
-        };
-        if *present {
-            return Err(invalid(format!(
-                "linux.namespaces contains duplicate {:?} entries",
-                namespace.typ()
-            )));
-        }
-        *present = true;
-    }
-    Ok(plan)
+    reject_unimplemented_keys(
+        linux,
+        "linux",
+        &["namespaces", "uidMappings", "gidMappings", "timeOffsets"],
+    )
 }
 
 fn validate_uts_name(field: &str, value: &str) -> Result<String> {

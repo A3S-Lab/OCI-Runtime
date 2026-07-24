@@ -54,7 +54,7 @@ fn null_io() -> ProcessIo {
 fn preserves_mount_order_and_normalizes_relative_destinations() {
     let plan = InitPlan::from_bundle(&bundle(MOUNT_CONFIG), &null_io())
         .expect("supported ordered mount profile");
-    assert!(plan.new_mount_namespace);
+    assert!(plan.namespaces.new_mount());
     assert_eq!(plan.mounts.len(), 2);
     assert_eq!(plan.mounts[0].index, 0);
     assert_eq!(plan.mounts[0].destination, Path::new("/proc"));

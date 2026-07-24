@@ -22,7 +22,7 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const LINUX_SIGTERM: i32 = 15;
-const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-v1\n";
+const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 
 pub(super) trait AgentStream: AsyncRead + AsyncWrite + Unpin + Send {}
 

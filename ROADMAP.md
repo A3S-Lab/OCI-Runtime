@@ -84,11 +84,12 @@ Completed:
   host/shim evidence;
 - root-only Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
-  create-time UTS, mount, IPC, network, cgroup, and PID namespaces, hostname
-  and domainname, recursively private mount propagation, ordered
-  existing-target OCI mounts, `pivot_root`, authenticated host-visible PID
-  reporting, exact-generation state, bounded typed init rejection reporting,
-  session idempotency, retained pidfd signaling, and cleanup;
+  create-time UTS, mount, IPC, network, cgroup, PID, user, and time namespaces,
+  parent-installed UID/GID maps, verified time offsets, hostname and domainname,
+  recursively private mount propagation, ordered existing-target OCI mounts,
+  `pivot_root`, authenticated host-visible PID reporting, exact-generation
+  state, bounded typed init rejection reporting, session idempotency, retained
+  pidfd signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -300,13 +301,16 @@ then may HVF become `experimental`.
 - [x] Retain exact normal-or-signal init termination, return the same result
   from repeated waits, enforce bounded wait timeouts, and prove one container's
   wait does not block another container's state request.
-- [ ] Namespace creation for user and time namespaces, plus joining existing
-  namespaces.
+- [x] Create new rootful user and time namespaces, install and read back exact
+  UID/GID mappings through the authenticated parent, apply and verify
+  monotonic/boottime offsets before the first child, and prove the path through
+  native Linux and the macOS utility VM.
+- [ ] Join existing namespaces.
 - [ ] Mount-target creation, rootfs propagation overrides, idmapped and
   recursive-attribute mounts, masked paths, read-only paths, and read-only
   rootfs.
-- [ ] UID/GID mappings, credentials, capabilities, rlimits, scheduler, I/O
-  priority, affinity, `no_new_privileges`, LSMs, and seccomp.
+- [ ] Rootless ID-mapping policy, remaining credentials, capabilities, rlimits,
+  scheduler, I/O priority, affinity, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified
   resource enforcement.
 - [ ] Namespace-internal init supervision, orphan/zombie reaping, and exec.

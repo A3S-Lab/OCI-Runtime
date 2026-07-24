@@ -184,8 +184,9 @@ The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
 - configured networking or complete process I/O works;
-- user/time namespaces, namespace joins, advanced mount semantics,
-  resources, capabilities, seccomp, or hooks work;
+- the rootful user/time namespace slice now exercised on native Linux and
+  macOS, namespace joins, advanced mount semantics, resources, capabilities,
+  seccomp, or hooks work through WHPX;
 - restart recovery, concurrent containers, or shared-guest-kernel isolation
   work;
 - the driver is production ready.
@@ -200,8 +201,9 @@ The next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
-3. add user/time namespaces, namespace joins, advanced mount, capability,
-   resource, seccomp, and hook enforcement;
+3. qualify the shared rootful user/time namespace slice on WHPX and add
+   namespace joins, advanced mount, capability, resource, seccomp, and hook
+   enforcement;
 4. return stdout, stderr, and arbitrary natural exit codes;
 5. reconcile stopped state after host runtime restart;
 6. add concurrent-container and negative isolation evidence;

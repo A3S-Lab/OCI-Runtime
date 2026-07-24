@@ -11,7 +11,17 @@ use a3s_oci_core::{
 const KVM_DEVICE: &str = "/dev/kvm";
 const KVM_API_VERSION: i32 = 12;
 const KVM_GET_API_VERSION: libc::c_ulong = 0xAE00;
-const REQUIRED_NAMESPACE_FILES: [&str; 7] = ["cgroup", "ipc", "mnt", "net", "pid", "user", "uts"];
+const REQUIRED_NAMESPACE_FILES: [&str; 9] = [
+    "cgroup",
+    "ipc",
+    "mnt",
+    "net",
+    "pid",
+    "time",
+    "time_for_children",
+    "user",
+    "uts",
+];
 
 #[derive(Debug)]
 struct NativeLinuxObservation {

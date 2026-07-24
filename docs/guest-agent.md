@@ -43,20 +43,31 @@ The accepted bootstrap profile requires:
 - numeric UID, GID, optional supplementary groups, and optional umask;
 - bounded arguments and environment with unique environment names.
 
-When `linux.namespaces` is present, it accepts only unique, newly created UTS,
-mount, IPC, network, cgroup, and PID namespace entries, in any order, with no
-join paths. Omitting a namespace inherits the runtime namespace of that type.
-Configured hostname and domainname values are bounded to the Linux kernel
-limit and require the new UTS namespace.
+When `linux.namespaces` is present, it accepts unique, newly created UTS,
+mount, IPC, network, cgroup, PID, user, and time namespace entries in any
+order, with no join paths. Omitting a namespace inherits the runtime namespace
+of that type. Configured hostname and domainname values are bounded to the
+Linux kernel limit and require the new UTS namespace.
 
-The wrapper atomically requests all configured UTS, mount, IPC, network,
-cgroup, and PID namespace isolation in one `unshare` call. Because a new PID
-namespace applies to the caller's next child, the authenticated wrapper remains
-as a supervisor and forks the container init as namespace PID 1. The child
-applies and reads back hostname and domainname with `uname`. When a mount
-namespace is requested, it then makes `/` recursively private, recursively
-bind-mounts the rootfs onto itself, applies every configured mount in listed
-order, and uses
+The user-namespace profile is deliberately rootful. A new user namespace
+requires both `uidMappings` and `gidMappings`, each list is bounded to the
+kernel's 340-entry limit, and the process UID, GID, and every supplementary GID
+must be covered. The wrapper creates the user namespace first, then blocks on
+the authenticated control channel while the parent verifies the distinct
+namespace, writes each `/proc/<pid>/{uid,gid}_map` exactly once, reads both
+maps back, and requires `/proc/<pid>/setgroups` to remain `allow`. Rootless
+`setgroups=deny` and subordinate-ID helper flows are not implemented.
+
+The wrapper then requests the configured UTS, mount, IPC, network, cgroup, PID,
+and time namespaces in one `unshare` call. Time offsets accept only normalized
+`monotonic` and `boottime` values; the wrapper writes and reads them back
+through `/proc/self/timens_offsets` before forking. A new PID or time namespace
+applies to the caller's next child, so the wrapper remains as a supervisor and
+forks the container init. With PID isolation that child is namespace PID 1.
+The child applies and reads back hostname and domainname with `uname`. When a
+mount namespace is requested, it then makes `/` recursively private,
+recursively bind-mounts the rootfs onto itself, applies every configured mount
+in listed order, and uses
 `pivot_root(".", ".")` followed by a detached unmount of the old root. All of
 this succeeds before readiness is reported, so namespace, mount, and rootfs
 isolation are part of the create barrier. When a mount namespace is omitted,
@@ -81,15 +92,20 @@ Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
 accepts only the exact kernel-reported supervisor PID. The wrapper revalidates
 the bundle, resolves a contained rootfs, and returns either a bounded typed
-error or readiness with the runtime-visible init PID before blocking. For a
-new PID namespace, the agent verifies that PID's parent, `NSpid` mapping to 1,
-and namespace identity against the authenticated supervisor. Create therefore
-preserves the exact rejection or returns `created` before the configured
-process runs. Before returning `created`, the executor opens a pidfd for that
-authenticated init PID. Failure to open the descriptor terminates the wrapper
-and fails create. Start sends the one-byte release signal; the init applies
-the inherited-namespace `chroot` when needed, then working directory, groups,
-GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
+error or readiness with the runtime-visible init PID before blocking. The
+authenticated parent permits exactly one expected user-mapping request. It
+rejects readiness that bypasses that request, a repeated request, or a request
+without a configured user namespace. For a new PID namespace, the agent
+verifies the reported PID's parent, `NSpid` mapping to 1, and namespace
+identity against the supervisor. It also verifies new user and time namespace
+identities against the authenticated supervisor's intended namespace links.
+Create therefore preserves the exact rejection or returns `created` before the
+configured process runs. Before returning `created`, the executor opens a
+pidfd for that authenticated init PID. Failure to open the descriptor
+terminates the wrapper and fails create. Start sends the one-byte release
+signal; the init applies the inherited-namespace `chroot` when needed, then
+working directory, groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and
+calls `execve`.
 
 State observes the init process, kill delivers one positive Linux signal
 through the retained pidfd, and delete supports stopped-only and force
@@ -116,11 +132,11 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount-target creation, rootfs propagation overrides, idmapped and
-recursive-attribute mounts, every namespace type other than UTS, mount, IPC,
-network, cgroup, and PID, all namespace joins, cgroup resources, capabilities,
-seccomp, hooks, read-only rootfs, terminals, non-null I/O, process-group
-signals, and every other unimplemented OCI property. These are release
-blockers, not silently accepted compatibility gaps.
+recursive-attribute mounts, all namespace joins, rootless user-mapping policy,
+cgroup resources, capabilities, seccomp, hooks, read-only rootfs, terminals,
+non-null I/O, process-group signals, and every other unimplemented OCI
+property. These are release blockers, not silently accepted compatibility
+gaps.
 
 ## Build And Evidence
 
@@ -156,6 +172,13 @@ descriptor inventory to return to its baseline.
 The macOS path uses the same static agent, fixed fixture, protocol, and
 lifecycle harness over the PID-verified Unix/vsock bridge. Only the host
 endpoint and libkrun hypervisor backend differ.
+
+The current native Linux and macOS lifecycle fixtures request all eight Linux
+namespace types. Their workload markers are written only after `/proc` proves
+the exact UID/GID maps and the configured monotonic and boottime offsets.
+Multi-container and no-delete cleanup gates reuse the same fixture. The
+retained WHPX qualification below predates this user/time requalification and
+does not count as Windows evidence for the new slice.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
 minirootfs and the 6,328,408-byte static agent with SHA-256

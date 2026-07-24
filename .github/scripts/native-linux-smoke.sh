@@ -26,12 +26,16 @@ jq --exit-status \
 bundle="$runner_temp/a3s-native-bundle"
 bundle_b="$runner_temp/a3s-native-bundle-b"
 work_parent="$runner_temp/a3s-native-work"
-mkdir -p "$bundle/rootfs/bin" "$bundle_b/rootfs/bin" "$work_parent"
+mkdir -p \
+  "$bundle/rootfs/bin" "$bundle/rootfs/proc" \
+  "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
+  "$work_parent"
 for candidate in "$bundle" "$bundle_b"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
 done
+sudo chown -R 0:0 "$bundle/rootfs" "$bundle_b/rootfs"
 
 run_smoke() {
   local expected_kvm_present="$1"
