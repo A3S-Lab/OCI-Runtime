@@ -30,7 +30,9 @@ pub use driver::{
 pub use native_linux_driver::NativeLinuxDriver;
 pub use native_smoke::native_linux_smoke;
 pub use oci_smoke::oci_vm_smoke;
-pub use report::{AgentVmSmokeReport, NativeLinuxSmokeReport, OciVmSmokeReport, WhpxSmokeReport};
+pub use report::{
+    AgentVmSmokeReport, HvfSmokeReport, NativeLinuxSmokeReport, OciVmSmokeReport, WhpxSmokeReport,
+};
 pub use service::HostRuntimeService;
 
 use a3s_oci_core::RuntimeFeatures;
@@ -45,4 +47,10 @@ pub fn features() -> RuntimeFeatures {
 #[must_use]
 pub fn whpx_smoke() -> WhpxSmokeReport {
     platform::whpx_smoke()
+}
+
+/// Exercise the macOS Hypervisor.framework VM-object lifecycle.
+#[must_use]
+pub fn hvf_smoke() -> HvfSmokeReport {
+    platform::hvf_smoke()
 }

@@ -64,6 +64,24 @@ fn agent_vm_smoke_fails_closed_with_versioned_output() {
 }
 
 #[test]
+fn hvf_smoke_emits_consistent_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .arg("hvf-smoke")
+        .output()
+        .expect("HVF smoke command must start");
+
+    assert!(
+        output.status.success() || output.status.code() == Some(2),
+        "HVF smoke exited unexpectedly: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: a3s_oci_runtime::HvfSmokeReport =
+        serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
+    assert_eq!(report.schema_version, "a3s.oci.hvf-smoke.v1");
+    assert_eq!(output.status.success(), report.is_success());
+}
+
+#[test]
 fn native_linux_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
         .args([

@@ -45,6 +45,9 @@ The project is experimental. The current cross-platform foundation implements:
   version 12;
 - an Apple Silicon Hypervisor.framework probe that reads
   `kern.hv_support` directly without spawning `sysctl`;
+- a versioned macOS HVF smoke that calls `hv_vm_create` and `hv_vm_destroy`
+  directly, reports entitlement failures such as `HV_DENIED`, and proves a
+  real signed VM-object round trip without claiming workload readiness;
 - versioned, machine-readable driver capability output;
 - an explicitly selected `NativeLinuxDriver` that reuses the Linux executor
   directly, accepts only `shared-host-kernel` isolation, and never links or
@@ -198,6 +201,42 @@ The command emits `a3s.oci.native-linux-smoke.v1` JSON and exits with status
 development gate for the reviewed bootstrap profile, not a production driver
 selection interface. See [Native Linux Development](docs/linux-native.md) for
 the exact evidence and remaining certification work.
+
+On an Apple Silicon macOS host, build and sign a disposable copy of the CLI
+with the checked-in Hypervisor entitlement before running the VM-object smoke:
+
+```sh
+cargo build -p a3s-oci-cli
+
+smoke_dir="$(mktemp -d)"
+trap 'rm -rf "$smoke_dir"' EXIT
+cp target/debug/a3s-oci "$smoke_dir/a3s-oci"
+codesign --force --sign - \
+  --entitlements packaging/macos/a3s-oci-hvf.entitlements \
+  "$smoke_dir/a3s-oci"
+codesign --verify --strict "$smoke_dir/a3s-oci"
+"$smoke_dir/a3s-oci" hvf-smoke
+```
+
+A successful result is:
+
+```json
+{
+  "schema_version": "a3s.oci.hvf-smoke.v1",
+  "platform": "macos",
+  "status": "available",
+  "apple_silicon": true,
+  "hypervisor_supported": true,
+  "vm_created": true,
+  "vm_destroyed": true
+}
+```
+
+The command exits with status `2` unless the entire round trip succeeds. On a
+host that reports HVF support, an executable without the required entitlement
+fails closed and retains the symbolic error, for example
+`hv_vm_create returned HV_DENIED (0xFAE94007)`. See
+[macOS HVF Development](docs/macos-hvf.md) for the evidence boundary.
 
 On a WHPX-capable Windows host, the versioned feature inventory resembles:
 
@@ -412,6 +451,30 @@ real platform lifecycle conformance remain release gates.
 See [Durable State](docs/durable-state.md) for the on-disk contract and its
 current recovery boundary.
 
+## macOS HVF
+
+The macOS feature probe and VM-object smoke are separate evidence gates. The
+probe performs only a direct `kern.hv_support` query. The
+entitlement-aware `hvf-smoke` command additionally:
+
+- links the system Hypervisor.framework at build time;
+- creates the one VM object permitted for the current process;
+- destroys that object before returning;
+- maps documented HVF return codes to stable diagnostics;
+- uses an ownership guard to retry VM destruction if the explicit cleanup
+  path fails.
+
+The signed smoke has passed on a local Apple Silicon host with
+`kern.hv_support = 1`. The same binary without the Hypervisor entitlement
+returned `HV_DENIED`, which verifies that entitlement failure is not confused
+with a successful capability probe. Hosted macOS CI currently reports
+`kern.hv_support = 0`, so it validates the unavailable, no-VM-created path.
+
+This smoke does not initialize libkrun, create vCPUs, map guest memory, boot a
+Linux kernel, connect the guest agent, or execute an OCI workload. A successful
+report therefore leaves `libkrun-hvf` at `probe-only`; the next macOS gate is
+an isolated, version-pinned libkrun context and runtime bundle.
+
 ## Windows WHPX
 
 The Windows probe loads `WinHvPlatform.dll` with
@@ -535,7 +598,7 @@ state, and cleanup.
 | Windows x86_64 | libkrun + WHPX utility VM | Fixed OCI create/start/kill/delete vertical slice passes; complete enforcement and recovery pending; driver is `probe-only` |
 | Linux x86_64/aarch64 without KVM | Native Linux executor | Explicit rootful experimental core lifecycle passes on both architectures with KVM absent and unusable; default inventory remains `probe-only`; complete enforcement, rootless operation, recovery, and SDK certification are pending |
 | Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Device access and KVM API version are reported separately; VM driver is not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Apple Silicon and `kern.hv_support` are reported; HVF driver is not implemented |
+| macOS arm64 | libkrun + HVF utility VM | Apple Silicon and `kern.hv_support` are reported, and a signed direct HVF VM-object create/destroy round trip passes locally; libkrun context, guest boot, and workload driver are not implemented |
 
 Linux installation, runtime inspection, A3S Box Sandbox isolation, and Rust,
 Python, and TypeScript SDK operations must work when `/dev/kvm` is absent or
@@ -599,11 +662,11 @@ crates/
 |       |                   # Reusable authenticated WHPX agent session
 |       |-- oci_smoke/     # Fixed-bundle core lifecycle evidence
 |       |-- platform/      # Linux, macOS HVF, Windows WHPX, and fallback probes
-|       |-- report.rs      # Versioned WHPX, bridge, and OCI smoke results
+|       |-- report.rs      # Versioned HVF, WHPX, bridge, and OCI smoke results
 |       |-- service.rs     # Host implementation of the SDK contract
 |       `-- state/         # Durable records, generations, operation journals
 `-- cli/
-    |-- src/main.rs        # Feature, native Linux, WHPX, and guest diagnostics
+    |-- src/main.rs        # Feature, native Linux, HVF, WHPX, and guest diagnostics
     `-- tests/cli.rs       # Public machine-readable CLI contract
 ```
 

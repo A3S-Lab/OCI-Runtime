@@ -26,6 +26,35 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
       - run: cargo run -p a3s-oci-cli -- features
+      - if: runner.os == 'macOS'
+        name: Hypervisor.framework VM object lifecycle
+        shell: bash
+        run: |
+          smoke="$RUNNER_TEMP/a3s-oci-hvf-smoke"
+          cp target/debug/a3s-oci "$smoke"
+          codesign --force --sign - \
+            --entitlements packaging/macos/a3s-oci-hvf.entitlements \
+            "$smoke"
+          codesign --verify --strict "$smoke"
+
+          set +e
+          output="$("$smoke" hvf-smoke)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+
+          support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+          if [[ "$support" == "1" ]]; then
+            test "$status" -eq 0
+            jq --exit-status \
+              '.status == "available" and .vm_created and .vm_destroyed' \
+              <<<"$output" >/dev/null
+          else
+            test "$status" -eq 2
+            jq --exit-status \
+              '.status == "unavailable" and (.vm_created | not) and (.vm_destroyed | not)' \
+              <<<"$output" >/dev/null
+          fi
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
         run: bash .github/scripts/native-linux-smoke.sh

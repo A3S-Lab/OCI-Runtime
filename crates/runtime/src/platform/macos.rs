@@ -1,11 +1,17 @@
 use std::collections::BTreeMap;
+#[cfg(target_arch = "aarch64")]
+use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 
 use a3s_oci_core::{
-    CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
+    CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
     RuntimeFeatures,
 };
+#[cfg(target_arch = "aarch64")]
+use thiserror::Error;
+
+use crate::HvfSmokeReport;
 
 #[derive(Debug)]
 struct HvfObservation {
@@ -16,6 +22,133 @@ struct HvfObservation {
 
 pub(crate) fn features() -> RuntimeFeatures {
     RuntimeFeatures::current(vec![capability_from_observation(observe_hvf())])
+}
+
+pub(crate) fn hvf_smoke() -> HvfSmokeReport {
+    let observation = observe_hvf();
+    if !observation.apple_silicon {
+        return HvfSmokeReport::unsupported(
+            HostPlatform::Macos,
+            observation.reason.unwrap_or_else(|| {
+                "Hypervisor.framework VM creation requires Apple Silicon".to_string()
+            }),
+        );
+    }
+
+    let mut report = HvfSmokeReport::initial(
+        HostPlatform::Macos,
+        observation.apple_silicon,
+        observation.hypervisor_supported,
+    );
+    if observation.hypervisor_supported != Some(true) {
+        report.reason = observation.reason.or_else(|| {
+            Some("Hypervisor.framework is unavailable according to kern.hv_support".into())
+        });
+        return report;
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        match HvfVm::create() {
+            Ok(vm) => {
+                report.vm_created = true;
+                match vm.close() {
+                    Ok(()) => {
+                        report.vm_destroyed = true;
+                        report.status = CapabilityStatus::Available;
+                    }
+                    Err(error) => report.reason = Some(error.to_string()),
+                }
+            }
+            Err(error) => report.reason = Some(error.to_string()),
+        }
+    }
+
+    report
+}
+
+#[cfg(target_arch = "aarch64")]
+#[derive(Debug, Error)]
+#[error("{operation} returned {name} (0x{code:08X})")]
+struct HvfApiError {
+    operation: &'static str,
+    name: &'static str,
+    code: u32,
+}
+
+#[cfg(target_arch = "aarch64")]
+struct HvfVm {
+    active: bool,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl HvfVm {
+    fn create() -> Result<Self, HvfApiError> {
+        // SAFETY: A null configuration requests Apple's documented default
+        // VM configuration and transfers no pointer ownership.
+        let status = unsafe { hv_vm_create(ptr::null()) };
+        check_hvf_status("hv_vm_create", status)?;
+        Ok(Self { active: true })
+    }
+
+    fn close(mut self) -> Result<(), HvfApiError> {
+        // SAFETY: this guard owns the one process-local VM object created by
+        // `hv_vm_create`, and it has created no vCPUs or memory mappings.
+        let status = unsafe { hv_vm_destroy() };
+        check_hvf_status("hv_vm_destroy", status)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Drop for HvfVm {
+    fn drop(&mut self) {
+        if self.active {
+            // SAFETY: this is the final cleanup attempt for the VM object
+            // owned by this guard. Drop cannot report a second failure.
+            unsafe {
+                let _ = hv_vm_destroy();
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn check_hvf_status(operation: &'static str, status: i32) -> Result<(), HvfApiError> {
+    if status == 0 {
+        Ok(())
+    } else {
+        let code = status as u32;
+        Err(HvfApiError {
+            operation,
+            name: hvf_status_name(code),
+            code,
+        })
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+const fn hvf_status_name(code: u32) -> &'static str {
+    match code {
+        0xFAE9_4001 => "HV_ERROR",
+        0xFAE9_4002 => "HV_BUSY",
+        0xFAE9_4003 => "HV_BAD_ARGUMENT",
+        0xFAE9_4004 => "HV_ILLEGAL_GUEST_STATE",
+        0xFAE9_4005 => "HV_NO_RESOURCES",
+        0xFAE9_4006 => "HV_NO_DEVICE",
+        0xFAE9_4007 => "HV_DENIED",
+        0xFAE9_4008 => "HV_EXISTS",
+        0xFAE9_400F => "HV_UNSUPPORTED",
+        _ => "unknown Hypervisor.framework status",
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[link(name = "Hypervisor", kind = "framework")]
+unsafe extern "C" {
+    fn hv_vm_create(config: *const c_void) -> i32;
+    fn hv_vm_destroy() -> i32;
 }
 
 fn observe_hvf() -> HvfObservation {
@@ -114,6 +247,8 @@ mod tests {
     use a3s_oci_core::{CapabilityStatus, DriverKind, DriverReadiness};
 
     use super::{capability_from_observation, features, HvfObservation};
+    #[cfg(target_arch = "aarch64")]
+    use super::{check_hvf_status, hvf_status_name};
 
     #[test]
     fn available_hvf_remains_probe_only() {
@@ -152,5 +287,21 @@ mod tests {
         assert_eq!(inventory.drivers.len(), 1);
         assert_eq!(capability.readiness, DriverReadiness::ProbeOnly);
         assert!(!capability.can_launch());
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn hypervisor_status_codes_remain_diagnostic() {
+        assert_eq!(hvf_status_name(0xFAE9_4007), "HV_DENIED");
+        assert_eq!(
+            hvf_status_name(0xDEAD_BEEF),
+            "unknown Hypervisor.framework status"
+        );
+        let error = check_hvf_status("hv_vm_create", 0xFAE9_4007_u32 as i32)
+            .expect_err("HV_DENIED must fail");
+        assert_eq!(
+            error.to_string(),
+            "hv_vm_create returned HV_DENIED (0xFAE94007)"
+        );
     }
 }
