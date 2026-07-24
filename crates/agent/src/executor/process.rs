@@ -26,15 +26,13 @@ pub(super) struct PreparedProcess {
 }
 
 impl PreparedProcess {
-    pub(super) async fn spawn(plan: &InitPlan, config_snapshot: &Path) -> Result<Self> {
+    pub(super) async fn spawn(
+        plan: &InitPlan,
+        config_snapshot: &Path,
+        init_executable: &Path,
+    ) -> Result<Self> {
         let (listener, control_name) = bind_control_listener()?;
-        let executable = std::env::current_exe().map_err(|error| {
-            process_error(
-                ErrorCode::Internal,
-                format!("failed to resolve guest-agent executable: {error}"),
-            )
-        })?;
-        let mut command = Command::new(executable);
+        let mut command = Command::new(init_executable);
         command
             .arg("container-init")
             .arg(config_snapshot)

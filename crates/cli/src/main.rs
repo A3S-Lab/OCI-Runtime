@@ -20,6 +20,18 @@ enum Command {
     Features,
     /// Query WHPX and create then delete one partition object.
     WhpxSmoke,
+    /// Run the experimental native Linux core lifecycle through the Rust SDK.
+    NativeLinuxSmoke {
+        /// Matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// OCI bundle containing config.json and rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing directory beneath which isolated smoke state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+    },
     /// Boot and authenticate the Linux agent at its fixed guest path.
     AgentVmSmoke {
         /// Isolated libkrun shim executable.
@@ -78,6 +90,20 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
         }
         Command::WhpxSmoke => {
             let report = a3s_oci_runtime::whpx_smoke();
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::NativeLinuxSmoke {
+            agent,
+            bundle,
+            work_parent,
+        } => {
+            let report = a3s_oci_runtime::native_linux_smoke(&agent, &bundle, &work_parent).await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

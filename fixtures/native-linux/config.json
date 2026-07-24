@@ -1,0 +1,48 @@
+{
+  "ociVersion": "1.3.0",
+  "root": {
+    "path": "rootfs",
+    "readonly": false
+  },
+  "process": {
+    "terminal": false,
+    "user": {
+      "uid": 0,
+      "gid": 0
+    },
+    "args": [
+      "/bin/sh",
+      "-c",
+      "printf 'a3s-oci-native-v1\\n' > /.a3s-oci-native-smoke; exec /bin/busybox sleep 300"
+    ],
+    "env": [
+      "PATH=/bin"
+    ],
+    "cwd": "/",
+    "noNewPrivileges": true
+  },
+  "hostname": "a3s-native",
+  "domainname": "runtime.test",
+  "linux": {
+    "namespaces": [
+      {
+        "type": "uts"
+      },
+      {
+        "type": "mount"
+      },
+      {
+        "type": "ipc"
+      },
+      {
+        "type": "network"
+      },
+      {
+        "type": "cgroup"
+      },
+      {
+        "type": "pid"
+      }
+    ]
+  }
+}

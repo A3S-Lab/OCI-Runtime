@@ -26,8 +26,21 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
       - run: cargo run -p a3s-oci-cli -- features
+      - if: runner.os == 'Linux'
+        name: Native Linux SDK lifecycle without KVM
+        run: bash .github/scripts/native-linux-smoke.sh
       - if: runner.os == 'Windows'
         run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+
+  native-linux-arm64:
+    name: native-linux-lifecycle (aarch64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: bash .github/scripts/native-linux-smoke.sh
 
   guest-agent-musl:
     runs-on: ubuntu-latest

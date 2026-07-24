@@ -85,6 +85,7 @@ dependencies = [
 name = "a3s-oci-runtime"
 version = "0.1.0"
 dependencies = [
+ "a3s-oci-agent",
  "a3s-oci-agent-protocol",
  "a3s-oci-core",
  "a3s-oci-sdk",

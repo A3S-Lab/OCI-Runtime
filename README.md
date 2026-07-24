@@ -46,6 +46,13 @@ The project is experimental. The current cross-platform foundation implements:
 - an Apple Silicon Hypervisor.framework probe that reads
   `kern.hv_support` directly without spawning `sysctl`;
 - versioned, machine-readable driver capability output;
+- an explicitly selected `NativeLinuxDriver` that reuses the Linux executor
+  directly, accepts only `shared-host-kernel` isolation, and never links or
+  initializes libkrun;
+- a versioned native Linux SDK lifecycle smoke that proves the OCI
+  create/start barrier, exact create/kill/delete replay, signal-driven stopped
+  state, marker visibility, post-delete `NotFound`, and cleanup on x86_64 and
+  aarch64 with `/dev/kvm` both absent and unusable;
 - an async, transport-independent `a3s-oci-sdk` contract for the full OCI
   lifecycle and A3S Box process-control surface;
 - strict, size-bounded OCI 1.0.0 through 1.3.0 bundle loading with an immutable
@@ -133,8 +140,11 @@ slice, not full OCI enforcement: user/time namespaces, all namespace joins,
 mount target creation, idmapped and recursive-attribute mounts, rootfs
 propagation overrides, cgroup resources, capabilities, hooks, seccomp,
 complete I/O, recovery, and the remaining SDK operations are still pending.
-Every built-in platform entry therefore remains `probe-only`, and the default
-host service advertises only `features`.
+Every built-in feature-inventory entry therefore remains `probe-only`, and the
+default host service advertises only `features`. On Linux,
+`NativeLinuxDriver::open_experimental` is an explicit rootful test opt-in that
+promotes only that constructed instance to `experimental`; it does not change
+the default inventory or production readiness.
 
 See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
@@ -162,6 +172,32 @@ device only for a `KVM_GET_API_VERSION` capability query. On Apple Silicon,
 feature output contains `libkrun-hvf` with the direct `kern.hv_support`
 observation. Host availability is not workload readiness: every current entry
 remains `probe-only` and `can_launch()` remains false.
+
+Run the real native Linux lifecycle against the checked-in BusyBox fixture:
+
+```sh
+sudo apt-get install busybox-static
+cargo build -p a3s-oci-agent -p a3s-oci-cli
+
+demo_root="$(mktemp -d)"
+bundle="$demo_root/bundle"
+work_parent="$demo_root/work"
+mkdir -p "$bundle/rootfs/bin" "$work_parent"
+cp fixtures/native-linux/config.json "$bundle/config.json"
+cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
+ln -s busybox "$bundle/rootfs/bin/sh"
+
+sudo target/debug/a3s-oci native-linux-smoke \
+  --agent "$PWD/target/debug/a3s-oci-agent" \
+  --bundle "$bundle" \
+  --work-parent "$work_parent"
+```
+
+The command emits `a3s.oci.native-linux-smoke.v1` JSON and exits with status
+`2` unless the complete SDK lifecycle and cleanup pass. It is a rootful
+development gate for the reviewed bootstrap profile, not a production driver
+selection interface. See [Native Linux Development](docs/linux-native.md) for
+the exact evidence and remaining certification work.
 
 On a WHPX-capable Windows host, the versioned feature inventory resembles:
 
@@ -497,7 +533,7 @@ state, and cleanup.
 | Host | Execution path | Current state |
 | --- | --- | --- |
 | Windows x86_64 | libkrun + WHPX utility VM | Fixed OCI create/start/kill/delete vertical slice passes; complete enforcement and recovery pending; driver is `probe-only` |
-| Linux x86_64/aarch64 without KVM | Native Linux executor | Namespace and cgroup v2 prerequisites are reported without touching KVM; native driver is not implemented |
+| Linux x86_64/aarch64 without KVM | Native Linux executor | Explicit rootful experimental core lifecycle passes on both architectures with KVM absent and unusable; default inventory remains `probe-only`; complete enforcement, rootless operation, recovery, and SDK certification are pending |
 | Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Device access and KVM API version are reported separately; VM driver is not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Apple Silicon and `kern.hv_support` are reported; HVF driver is not implemented |
 
@@ -567,7 +603,7 @@ crates/
 |       |-- service.rs     # Host implementation of the SDK contract
 |       `-- state/         # Durable records, generations, operation journals
 `-- cli/
-    |-- src/main.rs        # Feature, WHPX, and guest-agent diagnostics
+    |-- src/main.rs        # Feature, native Linux, WHPX, and guest diagnostics
     `-- tests/cli.rs       # Public machine-readable CLI contract
 ```
 
@@ -618,6 +654,17 @@ cargo run -p a3s-oci-cli -- oci-vm-smoke \
   --bundle C:\path\to\vm-rootfs\bundle \
   --console C:\path\to\new-oci-console.log
 ```
+
+On an x86_64 or aarch64 Ubuntu host, the CI-equivalent rootful native gate is:
+
+```sh
+bash .github/scripts/native-linux-smoke.sh
+```
+
+The script temporarily preserves any existing `/dev/kvm`, runs the complete
+lifecycle once with that path absent and once with an unusable directory at
+that path, verifies both JSON reports, and restores the original device on
+exit.
 
 Cross-check the non-Windows capability path when the target is installed:
 
@@ -698,8 +745,10 @@ returns `unsupported` for workload calls. Runtime integrators construct
 `HostRuntimeService::open` with a launch-ready, isolation-enforcing
 `RuntimeDriver`; that configured service exposes durable `create`, `state`,
 `start`, `kill`, and `delete`. Remaining SDK methods stay unsupported and are
-never reported as available early. No built-in platform driver is promoted
-from `probe-only` yet.
+never reported as available early. The default platform inventory is not
+promoted from `probe-only`. The rootful Linux development smoke explicitly
+constructs `NativeLinuxDriver::open_experimental`; only that instance reports
+`experimental`.
 
 See [SDK Transport](docs/sdk-transport.md) for the Box-facing connection
 contract and platform examples,
