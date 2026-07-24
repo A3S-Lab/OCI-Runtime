@@ -164,6 +164,21 @@ report_native_failure() {
       "$status"
   fi
 
+  if [[ "$apparmor_profile_loaded" == true ]] &&
+    command -v aa-exec >/dev/null; then
+    if sudo timeout 10s aa-exec -p "$apparmor_profile_name" -- \
+        unshare --user --map-root-user --mount --fork -- \
+        sh -c \
+          'printf "Profile-qualified probe context: "; cat /proc/self/attr/current; mount --make-rprivate / && mount --rbind "$1" "$1"' \
+          sh "$rootfs"; then
+      printf '%s\n' 'Profile-qualified user/mount namespace rbind probe: succeeded'
+    else
+      status=$?
+      printf 'Profile-qualified user/mount namespace rbind probe: failed (%s)\n' \
+        "$status"
+    fi
+  fi
+
   sudo dmesg --ctime 2>/dev/null | tail -n 120 || true
 }
 
