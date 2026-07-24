@@ -169,6 +169,18 @@ report_native_failure() {
     if sudo timeout 10s aa-exec -p "$apparmor_profile_name" -- \
         unshare --user --map-root-user --mount --fork -- \
         sh -c \
+          'printf "Profile-qualified bind context: "; cat /proc/self/attr/current; mount --make-rprivate / && mount --bind "$1" "$1"' \
+          sh "$rootfs"; then
+      printf '%s\n' 'Profile-qualified user/mount namespace bind probe: succeeded'
+    else
+      status=$?
+      printf 'Profile-qualified user/mount namespace bind probe: failed (%s)\n' \
+        "$status"
+    fi
+
+    if sudo timeout 10s aa-exec -p "$apparmor_profile_name" -- \
+        unshare --user --map-root-user --mount --fork -- \
+        sh -c \
           'printf "Profile-qualified probe context: "; cat /proc/self/attr/current; mount --make-rprivate / && mount --rbind "$1" "$1"' \
           sh "$rootfs"; then
       printf '%s\n' 'Profile-qualified user/mount namespace rbind probe: succeeded'
