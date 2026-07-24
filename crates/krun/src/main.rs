@@ -39,6 +39,17 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         pipe_name: String,
     },
+    /// Internal process-takeover boundary for the macOS VM smoke.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[command(name = "__macos-vm-smoke-worker", hide = true)]
+    MacosVmSmokeWorker {
+        #[arg(long, value_name = "DIR")]
+        rootfs: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+        #[arg(long, value_name = "NAME")]
+        marker_name: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -103,6 +114,18 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            }
+        }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        Command::MacosVmSmokeWorker {
+            rootfs,
+            console,
+            marker_name,
+        } => {
+            if a3s_oci_krun::run_macos_vm_smoke_worker(&rootfs, &console, &marker_name) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(2)

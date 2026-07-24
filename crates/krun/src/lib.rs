@@ -9,8 +9,15 @@ use std::path::Path;
 mod agent_smoke;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod context;
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+mod ffi;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_context;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_vm_smoke;
 mod report;
 
 pub use a3s_oci_agent_protocol::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
@@ -268,11 +275,30 @@ pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
         vm_smoke_windows(rootfs, console, config)
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        macos_vm_smoke::vm_smoke(rootfs, console, config)
+    }
+
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     {
         let _ = (rootfs, console);
         KrunVmSmokeReport::unsupported(HostPlatform::current(), config)
     }
+}
+
+/// Run the private macOS VM-entry worker used by [`vm_smoke`].
+///
+/// This is exported only so the isolated shim binary can cross the
+/// process-takeover boundary. It is not an SDK or driver API.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_macos_vm_smoke_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bool {
+    macos_vm_smoke::run_worker(rootfs, console, marker_name)
 }
 
 pub(crate) fn fallback_config() -> VmConfig {

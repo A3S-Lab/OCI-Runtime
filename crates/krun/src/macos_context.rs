@@ -1,4 +1,4 @@
-use std::ffi::{c_char, CString};
+use std::ffi::c_char;
 use std::fs::{self, File};
 use std::io::Read;
 use std::marker::PhantomData;
@@ -8,7 +8,9 @@ use std::rc::Rc;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_LOCAL, RTLD_NOW};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
+use crate::ffi::{path_to_cstring, value_to_cstring, FfiStringArray};
 use crate::VmConfig;
 
 const LIBKRUN_NAME: &str = "libkrun.1.17.0.dylib";
@@ -22,6 +24,12 @@ type KrunSetVmConfig = unsafe extern "C" fn(u32, u8, u32) -> i32;
 type KrunDisableImplicitVsock = unsafe extern "C" fn(u32) -> i32;
 type KrunAddVsock = unsafe extern "C" fn(u32, u32) -> i32;
 type KrunAddVsockPort = unsafe extern "C" fn(u32, u32, *const c_char, bool) -> i32;
+type KrunSetRoot = unsafe extern "C" fn(u32, *const c_char) -> i32;
+type KrunSetWorkdir = unsafe extern "C" fn(u32, *const c_char) -> i32;
+type KrunSetExec =
+    unsafe extern "C" fn(u32, *const c_char, *const *const c_char, *const *const c_char) -> i32;
+type KrunSetConsoleOutput = unsafe extern "C" fn(u32, *const c_char) -> i32;
+type KrunStartEnter = unsafe extern "C" fn(u32) -> i32;
 
 /// Exact, process-local API loaded from the checksum-verified runtime bundle.
 pub(crate) struct MacosKrunApi {
@@ -31,6 +39,11 @@ pub(crate) struct MacosKrunApi {
     disable_implicit_vsock: KrunDisableImplicitVsock,
     add_vsock: KrunAddVsock,
     add_vsock_port: KrunAddVsockPort,
+    set_root: KrunSetRoot,
+    set_workdir: KrunSetWorkdir,
+    set_exec: KrunSetExec,
+    set_console_output: KrunSetConsoleOutput,
+    start_enter: KrunStartEnter,
     // Drop libkrun before its firmware provider.
     _krun: Library,
     _firmware: Library,
@@ -80,6 +93,15 @@ impl MacosKrunApi {
         )?;
         let add_vsock = load_symbol(&krun, b"krun_add_vsock\0", "krun_add_vsock")?;
         let add_vsock_port = load_symbol(&krun, b"krun_add_vsock_port2\0", "krun_add_vsock_port2")?;
+        let set_root = load_symbol(&krun, b"krun_set_root\0", "krun_set_root")?;
+        let set_workdir = load_symbol(&krun, b"krun_set_workdir\0", "krun_set_workdir")?;
+        let set_exec = load_symbol(&krun, b"krun_set_exec\0", "krun_set_exec")?;
+        let set_console_output = load_symbol(
+            &krun,
+            b"krun_set_console_output\0",
+            "krun_set_console_output",
+        )?;
+        let start_enter = load_symbol(&krun, b"krun_start_enter\0", "krun_start_enter")?;
 
         Ok(Self {
             create_ctx,
@@ -88,6 +110,11 @@ impl MacosKrunApi {
             disable_implicit_vsock,
             add_vsock,
             add_vsock_port,
+            set_root,
+            set_workdir,
+            set_exec,
+            set_console_output,
+            start_enter,
             _krun: krun,
             _firmware: firmware,
         })
@@ -164,6 +191,104 @@ impl KrunContext {
             status,
             "failed to map the guest agent port to a macOS Unix socket",
         )
+    }
+
+    pub(crate) fn set_root(&mut self, root: &Path) -> Result<()> {
+        let id = self.active_id("krun_set_root")?;
+        let root = path_to_cstring("krun_set_root", root)?;
+        // SAFETY: the context remains exclusively owned by `self`, and the
+        // verified path is NUL-terminated for the duration of this call.
+        let status = unsafe { (self.api.set_root)(id, root.as_ptr()) };
+        check_status(
+            "krun_set_root",
+            status,
+            "failed to configure the macOS libkrun root filesystem",
+        )
+    }
+
+    pub(crate) fn set_workdir(&mut self, workdir: &str) -> Result<()> {
+        let id = self.active_id("krun_set_workdir")?;
+        let workdir = value_to_cstring("krun_set_workdir", "working directory", workdir)?;
+        // SAFETY: the context remains exclusively owned by `self`, and the
+        // value is NUL-terminated for the duration of this call.
+        let status = unsafe { (self.api.set_workdir)(id, workdir.as_ptr()) };
+        check_status(
+            "krun_set_workdir",
+            status,
+            "failed to configure the macOS libkrun working directory",
+        )
+    }
+
+    pub(crate) fn set_exec(
+        &mut self,
+        executable: &str,
+        arguments: &[String],
+        environment: &[(String, String)],
+    ) -> Result<()> {
+        let id = self.active_id("krun_set_exec")?;
+        let executable = value_to_cstring("krun_set_exec", "executable", executable)?;
+        let arguments = FfiStringArray::new("krun_set_exec", "arguments", arguments)?;
+        let environment_entries = Zeroizing::new(
+            environment
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>(),
+        );
+        let environment =
+            FfiStringArray::new("krun_set_exec", "environment", &environment_entries)?;
+
+        // SAFETY: all pointers refer to live allocations, and both tables
+        // contain the exact number of slots read by the pinned libkrun.
+        let status = unsafe {
+            (self.api.set_exec)(
+                id,
+                executable.as_ptr(),
+                arguments.as_ptr(),
+                environment.as_ptr(),
+            )
+        };
+        check_status(
+            "krun_set_exec",
+            status,
+            "failed to configure the macOS libkrun guest workload",
+        )
+    }
+
+    pub(crate) fn set_console_output(&mut self, output: &Path) -> Result<()> {
+        let id = self.active_id("krun_set_console_output")?;
+        let output = path_to_cstring("krun_set_console_output", output)?;
+        // SAFETY: the context remains exclusively owned by `self`, and the
+        // path is NUL-terminated for the duration of this call.
+        let status = unsafe { (self.api.set_console_output)(id, output.as_ptr()) };
+        check_status(
+            "krun_set_console_output",
+            status,
+            "failed to configure macOS libkrun console output",
+        )
+    }
+
+    pub(crate) fn start_enter(mut self) -> Result<i32> {
+        let id = self.id.take().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "libkrun context has already been released",
+            )
+            .for_operation("krun_start_enter")
+        })?;
+
+        // SAFETY: `id` is valid and exclusively owned. libkrun consumes the
+        // context before VM construction and terminates this worker process
+        // with the guest exit code after a successful entry.
+        let status = unsafe { (self.api.start_enter)(id) };
+        if status < 0 {
+            Err(ffi_error(
+                "krun_start_enter",
+                status,
+                "failed to enter the macOS libkrun virtual machine",
+            ))
+        } else {
+            Ok(status)
+        }
     }
 
     pub(crate) fn close(mut self) -> Result<()> {
@@ -344,23 +469,6 @@ fn load_symbol<T: Copy>(
         )
     })?;
     Ok(*symbol)
-}
-
-fn path_to_cstring(operation: &'static str, path: &Path) -> Result<CString> {
-    let value = path.to_str().ok_or_else(|| {
-        Error::new(
-            ErrorCode::InvalidArgument,
-            format!("path is not valid UTF-8: {}", path.display()),
-        )
-        .for_operation(operation)
-    })?;
-    CString::new(value).map_err(|_| {
-        Error::new(
-            ErrorCode::InvalidArgument,
-            "path contains an embedded NUL byte",
-        )
-        .for_operation(operation)
-    })
 }
 
 fn check_status(operation: &'static str, status: i32, message: &'static str) -> Result<()> {

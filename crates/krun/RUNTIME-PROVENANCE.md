@@ -62,5 +62,12 @@ plus the applicable native license and corresponding-source notices.
 The OCI Runtime build script verifies the inner archive and both extracted
 files. The macOS shim repeats the two file checks immediately before loading
 the absolute paths, rejects symbolic links, loads firmware before libkrun, and
-resolves only the context-lifecycle ABI it uses. A modified staged library is
-rejected before `krun_create_ctx`.
+resolves only the context and VM-entry ABI it uses. A modified staged library
+is rejected before `krun_create_ctx`.
+
+The real VM-entry qualification does not add a rootfs to the runtime archive.
+CI and local qualification download the upstream Alpine 3.22.5 aarch64
+minirootfs separately and require SHA-256
+`3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70`
+before extraction. This keeps the native runtime bundle deterministic while
+binding the diagnostic userspace used for retained guest-execution evidence.
