@@ -15,6 +15,7 @@
   <a href="#runtime-model">Runtime Model</a> •
   <a href="#platform-status">Platform Status</a> •
   <a href="#architecture">Architecture</a> •
+  <a href="#conformance-and-security">Conformance</a> •
   <a href="#development">Development</a>
 </p>
 
@@ -412,34 +413,69 @@ runtime prerequisite.
 
 ## Architecture
 
-The control plane is platform-neutral. Platform-specific isolation and native
-libraries stay behind explicit driver and shim boundaries:
+The public contract is separated from replaceable infrastructure. The SDK and
+lifecycle control plane remain platform-neutral, while native isolation and
+hypervisor libraries stay behind explicit driver, shim, and guest boundaries:
 
 ```mermaid
 flowchart TB
-    consumers["Consumers<br/>A3S Box · a3s-oci CLI · planned containerd shim"]
-    control["Platform-neutral control plane<br/>RuntimeClient → OciRuntimeService → HostRuntimeService<br/>validation · lifecycle · reconciliation"]
-    state[("Durable state<br/>exact bundle · generations · operation journal")]
-    selection{"RuntimeDriver<br/>explicit isolation selection"}
-    native["Native Linux<br/>NativeLinuxDriver · experimental opt-in"]
-    utility["Utility VM host · qualification path<br/>isolated a3s-oci-krun-shim → libkrun<br/>KVM · HVF · WHPX"]
-    agent["A3S Linux guest<br/>authenticated AF_VSOCK → a3s-oci-agent"]
-    executor["Shared LinuxExecutor<br/>namespaces · mounts · PID 1 · process lifecycle"]
+    subgraph consumers["Consumers and SDK"]
+        box["A3S Box"]
+        cli["a3s-oci CLI"]
+        containerd["containerd shim<br/>(planned)"]
+        client["RuntimeClient<br/>in-process service or bounded local IPC"]
+        box --> client
+        cli --> client
+        containerd -.-> client
+    end
 
-    consumers --> control --> selection
-    control <--> state
-    selection --> native --> executor
-    selection --> utility --> agent --> executor
+    subgraph host["Platform-neutral host control plane"]
+        service["OciRuntimeService<br/>HostRuntimeService"]
+        validation["OCI schema and semantic validation"]
+        lifecycle["Durable lifecycle<br/>generations · replay · fencing · reconciliation"]
+        state[("Runtime-owned state<br/>exact config · operation journal")]
+        selection{"RuntimeDriver<br/>explicit isolation selection"}
+
+        service --> validation --> lifecycle --> selection
+        lifecycle <--> state
+    end
+
+    subgraph native["Native Linux — experimental opt-in"]
+        native_driver["NativeLinuxDriver<br/>shared host kernel"]
+    end
+
+    subgraph utility["Utility VM — qualification path"]
+        utility_driver["Utility VM RuntimeDriver<br/>(integration pending)"]
+        shim["a3s-oci-krun-shim<br/>checksum-pinned native loading"]
+        hypervisor["libkrun<br/>HVF · WHPX<br/>KVM probe only"]
+        bridge["Authenticated host/guest bridge<br/>Unix socket or named pipe → AF_VSOCK"]
+        agent["a3s-oci-agent<br/>static Linux guest service"]
+
+        utility_driver -.-> shim
+        shim --> hypervisor --> bridge --> agent
+    end
+
+    executor["Shared LinuxExecutor implementation<br/>namespaces · mounts · create/start barrier<br/>PID 1 · signaling · scoped cleanup"]
+
+    client --> service
+    selection -->|"shared-host-kernel"| native_driver
+    selection -.->|"dedicated-vm / shared-guest-kernel"| utility_driver
+    native_driver --> executor
+    agent --> executor
 ```
 
-The same `LinuxExecutor` is called directly on Linux and through the guest
-agent in a utility VM. The utility-VM branch represents the qualification
-architecture; readiness remains defined by the
-[platform status](#platform-status), not by presence in the diagram.
+The two paths compile and place the same `LinuxExecutor` differently: directly
+behind `NativeLinuxDriver` on Linux, or inside `a3s-oci-agent` in a utility VM.
+The utility-VM branch is the qualification architecture: its driver integration
+is dashed because it is not yet wired into `HostRuntimeService`. Solid
+connections show implemented or directly exercised boundaries, not `supported`
+readiness; the [platform status](#platform-status) remains authoritative.
 
-A3S Box owns product-level images, builds, volumes, networks, and policy. A3S
-OCI Runtime owns the validated OCI lifecycle, platform execution, durable
-state, guest protocol, and runtime-scoped cleanup.
+| Boundary | Owns | Deliberately leaves outside |
+| --- | --- | --- |
+| A3S Box product plane | Images, builds, volumes, networks, and product policy | OCI process and isolation enforcement |
+| OCI Runtime control plane | Exact OCI validation, lifecycle state, replay, reconciliation, capability reporting, and driver selection | Silent isolation fallback and product policy |
+| Platform execution plane | Hypervisor bridge, Linux namespaces and mounts, PID 1 lifecycle, signaling, and runtime-scoped cleanup | Image distribution and workload orchestration |
 
 The main runtime, CLI, and SDK do not link libkrun. Only
 `a3s-oci-krun-shim` loads the checksum-verified native runtime bundle, keeping
@@ -509,6 +545,7 @@ Run checks from the OCI Runtime repository root:
 cargo fmt --all -- --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 Cross-check Linux compilation without treating the monorepo root as a Rust
