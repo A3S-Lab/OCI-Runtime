@@ -14,6 +14,7 @@ use tokio::time::timeout;
 
 use super::control::{read_outcome, InitOutcome, START_BYTE};
 use super::pid;
+use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -23,6 +24,7 @@ pub(super) struct PreparedProcess {
     child: Child,
     control: Option<UnixStream>,
     pid: i32,
+    pidfd: PidFd,
 }
 
 impl PreparedProcess {
@@ -151,12 +153,20 @@ impl PreparedProcess {
                 ));
             }
         };
+        let pidfd = match PidFd::open(runtime_pid) {
+            Ok(pidfd) => pidfd,
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+        };
         drop(listener);
 
         Ok(Self {
             child,
             control: Some(control),
             pid: runtime_pid,
+            pidfd,
         })
     }
 
@@ -191,21 +201,8 @@ impl PreparedProcess {
         })
     }
 
-    pub(super) fn signal(&self, signal: i32) -> Result<()> {
-        // SAFETY: `pid` is the positive process ID returned by Tokio and the
-        // signal has already passed the SDK's positive-integer validation.
-        if unsafe { libc::kill(self.pid, signal) } == 0 {
-            Ok(())
-        } else {
-            Err(process_error(
-                ErrorCode::Unavailable,
-                format!(
-                    "failed to signal container init PID {}: {}",
-                    self.pid,
-                    io::Error::last_os_error()
-                ),
-            ))
-        }
+    pub(super) fn signal(&self, signal: i32) -> Result<SignalOutcome> {
+        self.pidfd.send_signal(signal)
     }
 
     pub(super) async fn force_stop(&mut self) -> Result<()> {
@@ -219,19 +216,19 @@ impl PreparedProcess {
                 ));
             }
         }
-        // SAFETY: `pid` is the positive, authenticated runtime-visible PID
-        // held at the create barrier.
-        if unsafe { libc::kill(self.pid, libc::SIGKILL) } != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
+        match self.pidfd.send_signal(libc::SIGKILL) {
+            Ok(SignalOutcome::Delivered | SignalOutcome::Exited) => {}
+            Err(error) => {
                 terminate(&mut self.child).await;
-                return Err(process_error(
-                    ErrorCode::Internal,
+                return Err(Error::new(
+                    error.code,
                     format!(
                         "failed to terminate container init PID {} during cleanup: {error}",
                         self.pid
                     ),
-                ));
+                )
+                .for_operation("run-container-init")
+                .retryable(error.retryable));
             }
         }
         match timeout(INIT_READY_TIMEOUT, self.child.wait()).await {

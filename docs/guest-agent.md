@@ -84,25 +84,32 @@ error or readiness with the runtime-visible init PID before blocking. For a
 new PID namespace, the agent verifies that PID's parent, `NSpid` mapping to 1,
 and namespace identity against the authenticated supervisor. Create therefore
 preserves the exact rejection or returns `created` before the configured
-process runs. Start sends the one-byte release signal; the init applies the
-inherited-namespace `chroot` when needed, then working directory, groups, GID,
-UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
+process runs. Before returning `created`, the executor opens a pidfd for that
+authenticated init PID. Failure to open the descriptor terminates the wrapper
+and fails create. Start sends the one-byte release signal; the init applies
+the inherited-namespace `chroot` when needed, then working directory, groups,
+GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
 
-State observes the init process, kill delivers one positive Linux signal, and
-delete supports stopped-only and force cleanup. Exact request retries are
-fingerprinted by `OperationId`, and reused IDs with different requests fail.
-Generation fences remain in memory after delete.
+State observes the init process, kill delivers one positive Linux signal
+through the retained pidfd, and delete supports stopped-only and force
+cleanup. Cleanup also signals through the pidfd and always reaps the
+authenticated wrapper before removing its runtime directory. Numeric PID
+reuse can therefore never redirect a lifecycle signal to an unrelated
+process. Exact request retries are fingerprinted by `OperationId`, and reused
+IDs with different requests fail. Generation fences remain in memory after
+delete.
 
 All guest registry, generation, and idempotency state is session-local. A
 closed host connection force-stops remaining init processes and removes the
 agent-owned runtime root. Agent restart recovery is not implemented yet.
 
-The executor currently rejects mount-target creation, rootfs propagation
-overrides, idmapped and recursive-attribute mounts, every namespace type other
-than UTS, mount, IPC, network, cgroup, and PID, all namespace joins, cgroup
-resources, capabilities, seccomp, hooks, read-only rootfs, terminals, non-null
-I/O, process-group signals, and every other unimplemented OCI property. These
-are release blockers, not silently accepted compatibility gaps.
+The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
+rejects mount-target creation, rootfs propagation overrides, idmapped and
+recursive-attribute mounts, every namespace type other than UTS, mount, IPC,
+network, cgroup, and PID, all namespace joins, cgroup resources, capabilities,
+seccomp, hooks, read-only rootfs, terminals, non-null I/O, process-group
+signals, and every other unimplemented OCI property. These are release
+blockers, not silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -123,8 +130,9 @@ NotFound, marker cleanup, and nominal guest runtime cleanup.
 `a3s-oci oci-vm-multi-container-smoke` keeps two distinct bundle rootfs and
 runtime slots live behind the create barrier, proves that A's start, kill,
 delete, recreation, stale generation, and replay conflicts do not alter B,
-then completes B independently. The macOS HVF gate retains both per-container
-markers together with guest-runtime and host-process cleanup evidence.
+then completes B independently. The macOS HVF gate sends both init signals
+through distinct retained pidfds and retains both per-container markers
+together with guest-runtime and host-process cleanup evidence.
 
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
 records that delete was not attempted, and requires guest executor shutdown to

@@ -17,6 +17,7 @@ const REQUIRED_NAMESPACE_FILES: [&str; 7] = ["cgroup", "ipc", "mnt", "net", "pid
 struct NativeLinuxObservation {
     namespace_api: bool,
     cgroup_v2: bool,
+    pidfd_signaling: bool,
     unprivileged_user_namespaces: &'static str,
     reason: Option<String>,
 }
@@ -47,6 +48,8 @@ fn observe_native_linux() -> NativeLinuxObservation {
         .collect::<Vec<_>>();
     let namespace_api = missing_namespaces.is_empty();
     let cgroup_v2 = Path::new("/sys/fs/cgroup/cgroup.controllers").is_file();
+    let pidfd_error = a3s_oci_agent::verify_linux_pidfd_support().err();
+    let pidfd_signaling = pidfd_error.is_none();
     let reason = if !namespace_api {
         Some(format!(
             "Linux namespace API is incomplete; missing /proc/self/ns/{}",
@@ -55,12 +58,13 @@ fn observe_native_linux() -> NativeLinuxObservation {
     } else if !cgroup_v2 {
         Some("cgroup v2 is unavailable at /sys/fs/cgroup/cgroup.controllers".to_string())
     } else {
-        None
+        pidfd_error.map(|error| format!("Linux pidfd signaling is unavailable: {error}"))
     };
 
     NativeLinuxObservation {
         namespace_api,
         cgroup_v2,
+        pidfd_signaling,
         unprivileged_user_namespaces: observe_unprivileged_user_namespaces(),
         reason,
     }
@@ -84,13 +88,18 @@ fn native_capability(observation: NativeLinuxObservation) -> DriverCapability {
     );
     evidence.insert("cgroup_v2".to_string(), observation.cgroup_v2.to_string());
     evidence.insert(
+        "pidfd_signaling".to_string(),
+        observation.pidfd_signaling.to_string(),
+    );
+    evidence.insert(
         "unprivileged_user_namespaces".to_string(),
         observation.unprivileged_user_namespaces.to_string(),
     );
 
     DriverCapability {
         driver: DriverKind::NativeLinux,
-        status: if observation.namespace_api && observation.cgroup_v2 {
+        status: if observation.namespace_api && observation.cgroup_v2 && observation.pidfd_signaling
+        {
             CapabilityStatus::Available
         } else {
             CapabilityStatus::Unavailable
@@ -220,6 +229,7 @@ mod tests {
         let capability = native_capability(NativeLinuxObservation {
             namespace_api: true,
             cgroup_v2: true,
+            pidfd_signaling: true,
             unprivileged_user_namespaces: "enabled",
             reason: None,
         });
@@ -239,6 +249,7 @@ mod tests {
         let capability = native_capability(NativeLinuxObservation {
             namespace_api: true,
             cgroup_v2: false,
+            pidfd_signaling: true,
             unprivileged_user_namespaces: "disabled",
             reason: Some("cgroup v2 is unavailable".to_string()),
         });
@@ -248,6 +259,21 @@ mod tests {
             capability.evidence["unprivileged_user_namespaces"],
             "disabled"
         );
+        assert!(!capability.can_launch());
+    }
+
+    #[test]
+    fn missing_pidfd_signaling_makes_native_execution_unavailable() {
+        let capability = native_capability(NativeLinuxObservation {
+            namespace_api: true,
+            cgroup_v2: true,
+            pidfd_signaling: false,
+            unprivileged_user_namespaces: "enabled",
+            reason: Some("pidfd signaling is unavailable".to_string()),
+        });
+
+        assert_eq!(capability.status, CapabilityStatus::Unavailable);
+        assert_eq!(capability.evidence["pidfd_signaling"], "false");
         assert!(!capability.can_launch());
     }
 

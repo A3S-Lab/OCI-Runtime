@@ -38,8 +38,8 @@ Completed:
 - pure OCI lifecycle transition contract;
 - versioned driver status, readiness, isolation, and evidence;
 - secure WHPX DLL loading and hypervisor capability probe;
-- native Linux namespace and cgroup v2 prerequisite reporting that does not
-  touch `/dev/kvm`;
+- native Linux namespace, cgroup v2, and pidfd signaling prerequisite
+  reporting that does not touch `/dev/kvm`;
 - Linux KVM device, access, ioctl, and API-version reporting without libkrun
   initialization;
 - Apple Silicon and Hypervisor.framework capability reporting through a
@@ -86,7 +86,7 @@ Completed:
   and domainname, recursively private mount propagation, ordered
   existing-target OCI mounts, `pivot_root`, authenticated host-visible PID
   reporting, exact-generation state, bounded typed init rejection reporting,
-  session idempotency, signaling, and cleanup;
+  session idempotency, retained pidfd signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -289,6 +289,10 @@ then may HVF become `experimental`.
   and authenticate its host-visible PID before the created barrier.
 - [x] Prove executor shutdown cleanup without delete after successful create,
   start, and kill through native Linux and the macOS utility-VM path.
+- [x] Open and retain a pidfd for every authenticated init process, reject
+  kernels without `pidfd_open` and `pidfd_send_signal`, and deliver lifecycle
+  and cleanup signals without a numeric-PID reuse race. Prove the path through
+  native Linux and the macOS utility VM.
 - [ ] Namespace creation for user and time namespaces, plus joining existing
   namespaces.
 - [ ] Mount-target creation, rootfs propagation overrides, idmapped and
@@ -298,7 +302,7 @@ then may HVF become `experimental`.
   priority, affinity, `no_new_privileges`, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified
   resource enforcement.
-- [ ] Init supervision, zombie reaping, pidfd signaling, exec, and wait.
+- [ ] Init supervision, zombie reaping, exec, and wait.
 - [ ] Ordered hooks with OCI state on stdin.
 - [ ] Backpressured stdin/stdout/stderr, PTY, resize, signals, and output
   cursors.
@@ -309,8 +313,8 @@ and recovery suites in the Windows guest and on native Linux.
 
 ### R4 — Native Linux Without KVM
 
-- [x] Report native namespace and cgroup v2 prerequisites without opening
-  `/dev/kvm` or initializing libkrun.
+- [x] Report native namespace, cgroup v2, and pidfd signaling prerequisites
+  without opening `/dev/kvm` or initializing libkrun.
 - [x] Report optional KVM absence, permission failure, ioctl failure, and API
   version independently from native readiness.
 - [x] Add the native Linux driver without linking or initializing libkrun.

@@ -30,6 +30,12 @@ The native probe performs read-only inspection of:
 - `/proc/self/ns/uts`;
 - `/sys/fs/cgroup/cgroup.controllers`.
 
+It also opens a pidfd for the probing process, sends signal `0` through
+`pidfd_send_signal`, and closes the descriptor. This proves both required
+kernel interfaces without delivering a signal. The stable
+`pidfd_signaling=true` evidence field is required for an available native
+result.
+
 It also records `/proc/sys/kernel/unprivileged_userns_clone` when that
 distribution-specific policy file exists. The policy is evidence for future
 rootless execution; it is not required for rootful host availability.
@@ -42,7 +48,8 @@ The native probe never:
 - writes cgroup state;
 - mutates runtime state.
 
-An available result means only that the baseline kernel interfaces exist.
+An available result means only that the baseline kernel interfaces and pidfd
+process control exist.
 `DriverReadiness::ProbeOnly` prevents selection by the default
 `HostRuntimeService`.
 
@@ -85,8 +92,8 @@ following:
 4. the workload marker is absent before start;
 5. retrying create replays its exact result;
 6. start releases the prepared init and the marker is observed;
-7. `SIGKILL` terminates the namespace PID 1 and retrying kill replays its exact
-   result;
+7. `SIGKILL` reaches the namespace PID 1 through its retained pidfd, and
+   retrying kill replays its exact result;
 8. state reaches `stopped`;
 9. stopped-only delete and its exact retry succeed;
 10. state returns `NotFound` after delete;
@@ -94,7 +101,8 @@ following:
 
 The smoke uses `SIGKILL` because Linux protects a PID-namespace init from
 default-action signals such as `SIGTERM`. General PID 1 supervision and signal
-forwarding remain part of the executor roadmap.
+forwarding remain part of the executor roadmap. The runtime never resolves the
+numeric PID again for lifecycle or cleanup signaling.
 
 GitHub Actions runs this real rootful lifecycle on x86_64 and aarch64 Ubuntu.
 Each architecture runs once with `/dev/kvm` absent and once with a directory at
@@ -138,10 +146,10 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 ```
 
 The `a3s.oci.native-linux-multi-container-smoke.v1` success additionally
-requires exact create/start/kill/delete replay, both marker removals, executor
-shutdown, and complete durable-session removal. GitHub Actions runs the gate
-on x86_64 and aarch64 both without `/dev/kvm` and with a present but unusable
-placeholder at that path.
+requires exact create/start/kill/delete replay through each retained pidfd,
+both marker removals, executor shutdown, and complete durable-session removal.
+GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
+with a present but unusable placeholder at that path.
 
 ## Fault-injected shutdown cleanup
 
@@ -181,7 +189,7 @@ The default driver must remain `probe-only` until at least the following pass:
 - namespace joins, time namespaces, and security-negative cases;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
-- init supervision, zombie reaping, pidfd signaling, and complete process I/O;
+- init supervision, zombie reaping, exec, wait, and complete process I/O;
 - hooks, exhaustive durable-write and driver-error recovery injection,
   descriptor-relative path handling, and adversarial cleanup;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on

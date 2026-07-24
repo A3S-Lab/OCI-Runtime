@@ -4,6 +4,7 @@ mod mount;
 #[cfg(test)]
 mod mount_tests;
 mod pid;
+mod pidfd;
 mod plan;
 #[cfg(test)]
 mod plan_tests;
@@ -24,6 +25,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use crate::AGENT_VERSION;
+use pidfd::SignalOutcome;
 use plan::InitPlan;
 use process::PreparedProcess;
 use state::{
@@ -31,6 +33,7 @@ use state::{
 };
 
 pub(crate) use init::run_container_init_if_requested;
+pub(crate) use pidfd::verify_support as verify_pidfd_support;
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const MAX_OPERATION_RECORDS: usize = 4_096;
@@ -70,6 +73,7 @@ impl LinuxExecutor {
                 "the Linux executor must run as root",
             ));
         }
+        pidfd::verify_support()?;
         let parent = runtime_parent.as_ref();
         if !parent.is_absolute() {
             return Err(executor_error(
@@ -340,8 +344,10 @@ impl LinuxExecutor {
                 "cannot signal a stopped container",
             ));
         }
-        record.process.signal(request.signal.get())?;
-        record.refresh()?;
+        match record.process.signal(request.signal.get())? {
+            SignalOutcome::Delivered => record.refresh()?,
+            SignalOutcome::Exited => record.status = ContainerState::Stopped,
+        }
         record.state()
     }
 
@@ -363,16 +369,17 @@ impl LinuxExecutor {
                 )
             })?;
             record.refresh()?;
-            if record.status != ContainerState::Stopped {
-                if request.mode == DeleteMode::StoppedOnly {
-                    return Err(executor_error(
-                        ErrorCode::FailedPrecondition,
-                        "stopped-only delete requires a stopped container",
-                    ));
-                }
-                record.process.force_stop().await?;
-                record.status = ContainerState::Stopped;
+            if record.status != ContainerState::Stopped && request.mode == DeleteMode::StoppedOnly {
+                return Err(executor_error(
+                    ErrorCode::FailedPrecondition,
+                    "stopped-only delete requires a stopped container",
+                ));
             }
+            // Even an already-stopped init may have an authenticated wrapper
+            // that has not completed its final wait yet. Always reap that
+            // wrapper before releasing the runtime directory.
+            record.process.force_stop().await?;
+            record.status = ContainerState::Stopped;
             record.runtime_directory.clone()
         };
         remove_container_directory(&self.runtime_root, &runtime_directory).await?;
