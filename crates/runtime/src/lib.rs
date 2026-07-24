@@ -16,6 +16,8 @@ mod agent_smoke_process;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod agent_socket;
 mod driver;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod host_cleanup;
 #[cfg(target_os = "linux")]
 mod native_linux_driver;
 mod native_smoke;
@@ -41,7 +43,8 @@ pub use native_linux_driver::NativeLinuxDriver;
 pub use native_smoke::native_linux_smoke;
 pub use oci_smoke::oci_vm_smoke;
 pub use report::{
-    AgentVmSmokeReport, HvfSmokeReport, NativeLinuxSmokeReport, OciVmSmokeReport, WhpxSmokeReport,
+    AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxSmokeReport,
+    OciVmSmokeReport, WhpxSmokeReport,
 };
 pub use service::HostRuntimeService;
 

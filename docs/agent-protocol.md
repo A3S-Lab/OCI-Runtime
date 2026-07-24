@@ -94,10 +94,13 @@ five core operations.
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in `a3s.oci.agent-vm-smoke.v2`. The signed path must negotiate protocol version
+in `a3s.oci.agent-vm-smoke.v3`. The signed path must negotiate protocol version
 1 and the exact five operations. The missing-entitlement path must exit with
 status `2`, report no negotiation, terminate the shim process group, and leave
-no private endpoint residue.
+no private endpoint residue. Both paths also retain in-process evidence that
+the exact runtime-owned endpoint was removed, the complete current-process
+descriptor inventory returned to its baseline, and every observed shim or
+VM-worker PID disappeared.
 
 The real Windows and macOS `oci-vm-smoke` paths keep the same authenticated
 connection open and prove a fixed bundle through create, state, exact create

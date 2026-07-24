@@ -20,9 +20,22 @@ pub async fn agent_vm_smoke(shim: &Path, rootfs: &Path, console: &Path) -> Agent
         all(target_os = "macos", target_arch = "aarch64")
     ))]
     {
-        match crate::agent_session::AgentVmSession::connect(shim, rootfs, console).await {
-            Ok(session) => session.finish().await,
-            Err(report) => report,
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
+        let report =
+            match crate::agent_session::AgentVmSession::connect(shim, rootfs, console).await {
+                Ok(session) => session.finish().await,
+                Err(report) => report,
+            };
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            let mut report = report;
+            cleanup.apply(&mut report).await;
+            report
+        }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        {
+            report
         }
     }
 

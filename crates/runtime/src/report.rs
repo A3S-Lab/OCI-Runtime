@@ -10,9 +10,9 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v2";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v3";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
-pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v2";
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v3";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
 pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v1";
 
@@ -144,6 +144,44 @@ impl HvfSmokeReport {
     }
 }
 
+/// macOS host-resource evidence captured around one guest-agent VM session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MacosHostCleanupEvidence {
+    /// Whether the exact runtime-owned Unix endpoint was removed.
+    pub endpoint_removed: bool,
+    /// Whether the public libkrun shim process disappeared after it was waited.
+    pub shim_reaped: bool,
+    /// Whether the direct libkrun VM worker disappeared after session cleanup.
+    pub bridge_reaped: bool,
+    /// Number of host descriptors open before the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_descriptors_before: Option<u32>,
+    /// Number of host descriptors open after the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_descriptors_after: Option<u32>,
+    /// Whether the complete host `(descriptor, type)` inventory was restored.
+    pub descriptor_inventory_restored: bool,
+    /// Diagnostic reason when cleanup verification was incomplete or failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl MacosHostCleanupEvidence {
+    /// Return whether every tracked macOS host resource returned to baseline.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.endpoint_removed
+            && self.shim_reaped
+            && self.bridge_reaped
+            && self
+                .open_descriptors_before
+                .is_some_and(|descriptor_count| descriptor_count > 0)
+            && self.open_descriptors_before == self.open_descriptors_after
+            && self.descriptor_inventory_restored
+            && self.reason.is_none()
+    }
+}
+
 /// End-to-end evidence from host endpoint binding through guest-agent negotiation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentVmSmokeReport {
@@ -155,6 +193,9 @@ pub struct AgentVmSmokeReport {
     pub status: CapabilityStatus,
     /// Whether an exclusive, protected host endpoint was bound.
     pub endpoint_bound: bool,
+    /// Portable basename of the exact host endpoint allocated for this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_name: Option<String>,
     /// Whether the isolated libkrun shim process was started.
     pub shim_spawned: bool,
     /// Process ID of the public libkrun shim parent.
@@ -191,6 +232,9 @@ pub struct AgentVmSmokeReport {
     /// Exact shim evidence retained without linking libkrun into the runtime.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shim_report: Option<Value>,
+    /// Host endpoint, process, and descriptor cleanup evidence on macOS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub macos_cleanup: Option<MacosHostCleanupEvidence>,
     /// Diagnostic reason when the smoke was not successful.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -203,6 +247,7 @@ impl AgentVmSmokeReport {
             platform,
             status: CapabilityStatus::Unavailable,
             endpoint_bound: false,
+            endpoint_name: None,
             shim_spawned: false,
             shim_process_id: None,
             bridge_process_id: None,
@@ -216,6 +261,7 @@ impl AgentVmSmokeReport {
             shim_exit_code: None,
             console_created: false,
             shim_report: None,
+            macos_cleanup: None,
             reason: None,
         }
     }
@@ -251,6 +297,13 @@ impl AgentVmSmokeReport {
             HostPlatform::Macos => Some("aarch64"),
             _ => None,
         };
+        let host_cleanup_matches = match self.platform {
+            HostPlatform::Macos => self
+                .macos_cleanup
+                .as_ref()
+                .is_some_and(MacosHostCleanupEvidence::is_success),
+            _ => self.macos_cleanup.is_none(),
+        };
         matches!(self.status, CapabilityStatus::Available)
             && self.endpoint_bound
             && self.shim_spawned
@@ -272,6 +325,7 @@ impl AgentVmSmokeReport {
             && self.shim_exit_code == Some(0)
             && self.console_created
             && self.shim_report.is_some()
+            && host_cleanup_matches
     }
 }
 
@@ -519,5 +573,62 @@ impl OciVmSmokeReport {
             && self.marker_removed
             && self.guest_runtime_clean
             && self.bridge.is_success()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MacosHostCleanupEvidence;
+
+    #[test]
+    fn macos_cleanup_requires_every_host_resource_to_return_to_baseline() {
+        let evidence = MacosHostCleanupEvidence {
+            endpoint_removed: true,
+            shim_reaped: true,
+            bridge_reaped: true,
+            open_descriptors_before: Some(7),
+            open_descriptors_after: Some(7),
+            descriptor_inventory_restored: true,
+            reason: None,
+        };
+        assert!(evidence.is_success());
+
+        for incomplete in [
+            MacosHostCleanupEvidence {
+                endpoint_removed: false,
+                ..evidence.clone()
+            },
+            MacosHostCleanupEvidence {
+                shim_reaped: false,
+                ..evidence.clone()
+            },
+            MacosHostCleanupEvidence {
+                bridge_reaped: false,
+                ..evidence.clone()
+            },
+            MacosHostCleanupEvidence {
+                open_descriptors_before: None,
+                ..evidence.clone()
+            },
+            MacosHostCleanupEvidence {
+                open_descriptors_before: Some(0),
+                open_descriptors_after: Some(0),
+                ..evidence.clone()
+            },
+            MacosHostCleanupEvidence {
+                open_descriptors_after: Some(8),
+                ..evidence.clone()
+            },
+            MacosHostCleanupEvidence {
+                descriptor_inventory_restored: false,
+                ..evidence.clone()
+            },
+            MacosHostCleanupEvidence {
+                reason: Some("cleanup failed".into()),
+                ..evidence.clone()
+            },
+        ] {
+            assert!(!incomplete.is_success(), "{incomplete:?}");
+        }
     }
 }
