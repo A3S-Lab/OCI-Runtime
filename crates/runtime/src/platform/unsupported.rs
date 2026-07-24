@@ -1,12 +1,14 @@
-use std::collections::BTreeMap;
-
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
     RuntimeFeatures,
 };
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+use std::collections::BTreeMap;
 
 use crate::WhpxSmokeReport;
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn features() -> RuntimeFeatures {
     RuntimeFeatures::current(vec![DriverCapability {
         driver: DriverKind::LibkrunWhpx,

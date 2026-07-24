@@ -38,6 +38,12 @@ Completed:
 - pure OCI lifecycle transition contract;
 - versioned driver status, readiness, isolation, and evidence;
 - secure WHPX DLL loading and hypervisor capability probe;
+- native Linux namespace and cgroup v2 prerequisite reporting that does not
+  touch `/dev/kvm`;
+- Linux KVM device, access, ioctl, and API-version reporting without libkrun
+  initialization;
+- Apple Silicon and Hypervisor.framework capability reporting through a
+  direct `kern.hv_support` query;
 - WHPX partition-object create/delete smoke on Windows;
 - isolated libkrun shim with a pinned, checksum-verified Windows runtime
   bundle;
@@ -85,7 +91,7 @@ Completed:
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
-- Windows and Linux CI.
+- Windows, Linux, and macOS CI.
 
 Not yet complete:
 
@@ -225,6 +231,10 @@ and recovery suites in the Windows guest and on native Linux.
 
 ### R4 — Native Linux Without KVM
 
+- [x] Report native namespace and cgroup v2 prerequisites without opening
+  `/dev/kvm` or initializing libkrun.
+- [x] Report optional KVM absence, permission failure, ioctl failure, and API
+  version independently from native readiness.
 - [ ] Add the native Linux driver without linking or initializing libkrun.
 - [ ] Reuse the R3 Linux executor directly.
 - [ ] Prove runtime install, startup, inspection, and SDK loading without KVM.

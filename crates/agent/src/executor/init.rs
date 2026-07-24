@@ -262,7 +262,7 @@ fn verify_uts_name(field: &str, expected: &str, actual: &[libc::c_char]) -> Resu
     let actual = actual
         .iter()
         .take_while(|byte| **byte != 0)
-        .map(|byte| *byte as u8)
+        .map(|byte| byte.to_ne_bytes()[0])
         .collect::<Vec<_>>();
     if actual == expected.as_bytes() {
         Ok(())

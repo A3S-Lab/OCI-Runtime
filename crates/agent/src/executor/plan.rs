@@ -207,9 +207,8 @@ fn validate_profile(raw: &Value) -> Result<()> {
         return Ok(());
     };
     let linux = object(linux, "linux")?;
-    reject_unimplemented_keys(linux, "linux", &["namespaces"])?;
     let Some(namespaces) = linux.get("namespaces") else {
-        return Ok(());
+        return reject_unimplemented_keys(linux, "linux", &["namespaces"]);
     };
     let namespaces = namespaces
         .as_array()
@@ -238,7 +237,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             ));
         }
     }
-    Ok(())
+    reject_unimplemented_keys(linux, "linux", &["namespaces"])
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

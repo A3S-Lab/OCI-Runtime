@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use a3s_oci_core::{DriverKind, DriverReadiness, RuntimeFeatures};
+use a3s_oci_core::{DriverKind, DriverReadiness, HostPlatform, RuntimeFeatures};
 
 #[test]
 fn features_command_emits_versioned_machine_readable_output() {
@@ -16,13 +16,29 @@ fn features_command_emits_versioned_machine_readable_output() {
     );
     let features: RuntimeFeatures =
         serde_json::from_slice(&output.stdout).expect("features output must be valid JSON");
-    let whpx = features
-        .driver(DriverKind::LibkrunWhpx)
-        .expect("features must include the WHPX driver");
-
     assert_eq!(features.schema_version, "a3s.oci.features.v1");
-    assert_eq!(whpx.readiness, DriverReadiness::ProbeOnly);
-    assert!(!whpx.can_launch());
+    match features.platform {
+        HostPlatform::Linux => {
+            assert!(features.driver(DriverKind::NativeLinux).is_some());
+            assert!(features.driver(DriverKind::LibkrunKvm).is_some());
+            assert_eq!(features.drivers.len(), 2);
+        }
+        HostPlatform::Macos => {
+            assert!(features.driver(DriverKind::LibkrunHvf).is_some());
+            assert_eq!(features.drivers.len(), 1);
+        }
+        HostPlatform::Windows => {
+            assert!(features.driver(DriverKind::LibkrunWhpx).is_some());
+            assert_eq!(features.drivers.len(), 1);
+        }
+        HostPlatform::Unsupported => {
+            assert!(features.driver(DriverKind::LibkrunWhpx).is_some());
+        }
+    }
+    assert!(features
+        .drivers
+        .iter()
+        .all(|driver| driver.readiness == DriverReadiness::ProbeOnly && !driver.can_launch()));
 }
 
 #[test]

@@ -1,3 +1,7 @@
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(not(windows))]
 mod unsupported;
 #[cfg(windows)]
@@ -13,7 +17,17 @@ pub(crate) fn features() -> RuntimeFeatures {
         windows::features()
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::features()
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        macos::features()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         unsupported::features()
     }
