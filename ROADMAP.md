@@ -44,6 +44,10 @@ Completed:
   initialization;
 - Apple Silicon and Hypervisor.framework capability reporting through a
   direct `kern.hv_support` query;
+- explicit rootful native Linux driver integration that reuses the shared
+  executor without linking or initializing libkrun;
+- real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
+  aarch64, repeated with `/dev/kvm` absent and present but unusable;
 - WHPX partition-object create/delete smoke on Windows;
 - isolated libkrun shim with a pinned, checksum-verified Windows runtime
   bundle;
@@ -101,7 +105,7 @@ Not yet complete:
 - a production workload driver;
 - OCI hook execution;
 - OCI configuration enforcement;
-- native Linux execution;
+- production-ready native Linux execution;
 - A3S Box migration;
 - upstream conformance and security certification.
 
@@ -235,11 +239,16 @@ and recovery suites in the Windows guest and on native Linux.
   `/dev/kvm` or initializing libkrun.
 - [x] Report optional KVM absence, permission failure, ioctl failure, and API
   version independently from native readiness.
-- [ ] Add the native Linux driver without linking or initializing libkrun.
-- [ ] Reuse the R3 Linux executor directly.
-- [ ] Prove runtime install, startup, inspection, and SDK loading without KVM.
+- [x] Add the native Linux driver without linking or initializing libkrun.
+- [x] Reuse the R3 Linux executor directly.
+- [x] Prove runtime binary startup, feature inspection, Rust SDK loading, and
+  the rootful core lifecycle without KVM on x86_64 and aarch64.
+- [ ] Prove packaged installation and A3S Box product startup without KVM.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
-- [ ] Fail explicit dedicated-VM requests before image or state mutation.
+- [x] Fail explicit dedicated-VM requests before runtime state or driver
+  mutation.
+- [ ] Reject unavailable dedicated-VM selection in A3S Box before image
+  mutation.
 
 Exit gate: A3S Box Sandbox and its Rust, Python, and TypeScript SDK tests pass
 on supported x86_64 and aarch64 Linux hosts without KVM.
