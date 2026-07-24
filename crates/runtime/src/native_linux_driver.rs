@@ -232,6 +232,10 @@ mod tests {
 
     use super::driver_state;
 
+    const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    const OTHER_DIGEST: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
     #[test]
     fn maps_exact_created_running_and_stopped_states() {
         let target = ContainerTarget::exact(
@@ -243,10 +247,8 @@ mod tests {
             (ContainerState::Running, Some(101)),
             (ContainerState::Stopped, None),
         ] {
-            let state =
-                AgentState::new(target.clone(), status, pid, "sha256-test").expect("agent state");
-            let mapped =
-                driver_state(&target, Some("sha256-test"), state).expect("mapped driver state");
+            let state = AgentState::new(target.clone(), status, pid, DIGEST).expect("agent state");
+            let mapped = driver_state(&target, Some(DIGEST), state).expect("mapped driver state");
             assert_eq!(mapped.status(), status);
             assert_eq!(mapped.pid(), pid);
         }
@@ -259,17 +261,17 @@ mod tests {
             Generation(1),
         );
         let other = ContainerTarget::exact(target.id.clone(), Generation(2));
-        let state = AgentState::new(other, ContainerState::Created, Some(101), "sha256-test")
+        let state = AgentState::new(other, ContainerState::Created, Some(101), DIGEST)
             .expect("agent state");
-        assert!(driver_state(&target, Some("sha256-test"), state).is_err());
+        assert!(driver_state(&target, Some(DIGEST), state).is_err());
 
         let state = AgentState::new(
             target.clone(),
             ContainerState::Created,
             Some(101),
-            "different",
+            OTHER_DIGEST,
         )
         .expect("agent state");
-        assert!(driver_state(&target, Some("sha256-test"), state).is_err());
+        assert!(driver_state(&target, Some(DIGEST), state).is_err());
     }
 }
