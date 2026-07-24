@@ -42,18 +42,35 @@ jobs:
           ln -s busybox "$bundle/rootfs/bin/sh"
 
           run_smoke() {
-            sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
+            expected_kvm_present="$1"
+            output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
               --agent "$PWD/target/debug/a3s-oci-agent" \
               --bundle "$bundle" \
-              --work-parent "$work_parent"
+              --work-parent "$work_parent")"
+            printf '%s\n' "$output"
+            jq --exit-status \
+              --argjson expected "$expected_kvm_present" \
+              '.status == "available" and .kvm_device_present == $expected' \
+              <<<"$output" >/dev/null
           }
 
-          run_smoke
-          if [[ ! -e /dev/kvm ]]; then
-            sudo mkdir /dev/kvm
-            trap 'sudo rmdir /dev/kvm' EXIT
-            run_smoke
+          saved_kvm="/dev/a3s-oci-kvm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          restore_kvm() {
+            if [[ -d /dev/kvm ]]; then
+              sudo rmdir /dev/kvm
+            fi
+            if [[ -e "$saved_kvm" || -L "$saved_kvm" ]]; then
+              sudo mv "$saved_kvm" /dev/kvm
+            fi
+          }
+          trap restore_kvm EXIT
+          if [[ -e /dev/kvm || -L /dev/kvm ]]; then
+            sudo mv /dev/kvm "$saved_kvm"
           fi
+
+          run_smoke false
+          sudo mkdir /dev/kvm
+          run_smoke true
       - if: runner.os == 'Windows'
         run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
 
