@@ -28,51 +28,19 @@ jobs:
       - run: cargo run -p a3s-oci-cli -- features
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes busybox-static
-          cargo build -p a3s-oci-agent -p a3s-oci-cli
-
-          bundle="$RUNNER_TEMP/a3s-native-bundle"
-          work_parent="$RUNNER_TEMP/a3s-native-work"
-          mkdir -p "$bundle/rootfs/bin" "$work_parent"
-          cp fixtures/native-linux/config.json "$bundle/config.json"
-          cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
-          ln -s busybox "$bundle/rootfs/bin/sh"
-
-          run_smoke() {
-            expected_kvm_present="$1"
-            output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
-              --agent "$PWD/target/debug/a3s-oci-agent" \
-              --bundle "$bundle" \
-              --work-parent "$work_parent")"
-            printf '%s\n' "$output"
-            jq --exit-status \
-              --argjson expected "$expected_kvm_present" \
-              '.status == "available" and .kvm_device_present == $expected' \
-              <<<"$output" >/dev/null
-          }
-
-          saved_kvm="/dev/a3s-oci-kvm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          restore_kvm() {
-            if [[ -d /dev/kvm ]]; then
-              sudo rmdir /dev/kvm
-            fi
-            if [[ -e "$saved_kvm" || -L "$saved_kvm" ]]; then
-              sudo mv "$saved_kvm" /dev/kvm
-            fi
-          }
-          trap restore_kvm EXIT
-          if [[ -e /dev/kvm || -L /dev/kvm ]]; then
-            sudo mv /dev/kvm "$saved_kvm"
-          fi
-
-          run_smoke false
-          sudo mkdir /dev/kvm
-          run_smoke true
+        run: bash .github/scripts/native-linux-smoke.sh
       - if: runner.os == 'Windows'
         run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+
+  native-linux-arm64:
+    name: native-linux-lifecycle (aarch64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: bash .github/scripts/native-linux-smoke.sh
 
   guest-agent-musl:
     runs-on: ubuntu-latest
