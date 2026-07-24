@@ -40,11 +40,19 @@ sudo chown -R 0:0 "$bundle/rootfs" "$bundle_b/rootfs"
 run_smoke() {
   local expected_kvm_present="$1"
   local output
-  output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
-    --agent "$PWD/target/debug/a3s-oci-agent" \
-    --bundle "$bundle" \
-    --work-parent "$work_parent")"
+  local status
+  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle "$bundle" \
+      --work-parent "$work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
   printf '%s\n' "$output"
+  if ((status != 0)); then
+    return "$status"
+  fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
     '.schema_version == "a3s.oci.native-linux-smoke.v2"
@@ -80,13 +88,21 @@ run_smoke() {
 run_multi_container_smoke() {
   local expected_kvm_present="$1"
   local output
-  output="$(sudo "$PWD/target/debug/a3s-oci" \
-    native-linux-multi-container-smoke \
-    --agent "$PWD/target/debug/a3s-oci-agent" \
-    --bundle-a "$bundle" \
-    --bundle-b "$bundle_b" \
-    --work-parent "$work_parent")"
+  local status
+  if output="$(sudo "$PWD/target/debug/a3s-oci" \
+      native-linux-multi-container-smoke \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle-a "$bundle" \
+      --bundle-b "$bundle_b" \
+      --work-parent "$work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
   printf '%s\n' "$output"
+  if ((status != 0)); then
+    return "$status"
+  fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
     '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v2"
@@ -148,13 +164,21 @@ run_multi_container_smoke() {
 run_fault_cleanup() {
   local phase
   local output
+  local status
   for phase in after-create after-start after-kill; do
-    output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-fault-cleanup \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
-      --bundle "$bundle" \
-      --work-parent "$work_parent" \
-      --fault-after "$phase")"
+    if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-fault-cleanup \
+        --agent "$PWD/target/debug/a3s-oci-agent" \
+        --bundle "$bundle" \
+        --work-parent "$work_parent" \
+        --fault-after "$phase")"; then
+      status=0
+    else
+      status=$?
+    fi
     printf '%s\n' "$output"
+    if ((status != 0)); then
+      return "$status"
+    fi
     jq --exit-status --arg phase "$phase" \
       '.schema_version == "a3s.oci.native-linux-fault-cleanup.v2"
        and .platform == "linux" and .status == "available"
