@@ -15,6 +15,7 @@ mod agent_smoke;
 mod agent_smoke_process;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod agent_socket;
+mod cleanup_report;
 mod driver;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
@@ -34,14 +35,18 @@ pub use agent_pipe::WindowsAgentPipeListener;
 pub use agent_smoke::agent_vm_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use agent_socket::MacosAgentSocketListener;
+pub use cleanup_report::{
+    FaultInjectionEvidence, LifecycleFaultPoint, NativeLinuxFaultCleanupReport,
+    OciVmFaultCleanupReport,
+};
 pub use driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
     RuntimeDriver,
 };
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
-pub use native_smoke::native_linux_smoke;
-pub use oci_smoke::oci_vm_smoke;
+pub use native_smoke::{native_linux_fault_cleanup, native_linux_smoke};
+pub use oci_smoke::{oci_vm_fault_cleanup, oci_vm_smoke};
 pub use report::{
     AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxSmokeReport,
     OciVmSmokeReport, WhpxSmokeReport,

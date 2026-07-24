@@ -31,6 +31,53 @@ run_smoke() {
     <<<"$output" >/dev/null
 }
 
+run_fault_cleanup() {
+  local phase
+  local output
+  for phase in after-create after-start after-kill; do
+    output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-fault-cleanup \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle "$bundle" \
+      --work-parent "$work_parent" \
+      --fault-after "$phase")"
+    printf '%s\n' "$output"
+    jq --exit-status --arg phase "$phase" \
+      '.schema_version == "a3s.oci.native-linux-fault-cleanup.v1"
+       and .platform == "linux" and .status == "available"
+       and .bundle_loaded
+       and .service_operations
+           == ["features", "create", "state", "start", "kill", "delete"]
+       and .lifecycle.requested_fault == $phase
+       and .lifecycle.injected_fault == $phase
+       and .lifecycle.create_completed
+       and (.lifecycle.created_pid > 0)
+       and .lifecycle.marker_absent_after_create
+       and (.lifecycle.normal_delete_attempted | not)
+       and (if $phase == "after-create" then
+              (.lifecycle.start_completed | not)
+              and (.lifecycle.kill_completed | not)
+              and (.lifecycle.marker_verified_after_start | not)
+            elif $phase == "after-start" then
+              .lifecycle.start_completed
+              and (.lifecycle.kill_completed | not)
+              and .lifecycle.marker_verified_after_start
+            else
+              .lifecycle.start_completed
+              and .lifecycle.kill_completed
+              and .lifecycle.marker_verified_after_start
+            end)
+       and .executor_shutdown_succeeded
+       and .process_reaped
+       and .marker_removed
+       and .executor_runtime_clean
+       and .session_root_clean
+       and (.reason == null)' \
+      <<<"$output" >/dev/null
+    test ! -e "$bundle/rootfs/.a3s-oci-native-smoke"
+    test -z "$(find "$work_parent" -mindepth 1 -print -quit)"
+  done
+}
+
 saved_kvm="/dev/a3s-oci-kvm-${run_id}-${run_attempt}"
 restore_kvm() {
   if [[ -d /dev/kvm ]]; then
@@ -47,5 +94,6 @@ if [[ -e /dev/kvm || -L /dev/kvm ]]; then
 fi
 
 run_smoke false
+run_fault_cleanup
 sudo mkdir /dev/kvm
 run_smoke true

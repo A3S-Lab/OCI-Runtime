@@ -6,6 +6,7 @@ use a3s_oci_sdk::{OciBundle, RuntimeClient};
 
 use crate::{HostRuntimeService, NativeLinuxDriver, NativeLinuxSmokeReport, RuntimeDriver};
 
+mod fault_cleanup;
 mod filesystem;
 mod lifecycle;
 
@@ -14,6 +15,15 @@ use filesystem::{
     unique_nonce, MARKER_NAME,
 };
 use lifecycle::{best_effort_delete, exercise};
+
+pub(super) async fn run_fault_cleanup(
+    init_executable: &Path,
+    bundle_directory: &Path,
+    work_parent: &Path,
+    fault: crate::LifecycleFaultPoint,
+) -> crate::NativeLinuxFaultCleanupReport {
+    fault_cleanup::run(init_executable, bundle_directory, work_parent, fault).await
+}
 
 pub(super) async fn run(
     init_executable: &Path,

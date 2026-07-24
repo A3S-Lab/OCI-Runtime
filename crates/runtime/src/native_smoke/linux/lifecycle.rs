@@ -11,7 +11,7 @@ use a3s_oci_sdk::{
 use tokio::time::{sleep, timeout, Instant};
 
 use super::filesystem::{path_exists, read_marker, MARKER_CONTENTS};
-use crate::NativeLinuxSmokeReport;
+use crate::{FaultInjectionEvidence, LifecycleFaultPoint, NativeLinuxSmokeReport};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -130,6 +130,95 @@ pub(super) async fn exercise(
     Ok(())
 }
 
+pub(super) async fn exercise_until_fault(
+    client: &RuntimeClient,
+    bundle: &OciBundle,
+    nonce: &str,
+    marker: &Path,
+    evidence: &mut FaultInjectionEvidence,
+) -> Result<Vec<a3s_oci_sdk::RuntimeOperation>, String> {
+    let operations = native_call("features", client.features()).await?.operations;
+    let id = ContainerId::new(format!("native-fault-{nonce}"))
+        .map_err(|error| format!("failed to construct native fault container ID: {error}"))?;
+    let create = CreateRequest {
+        context: fault_operation(nonce, "create")?,
+        id: id.clone(),
+        bundle: bundle.clone(),
+        isolation: IsolationRequest::SharedHostKernel,
+        io: ProcessIo {
+            stdin: a3s_oci_sdk::IoMode::Null,
+            stdout: a3s_oci_sdk::IoMode::Null,
+            stderr: a3s_oci_sdk::IoMode::Null,
+            terminal_size: None,
+        },
+    };
+    let created = native_call("fault create", client.create(create)).await?;
+    if *created.state.status() != ContainerState::Created {
+        return Err("native fault create did not preserve the OCI created barrier".into());
+    }
+    evidence.create_completed = true;
+    evidence.created_pid = *created.state.pid();
+    let target = ContainerTarget::exact(id, created.generation);
+    let observed = native_call(
+        "fault state after create",
+        client.state(StateRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    if observed != created {
+        return Err("native fault state after create did not match create".into());
+    }
+    evidence.marker_absent_after_create = !path_exists(marker).await?;
+    if !evidence.marker_absent_after_create {
+        return Err("native fault workload ran before OCI start".into());
+    }
+    if evidence.requested_fault == LifecycleFaultPoint::AfterCreate {
+        evidence.injected_fault = Some(LifecycleFaultPoint::AfterCreate);
+        return Ok(operations);
+    }
+
+    let started = native_call(
+        "fault start",
+        client.start(StartRequest {
+            context: fault_operation(nonce, "start")?,
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    if *started.state.status() != ContainerState::Running {
+        return Err("native fault start did not leave the workload running".into());
+    }
+    evidence.start_completed = true;
+    wait_for_exact_marker(client, &target, marker).await?;
+    evidence.marker_verified_after_start = true;
+    if evidence.requested_fault == LifecycleFaultPoint::AfterStart {
+        evidence.injected_fault = Some(LifecycleFaultPoint::AfterStart);
+        return Ok(operations);
+    }
+
+    let killed = native_call(
+        "fault kill",
+        client.kill(KillRequest {
+            context: fault_operation(nonce, "kill")?,
+            target,
+            signal: Signal::new(libc::SIGKILL)
+                .map_err(|error| format!("failed to construct native fault signal: {error}"))?,
+            all: false,
+        }),
+    )
+    .await?;
+    if !matches!(
+        *killed.state.status(),
+        ContainerState::Running | ContainerState::Stopped
+    ) {
+        return Err("native fault kill returned an unexpected lifecycle state".into());
+    }
+    evidence.kill_completed = true;
+    evidence.injected_fault = Some(LifecycleFaultPoint::AfterKill);
+    Ok(operations)
+}
+
 async fn dedicated_vm_is_rejected(
     client: &RuntimeClient,
     request: CreateRequest,
@@ -166,6 +255,17 @@ async fn wait_for_marker(
     marker: &Path,
     report: &mut NativeLinuxSmokeReport,
 ) -> Result<(), String> {
+    wait_for_exact_marker(client, target, marker).await?;
+    report.running_observed = true;
+    report.marker_verified = true;
+    Ok(())
+}
+
+async fn wait_for_exact_marker(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    marker: &Path,
+) -> Result<(), String> {
     let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
     loop {
         let state = native_call(
@@ -176,7 +276,7 @@ async fn wait_for_marker(
         )
         .await?;
         match *state.state.status() {
-            ContainerState::Running => report.running_observed = true,
+            ContainerState::Running => {}
             status => {
                 return Err(format!(
                     "native runtime reported unexpected state {status} before kill"
@@ -184,8 +284,7 @@ async fn wait_for_marker(
             }
         }
         if path_exists(marker).await? {
-            report.marker_verified = read_marker(marker).await? == MARKER_CONTENTS;
-            if report.marker_verified {
+            if read_marker(marker).await? == MARKER_CONTENTS {
                 return Ok(());
             }
             return Err("native workload produced unexpected marker contents".into());
@@ -255,5 +354,11 @@ fn native_error(operation: &str, error: &Error) -> String {
 fn operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
     let id = OperationId::new(format!("native-{nonce}-{name}"))
         .map_err(|error| format!("failed to construct {name} operation ID: {error}"))?;
+    Ok(OperationContext::new(id))
+}
+
+fn fault_operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
+    let id = OperationId::new(format!("native-fault-{nonce}-{name}"))
+        .map_err(|error| format!("failed to construct fault {name} operation ID: {error}"))?;
     Ok(OperationContext::new(id))
 }

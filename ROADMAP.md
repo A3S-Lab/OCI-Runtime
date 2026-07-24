@@ -60,10 +60,17 @@ Completed:
   shared Windows lifecycle harness, including exact mutation retries,
   create/start separation, running and stopped observation, post-delete
   NotFound, and nominal process, endpoint, marker, and runtime-root cleanup;
+- real macOS no-delete cleanup after successful create, start, and kill
+  boundaries, with exact fault identity, guest executor shutdown, endpoint and
+  marker removal, shim/worker reap, descriptor-inventory restoration, and no
+  new guest runtime root;
 - explicit rootful native Linux driver integration that reuses the shared
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
   aarch64, repeated with `/dev/kvm` absent and present but unusable;
+- real native Linux no-delete cleanup after create, start, and kill on x86_64
+  and aarch64, including init-PID reap and executor, durable-state, marker, and
+  session-root removal;
 - WHPX partition-object create/delete smoke on Windows;
 - isolated libkrun shim with a pinned, checksum-verified Windows runtime
   bundle;
@@ -242,10 +249,11 @@ runtime-root leak. Only then may WHPX become `experimental`.
   authenticate protocol-v1 negotiation with a one-time token.
 - [x] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
   WHPX.
-- [ ] Prove deterministic VM, process, descriptor, and filesystem cleanup
-  under injected faults. Signed and missing-entitlement gates already require
-  exact endpoint removal, observed-PID reap, and descriptor-inventory
-  restoration.
+- [x] Prove deterministic VM, process, descriptor, and filesystem cleanup
+  without normal delete after successful create, start, and kill boundaries.
+  Each phase requires exact endpoint removal, observed-PID reap, complete
+  descriptor-inventory restoration, marker removal, and no new guest runtime
+  root.
 - [x] Retain fail-closed unavailable-virtualization, missing-entitlement,
   invalid-runtime-asset, missing-agent-rootfs, wrong-token, and unexpected-peer
   evidence without reporting false negotiation.
@@ -270,6 +278,8 @@ then may HVF become `experimental`.
   created barrier.
 - [x] Create a new PID namespace, run the container init as namespace PID 1,
   and authenticate its host-visible PID before the created barrier.
+- [x] Prove executor shutdown cleanup without delete after successful create,
+  start, and kill through native Linux and the macOS utility-VM path.
 - [ ] Namespace creation for user and time namespaces, plus joining existing
   namespaces.
 - [ ] Mount-target creation, rootfs propagation overrides, idmapped and
@@ -298,6 +308,8 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Reuse the R3 Linux executor directly.
 - [x] Prove runtime binary startup, feature inspection, Rust SDK loading, and
   the rootful core lifecycle without KVM on x86_64 and aarch64.
+- [x] Prove shutdown cleanup without delete after create, start, and kill on
+  x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver
