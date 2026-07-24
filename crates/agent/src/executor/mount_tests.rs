@@ -109,10 +109,6 @@ fn rejects_mounts_without_isolating_the_runtime_mount_namespace() {
 #[test]
 fn rejects_unimplemented_or_ambiguous_mount_semantics() {
     for (replacement, expected) in [
-        (
-            r#""options": ["nosuid", "nodev", "idmap"]"#,
-            "idmapped mounts",
-        ),
         (r#""options": ["nosuid", "nodev", "rro"]"#, "mount_setattr"),
         (r#""options": ["private", "slave"]"#, "multiple propagation"),
         (r#""options": ["mode=1777,size=16m"]"#, "comma separators"),
@@ -125,6 +121,15 @@ fn rejects_unimplemented_or_ambiguous_mount_semantics() {
             InitPlan::from_bundle(&bundle(&config), &null_io()).expect_err("unsupported mount");
         assert!(error.message.contains(expected), "{error}");
     }
+
+    let idmapped = MOUNT_CONFIG.replace(
+        r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+        r#""options": ["nosuid", "nodev", "idmap"],
+      "uidMappings": [{"containerID": 0, "hostID": 0, "size": 1}],
+      "gidMappings": [{"containerID": 0, "hostID": 0, "size": 1}]"#,
+    );
+    let error = InitPlan::from_bundle(&bundle(&idmapped), &null_io()).expect_err("idmapped mount");
+    assert!(error.message.contains("idmapped mounts"), "{error}");
 }
 
 #[test]
