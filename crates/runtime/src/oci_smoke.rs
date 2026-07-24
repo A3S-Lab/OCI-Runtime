@@ -7,7 +7,7 @@ use std::path::Path;
 use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
-use crate::{LifecycleFaultPoint, OciVmFaultCleanupReport};
+use crate::{LifecycleFaultPoint, OciVmFaultCleanupReport, OciVmMultiContainerSmokeReport};
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
@@ -42,6 +42,35 @@ pub async fn oci_vm_smoke(
     {
         let _ = (shim, vm_rootfs, bundle, console);
         OciVmSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Exercise two independently fenced containers inside one authenticated utility VM.
+///
+/// Both bundles must be distinct strict descendants of `vm_rootfs`.
+#[must_use]
+pub async fn oci_vm_multi_container_smoke(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    console: &Path,
+) -> OciVmMultiContainerSmokeReport {
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
+    {
+        utility_vm::run_multi_container(shim, vm_rootfs, bundle_a, bundle_b, console).await
+    }
+
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
+    {
+        let _ = (shim, vm_rootfs, bundle_a, bundle_b, console);
+        OciVmMultiContainerSmokeReport::unsupported(HostPlatform::current())
     }
 }
 

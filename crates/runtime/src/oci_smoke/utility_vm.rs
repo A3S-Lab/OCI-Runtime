@@ -16,6 +16,7 @@ const GUEST_RUNTIME_PREFIX: &str = "a3s-oci-agent-";
 
 mod fault_cleanup;
 mod lifecycle;
+mod multi_container;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -27,6 +28,16 @@ pub(super) async fn run_fault_cleanup(
     fault: crate::LifecycleFaultPoint,
 ) -> crate::OciVmFaultCleanupReport {
     fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, fault).await
+}
+
+pub(super) async fn run_multi_container(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    console: &Path,
+) -> crate::OciVmMultiContainerSmokeReport {
+    multi_container::run(shim, vm_rootfs, bundle_a, bundle_b, console).await
 }
 
 pub(super) async fn run(

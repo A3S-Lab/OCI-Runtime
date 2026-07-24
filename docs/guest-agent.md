@@ -120,6 +120,12 @@ below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
+`a3s-oci oci-vm-multi-container-smoke` keeps two distinct bundle rootfs and
+runtime slots live behind the create barrier, proves that A's start, kill,
+delete, recreation, stale generation, and replay conflicts do not alter B,
+then completes B independently. The macOS HVF gate retains both per-container
+markers together with guest-runtime and host-process cleanup evidence.
+
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
 records that delete was not attempted, and requires guest executor shutdown to
 remove the container process and runtime root. On macOS the nested report also

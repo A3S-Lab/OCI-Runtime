@@ -34,6 +34,21 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
     },
+    /// Prove two native Linux containers remain independently fenced.
+    NativeLinuxMultiContainerSmoke {
+        /// Matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// First OCI bundle containing config.json and rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle_a: PathBuf,
+        /// Second distinct OCI bundle containing config.json and rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle_b: PathBuf,
+        /// Existing directory beneath which isolated smoke state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+    },
     /// Interrupt native Linux lifecycle and prove cleanup without OCI delete.
     NativeLinuxFaultCleanup {
         /// Matching a3s-oci-agent executable used for the prepared init mode.
@@ -72,6 +87,24 @@ enum Command {
         /// OCI bundle contained by the VM root filesystem.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
+        /// New host file that receives the guest console stream.
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+    },
+    /// Prove two containers remain independently fenced inside one utility VM.
+    OciVmMultiContainerSmoke {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// First OCI bundle contained by the VM root filesystem.
+        #[arg(long, value_name = "DIR")]
+        bundle_a: PathBuf,
+        /// Second distinct OCI bundle contained by the VM root filesystem.
+        #[arg(long, value_name = "DIR")]
+        bundle_b: PathBuf,
         /// New host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
@@ -177,6 +210,27 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
                 ExitCode::from(2)
             })
         }
+        Command::NativeLinuxMultiContainerSmoke {
+            agent,
+            bundle_a,
+            bundle_b,
+            work_parent,
+        } => {
+            let report = a3s_oci_runtime::native_linux_multi_container_smoke(
+                &agent,
+                &bundle_a,
+                &bundle_b,
+                &work_parent,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
         Command::NativeLinuxFaultCleanup {
             agent,
             bundle,
@@ -219,6 +273,25 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             console,
         } => {
             let report = a3s_oci_runtime::oci_vm_smoke(&shim, &vm_rootfs, &bundle, &console).await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::OciVmMultiContainerSmoke {
+            shim,
+            vm_rootfs,
+            bundle_a,
+            bundle_b,
+            console,
+        } => {
+            let report = a3s_oci_runtime::oci_vm_multi_container_smoke(
+                &shim, &vm_rootfs, &bundle_a, &bundle_b, &console,
+            )
+            .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

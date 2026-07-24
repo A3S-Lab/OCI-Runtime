@@ -3,7 +3,10 @@ use std::path::Path;
 #[cfg(not(target_os = "linux"))]
 use a3s_oci_core::HostPlatform;
 
-use crate::{LifecycleFaultPoint, NativeLinuxFaultCleanupReport, NativeLinuxSmokeReport};
+use crate::{
+    LifecycleFaultPoint, NativeLinuxFaultCleanupReport, NativeLinuxMultiContainerSmokeReport,
+    NativeLinuxSmokeReport,
+};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -26,6 +29,29 @@ pub async fn native_linux_smoke(
     {
         let _ = (init_executable, bundle, work_parent);
         NativeLinuxSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Exercise two independently fenced containers through the native Rust SDK path.
+///
+/// The diagnostic uses distinct bundles, retains both create barriers
+/// concurrently, recreates one container with the next durable generation,
+/// and verifies that every mutation remains scoped to its exact container.
+pub async fn native_linux_multi_container_smoke(
+    init_executable: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    work_parent: &Path,
+) -> NativeLinuxMultiContainerSmokeReport {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_multi_container(init_executable, bundle_a, bundle_b, work_parent).await
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (init_executable, bundle_a, bundle_b, work_parent);
+        NativeLinuxMultiContainerSmokeReport::unsupported(HostPlatform::current())
     }
 }
 
