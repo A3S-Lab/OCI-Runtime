@@ -15,6 +15,7 @@
   <a href="#runtime-model">Runtime Model</a> •
   <a href="#platform-status">Platform Status</a> •
   <a href="#architecture">Architecture</a> •
+  <a href="#conformance-and-security">Conformance</a> •
   <a href="#development">Development</a>
 </p>
 
@@ -350,12 +351,13 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$rootfs_dir/oci-multi-container.log"
 ```
 
-`a3s.oci.oci-vm-multi-container-smoke.v2` requires that starting, killing,
+`a3s.oci.oci-vm-multi-container-smoke.v3` requires that starting, killing,
 waiting for, and deleting A never changes or blocks B; both waits return and
 replay the exact normal exit status; recreating A advances generation 1 to 2;
 stale and cross-container replay requests fail; B then completes
-independently; and VM shutdown restores guest-runtime, endpoint, descriptor,
-shim, and worker inventories.
+independently; existing namespace descriptors are type-checked and joined
+across the shared executor; and VM shutdown restores guest-runtime, endpoint,
+descriptor, shim, and worker inventories.
 
 Fault cleanup reuses the same signed shim and bundle but stops after each
 successful lifecycle boundary:
@@ -433,6 +435,8 @@ The current executor implements a reviewed bootstrap vertical slice:
 - parent-authenticated rootful UID/GID mappings plus read-back verification,
   with normalized monotonic and boottime offsets applied before the first
   time-namespace child;
+- type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
+  and time namespaces, including retained rootfs access after a mount join;
 - hostname and domain name configuration;
 - recursively private mount propagation and `pivot_root`;
 - ordered existing-target OCI mounts with bind/rbind and common VFS options;
@@ -443,8 +447,9 @@ The current executor implements a reviewed bootstrap vertical slice:
 
 The supported user-namespace slice is rootful: it requires both UID and GID
 mappings, coverage for every configured process ID, and an `allow` setgroups
-policy. Unimplemented OCI fields are rejected instead of ignored. Rootless
-mapping policy, namespace joins, complete mount semantics, cgroup resources,
+policy. Mount entries remain unsupported when joining an existing mount
+namespace. Other unimplemented OCI fields are rejected instead of ignored.
+Rootless mapping policy, complete mount semantics, cgroup resources,
 capabilities, hooks, seccomp, full I/O, recovery, and the remaining SDK
 operations are still release gates.
 
@@ -473,9 +478,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container wait and mutation isolation, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container isolation, type-checked existing-namespace joins, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles with exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -484,47 +489,69 @@ runtime prerequisite.
 
 ## Architecture
 
-The platform-neutral control plane is independent of the host isolation
-mechanism. Native libraries and Linux-specific execution stay behind explicit
-driver, shim, and guest-agent boundaries:
+The public contract is separated from replaceable infrastructure. The SDK and
+lifecycle control plane remain platform-neutral, while native isolation and
+hypervisor libraries stay behind explicit driver, shim, and guest boundaries:
 
-```text
-A3S Box / a3s-oci CLI / Rust SDK consumers
-                    │
-        RuntimeClient / OciRuntimeService
-                    │
-      in-process call or bounded local IPC
-                    │
-          OCI validation and lifecycle
-                    │
-            HostRuntimeService
- exact bundle · generations · journal · reconciliation
-                    │
-               RuntimeDriver
-          ┌─────────┴──────────┐
-          │                    │
- Native Linux host      Utility VM qualification
- NativeLinuxDriver      a3s-oci-krun-shim → libkrun
-          │             KVM · HVF · WHPX
-          │                    │
-          │          authenticated guest protocol
-          │                    │
-          │              a3s-oci-agent
-          │                    │
-          └─────────┬──────────┘
-                    │
-             LinuxExecutor
- namespaces · mounts · PID 1 · pidfds · wait · cleanup
+```mermaid
+flowchart TB
+    subgraph consumers["Consumers and SDK"]
+        box["A3S Box"]
+        cli["a3s-oci CLI"]
+        containerd["containerd shim<br/>(planned)"]
+        client["RuntimeClient<br/>in-process service or bounded local IPC"]
+        box --> client
+        cli --> client
+        containerd -.-> client
+    end
+
+    subgraph control["Platform-neutral host control plane"]
+        service["OciRuntimeService<br/>HostRuntimeService"]
+        validation["OCI schema and semantic validation"]
+        lifecycle["Durable lifecycle<br/>generations · replay · fencing · reconciliation"]
+        state[("Runtime-owned state<br/>exact config · operation journal")]
+        selection{"RuntimeDriver<br/>explicit isolation selection"}
+
+        service --> validation --> lifecycle --> selection
+        lifecycle <--> state
+    end
+
+    subgraph native["Native Linux — experimental opt-in"]
+        native_driver["NativeLinuxDriver<br/>shared host kernel"]
+    end
+
+    subgraph utility["Utility VM — qualification path"]
+        utility_driver["Utility VM RuntimeDriver<br/>(integration pending)"]
+        shim["a3s-oci-krun-shim<br/>checksum-pinned native loading"]
+        hypervisor["libkrun<br/>HVF · WHPX<br/>KVM probe only"]
+        bridge["Authenticated host/guest bridge<br/>Unix socket or named pipe → AF_VSOCK"]
+        agent["a3s-oci-agent<br/>static Linux guest service"]
+
+        utility_driver -.-> shim
+        shim --> hypervisor --> bridge --> agent
+    end
+
+    executor["Shared LinuxExecutor<br/>new and joined namespaces · mounts · create/start barrier<br/>PID 1 · pidfds · wait · scoped cleanup"]
+
+    client --> service
+    selection -->|"shared-host-kernel"| native_driver
+    selection -.->|"dedicated-vm / shared-guest-kernel"| utility_driver
+    native_driver --> executor
+    agent --> executor
 ```
 
-The same `LinuxExecutor` is called directly on Linux and through the guest
-agent in a utility VM. The utility-VM branch represents the qualification
-architecture; readiness remains defined by the
-[platform status](#platform-status), not by presence in the diagram.
+The two paths compile and place the same `LinuxExecutor` differently: directly
+behind `NativeLinuxDriver` on Linux, or inside `a3s-oci-agent` in a utility VM.
+The utility-VM driver edge is dashed because it is a qualification path and is
+not yet wired into `HostRuntimeService`. Solid edges show implemented or
+directly exercised boundaries, not `supported` readiness; the
+[platform status](#platform-status) remains authoritative.
 
-A3S Box owns product-level images, builds, volumes, networks, and policy. A3S
-OCI Runtime owns the validated OCI lifecycle, platform execution, durable
-state, guest protocol, and runtime-scoped cleanup.
+| Boundary | Owns | Deliberately leaves outside |
+| --- | --- | --- |
+| A3S Box product plane | Images, builds, volumes, networks, and product policy | OCI process and isolation enforcement |
+| OCI Runtime control plane | Exact OCI validation, lifecycle state, replay, reconciliation, capability reporting, and driver selection | Silent isolation fallback and product policy |
+| Platform execution plane | Hypervisor bridge, Linux namespaces and mounts, PID 1 lifecycle, signaling, and runtime-scoped cleanup | Image distribution and workload orchestration |
 
 The main runtime, CLI, and SDK do not link libkrun. Only
 `a3s-oci-krun-shim` loads the checksum-verified native runtime bundle, keeping
@@ -597,6 +624,7 @@ Run checks from the OCI Runtime repository root:
 cargo fmt --all -- --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 Cross-check Linux compilation without treating the monorepo root as a Rust
@@ -615,13 +643,13 @@ Platform CI covers:
 
 - the 237-point durable commit matrix and all 14 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
-- Ubuntu x86_64 native pidfd probe, lifecycle, multi-container isolation, and
-  three-phase no-delete cleanup without KVM;
-- Ubuntu aarch64 native pidfd probe, lifecycle, multi-container isolation, and
-  three-phase no-delete cleanup without KVM;
+- Ubuntu x86_64 native pidfd probe, lifecycle, multi-container and
+  existing-namespace isolation, and three-phase no-delete cleanup without KVM;
+- Ubuntu aarch64 native pidfd probe, lifecycle, multi-container and
+  existing-namespace isolation, and three-phase no-delete cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,
-  pidfd-backed fixed and multi-container OCI lifecycles, three-phase no-delete
-  cleanup, and missing-entitlement fail-closed gates;
+  pidfd-backed fixed, multi-container, and existing-namespace OCI lifecycles,
+  three-phase no-delete cleanup, and missing-entitlement fail-closed gates;
 - Windows WHPX and libkrun context gates;
 - static x86_64 and aarch64 musl guest-agent output.
 
