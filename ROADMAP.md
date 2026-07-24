@@ -46,6 +46,8 @@ Completed:
   direct `kern.hv_support` query;
 - entitlement-aware direct Hypervisor.framework VM-object create/destroy
   evidence with versioned, fail-closed diagnostics;
+- isolated macOS libkrun context create/configure/plain-vsock/release evidence
+  from a checksum-pinned, runtime-reverified arm64 bundle;
 - explicit rootful native Linux driver integration that reuses the shared
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
@@ -213,16 +215,17 @@ runtime-root leak. Only then may WHPX become `experimental`.
   CLI and macOS CI.
 - [x] Verify a signed round trip on a local Apple Silicon host and verify that
   a missing entitlement returns `HV_DENIED`.
-- [ ] Stage a runtime-owned, checksum-verified macOS libkrun bundle only for
+- [x] Stage a runtime-owned, checksum-verified macOS libkrun bundle only for
   the isolated shim.
-- [ ] Create, configure, and release one libkrun HVF context.
+- [x] Create, configure plain agent vsock, and release one libkrun context
+  without entering a VM.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [ ] Establish the macOS host endpoint and AF_VSOCK guest-agent bridge.
 - [ ] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
   WHPX.
 - [ ] Prove deterministic VM, process, descriptor, and filesystem cleanup.
-- [ ] Retain negative evidence for missing entitlement, unavailable
-  virtualization, invalid runtime assets, and failed guest startup.
+- [ ] Retain negative evidence for unavailable virtualization and failed guest
+  startup. Missing-entitlement and invalid-runtime-asset evidence is complete.
 
 Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
 fixed OCI lifecycle through the authenticated guest agent, validates negative

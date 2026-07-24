@@ -24,6 +24,10 @@ zeroize.workspace = true
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
 a3s-libkrun-sys.workspace = true
 
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+libloading.workspace = true
+sha2.workspace = true
+
 [build-dependencies]
 sha2.workspace = true
 tar = "0.4"

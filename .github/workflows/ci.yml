@@ -55,6 +55,53 @@ jobs:
               '.status == "unavailable" and (.vm_created | not) and (.vm_destroyed | not)' \
               <<<"$output" >/dev/null
           fi
+      - if: runner.os == 'macOS'
+        name: Isolated libkrun context lifecycle
+        shell: bash
+        run: |
+          smoke_dir="$RUNNER_TEMP/a3s-oci-krun-context"
+          mkdir -p "$smoke_dir"
+          cp target/debug/a3s-oci-krun-shim "$smoke_dir/"
+          cp -R target/debug/a3s-oci-krun-runtime "$smoke_dir/"
+
+          codesign --verify --strict \
+            "$smoke_dir/a3s-oci-krun-runtime/libkrun.1.17.0.dylib"
+          codesign --verify --strict \
+            "$smoke_dir/a3s-oci-krun-runtime/libkrunfw.5.dylib"
+          codesign --force --sign - \
+            --entitlements packaging/macos/a3s-oci-hvf.entitlements \
+            "$smoke_dir/a3s-oci-krun-shim"
+          codesign --verify --strict "$smoke_dir/a3s-oci-krun-shim"
+
+          output="$("$smoke_dir/a3s-oci-krun-shim" context-smoke)"
+          printf '%s\n' "$output"
+          jq --exit-status \
+            '.platform == "macos" and .status == "available"
+             and .runtime_bundle_loaded and .context_created
+             and .vm_configured and .agent_vsock_configured
+             and .context_released' \
+            <<<"$output" >/dev/null
+
+          tampered_dir="$RUNNER_TEMP/a3s-oci-krun-context-tampered"
+          cp -R "$smoke_dir" "$tampered_dir"
+          chmod u+w \
+            "$tampered_dir/a3s-oci-krun-runtime/libkrun.1.17.0.dylib"
+          printf '\0' >> \
+            "$tampered_dir/a3s-oci-krun-runtime/libkrun.1.17.0.dylib"
+          set +e
+          tampered_output="$(
+            "$tampered_dir/a3s-oci-krun-shim" context-smoke
+          )"
+          tampered_status=$?
+          set -e
+          printf '%s\n' "$tampered_output"
+          test "$tampered_status" -eq 2
+          jq --exit-status \
+            '.status == "unavailable"
+             and (.runtime_bundle_loaded | not)
+             and (.context_created | not)
+             and (.reason | contains("SHA-256 mismatch"))' \
+            <<<"$tampered_output" >/dev/null
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
         run: bash .github/scripts/native-linux-smoke.sh

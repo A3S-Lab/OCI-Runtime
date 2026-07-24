@@ -24,6 +24,7 @@ clap = { version = "4.5", features = ["derive"] }
 fs2 = "0.4"
 getrandom = "0.3"
 jsonschema = { version = "0.48.5", default-features = false }
+libloading = "0.8"
 oci-spec = { version = "0.10", default-features = false, features = ["runtime"] }
 semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
