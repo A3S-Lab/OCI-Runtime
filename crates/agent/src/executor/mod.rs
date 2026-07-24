@@ -32,36 +32,101 @@ use state::{
 
 pub(crate) use init::run_container_init_if_requested;
 
-const RUNTIME_PARENT: &str = "/run";
+const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const MAX_OPERATION_RECORDS: usize = 4_096;
 
+/// Fail-closed Linux OCI executor shared by native and utility-VM drivers.
 #[derive(Debug)]
-pub(crate) struct LinuxExecutorAgent {
+pub struct LinuxExecutor {
     capabilities: AgentCapabilities,
+    init_executable: PathBuf,
     runtime_root: PathBuf,
     state: Mutex<ExecutorState>,
 }
 
-impl LinuxExecutorAgent {
+impl LinuxExecutor {
     pub(crate) async fn new() -> Result<Self> {
+        let executable = std::env::current_exe().map_err(|error| {
+            executor_error(
+                ErrorCode::Internal,
+                format!("failed to resolve guest-agent executable: {error}"),
+            )
+        })?;
+        Self::open(DEFAULT_RUNTIME_PARENT, executable).await
+    }
+
+    /// Open an isolated executor beneath an existing runtime-owned directory.
+    ///
+    /// The init executable must enter [`crate::run_internal_container_init`]
+    /// before starting its normal application path.
+    pub async fn open(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+    ) -> Result<Self> {
         // SAFETY: `geteuid` has no preconditions.
         if unsafe { libc::geteuid() } != 0 {
             return Err(executor_error(
                 ErrorCode::PermissionDenied,
-                "the Linux guest executor must run as root",
+                "the Linux executor must run as root",
             ));
         }
-        let parent = Path::new(RUNTIME_PARENT);
+        let parent = runtime_parent.as_ref();
+        if !parent.is_absolute() {
+            return Err(executor_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "Linux executor runtime parent must be absolute: {}",
+                    parent.display()
+                ),
+            ));
+        }
         let metadata = tokio::fs::symlink_metadata(parent).await.map_err(|error| {
             executor_error(
                 ErrorCode::FailedPrecondition,
-                format!("failed to inspect runtime parent {RUNTIME_PARENT}: {error}"),
+                format!(
+                    "failed to inspect Linux executor runtime parent {}: {error}",
+                    parent.display()
+                ),
             )
         })?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(executor_error(
                 ErrorCode::FailedPrecondition,
-                format!("{RUNTIME_PARENT} must be a real directory"),
+                format!(
+                    "Linux executor runtime parent must be a real directory: {}",
+                    parent.display()
+                ),
+            ));
+        }
+        let init_executable = tokio::fs::canonicalize(init_executable.as_ref())
+            .await
+            .map_err(|error| {
+                executor_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to resolve Linux executor init executable {}: {error}",
+                        init_executable.as_ref().display()
+                    ),
+                )
+            })?;
+        let init_metadata = tokio::fs::metadata(&init_executable)
+            .await
+            .map_err(|error| {
+                executor_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to inspect Linux executor init executable {}: {error}",
+                        init_executable.display()
+                    ),
+                )
+            })?;
+        if !init_metadata.is_file() {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "Linux executor init executable must be a regular file: {}",
+                    init_executable.display()
+                ),
             ));
         }
         let runtime_root = parent.join(format!("a3s-oci-agent-{}", std::process::id()));
@@ -79,12 +144,20 @@ impl LinuxExecutorAgent {
 
         Ok(Self {
             capabilities: AgentCapabilities::core(AGENT_VERSION, std::env::consts::ARCH)?,
+            init_executable,
             runtime_root,
             state: Mutex::new(ExecutorState::default()),
         })
     }
 
-    pub(crate) async fn shutdown(&self) -> Result<()> {
+    /// Absolute private directory holding this executor's transient state.
+    #[must_use]
+    pub fn runtime_root(&self) -> &Path {
+        &self.runtime_root
+    }
+
+    /// Stop every owned init process and remove all transient executor state.
+    pub async fn shutdown(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         let mut first_error = None;
         for record in state.containers.values_mut() {
@@ -163,7 +236,9 @@ impl LinuxExecutorAgent {
             let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
             return Err(error);
         }
-        let process = match PreparedProcess::spawn(&plan, &config_snapshot).await {
+        let process = match PreparedProcess::spawn(&plan, &config_snapshot, &self.init_executable)
+            .await
+        {
             Ok(process) => process,
             Err(error) => {
                 let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
@@ -307,7 +382,7 @@ impl LinuxExecutorAgent {
 }
 
 #[async_trait]
-impl GuestAgentService for LinuxExecutorAgent {
+impl GuestAgentService for LinuxExecutor {
     fn capabilities(&self) -> AgentCapabilities {
         self.capabilities.clone()
     }

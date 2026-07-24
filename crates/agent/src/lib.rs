@@ -15,6 +15,9 @@ mod executor;
 #[cfg(target_os = "linux")]
 mod vsock;
 
+#[cfg(target_os = "linux")]
+pub use executor::LinuxExecutor;
+
 /// Guest implementation version sent during protocol negotiation.
 pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -117,7 +120,7 @@ pub fn run(token: SessionToken) -> Result<()> {
             )
             .for_operation("run-guest-agent")
         })?;
-        let service = Arc::new(executor::LinuxExecutorAgent::new().await?);
+        let service = Arc::new(LinuxExecutor::new().await?);
         let protocol_service: Arc<dyn GuestAgentService> = service.clone();
         let serve_result =
             a3s_oci_agent_protocol::serve_agent_connection(stream, token, protocol_service).await;

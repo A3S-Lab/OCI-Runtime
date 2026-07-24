@@ -26,6 +26,34 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets
       - run: cargo run -p a3s-oci-cli -- features
+      - if: runner.os == 'Linux'
+        name: Native Linux SDK lifecycle without KVM
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes busybox-static
+          cargo build -p a3s-oci-agent -p a3s-oci-cli
+
+          bundle="$RUNNER_TEMP/a3s-native-bundle"
+          work_parent="$RUNNER_TEMP/a3s-native-work"
+          mkdir -p "$bundle/rootfs/bin" "$work_parent"
+          cp fixtures/native-linux/config.json "$bundle/config.json"
+          cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
+          ln -s busybox "$bundle/rootfs/bin/sh"
+
+          run_smoke() {
+            sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
+              --agent "$PWD/target/debug/a3s-oci-agent" \
+              --bundle "$bundle" \
+              --work-parent "$work_parent"
+          }
+
+          run_smoke
+          if [[ ! -e /dev/kvm ]]; then
+            sudo mkdir /dev/kvm
+            trap 'sudo rmdir /dev/kvm' EXIT
+            run_smoke
+          fi
       - if: runner.os == 'Windows'
         run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
 

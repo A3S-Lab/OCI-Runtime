@@ -8,6 +8,9 @@ mod agent_smoke;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod agent_smoke_process;
 mod driver;
+#[cfg(target_os = "linux")]
+mod native_linux_driver;
+mod native_smoke;
 mod oci_smoke;
 mod platform;
 mod report;
@@ -23,8 +26,11 @@ pub use driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
     RuntimeDriver,
 };
+#[cfg(target_os = "linux")]
+pub use native_linux_driver::NativeLinuxDriver;
+pub use native_smoke::native_linux_smoke;
 pub use oci_smoke::oci_vm_smoke;
-pub use report::{AgentVmSmokeReport, OciVmSmokeReport, WhpxSmokeReport};
+pub use report::{AgentVmSmokeReport, NativeLinuxSmokeReport, OciVmSmokeReport, WhpxSmokeReport};
 pub use service::HostRuntimeService;
 
 use a3s_oci_core::RuntimeFeatures;
