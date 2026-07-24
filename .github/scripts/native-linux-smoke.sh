@@ -5,6 +5,66 @@ set -euo pipefail
 runner_temp="${RUNNER_TEMP:?RUNNER_TEMP must identify the CI job temporary directory}"
 run_id="${GITHUB_RUN_ID:?GITHUB_RUN_ID must identify the CI run}"
 run_attempt="${GITHUB_RUN_ATTEMPT:?GITHUB_RUN_ATTEMPT must identify the CI attempt}"
+apparmor_userns_policy="/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+saved_apparmor_userns_policy=""
+apparmor_userns_policy_changed=false
+saved_kvm="/dev/a3s-oci-kvm-${run_id}-${run_attempt}"
+kvm_original_moved=false
+kvm_test_directory_created=false
+
+restore_host() {
+  local command_status=$?
+  local cleanup_status=0
+  local status
+  trap - EXIT
+  set +e
+
+  if [[ "$kvm_test_directory_created" == true && -d /dev/kvm ]]; then
+    sudo rmdir /dev/kvm
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ "$kvm_original_moved" == true ]]; then
+    sudo mv "$saved_kvm" /dev/kvm
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ "$apparmor_userns_policy_changed" == true ]]; then
+    sudo sysctl --quiet --write \
+      "kernel.apparmor_restrict_unprivileged_userns=$saved_apparmor_userns_policy"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+
+  if ((command_status != 0)); then
+    exit "$command_status"
+  fi
+  exit "$cleanup_status"
+}
+trap restore_host EXIT
+
+prepare_github_user_namespace_policy() {
+  if [[ "${GITHUB_ACTIONS:-}" != "true" || ! -r "$apparmor_userns_policy" ]]; then
+    return
+  fi
+
+  saved_apparmor_userns_policy="$(<"$apparmor_userns_policy")"
+  printf 'AppArmor unprivileged user namespace restriction: %s\n' \
+    "$saved_apparmor_userns_policy"
+  if [[ "$saved_apparmor_userns_policy" == "1" ]]; then
+    sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+    apparmor_userns_policy_changed=true
+  fi
+  test "$(<"$apparmor_userns_policy")" = "0"
+}
+
+prepare_github_user_namespace_policy
 
 sudo apt-get update
 sudo apt-get install --yes busybox-static jq
@@ -216,24 +276,15 @@ run_fault_cleanup() {
   done
 }
 
-saved_kvm="/dev/a3s-oci-kvm-${run_id}-${run_attempt}"
-restore_kvm() {
-  if [[ -d /dev/kvm ]]; then
-    sudo rmdir /dev/kvm
-  fi
-  if [[ -e "$saved_kvm" || -L "$saved_kvm" ]]; then
-    sudo mv "$saved_kvm" /dev/kvm
-  fi
-}
-trap restore_kvm EXIT
-
 if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   sudo mv /dev/kvm "$saved_kvm"
+  kvm_original_moved=true
 fi
 
 run_smoke false
 run_multi_container_smoke false
 run_fault_cleanup
 sudo mkdir /dev/kvm
+kvm_test_directory_created=true
 run_smoke true
 run_multi_container_smoke true

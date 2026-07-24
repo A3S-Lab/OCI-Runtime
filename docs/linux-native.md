@@ -41,6 +41,11 @@ result.
 It also records `/proc/sys/kernel/unprivileged_userns_clone` when that
 distribution-specific policy file exists. The policy is evidence for future
 rootless execution; it is not required for rootful host availability.
+On kernels that expose
+`/proc/sys/kernel/apparmor_restrict_unprivileged_userns`, the probe reports the
+setting as `apparmor_restrict_unprivileged_userns`. This is diagnostic evidence:
+an AppArmor or other LSM policy can still reject a requested user-namespace
+mount after the read-only baseline probe succeeds.
 
 The native probe never:
 
@@ -117,6 +122,14 @@ Each architecture runs once with `/dev/kvm` absent and once with a directory at
 that path, which is present but unusable as a KVM device. The script validates
 the corresponding `kvm_device_present` report field and restores any original
 device after the test.
+
+Ubuntu 24.04 GitHub-hosted runners enable an AppArmor policy that rejects the
+fixture's mount operations inside its new user namespace. Only when
+`GITHUB_ACTIONS=true`, the smoke script temporarily disables that one policy
+for the duration of the qualification script and restores its original value
+on exit. The runtime itself never changes host security policy. A production
+host must provide an appropriate narrow LSM policy for the requested OCI
+profile; a denied mount fails the create operation.
 
 Run the same gate on a supported Ubuntu host:
 
