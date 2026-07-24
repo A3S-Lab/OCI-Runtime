@@ -1,5 +1,7 @@
 use std::ffi::CString;
+use std::fs::File;
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -70,13 +72,15 @@ pub(super) fn pivot_root(rootfs: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn chroot(rootfs: &Path) -> Result<()> {
-    let rootfs = path_cstring(rootfs)?;
-
-    // SAFETY: both pathnames are NUL-terminated and remain live for each
-    // syscall. The caller is the dedicated single-threaded init process.
+pub(super) fn chroot(rootfs: &File) -> Result<()> {
+    // SAFETY: the descriptor was opened on the validated rootfs directory
+    // before namespace entry. The caller is the dedicated single-threaded init
+    // process, and `.` resolves through the retained descriptor after fchdir.
     unsafe {
-        if libc::chroot(rootfs.as_ptr()) != 0 {
+        if libc::fchdir(rootfs.as_raw_fd()) != 0 {
+            return Err(last_os_error("change to the retained container rootfs"));
+        }
+        if libc::chroot(CURRENT_DIRECTORY.as_ptr().cast()) != 0 {
             return Err(last_os_error("chroot container rootfs"));
         }
         if libc::chdir(ROOT_DIRECTORY.as_ptr().cast()) != 0 {

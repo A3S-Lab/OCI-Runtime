@@ -21,6 +21,7 @@ mod fault;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
 mod multi_container_report;
+mod namespace_join;
 #[cfg(target_os = "linux")]
 mod native_linux_driver;
 mod native_smoke;
@@ -46,7 +47,7 @@ pub use driver::{
     DriverWaitRequest, RuntimeDriver,
 };
 pub use multi_container_report::{
-    MultiContainerLifecycleEvidence, NativeLinuxMultiContainerSmokeReport,
+    MultiContainerLifecycleEvidence, NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport,
     OciVmMultiContainerSmokeReport,
 };
 #[cfg(target_os = "linux")]

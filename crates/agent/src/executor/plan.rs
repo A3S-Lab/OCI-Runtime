@@ -126,10 +126,10 @@ impl InitPlan {
             .as_deref()
             .map(|value| validate_uts_name("domainname", value))
             .transpose()?;
-        if (hostname.is_some() || domainname.is_some()) && !namespaces.new_uts() {
+        if (hostname.is_some() || domainname.is_some()) && !namespaces.has_uts() {
             return Err(unsupported(
                 "hostname/domainname",
-                "the bootstrap executor changes UTS names only in a newly created UTS namespace",
+                "the bootstrap executor changes UTS names only in a configured UTS namespace",
             ));
         }
 
@@ -225,11 +225,8 @@ fn validate_profile(raw: &Value) -> Result<()> {
                 "only Linux OCI namespace types are accepted",
             ));
         }
-        if namespace.contains_key("path") {
-            return Err(unsupported(
-                &format!("{field}.path"),
-                "joining an existing namespace is not implemented",
-            ));
+        if namespace.get("path").is_some_and(|path| !path.is_string()) {
+            return Err(invalid(format!("{field}.path must be a string")));
         }
     }
     reject_unimplemented_keys(

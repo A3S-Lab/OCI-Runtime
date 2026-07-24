@@ -401,40 +401,84 @@ fn rejects_uts_names_outside_the_supported_profile() {
 }
 
 #[test]
-fn rejects_joined_namespaces() {
-    let joined = UTS_CONFIG.replace(
-        r#""type": "uts""#,
-        r#""type": "uts", "path": "/proc/1/ns/uts""#,
-    );
-    let error = InitPlan::from_bundle(&bundle(&joined), &null_io())
-        .expect_err("joined UTS namespace unsupported");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("namespaces[0].path"));
+fn accepts_all_joined_namespace_types_and_retains_their_absolute_paths() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    config["hostname"] = serde_json::json!("joined-host");
+    config["domainname"] = serde_json::json!("joined.test");
+    config["linux"] = serde_json::json!({
+        "namespaces": [
+            {"type": "time", "path": "/proc/42/ns/time"},
+            {"type": "pid", "path": "/proc/42/ns/pid"},
+            {"type": "user", "path": "/proc/42/ns/user"},
+            {"type": "mount", "path": "/proc/42/ns/mnt"},
+            {"type": "network", "path": "/proc/42/ns/net"},
+            {"type": "ipc", "path": "/proc/42/ns/ipc"},
+            {"type": "cgroup", "path": "/proc/42/ns/cgroup"},
+            {"type": "uts", "path": "/proc/42/ns/uts"}
+        ]
+    });
+    let config = serde_json::to_string(&config).expect("encode namespace configuration");
 
-    let joined_mount = UTS_CONFIG.replace(
-        r#"{"type": "uts"}"#,
-        r#"{"type": "uts"}, {"type": "mount", "path": "/proc/1/ns/mnt"}"#,
+    let plan =
+        InitPlan::from_bundle(&bundle(&config), &null_io()).expect("all existing Linux namespaces");
+    assert_eq!(
+        plan.namespaces.joined_uts(),
+        Some(std::path::Path::new("/proc/42/ns/uts"))
     );
-    let error = InitPlan::from_bundle(&bundle(&joined_mount), &null_io())
-        .expect_err("joined mount namespace unsupported");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("namespaces[1].path"));
+    assert_eq!(
+        plan.namespaces.joined_mount(),
+        Some(std::path::Path::new("/proc/42/ns/mnt"))
+    );
+    assert_eq!(
+        plan.namespaces.joined_ipc(),
+        Some(std::path::Path::new("/proc/42/ns/ipc"))
+    );
+    assert_eq!(
+        plan.namespaces.joined_network(),
+        Some(std::path::Path::new("/proc/42/ns/net"))
+    );
+    assert_eq!(
+        plan.namespaces.joined_cgroup(),
+        Some(std::path::Path::new("/proc/42/ns/cgroup"))
+    );
+    assert_eq!(
+        plan.namespaces.joined_pid(),
+        Some(std::path::Path::new("/proc/42/ns/pid"))
+    );
+    assert_eq!(
+        plan.namespaces.joined_user(),
+        Some(std::path::Path::new("/proc/42/ns/user"))
+    );
+    assert_eq!(
+        plan.namespaces.joined_time(),
+        Some(std::path::Path::new("/proc/42/ns/time"))
+    );
+    assert!(plan.namespaces.requires_child_process());
+    assert_eq!(plan.hostname.as_deref(), Some("joined-host"));
+    assert_eq!(plan.domainname.as_deref(), Some("joined.test"));
+}
 
-    let joined_network = UTS_CONFIG.replace(
-        r#"{"type": "uts"}"#,
-        r#"{"type": "uts"}, {"type": "network", "path": "/proc/1/ns/net"}"#,
-    );
-    let error = InitPlan::from_bundle(&bundle(&joined_network), &null_io())
-        .expect_err("joined network namespace unsupported");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("namespaces[1].path"));
+#[test]
+fn joined_mount_namespaces_do_not_enable_unimplemented_mount_mutation() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    config["mounts"] = serde_json::json!([{
+        "destination": "/proc",
+        "type": "proc",
+        "source": "proc"
+    }]);
+    config["linux"] = serde_json::json!({
+        "namespaces": [
+            {"type": "mount", "path": "/proc/42/ns/mnt"}
+        ]
+    });
+    let config = serde_json::to_string(&config).expect("encode namespace configuration");
 
-    let joined_pid = UTS_CONFIG.replace(
-        r#"{"type": "uts"}"#,
-        r#"{"type": "uts"}, {"type": "pid", "path": "/proc/1/ns/pid"}"#,
-    );
-    let error = InitPlan::from_bundle(&bundle(&joined_pid), &null_io())
-        .expect_err("joined PID namespace unsupported");
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("mount mutation in a shared namespace must remain fail-closed");
     assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("namespaces[1].path"));
+    assert!(error
+        .message
+        .contains("only in a newly created mount namespace"));
 }

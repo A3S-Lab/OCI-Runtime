@@ -1,11 +1,14 @@
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxIdMapping, LinuxNamespaceType};
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::control;
 
+mod join;
 mod time;
 mod user;
 
@@ -38,15 +41,40 @@ pub(super) struct TimeOffset {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum NamespaceAction {
+    #[default]
+    Inherit,
+    Create,
+    Join(PathBuf),
+}
+
+impl NamespaceAction {
+    const fn is_new(&self) -> bool {
+        matches!(self, Self::Create)
+    }
+
+    const fn is_configured(&self) -> bool {
+        !matches!(self, Self::Inherit)
+    }
+
+    fn joined(&self) -> Option<&Path> {
+        match self {
+            Self::Join(path) => Some(path),
+            Self::Inherit | Self::Create => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct NamespacePlan {
-    new_uts: bool,
-    new_mount: bool,
-    new_ipc: bool,
-    new_network: bool,
-    new_cgroup: bool,
-    new_pid: bool,
-    new_user: bool,
-    new_time: bool,
+    uts: NamespaceAction,
+    mount: NamespaceAction,
+    ipc: NamespaceAction,
+    network: NamespaceAction,
+    cgroup: NamespaceAction,
+    pid: NamespaceAction,
+    user: NamespaceAction,
+    time: NamespaceAction,
     uid_mappings: Vec<IdMapping>,
     gid_mappings: Vec<IdMapping>,
     monotonic_offset: Option<TimeOffset>,
@@ -66,35 +94,32 @@ impl NamespacePlan {
         let mut plan = Self::default();
         if let Some(namespaces) = linux.namespaces().as_deref() {
             for (index, namespace) in namespaces.iter().enumerate() {
-                if namespace.path().is_some() {
-                    return Err(unsupported(
-                        &format!("linux.namespaces[{index}].path"),
-                        "joining an existing namespace is not implemented",
-                    ));
-                }
-                let present = match namespace.typ() {
-                    LinuxNamespaceType::Uts => &mut plan.new_uts,
-                    LinuxNamespaceType::Mount => &mut plan.new_mount,
-                    LinuxNamespaceType::Ipc => &mut plan.new_ipc,
-                    LinuxNamespaceType::Network => &mut plan.new_network,
-                    LinuxNamespaceType::Cgroup => &mut plan.new_cgroup,
-                    LinuxNamespaceType::Pid => &mut plan.new_pid,
-                    LinuxNamespaceType::User => &mut plan.new_user,
-                    LinuxNamespaceType::Time => &mut plan.new_time,
+                let action = match namespace.typ() {
+                    LinuxNamespaceType::Uts => &mut plan.uts,
+                    LinuxNamespaceType::Mount => &mut plan.mount,
+                    LinuxNamespaceType::Ipc => &mut plan.ipc,
+                    LinuxNamespaceType::Network => &mut plan.network,
+                    LinuxNamespaceType::Cgroup => &mut plan.cgroup,
+                    LinuxNamespaceType::Pid => &mut plan.pid,
+                    LinuxNamespaceType::User => &mut plan.user,
+                    LinuxNamespaceType::Time => &mut plan.time,
                 };
-                if *present {
+                if action.is_configured() {
                     return Err(invalid(format!(
                         "linux.namespaces contains duplicate {:?} entries",
                         namespace.typ()
                     )));
                 }
-                *present = true;
+                *action = match namespace.path() {
+                    Some(path) => NamespaceAction::Join(validate_join_path(index, path)?),
+                    None => NamespaceAction::Create,
+                };
             }
         }
 
         plan.uid_mappings = collect_mappings("linux.uidMappings", linux.uid_mappings().as_deref())?;
         plan.gid_mappings = collect_mappings("linux.gidMappings", linux.gid_mappings().as_deref())?;
-        if plan.new_user {
+        if plan.new_user() {
             if plan.uid_mappings.is_empty() || plan.gid_mappings.is_empty() {
                 return Err(unsupported(
                     "linux.uidMappings/linux.gidMappings",
@@ -117,7 +142,7 @@ impl NamespacePlan {
         }
 
         if let Some(offsets) = linux.time_offsets() {
-            if !plan.new_time {
+            if !plan.new_time() {
                 return Err(invalid(
                     "linux.timeOffsets requires a newly created time namespace",
                 ));
@@ -142,39 +167,83 @@ impl NamespacePlan {
     }
 
     pub(super) const fn new_uts(&self) -> bool {
-        self.new_uts
+        self.uts.is_new()
     }
 
     pub(super) const fn new_mount(&self) -> bool {
-        self.new_mount
+        self.mount.is_new()
     }
 
     pub(super) const fn new_ipc(&self) -> bool {
-        self.new_ipc
+        self.ipc.is_new()
     }
 
     pub(super) const fn new_network(&self) -> bool {
-        self.new_network
+        self.network.is_new()
     }
 
     pub(super) const fn new_cgroup(&self) -> bool {
-        self.new_cgroup
+        self.cgroup.is_new()
     }
 
     pub(super) const fn new_pid(&self) -> bool {
-        self.new_pid
+        self.pid.is_new()
     }
 
     pub(super) const fn new_user(&self) -> bool {
-        self.new_user
+        self.user.is_new()
     }
 
     pub(super) const fn new_time(&self) -> bool {
-        self.new_time
+        self.time.is_new()
+    }
+
+    pub(super) const fn has_uts(&self) -> bool {
+        self.uts.is_configured()
+    }
+
+    pub(super) const fn has_pid(&self) -> bool {
+        self.pid.is_configured()
+    }
+
+    pub(super) const fn has_time(&self) -> bool {
+        self.time.is_configured()
+    }
+
+    pub(super) fn joined_uts(&self) -> Option<&Path> {
+        self.uts.joined()
+    }
+
+    pub(super) fn joined_mount(&self) -> Option<&Path> {
+        self.mount.joined()
+    }
+
+    pub(super) fn joined_ipc(&self) -> Option<&Path> {
+        self.ipc.joined()
+    }
+
+    pub(super) fn joined_network(&self) -> Option<&Path> {
+        self.network.joined()
+    }
+
+    pub(super) fn joined_cgroup(&self) -> Option<&Path> {
+        self.cgroup.joined()
+    }
+
+    pub(super) fn joined_pid(&self) -> Option<&Path> {
+        self.pid.joined()
+    }
+
+    pub(super) fn joined_user(&self) -> Option<&Path> {
+        self.user.joined()
+    }
+
+    pub(super) fn joined_time(&self) -> Option<&Path> {
+        self.time.joined()
     }
 
     pub(super) const fn requires_child_process(&self) -> bool {
-        self.new_pid || self.new_time
+        self.has_pid() || self.has_time()
     }
 
     pub(super) fn uid_mappings(&self) -> &[IdMapping] {
@@ -195,6 +264,8 @@ impl NamespacePlan {
 }
 
 pub(super) fn enter_new_namespaces(plan: &NamespacePlan, control: &mut UnixStream) -> Result<()> {
+    join::enter(plan)?;
+
     if plan.new_user() {
         unshare(libc::CLONE_NEWUSER, "create Linux OCI user namespace")?;
         control::request_user_mapping(control)?;
@@ -229,6 +300,17 @@ pub(super) fn enter_new_namespaces(plan: &NamespacePlan, control: &mut UnixStrea
         time::apply_offsets(plan)?;
     }
     Ok(())
+}
+
+fn validate_join_path(index: usize, path: &Path) -> Result<PathBuf> {
+    let field = format!("linux.namespaces[{index}].path");
+    if !path.is_absolute() {
+        return Err(invalid(format!("{field} must be absolute")));
+    }
+    if path.as_os_str().as_bytes().contains(&0) {
+        return Err(invalid(format!("{field} must not contain a NUL byte")));
+    }
+    Ok(path.to_path_buf())
 }
 
 fn unshare(flags: libc::c_int, operation: &str) -> Result<()> {

@@ -170,12 +170,25 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
-The `a3s.oci.native-linux-multi-container-smoke.v2` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v3` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
-complete durable-session removal. GitHub Actions runs the gate on x86_64 and
-aarch64 both without `/dev/kvm` and with a present but unusable placeholder at
-that path.
+complete durable-session removal. It then keeps a prepared donor behind its
+create barrier and requires:
+
+1. a namespace descriptor whose type disagrees with its OCI entry to fail
+   before container state;
+2. one workload to join the donor UTS, IPC, network, cgroup, PID, user, and
+   time namespaces while retaining a private mount namespace;
+3. a second workload to join the donor mount namespace and execute through the
+   rootfs descriptor retained before `setns`;
+4. PID/time joins to cross `exec` and remain running for a bounded observation
+   window;
+5. both joiners to complete without changing the donor's created state;
+6. all donor, joiner, and negative-case state to be removed.
+
+GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
+with a present but unusable placeholder at that path.
 
 ## Fault-injected shutdown cleanup
 
@@ -214,7 +227,8 @@ The default driver must remain `probe-only` until at least the following pass:
 
 - rootless lifecycle using subordinate UID/GID mappings and the
   `setgroups=deny` flow;
-- namespace joins and lifecycle-level namespace security-negative cases;
+- broader namespace-join security negatives, donor teardown races, and
+  restart recovery beyond the retained wrong-type pre-state rejection;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
 - namespace-internal init supervision and orphan/zombie reaping, exec,
