@@ -43,16 +43,19 @@ The accepted bootstrap profile requires:
 - bounded arguments and environment with unique environment names.
 
 When `linux.namespaces` is present, it accepts only unique, newly created UTS,
-mount, IPC, network, and cgroup namespace entries, in any order, with no join
-paths. Omitting a namespace inherits the runtime namespace of that type.
+mount, IPC, network, cgroup, and PID namespace entries, in any order, with no
+join paths. Omitting a namespace inherits the runtime namespace of that type.
 Configured hostname and domainname values are bounded to the Linux kernel
 limit and require the new UTS namespace.
 
-The wrapper creates all requested UTS, mount, IPC, network, and cgroup
-namespaces atomically in one `unshare` call. It applies and reads back hostname
-and domainname with `uname`. When a mount namespace is requested, it then makes
-`/` recursively private, recursively bind-mounts the rootfs onto itself,
-applies every configured mount in listed order, and uses
+The wrapper atomically requests all configured UTS, mount, IPC, network,
+cgroup, and PID namespace isolation in one `unshare` call. Because a new PID
+namespace applies to the caller's next child, the authenticated wrapper remains
+as a supervisor and forks the container init as namespace PID 1. The child
+applies and reads back hostname and domainname with `uname`. When a mount
+namespace is requested, it then makes `/` recursively private, recursively
+bind-mounts the rootfs onto itself, applies every configured mount in listed
+order, and uses
 `pivot_root(".", ".")` followed by a detached unmount of the old root. All of
 this succeeds before readiness is reported, so namespace, mount, and rootfs
 isolation are part of the create barrier. When a mount namespace is omitted,
@@ -75,13 +78,15 @@ The current mount slice:
 
 Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
-accepts only the exact kernel-reported child PID. The wrapper revalidates the
-bundle, resolves a contained rootfs, and returns either a bounded typed error
-or readiness before blocking. Create therefore preserves the exact rejection
-or returns `created` before the configured process runs. Start sends the
-one-byte release signal; the wrapper applies the inherited-namespace `chroot`
-when needed, then working directory, groups, GID, UID, umask, and
-`PR_SET_NO_NEW_PRIVS`, and calls `execve`.
+accepts only the exact kernel-reported supervisor PID. The wrapper revalidates
+the bundle, resolves a contained rootfs, and returns either a bounded typed
+error or readiness with the runtime-visible init PID before blocking. For a
+new PID namespace, the agent verifies that PID's parent, `NSpid` mapping to 1,
+and namespace identity against the authenticated supervisor. Create therefore
+preserves the exact rejection or returns `created` before the configured
+process runs. Start sends the one-byte release signal; the init applies the
+inherited-namespace `chroot` when needed, then working directory, groups, GID,
+UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
 
 State observes the init process, kill delivers one positive Linux signal, and
 delete supports stopped-only and force cleanup. Exact request retries are
@@ -94,7 +99,7 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor currently rejects mount-target creation, rootfs propagation
 overrides, idmapped and recursive-attribute mounts, every namespace type other
-than UTS, mount, IPC, network, and cgroup, all namespace joins, cgroup
+than UTS, mount, IPC, network, cgroup, and PID, all namespace joins, cgroup
 resources, capabilities, seccomp, hooks, read-only rootfs, terminals, non-null
 I/O, process-group signals, and every other unimplemented OCI property. These
 are release blockers, not silently accepted compatibility gaps.
@@ -128,3 +133,11 @@ no guest runtime state. This proves the fixed bootstrap slice, not the
 immutable A3S system image, complete OCI enforcement, process I/O, configured
 networking, restart recovery, or fault-injected cleanup. The WHPX driver
 therefore remains `probe-only`.
+
+The PID qualification used the 6,371,704-byte static agent with SHA-256
+`45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.
+The workload required shell PID 1 and a matching `/proc/1/ns/pid` identity
+before producing its marker. The agent returned authenticated host-visible PID
+396, and the complete create/state/start/kill/delete lifecycle and cleanup
+passed through WHPX. A joined-PID companion bundle retained `Unsupported` at
+`linux.namespaces[5].path` and left no guest runtime state.

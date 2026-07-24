@@ -29,6 +29,7 @@ pub(super) struct InitPlan {
     pub(super) new_ipc_namespace: bool,
     pub(super) new_network_namespace: bool,
     pub(super) new_cgroup_namespace: bool,
+    pub(super) new_pid_namespace: bool,
     pub(super) mounts: Vec<MountPlan>,
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
@@ -148,6 +149,7 @@ impl InitPlan {
             new_ipc_namespace: namespaces.new_ipc,
             new_network_namespace: namespaces.new_network,
             new_cgroup_namespace: namespaces.new_cgroup,
+            new_pid_namespace: namespaces.new_pid,
             mounts,
             hostname,
             domainname,
@@ -222,11 +224,11 @@ fn validate_profile(raw: &Value) -> Result<()> {
             .ok_or_else(|| invalid(format!("{field}.type must be a string")))?;
         if !matches!(
             namespace_type,
-            "uts" | "mount" | "ipc" | "network" | "cgroup"
+            "uts" | "mount" | "ipc" | "network" | "cgroup" | "pid"
         ) {
             return Err(unsupported(
                 &format!("{field}.type"),
-                "only new UTS, mount, IPC, network, and cgroup namespaces are implemented",
+                "only new UTS, mount, IPC, network, cgroup, and PID namespaces are implemented",
             ));
         }
         if namespace.contains_key("path") {
@@ -246,6 +248,7 @@ struct NamespacePlan {
     new_ipc: bool,
     new_network: bool,
     new_cgroup: bool,
+    new_pid: bool,
 }
 
 fn validate_linux_namespaces(
@@ -271,10 +274,11 @@ fn validate_linux_namespaces(
             LinuxNamespaceType::Ipc => &mut plan.new_ipc,
             LinuxNamespaceType::Network => &mut plan.new_network,
             LinuxNamespaceType::Cgroup => &mut plan.new_cgroup,
+            LinuxNamespaceType::Pid => &mut plan.new_pid,
             _ => {
                 return Err(unsupported(
                     &format!("linux.namespaces[{index}].type"),
-                    "only new UTS, mount, IPC, network, and cgroup namespaces are implemented",
+                    "only new UTS, mount, IPC, network, cgroup, and PID namespaces are implemented",
                 ));
             }
         };

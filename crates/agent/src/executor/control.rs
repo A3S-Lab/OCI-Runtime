@@ -12,8 +12,26 @@ const MAX_REJECTION_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InitOutcome {
-    Ready,
+    Ready { pid: i32 },
     Rejected(Error),
+}
+
+pub(super) fn write_ready(stream: &mut StdUnixStream, pid: i32) -> Result<()> {
+    if pid <= 0 {
+        return Err(control_error(
+            ErrorCode::InvalidArgument,
+            format!("container init reported non-positive PID {pid}"),
+        ));
+    }
+    stream
+        .write_all(&[READY_BYTE])
+        .and_then(|()| stream.write_all(&pid.to_be_bytes()))
+        .map_err(|write| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to report prepared container init readiness: {write}"),
+            )
+        })
 }
 
 pub(super) fn write_rejection(stream: &mut StdUnixStream, error: &Error) -> Result<()> {
@@ -62,12 +80,33 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
             )
         })?;
     match discriminator[0] {
-        READY_BYTE => Ok(InitOutcome::Ready),
+        READY_BYTE => read_ready_pid(stream)
+            .await
+            .map(|pid| InitOutcome::Ready { pid }),
         REJECTED_BYTE => read_rejection(stream).await.map(InitOutcome::Rejected),
         other => Err(control_error(
             ErrorCode::FailedPrecondition,
             format!("prepared container init returned unknown outcome byte {other:#04x}"),
         )),
+    }
+}
+
+async fn read_ready_pid(stream: &mut UnixStream) -> Result<i32> {
+    let mut encoded_pid = [0_u8; size_of::<i32>()];
+    stream.read_exact(&mut encoded_pid).await.map_err(|read| {
+        control_error(
+            ErrorCode::FailedPrecondition,
+            format!("container init readiness PID was truncated: {read}"),
+        )
+    })?;
+    let pid = i32::from_be_bytes(encoded_pid);
+    if pid <= 0 {
+        Err(control_error(
+            ErrorCode::FailedPrecondition,
+            format!("container init reported non-positive PID {pid}"),
+        ))
+    } else {
+        Ok(pid)
     }
 }
 
@@ -116,7 +155,49 @@ mod tests {
 
     use a3s_oci_sdk::{Error, ErrorCode};
 
-    use super::{read_outcome, write_rejection, InitOutcome};
+    use super::{read_outcome, write_ready, write_rejection, InitOutcome};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ready_round_trip_carries_the_runtime_visible_pid() {
+        let (mut writer, reader) = StdUnixStream::pair().expect("create control socket pair");
+        reader
+            .set_nonblocking(true)
+            .expect("make control reader nonblocking");
+        let writer = tokio::task::spawn_blocking(move || {
+            write_ready(&mut writer, 42_001).expect("write readiness");
+        });
+        let mut reader = tokio::net::UnixStream::from_std(reader).expect("register control reader");
+
+        assert_eq!(
+            read_outcome(&mut reader).await.expect("read readiness"),
+            InitOutcome::Ready { pid: 42_001 }
+        );
+        writer.await.expect("control writer task");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn readiness_reader_rejects_non_positive_or_truncated_pids() {
+        use std::io::Write;
+
+        for payload in [0_i32.to_be_bytes().to_vec(), vec![0, 1]] {
+            let (mut writer, reader) = StdUnixStream::pair().expect("create control socket pair");
+            reader
+                .set_nonblocking(true)
+                .expect("make control reader nonblocking");
+            let writer = tokio::task::spawn_blocking(move || {
+                writer.write_all(&[super::READY_BYTE]).expect("kind");
+                writer.write_all(&payload).expect("PID payload");
+            });
+            let mut reader =
+                tokio::net::UnixStream::from_std(reader).expect("register control reader");
+
+            let error = read_outcome(&mut reader)
+                .await
+                .expect_err("invalid readiness PID must fail");
+            assert_eq!(error.code, ErrorCode::FailedPrecondition);
+            writer.await.expect("control writer task");
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn rejection_round_trip_preserves_the_typed_error() {

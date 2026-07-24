@@ -111,10 +111,11 @@ A successful fixed OCI VM smoke additionally proves that:
 - create applies existing-target mount entries in listed order, including
   relative bundle bind sources, common VFS flags, propagation modes, and
   filesystem-specific data;
-- create atomically enters requested IPC, network, and cgroup namespaces before
-  reporting ready;
-- create returns `created` and a positive guest PID without running the
-  configured process;
+- create atomically enters requested IPC, network, cgroup, and PID namespace
+  setup before reporting ready;
+- create returns `created` and an authenticated host-visible init PID without
+  running the configured process; the init is PID 1 in a requested new PID
+  namespace;
 - state and an exact create retry match the original result;
 - start releases a randomly named abstract Unix socket only after the parent
   verifies the exact init-wrapper PID;
@@ -143,9 +144,7 @@ report, and returned exit status zero.
 
 The UTS qualification configured hostname `a3s-smoke` and domainname
 `runtime.test`, checked the hostname from the workload, and crossed the create
-barrier only after the wrapper read both applied values back with `uname`. A
-companion bundle added a PID namespace; create returned `Unsupported` for
-`linux.namespaces` and left no runtime state.
+barrier only after the wrapper read both applied values back with `uname`.
 
 The mount qualification requested new UTS and mount namespaces in the same
 bundle. It first rbind-mounted a relative bundle source onto `/mnt`, then
@@ -165,6 +164,15 @@ passed. A companion bundle supplied `/proc/1/ns/net` as a network namespace
 join path; create retained the exact typed `Unsupported` rejection and left no
 guest runtime directory.
 
+The PID qualification used the 6,371,704-byte static musl agent with SHA-256
+`45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.
+The supervisor forked a container init that required shell PID 1 and a matching
+`/proc/1/ns/pid` identity before writing the marker. Create returned
+authenticated host-visible PID 396, the complete lifecycle and cleanup report
+passed, and the VM exited cleanly. A companion bundle joined
+`/proc/1/ns/pid`; create retained `Unsupported` at
+`linux.namespaces[5].path` and left no guest runtime directory.
+
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
 does not build it.
@@ -173,7 +181,7 @@ The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
 - configured networking or complete process I/O works;
-- PID/user/time namespaces, namespace joins, advanced mount semantics,
+- user/time namespaces, namespace joins, advanced mount semantics,
   resources, capabilities, seccomp, or hooks work;
 - restart recovery, concurrent containers, or shared-guest-kernel isolation
   work;
@@ -189,7 +197,7 @@ The next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
-3. add PID/user/time namespaces, namespace joins, advanced mount, capability,
+3. add user/time namespaces, namespace joins, advanced mount, capability,
    resource, seccomp, and hook enforcement;
 4. return stdout, stderr, and the natural exit code;
 5. reconcile stopped state after host runtime restart;

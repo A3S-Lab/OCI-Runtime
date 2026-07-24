@@ -61,6 +61,7 @@ fn accepts_the_exact_bootstrap_profile() {
     assert!(!plan.new_ipc_namespace);
     assert!(!plan.new_network_namespace);
     assert!(!plan.new_cgroup_namespace);
+    assert!(!plan.new_pid_namespace);
 }
 
 #[test]
@@ -164,6 +165,30 @@ fn accepts_new_ipc_network_and_cgroup_namespaces_in_any_order() {
 }
 
 #[test]
+fn accepts_a_new_pid_namespace_in_any_supported_order() {
+    for namespaces in [
+        ["pid", "uts", "mount"],
+        ["mount", "pid", "uts"],
+        ["uts", "mount", "pid"],
+    ] {
+        let mut config: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+        config["linux"] = serde_json::json!({
+            "namespaces": namespaces
+                .into_iter()
+                .map(|namespace| serde_json::json!({"type": namespace}))
+                .collect::<Vec<_>>()
+        });
+        let config = serde_json::to_string(&config).expect("encode namespace configuration");
+        let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+            .expect("new PID namespace with supported peers");
+        assert!(plan.new_pid_namespace);
+        assert!(plan.new_uts_namespace);
+        assert!(plan.new_mount_namespace);
+    }
+}
+
+#[test]
 fn rejects_uts_names_outside_the_supported_profile() {
     let too_long = UTS_CONFIG.replace("a3s-smoke", &"h".repeat(65));
     let error =
@@ -189,23 +214,23 @@ fn rejects_uts_names_outside_the_supported_profile() {
 
 #[test]
 fn rejects_unimplemented_or_joined_namespaces() {
-    let mut pid: serde_json::Value =
+    let mut user: serde_json::Value =
         serde_json::from_str(UTS_CONFIG).expect("decode test configuration");
-    let root = pid
+    let root = user
         .as_object_mut()
         .expect("test configuration must be an object");
     root.remove("hostname");
     root.remove("domainname");
-    pid["linux"]["namespaces"][0]["type"] = serde_json::Value::String("pid".into());
-    let pid = serde_json::to_string(&pid).expect("encode PID namespace test");
-    let error = InitPlan::from_bundle(&bundle(&pid), &null_io())
-        .expect_err("single PID namespace unsupported");
+    user["linux"]["namespaces"][0]["type"] = serde_json::Value::String("user".into());
+    let user = serde_json::to_string(&user).expect("encode user namespace test");
+    let error = InitPlan::from_bundle(&bundle(&user), &null_io())
+        .expect_err("single user namespace unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("namespaces[0].type"));
 
-    let multiple = UTS_CONFIG.replace(r#""type": "uts""#, r#""type": "uts"}, {"type": "pid""#);
+    let multiple = UTS_CONFIG.replace(r#""type": "uts""#, r#""type": "uts"}, {"type": "user""#);
     let error = InitPlan::from_bundle(&bundle(&multiple), &null_io())
-        .expect_err("mixed UTS and PID namespaces unsupported");
+        .expect_err("mixed UTS and user namespaces unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("linux.namespaces"));
 
@@ -233,6 +258,15 @@ fn rejects_unimplemented_or_joined_namespaces() {
     );
     let error = InitPlan::from_bundle(&bundle(&joined_network), &null_io())
         .expect_err("joined network namespace unsupported");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("namespaces[1].path"));
+
+    let joined_pid = UTS_CONFIG.replace(
+        r#"{"type": "uts"}"#,
+        r#"{"type": "uts"}, {"type": "pid", "path": "/proc/1/ns/pid"}"#,
+    );
+    let error = InitPlan::from_bundle(&bundle(&joined_pid), &null_io())
+        .expect_err("joined PID namespace unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("namespaces[1].path"));
 }

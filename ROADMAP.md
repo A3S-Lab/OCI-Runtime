@@ -49,10 +49,11 @@ Completed:
   host/shim evidence;
 - root-only Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
-  create-time UTS, mount, IPC, network, and cgroup namespaces, hostname and
-  domainname, recursively private mount propagation, ordered existing-target
-  OCI mounts, `pivot_root`, exact-generation state, bounded typed init
-  rejection reporting, session idempotency, signaling, and cleanup;
+  create-time UTS, mount, IPC, network, cgroup, and PID namespaces, hostname
+  and domainname, recursively private mount propagation, ordered
+  existing-target OCI mounts, `pivot_root`, authenticated host-visible PID
+  reporting, exact-generation state, bounded typed init rejection reporting,
+  session idempotency, signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -202,8 +203,10 @@ runtime-root leak. Only then may WHPX become `experimental`.
   data.
 - [x] Create new IPC, network, and cgroup namespaces atomically before the
   created barrier.
-- [ ] Namespace creation for PID, user, and time namespaces, plus joining
-  existing namespaces.
+- [x] Create a new PID namespace, run the container init as namespace PID 1,
+  and authenticate its host-visible PID before the created barrier.
+- [ ] Namespace creation for user and time namespaces, plus joining existing
+  namespaces.
 - [ ] Mount-target creation, rootfs propagation overrides, idmapped and
   recursive-attribute mounts, masked paths, read-only paths, and read-only
   rootfs.

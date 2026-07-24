@@ -93,19 +93,23 @@ hostname. When requested, the same create barrier also covers a new mount
 namespace, recursively private propagation, a self-bound rootfs, and
 `pivot_root`. Ordered existing-target mount entries run before that pivot,
 including relative bundle bind sources, common VFS flags, propagation, and
-bounded filesystem-specific data. Requested IPC, network, and cgroup
-namespaces are created atomically with UTS and mount isolation. The host
-verifies marker removal and that VM shutdown leaves no new guest-agent runtime
-directory.
+bounded filesystem-specific data. Requested IPC, network, cgroup, and PID
+namespace setup is atomic with UTS and mount isolation. For a new PID
+namespace, the container init runs as namespace PID 1 while the guest agent
+authenticates and reports its host-visible PID. The host verifies marker
+removal and that VM shutdown leaves no new guest-agent runtime directory.
 
-The private parent/init control channel reports either readiness or a bounded,
-typed SDK error. The parent validates the kernel-reported peer PID before
-reading that outcome, so create-time namespace and rootfs failures retain
-their exact error class and context without trusting a pathname socket.
+The private parent/init control channel reports either readiness with a
+positive runtime-visible PID or a bounded, typed SDK error. The parent validates
+the kernel-reported supervisor peer PID before reading that outcome. For PID
+isolation it additionally verifies the reported init's parent, `NSpid` mapping,
+and namespace links before exposing the created state. Create-time namespace
+and rootfs failures therefore retain their exact error class and context
+without trusting a pathname socket.
 
 This is the first Linux executor vertical slice, not complete OCI
 enforcement. A pinned immutable system image, complete process I/O, remaining
-PID/user/time namespace creation, namespace joins, advanced mount semantics,
+user/time namespace creation, namespace joins, advanced mount semantics,
 resources, hooks, recovery, negative isolation cases, fault cleanup, and full
 lifecycle evidence remain required before the WHPX driver can advance beyond
 `probe-only`.

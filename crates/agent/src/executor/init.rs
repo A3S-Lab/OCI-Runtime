@@ -1,5 +1,5 @@
 use std::ffi::{CString, OsStr};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::mem::MaybeUninit;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::ffi::OsStrExt;
@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
-use super::control::{write_rejection, READY_BYTE, START_BYTE};
+use super::control::{write_ready, write_rejection, START_BYTE};
 use super::mount;
+use super::pid::{self, ForkRole};
 use super::plan::InitPlan;
 use super::rootfs;
 
@@ -55,24 +56,28 @@ fn run_container_init(
             format!("failed to connect abstract prepared init control socket: {error}"),
         )
     })?;
-    let (plan, rootfs) = match prepare_container_init(config_snapshot, bundle_directory) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            if let Err(report) = write_rejection(&mut control, &error) {
-                return Err(init_error(
-                    ErrorCode::Internal,
-                    format!("{error}; failed to report the exact rejection: {report}"),
-                ));
-            }
-            return Err(error);
-        }
-    };
-    control.write_all(&[READY_BYTE]).map_err(|error| {
-        init_error(
-            ErrorCode::Unavailable,
-            format!("failed to report prepared init readiness: {error}"),
-        )
-    })?;
+    let (plan, canonical_bundle, rootfs) =
+        match prepare_container_init(config_snapshot, bundle_directory) {
+            Ok(prepared) => prepared,
+            Err(error) => return reject_before_ready(&mut control, error),
+        };
+    if let Err(error) = unshare_namespaces(&plan) {
+        return reject_before_ready(&mut control, error);
+    }
+    if plan.new_pid_namespace {
+        return run_pid_namespace_init(&plan, &canonical_bundle, &rootfs, control);
+    }
+    if let Err(error) = prepare_create_environment(&plan, &canonical_bundle, &rootfs) {
+        return reject_before_ready(&mut control, error);
+    }
+    // SAFETY: `getpid` has no preconditions and this wrapper has not entered a
+    // PID namespace that changes the runtime-visible process.
+    let pid = unsafe { libc::getpid() };
+    write_ready(&mut control, pid)?;
+    wait_for_start_and_exec(&plan, &rootfs, control)
+}
+
+fn wait_for_start_and_exec(plan: &InitPlan, rootfs: &Path, mut control: UnixStream) -> Result<()> {
     let mut start = [0_u8; 1];
     control.read_exact(&mut start).map_err(|error| {
         init_error(
@@ -87,13 +92,46 @@ fn run_container_init(
         ));
     }
     drop(control);
-    enter_rootfs_and_exec(&plan, &rootfs)
+    enter_rootfs_and_exec(plan, rootfs)
+}
+
+fn run_pid_namespace_init(
+    plan: &InitPlan,
+    bundle_directory: &Path,
+    rootfs: &Path,
+    mut control: UnixStream,
+) -> Result<()> {
+    match pid::fork_namespace_init() {
+        Ok(ForkRole::Supervisor { child_pid }) => {
+            drop(control);
+            pid::wait_for_child(child_pid)
+        }
+        Ok(ForkRole::Init { runtime_pid }) => {
+            if let Err(error) = prepare_create_environment(plan, bundle_directory, rootfs) {
+                return reject_before_ready(&mut control, error);
+            }
+            write_ready(&mut control, runtime_pid)?;
+            wait_for_start_and_exec(plan, rootfs, control)
+        }
+        Err(error) => reject_before_ready(&mut control, error),
+    }
+}
+
+fn reject_before_ready(control: &mut UnixStream, error: Error) -> Result<()> {
+    if let Err(report) = write_rejection(control, &error) {
+        Err(init_error(
+            ErrorCode::Internal,
+            format!("{error}; failed to report the exact rejection: {report}"),
+        ))
+    } else {
+        Err(error)
+    }
 }
 
 fn prepare_container_init(
     config_snapshot: PathBuf,
     bundle_directory: PathBuf,
-) -> Result<(InitPlan, PathBuf)> {
+) -> Result<(InitPlan, PathBuf, PathBuf)> {
     let config_json = read_bounded_config(&config_snapshot)?;
     let bundle = OciBundle::from_json(bundle_directory, config_json)?;
     let plan = InitPlan::from_bundle(&bundle, &null_io())?;
@@ -124,15 +162,10 @@ fn prepare_container_init(
             ),
         ));
     }
-    prepare_create_environment(&plan, &canonical_bundle, &rootfs)?;
-    Ok((plan, rootfs))
+    Ok((plan, canonical_bundle, rootfs))
 }
 
-fn prepare_create_environment(
-    plan: &InitPlan,
-    bundle_directory: &Path,
-    rootfs: &Path,
-) -> Result<()> {
+fn unshare_namespaces(plan: &InitPlan) -> Result<()> {
     let mut namespace_flags = 0;
     if plan.new_uts_namespace {
         namespace_flags |= libc::CLONE_NEWUTS;
@@ -149,6 +182,9 @@ fn prepare_create_environment(
     if plan.new_cgroup_namespace {
         namespace_flags |= libc::CLONE_NEWCGROUP;
     }
+    if plan.new_pid_namespace {
+        namespace_flags |= libc::CLONE_NEWPID;
+    }
     if namespace_flags != 0 {
         // SAFETY: `unshare` has no pointer preconditions. This dedicated
         // wrapper is single-threaded before it reports the created barrier.
@@ -156,6 +192,14 @@ fn prepare_create_environment(
             return Err(last_os_error("create Linux OCI namespaces"));
         }
     }
+    Ok(())
+}
+
+fn prepare_create_environment(
+    plan: &InitPlan,
+    bundle_directory: &Path,
+    rootfs: &Path,
+) -> Result<()> {
     if let Some(hostname) = &plan.hostname {
         if !plan.new_uts_namespace {
             return Err(init_error(

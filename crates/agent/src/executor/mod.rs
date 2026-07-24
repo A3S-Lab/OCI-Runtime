@@ -3,6 +3,7 @@ mod init;
 mod mount;
 #[cfg(test)]
 mod mount_tests;
+mod pid;
 mod plan;
 #[cfg(test)]
 mod plan_tests;

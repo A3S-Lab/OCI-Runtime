@@ -13,6 +13,7 @@ use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 use super::control::{read_outcome, InitOutcome, START_BYTE};
+use super::pid;
 use super::plan::InitPlan;
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -128,8 +129,14 @@ impl PreparedProcess {
                 ),
             ));
         }
-        match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
-            Ok(Ok(InitOutcome::Ready)) => {}
+        let runtime_pid = match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
+            Ok(Ok(InitOutcome::Ready { pid: runtime_pid })) => {
+                if let Err(error) = pid::validate_runtime_pid(plan, pid, runtime_pid).await {
+                    terminate(&mut child).await;
+                    return Err(error);
+                }
+                runtime_pid
+            }
             Ok(Ok(InitOutcome::Rejected(error))) => {
                 terminate(&mut child).await;
                 return Err(error);
@@ -145,13 +152,13 @@ impl PreparedProcess {
                     "timed out reading prepared container init readiness",
                 ));
             }
-        }
+        };
         drop(listener);
 
         Ok(Self {
             child,
             control: Some(control),
-            pid,
+            pid: runtime_pid,
         })
     }
 
@@ -214,18 +221,37 @@ impl PreparedProcess {
                 ));
             }
         }
-        self.child.kill().await.map_err(|error| {
-            process_error(
-                ErrorCode::Internal,
-                format!("failed to terminate container init during cleanup: {error}"),
-            )
-        })?;
-        self.child.wait().await.map_err(|error| {
-            process_error(
-                ErrorCode::Internal,
-                format!("failed to reap container init during cleanup: {error}"),
-            )
-        })?;
+        // SAFETY: `pid` is the positive, authenticated runtime-visible PID
+        // held at the create barrier.
+        if unsafe { libc::kill(self.pid, libc::SIGKILL) } != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                terminate(&mut self.child).await;
+                return Err(process_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to terminate container init PID {} during cleanup: {error}",
+                        self.pid
+                    ),
+                ));
+            }
+        }
+        match timeout(INIT_READY_TIMEOUT, self.child.wait()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                return Err(process_error(
+                    ErrorCode::Internal,
+                    format!("failed to reap container init supervisor during cleanup: {error}"),
+                ));
+            }
+            Err(_) => {
+                terminate(&mut self.child).await;
+                return Err(process_error(
+                    ErrorCode::DeadlineExceeded,
+                    "timed out reaping container init supervisor during cleanup",
+                ));
+            }
+        }
         Ok(())
     }
 }
