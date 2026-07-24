@@ -6,9 +6,14 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::fault::{
+    DirectoryCommitStage, DurableMutation, FaultInjector, FaultPoint, FileCommitStage,
+};
+
 use super::model::{RuntimeRootMarker, ROOT_SCHEMA_VERSION};
 
 const ROOT_MARKER_FILE: &str = "root.json";
+const ROOT_MARKER_TRANSACTION_FILE: &str = ".root.json.next";
 const LOCK_FILE: &str = ".lock";
 const MAX_STATE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -17,7 +22,10 @@ pub(super) struct RootLock {
     _file: std::fs::File,
 }
 
-pub(super) async fn open_root(path: &Path) -> Result<(PathBuf, Arc<RootLock>)> {
+pub(super) async fn open_root(
+    path: &Path,
+    faults: &dyn FaultInjector,
+) -> Result<(PathBuf, Arc<RootLock>)> {
     if !path.is_absolute() {
         return Err(state_error(
             ErrorCode::InvalidArgument,
@@ -74,11 +82,11 @@ pub(super) async fn open_root(path: &Path) -> Result<(PathBuf, Arc<RootLock>)> {
     }
     let root_lock = acquire_root_lock(lock_path.clone()).await?;
     set_private_file_permissions(&lock_path).await?;
-    initialize_layout(&root).await?;
+    initialize_layout(&root, faults).await?;
     Ok((root, Arc::new(root_lock)))
 }
 
-async fn initialize_layout(root: &Path) -> Result<()> {
+async fn initialize_layout(root: &Path, faults: &dyn FaultInjector) -> Result<()> {
     let marker_path = root.join(ROOT_MARKER_FILE);
     if path_exists(&marker_path).await? {
         ensure_plain_file(&marker_path, "runtime root marker").await?;
@@ -103,7 +111,7 @@ async fn initialize_layout(root: &Path) -> Result<()> {
             .await
             .map_err(|error| io_error("inspect-state-root", root, error))?
         {
-            if entry.file_name() != LOCK_FILE {
+            if entry.file_name() != LOCK_FILE && entry.file_name() != ROOT_MARKER_TRANSACTION_FILE {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "open-state-root",
@@ -111,7 +119,13 @@ async fn initialize_layout(root: &Path) -> Result<()> {
                 ));
             }
         }
-        atomic_write_json(&marker_path, &RuntimeRootMarker::default()).await?;
+        atomic_write_json(
+            faults,
+            DurableMutation::RuntimeRootMarker,
+            &marker_path,
+            &RuntimeRootMarker::default(),
+        )
+        .await?;
     }
 
     for directory in ["containers", "generations", "operations", "quarantine"] {
@@ -335,7 +349,12 @@ async fn read_bytes(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) async fn atomic_write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(super) async fn atomic_write_json(
+    faults: &dyn FaultInjector,
+    mutation: DurableMutation,
+    path: &Path,
+    value: &impl Serialize,
+) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| {
         state_error(
             ErrorCode::Internal,
@@ -344,10 +363,22 @@ pub(super) async fn atomic_write_json(path: &Path, value: &impl Serialize) -> Re
         )
     })?;
     bytes.push(b'\n');
-    atomic_write(path, &bytes).await
+    atomic_write(faults, mutation, path, &bytes).await
 }
 
-pub(super) async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) async fn atomic_write(
+    faults: &dyn FaultInjector,
+    mutation: DurableMutation,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<()> {
+    if mutation.is_directory_move() {
+        return Err(state_error(
+            ErrorCode::Internal,
+            "write-state-file",
+            format!("directory mutation {mutation:?} cannot replace a state file"),
+        ));
+    }
     if bytes.len() as u64 > MAX_STATE_FILE_BYTES {
         return Err(state_error(
             ErrorCode::ResourceExhausted,
@@ -392,22 +423,62 @@ pub(super) async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         .open(&temporary)
         .await
         .map_err(|error| io_error("create-state-file", &temporary, error))?;
+    faults.check(FaultPoint::DurableFile {
+        mutation,
+        stage: FileCommitStage::TemporaryFileCreated,
+    })?;
     set_private_file_permissions(&temporary).await?;
+    faults.check(FaultPoint::DurableFile {
+        mutation,
+        stage: FileCommitStage::TemporaryFileProtected,
+    })?;
     file.write_all(bytes)
         .await
         .map_err(|error| io_error("write-state-file", &temporary, error))?;
+    faults.check(FaultPoint::DurableFile {
+        mutation,
+        stage: FileCommitStage::DataWritten,
+    })?;
     file.flush()
         .await
         .map_err(|error| io_error("flush-state-file", &temporary, error))?;
+    faults.check(FaultPoint::DurableFile {
+        mutation,
+        stage: FileCommitStage::DataFlushed,
+    })?;
     file.sync_all()
         .await
         .map_err(|error| io_error("sync-state-file", &temporary, error))?;
+    faults.check(FaultPoint::DurableFile {
+        mutation,
+        stage: FileCommitStage::FileSynced,
+    })?;
     drop(file);
     atomic_replace(&temporary, path).await?;
-    sync_parent(parent).await
+    faults.check(FaultPoint::DurableFile {
+        mutation,
+        stage: FileCommitStage::FileReplaced,
+    })?;
+    sync_parent(parent).await?;
+    faults.check(FaultPoint::DurableFile {
+        mutation,
+        stage: FileCommitStage::ParentDirectorySynced,
+    })
 }
 
-pub(super) async fn atomic_move_directory(source: &Path, destination: &Path) -> Result<()> {
+pub(super) async fn atomic_move_directory(
+    faults: &dyn FaultInjector,
+    mutation: DurableMutation,
+    source: &Path,
+    destination: &Path,
+) -> Result<()> {
+    if !mutation.is_directory_move() {
+        return Err(state_error(
+            ErrorCode::Internal,
+            "commit-state-directory",
+            format!("file mutation {mutation:?} cannot move a state directory"),
+        ));
+    }
     ensure_plain_directory(source, "state transaction source").await?;
     if path_exists(destination).await? {
         return Err(state_error(
@@ -436,11 +507,22 @@ pub(super) async fn atomic_move_directory(source: &Path, destination: &Path) -> 
     ensure_plain_directory(source_parent, "state transaction source parent").await?;
     ensure_plain_directory(destination_parent, "state transaction destination parent").await?;
     move_directory(source, destination).await?;
+    faults.check(FaultPoint::DurableDirectory {
+        mutation,
+        stage: DirectoryCommitStage::DirectoryMoved,
+    })?;
     sync_parent(source_parent).await?;
+    faults.check(FaultPoint::DurableDirectory {
+        mutation,
+        stage: DirectoryCommitStage::SourceParentSynced,
+    })?;
     if source_parent != destination_parent {
         sync_parent(destination_parent).await?;
     }
-    Ok(())
+    faults.check(FaultPoint::DurableDirectory {
+        mutation,
+        stage: DirectoryCommitStage::DestinationParentSynced,
+    })
 }
 
 #[cfg(unix)]

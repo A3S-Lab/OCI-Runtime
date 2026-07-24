@@ -2,7 +2,9 @@ use a3s_oci_core::{LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{ContainerRecord, ContainerTarget, ErrorCode, OciSchemaValidator, Result};
 
-use super::filesystem::{atomic_write_json, state_error};
+use crate::fault::DurableMutation;
+
+use super::filesystem::state_error;
 use super::model::{StoredOperation, StoredOperationKind, StoredOperationStatus};
 use super::oci_state::{container_state, rebuild_state};
 use super::{generation_conflict, DurableStateStore};
@@ -107,7 +109,8 @@ impl DurableStateStore {
             state_changed = true;
         }
         if state_changed {
-            atomic_write_json(
+            self.write_json(
+                DurableMutation::ObserveContainer,
                 &self
                     .container_directory(&target.id)
                     .join(super::CONTAINER_RECORD_FILE),
@@ -126,7 +129,12 @@ impl DurableStateStore {
             operation.outcome = StoredOperationStatus::Succeeded {
                 response: stored.record.clone(),
             };
-            atomic_write_json(&self.operation_path(&operation.operation_id), &operation).await?;
+            self.write_json(
+                DurableMutation::CompleteObservedOperation,
+                &self.operation_path(&operation.operation_id),
+                &operation,
+            )
+            .await?;
         }
         Ok(stored.record)
     }

@@ -126,6 +126,39 @@ handles these interrupted states:
   error;
 - malformed or digest-mismatched records fail closed.
 
-The remaining persistence gates are exhaustive fault injection at every write
-and host/driver transition, startup-wide orphan scanning, descriptor-relative
-path operations, and journals for all remaining mutating SDK operations.
+## Fault Injection Contract
+
+Every lifecycle write is routed through one typed `DurableMutation` registry.
+The registry currently contains 35 semantic mutations. Thirty-three atomic
+file replacements are exercised at all seven commit stages:
+
+1. temporary file creation;
+2. private permission or ACL application;
+3. data write;
+4. flush;
+5. file sync;
+6. atomic replacement;
+7. parent-directory sync.
+
+The delete and failed-create quarantine moves are each exercised after the
+rename, source-parent sync, and destination-parent sync. This expands to 237
+durable fault points. The host matrix separately injects before and after all
+six `RuntimeDriver` methods, including capability discovery, for another 12
+boundaries.
+
+On Unix the final file and directory boundaries follow explicit directory
+`sync_all` calls. Windows reaches the same logical checkpoints after its
+write-through `MoveFileExW` replacement or move because a separate directory
+sync primitive is not used there.
+
+Each test fails exactly once, drops the store or host service, reopens the same
+state root, and replays the original operation. Recovery must preserve
+monotonic generations and exact operation results, complete or safely resume
+journals, avoid duplicate live and quarantined generations, and remove every
+`.next` transaction file. The matrices run in Linux, macOS, and Windows CI.
+Production uses a non-configurable no-op injector.
+
+The remaining persistence gates are startup-wide orphan scanning,
+descriptor-relative path operations, journals for all remaining mutating SDK
+operations, and fault injection inside the utility-VM host/agent transport
+below the `RuntimeDriver` boundary.

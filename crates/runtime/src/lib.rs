@@ -17,6 +17,7 @@ mod agent_smoke_process;
 mod agent_socket;
 mod cleanup_report;
 mod driver;
+mod fault;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
 #[cfg(target_os = "linux")]

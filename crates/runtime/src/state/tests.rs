@@ -11,6 +11,8 @@ use tempfile::TempDir;
 
 use super::{DurableStateStore, RecordOperationPreparation};
 
+mod fault_matrix;
+
 const TEST_CONFIG: &str = concat!(
     "{\n",
     "  \"ociVersion\": \"1.3.0\",\n",
