@@ -5,6 +5,8 @@ use a3s_oci_sdk::oci_spec::runtime::LinuxNamespaceType;
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result};
 use serde_json::{Map, Value};
 
+use super::mount::{self, MountPlan};
+
 const MAX_ARGUMENTS: usize = 4_096;
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
 const MAX_EXEC_BYTES: usize = 1024 * 1024;
@@ -24,6 +26,7 @@ pub(super) struct InitPlan {
     pub(super) no_new_privileges: bool,
     pub(super) new_uts_namespace: bool,
     pub(super) new_mount_namespace: bool,
+    pub(super) mounts: Vec<MountPlan>,
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
 }
@@ -102,6 +105,13 @@ impl InitPlan {
             ));
         }
         let namespaces = validate_linux_namespaces(spec.linux().as_ref())?;
+        let mounts = mount::plan_all(spec.mounts().as_deref())?;
+        if !mounts.is_empty() && !namespaces.new_mount {
+            return Err(unsupported(
+                "mounts",
+                "the bootstrap executor applies mounts only in a newly created mount namespace",
+            ));
+        }
         let hostname = spec
             .hostname()
             .as_deref()
@@ -132,6 +142,7 @@ impl InitPlan {
             no_new_privileges: true,
             new_uts_namespace: namespaces.new_uts,
             new_mount_namespace: namespaces.new_mount,
+            mounts,
             hostname,
             domainname,
         })
@@ -147,6 +158,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "ociVersion",
             "root",
             "process",
+            "mounts",
             "hostname",
             "domainname",
             "linux",

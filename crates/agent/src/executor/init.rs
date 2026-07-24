@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
 use super::control::{write_rejection, READY_BYTE, START_BYTE};
+use super::mount;
 use super::plan::InitPlan;
 use super::rootfs;
 
@@ -123,11 +124,15 @@ fn prepare_container_init(
             ),
         ));
     }
-    prepare_create_environment(&plan, &rootfs)?;
+    prepare_create_environment(&plan, &canonical_bundle, &rootfs)?;
     Ok((plan, rootfs))
 }
 
-fn prepare_create_environment(plan: &InitPlan, rootfs: &Path) -> Result<()> {
+fn prepare_create_environment(
+    plan: &InitPlan,
+    bundle_directory: &Path,
+    rootfs: &Path,
+) -> Result<()> {
     let mut namespace_flags = 0;
     if plan.new_uts_namespace {
         namespace_flags |= libc::CLONE_NEWUTS;
@@ -172,6 +177,8 @@ fn prepare_create_environment(plan: &InitPlan, rootfs: &Path) -> Result<()> {
     }
     verify_uts_names(plan)?;
     if plan.new_mount_namespace {
+        rootfs::prepare_pivot(rootfs)?;
+        mount::apply_all(&plan.mounts, bundle_directory, rootfs)?;
         rootfs::pivot_root(rootfs)?;
     }
     Ok(())

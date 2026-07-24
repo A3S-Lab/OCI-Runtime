@@ -33,7 +33,8 @@ than the final OCI executor and rejects every property it cannot enforce.
 The accepted bootstrap profile requires:
 
 - only `ociVersion`, `root`, `process`, optional `hostname`, optional
-  `domainname`, and optional `linux` at the configuration root;
+  `domainname`, optional `mounts`, and optional `linux` at the configuration
+  root;
 - a writable normalized relative `root.path` equal to `rootfs`;
 - `terminal: false` and null stdin, stdout, and stderr;
 - `noNewPrivileges: true`;
@@ -50,11 +51,26 @@ UTS namespace.
 The wrapper creates all requested namespaces in one `unshare` call. It applies
 and reads back hostname and domainname with `uname`. When a mount namespace is
 requested, it then makes `/` recursively private, recursively bind-mounts the
-rootfs onto itself, and uses `pivot_root(".", ".")` followed by a detached
-unmount of the old root. All of this succeeds before readiness is reported, so
-namespace and rootfs isolation are part of the create barrier. When a mount
-namespace is omitted, the wrapper preserves the inherited namespace and uses
-the compatible `chroot` path after start.
+rootfs onto itself, applies every configured mount in listed order, and uses
+`pivot_root(".", ".")` followed by a detached unmount of the old root. All of
+this succeeds before readiness is reported, so namespace, mount, and rootfs
+isolation are part of the create barrier. When a mount namespace is omitted,
+the wrapper preserves the inherited namespace and uses the compatible
+`chroot` path after start; mount entries are rejected on that path to prevent
+changes from escaping into the agent's runtime mount namespace.
+
+The current mount slice:
+
+- requires each destination to exist and resolve strictly inside the rootfs;
+- interprets relative destinations from `/` and relative bind sources from the
+  bundle directory;
+- supports bind/rbind, common mount flags, all required propagation modes, and
+  bounded filesystem-specific option data;
+- remounts bind attributes explicitly and fails the complete create operation
+  on any syscall error;
+- rejects root replacement, missing bind sources, multiple propagation modes,
+  comma-packed options, idmapped mounts, recursive mount attributes,
+  `tmpcopyup`, and mount moves instead of silently ignoring them.
 
 Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
@@ -75,11 +91,12 @@ All guest registry, generation, and idempotency state is session-local. A
 closed host connection force-stops remaining init processes and removes the
 agent-owned runtime root. Agent restart recovery is not implemented yet.
 
-The executor currently rejects OCI mount entries, every namespace type other
-than UTS and mount, all namespace joins, propagation overrides, cgroups,
-capabilities, seccomp, hooks, read-only rootfs, terminals, non-null I/O,
-process-group signals, and every other unimplemented OCI property. These are
-release blockers, not silently accepted compatibility gaps.
+The executor currently rejects mount-target creation, rootfs propagation
+overrides, idmapped and recursive-attribute mounts, every namespace type other
+than UTS and mount, all namespace joins, cgroups, capabilities, seccomp, hooks,
+read-only rootfs, terminals, non-null I/O, process-group signals, and every
+other unimplemented OCI property. These are release blockers, not silently
+accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -98,11 +115,14 @@ observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
-minirootfs and the 6,298,768-byte static agent with SHA-256
-`851e898f023b86339bcbd65e668b0b3853097764902692cc9fa08880ea39db15`.
-The positive bundle requested both new UTS and mount namespaces and completed
-the full lifecycle after `pivot_root`. A joined-mount negative bundle retained
-its typed `Unsupported` error and left no guest runtime state. This proves the
-fixed bootstrap slice, not the immutable A3S system image, complete OCI
-enforcement, process I/O, networking, restart recovery, or fault-injected
-cleanup. The WHPX driver therefore remains `probe-only`.
+minirootfs and the 6,327,624-byte static agent with SHA-256
+`e5aa252765186e649d4b1927672c647137b804b0630c5924ba42a7d05190d630`.
+The positive bundle requested both new UTS and mount namespaces, then ordered a
+relative-source rbind, a nested proc mount made possible by that bind, and a
+relative-destination tmpfs. The workload verified both filesystem types from
+`/proc/self/mountinfo` before producing its marker. A missing-mount-namespace
+negative bundle retained its typed `Unsupported` error and left no guest
+runtime state. This proves the fixed bootstrap slice, not the immutable A3S
+system image, complete OCI enforcement, process I/O, networking, restart
+recovery, or fault-injected cleanup. The WHPX driver therefore remains
+`probe-only`.

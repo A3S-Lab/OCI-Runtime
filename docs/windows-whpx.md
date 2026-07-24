@@ -108,6 +108,9 @@ A successful fixed OCI VM smoke additionally proves that:
 - when configured, create establishes a new mount namespace, makes `/`
   recursively private, self-binds the rootfs, completes `pivot_root`, and
   reports ready only afterward;
+- create applies existing-target mount entries in listed order, including
+  relative bundle bind sources, common VFS flags, propagation modes, and
+  filesystem-specific data;
 - create returns `created` and a positive guest PID without running the
   configured process;
 - state and an exact create retry match the original result;
@@ -129,16 +132,12 @@ minirootfs archive with SHA-256
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
 
-The fixed OCI lifecycle qualification used the 6,298,768-byte static musl agent
+The fixed OCI lifecycle qualification used the 6,327,624-byte static musl agent
 with SHA-256
-`851e898f023b86339bcbd65e668b0b3853097764902692cc9fa08880ea39db15`.
+`e5aa252765186e649d4b1927672c647137b804b0630c5924ba42a7d05190d630`.
 Its report selected protocol version 1, identified the guest as `x86_64`,
 verified every fixed lifecycle field, retained the complete successful shim
 report, and returned exit status zero.
-
-A companion real-WHPX negative run added an otherwise valid `proc` mount.
-Create returned `Unsupported` for `config.mounts` before starting a process,
-and the report still verified marker and guest-runtime cleanup.
 
 The UTS qualification configured hostname `a3s-smoke` and domainname
 `runtime.test`, checked the hostname from the workload, and crossed the create
@@ -147,11 +146,14 @@ companion bundle added a PID namespace; create returned `Unsupported` for
 `linux.namespaces` and left no runtime state.
 
 The mount qualification requested new UTS and mount namespaces in the same
-bundle. The full lifecycle passed after recursively private propagation,
-rootfs self-bind, and `pivot_root`. A companion bundle supplied
-`/proc/1/ns/mnt` as a mount namespace join path; create retained the exact
-typed `Unsupported` rejection, did not create container state, and left no
-guest runtime directory.
+bundle. It first rbind-mounted a relative bundle source onto `/mnt`, then
+mounted proc at `/mnt/proc`, a destination that only existed because the first
+entry had already run, and finally mounted tmpfs from a relative destination
+onto `/tmp`. The workload verified both filesystem types through
+`/proc/self/mountinfo` and completed the full lifecycle after `pivot_root`. A
+companion bundle omitted the mount namespace; create retained the exact typed
+`Unsupported` rejection and left no guest runtime directory. A joined-mount
+namespace negative remains rejected as well.
 
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
@@ -161,7 +163,7 @@ The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
 - networking or complete process I/O works;
-- remaining namespace types and joins, OCI mount entries, resources,
+- remaining namespace types and joins, advanced mount semantics, resources,
   capabilities, seccomp, or hooks work;
 - restart recovery, concurrent containers, or shared-guest-kernel isolation
   work;
@@ -177,8 +179,8 @@ The next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
-3. add remaining namespace, OCI mount-entry, capability, resource, seccomp,
-   and hook enforcement;
+3. add remaining namespace, advanced mount, capability, resource, seccomp, and
+   hook enforcement;
 4. return stdout, stderr, and the natural exit code;
 5. reconcile stopped state after host runtime restart;
 6. add concurrent-container and negative isolation evidence;

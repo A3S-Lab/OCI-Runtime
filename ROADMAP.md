@@ -50,8 +50,9 @@ Completed:
 - root-only Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
   create-time UTS and mount namespaces, hostname and domainname, recursively
-  private mount propagation, `pivot_root`, exact-generation state, bounded
-  typed init rejection reporting, session idempotency, signaling, and cleanup;
+  private mount propagation, ordered existing-target OCI mounts, `pivot_root`,
+  exact-generation state, bounded typed init rejection reporting, session
+  idempotency, signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -196,10 +197,14 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [x] Create a new mount namespace, make the inherited mount tree recursively
   private, self-bind the rootfs, and complete `pivot_root` before the created
   barrier.
+- [x] Apply existing-target OCI mount entries in listed order, including
+  bind/rbind, common VFS flags, propagation modes, and filesystem-specific
+  data.
 - [ ] Namespace creation for PID, IPC, user, network, cgroup, and time
   namespaces, plus joining existing namespaces.
-- [ ] OCI mount entries and order, propagation overrides, idmapped mounts,
-  masked paths, read-only paths, and read-only rootfs.
+- [ ] Mount-target creation, rootfs propagation overrides, idmapped and
+  recursive-attribute mounts, masked paths, read-only paths, and read-only
+  rootfs.
 - [ ] UID/GID mappings, credentials, capabilities, rlimits, scheduler, I/O
   priority, affinity, `no_new_privileges`, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified

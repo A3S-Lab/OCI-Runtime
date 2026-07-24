@@ -1,5 +1,8 @@
 mod control;
 mod init;
+mod mount;
+#[cfg(test)]
+mod mount_tests;
 mod plan;
 #[cfg(test)]
 mod plan_tests;

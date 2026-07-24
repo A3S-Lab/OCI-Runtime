@@ -63,14 +63,14 @@ fn accepts_the_exact_bootstrap_profile() {
 #[test]
 fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
     let config = FIXED_CONFIG.replace(
-        r#""root": {"path": "rootfs", "readonly": false},"#,
-        r#""root": {"path": "rootfs", "readonly": false},
-           "mounts": [{"destination": "/proc", "type": "proc", "source": "proc"}],"#,
+        r#""ociVersion": "1.3.0","#,
+        r#""ociVersion": "1.3.0",
+           "annotations": {"dev.a3s.unsupported": "true"},"#,
     );
     let error =
-        InitPlan::from_bundle(&bundle(&config), &null_io()).expect_err("mounts unsupported");
+        InitPlan::from_bundle(&bundle(&config), &null_io()).expect_err("annotations unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("config.mounts"));
+    assert!(error.message.contains("config.annotations"));
 
     let config = FIXED_CONFIG.replace(
         r#""noNewPrivileges": true"#,

@@ -8,7 +8,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 const CURRENT_DIRECTORY: &[u8] = b".\0";
 const ROOT_DIRECTORY: &[u8] = b"/\0";
 
-pub(super) fn pivot_root(rootfs: &Path) -> Result<()> {
+pub(super) fn prepare_pivot(rootfs: &Path) -> Result<()> {
     let rootfs = path_cstring(rootfs)?;
     let null_path = std::ptr::null::<libc::c_char>();
     let null_data = std::ptr::null::<libc::c_void>();
@@ -39,6 +39,16 @@ pub(super) fn pivot_root(rootfs: &Path) -> Result<()> {
         {
             return Err(last_os_error("bind the container rootfs onto itself"));
         }
+    }
+    Ok(())
+}
+
+pub(super) fn pivot_root(rootfs: &Path) -> Result<()> {
+    let rootfs = path_cstring(rootfs)?;
+
+    // SAFETY: every pathname is NUL-terminated and remains live for each
+    // syscall. The rootfs was made a mount point by `prepare_pivot`.
+    unsafe {
         if libc::chdir(rootfs.as_ptr()) != 0 {
             return Err(last_os_error("change to the container rootfs"));
         }
