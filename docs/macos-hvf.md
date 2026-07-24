@@ -124,7 +124,7 @@ to the shim. The shim then:
 1. rejects a runtime directory or asset that is a symbolic link;
 2. recomputes both file hashes immediately before loading;
 3. loads `libkrunfw.5.dylib` and `libkrun.1.17.0.dylib` by absolute path;
-4. resolves only the six functions required by the context smoke;
+4. resolves only the functions required by the context and VM-entry smokes;
 5. creates one libkrun configuration context;
 6. records one vCPU and 128 MiB of memory;
 7. replaces implicit TSI with plain vsock and maps guest port 4093 to a
@@ -168,22 +168,114 @@ in a copied runtime asset and requires rejection before context creation.
 Native runtime hashes and source provenance are recorded in
 [Runtime Provenance](../crates/krun/RUNTIME-PROVENANCE.md).
 
+## Real Linux guest entry gate
+
+The `vm-smoke` command crosses the guest-execution boundary without claiming
+an OCI workload driver. It uses the kernel embedded in the pinned
+`libkrunfw.5.dylib`, presents a caller-supplied arm64 Linux rootfs through
+virtiofs, executes `/bin/sh`, and requires an exact guest-written marker to be
+visible on the host.
+
+Standard macOS libkrun consumes the process in `krun_start_enter`. The shim
+therefore keeps verification in a parent process and performs all libkrun work
+in a hidden child:
+
+```text
+a3s-oci-krun-shim vm-smoke
+        │
+        ├── validate rootfs, /bin/sh, console, and absent marker
+        ├── spawn signed worker and read bounded setup evidence
+        │       ├── reverify and load the pinned native bundle
+        │       ├── create and configure the context
+        │       ├── configure rootfs, command, and console
+        │       └── krun_start_enter → Linux guest → marker → guest exit
+        ├── enforce 30-second timeout and reap the worker
+        ├── require natural guest exit code 0
+        └── verify and remove the exact marker
+```
+
+The parent never treats pre-entry evidence or a successful libkrun API call as
+guest execution. Success requires all of the following in one report:
+
+```json
+{
+  "schema_version": "a3s.oci.krun-vm-smoke.v1",
+  "platform": "macos",
+  "status": "available",
+  "runtime_bundle_loaded": true,
+  "context_created": true,
+  "vm_configured": true,
+  "rootfs_configured": true,
+  "workload_configured": true,
+  "console_configured": true,
+  "vm_entered": true,
+  "guest_exit_code": 0,
+  "marker_verified": true,
+  "marker_removed": true,
+  "console_created": true,
+  "vcpus": 1,
+  "memory_mib": 512
+}
+```
+
+The retained qualification rootfs is the untouched Alpine 3.22.5 aarch64
+minirootfs:
+
+- URL:
+  `https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz`
+- bytes: `3,966,256`
+- SHA-256:
+  `3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70`
+
+Run the gate with the signed relocatable shim from the previous section:
+
+```sh
+asset_dir="$(mktemp -d)"
+rootfs="$asset_dir/rootfs"
+archive="$asset_dir/alpine-minirootfs-3.22.5-aarch64.tar.gz"
+mkdir "$rootfs"
+curl --fail --location --output "$archive" \
+  https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz
+printf '%s  %s\n' \
+  '3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70' \
+  "$archive" | shasum -a 256 --check
+tar -xzf "$archive" -C "$rootfs"
+
+"$smoke_dir/a3s-oci-krun-shim" vm-smoke \
+  --rootfs "$rootfs" \
+  --console "$asset_dir/console.log"
+```
+
+On the local Apple Silicon qualification host, the signed worker booted the
+guest, returned exit code zero, verified and removed
+`a3s-oci-hvf-vm-smoke-v1`, and left no smoke marker in the rootfs. The same
+build without the Hypervisor entitlement reached the complete context
+configuration boundary, failed `krun_start_enter`, returned status `2`, wrote
+no marker, and reported no false VM entry.
+
+macOS CI downloads and verifies the same rootfs. When
+`kern.hv_support = 1`, it requires the complete positive report. On hosted
+runners where virtualization is unavailable, it requires status `2`, complete
+pre-entry configuration evidence, no guest exit code, no marker, and no false
+success. The parent terminates and reaps a worker that exceeds the bounded
+startup interval.
+
 ## Remaining workload gates
 
-HVF VM-object creation and libkrun context configuration are still not workload
-execution. The current gates do not:
+The marker smoke proves real Linux guest execution, but it is not an
+authenticated A3S guest or an OCI lifecycle. The current gates do not:
 
-- boot the pinned A3S kernel or immutable Linux system image;
+- boot the production A3S immutable Linux system image;
 - bind the real host Unix socket or authenticate a guest-agent session;
 - execute any OCI lifecycle operation.
 
 The next macOS increments must add, in order:
 
-1. the pinned A3S kernel and immutable system root;
+1. the production A3S immutable system root;
 2. authenticated guest-agent negotiation over the macOS Unix-socket bridge;
 3. the same fixed OCI create/start/kill/delete lifecycle used by WHPX;
-4. deterministic process, descriptor, file, and VM cleanup;
-5. negative tests for failed guest boot, isolation weakening,
+4. deterministic descriptor and runtime-root cleanup around that lifecycle;
+5. negative tests for agent startup, isolation weakening,
    and recovery.
 
 Only after those gates and the shared Linux executor requirements pass may

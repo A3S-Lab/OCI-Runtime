@@ -102,6 +102,72 @@ jobs:
              and (.context_created | not)
              and (.reason | contains("SHA-256 mismatch"))' \
             <<<"$tampered_output" >/dev/null
+      - if: runner.os == 'macOS'
+        name: Real libkrun guest marker or fail-closed entry
+        shell: bash
+        run: |
+          rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
+          rootfs_archive="$RUNNER_TEMP/alpine-minirootfs-3.22.5-aarch64.tar.gz"
+          smoke_dir="$RUNNER_TEMP/a3s-oci-krun-vm"
+          console="$RUNNER_TEMP/a3s-oci-krun-vm-console.log"
+          mkdir -p "$rootfs_dir" "$smoke_dir"
+
+          curl --fail --location --retry 3 \
+            --output "$rootfs_archive" \
+            https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz
+          printf '%s  %s\n' \
+            '3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70' \
+            "$rootfs_archive" | shasum -a 256 --check
+          tar -xzf "$rootfs_archive" -C "$rootfs_dir"
+
+          cp target/debug/a3s-oci-krun-shim "$smoke_dir/"
+          cp -R target/debug/a3s-oci-krun-runtime "$smoke_dir/"
+          codesign --force --sign - \
+            --entitlements packaging/macos/a3s-oci-hvf.entitlements \
+            "$smoke_dir/a3s-oci-krun-shim"
+          codesign --verify --strict "$smoke_dir/a3s-oci-krun-shim"
+
+          set +e
+          output="$(
+            "$smoke_dir/a3s-oci-krun-shim" vm-smoke \
+              --rootfs "$rootfs_dir" \
+              --console "$console"
+          )"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+
+          support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+          if [[ "$support" == "1" ]]; then
+            test "$status" -eq 0
+            jq --exit-status \
+              '.platform == "macos" and .status == "available"
+               and .runtime_bundle_loaded and .context_created
+               and .vm_configured and .rootfs_configured
+               and .workload_configured and .console_configured
+               and .vm_entered and .guest_exit_code == 0
+               and .marker_verified and .marker_removed
+               and .console_created' \
+              <<<"$output" >/dev/null
+          else
+            test "$status" -eq 2
+            jq --exit-status \
+              '.platform == "macos" and .status == "unavailable"
+               and .runtime_bundle_loaded and .context_created
+               and .vm_configured and .rootfs_configured
+               and .workload_configured and .console_configured
+               and (.vm_entered | not)
+               and (.guest_exit_code == null)
+               and (.marker_verified | not)
+               and (.marker_removed | not)
+               and (.reason | length > 0)' \
+              <<<"$output" >/dev/null
+          fi
+
+          test -z "$(
+            find "$rootfs_dir" -maxdepth 1 \
+              -name '.a3s-oci-hvf-vm-smoke-*' -print -quit
+          )"
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
         run: bash .github/scripts/native-linux-smoke.sh

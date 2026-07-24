@@ -48,6 +48,9 @@ Completed:
   evidence with versioned, fail-closed diagnostics;
 - isolated macOS libkrun context create/configure/plain-vsock/release evidence
   from a checksum-pinned, runtime-reverified arm64 bundle;
+- real macOS HVF guest entry using the pinned libkrun firmware kernel and a
+  digest-verified Alpine arm64 userspace, with natural exit status, exact
+  host-visible marker verification, bounded worker reap, and marker cleanup;
 - explicit rootful native Linux driver integration that reuses the shared
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
@@ -219,6 +222,11 @@ runtime-root leak. Only then may WHPX become `experimental`.
   the isolated shim.
 - [x] Create, configure plain agent vsock, and release one libkrun context
   without entering a VM.
+- [x] Enter a real HVF VM in an isolated, bounded worker and require a
+  guest-written host marker, natural zero exit, worker reap, and marker
+  cleanup.
+- [x] Retain fail-closed unavailable-HVF and missing-entitlement evidence
+  without accepting pre-entry configuration as guest execution.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [ ] Establish the macOS host endpoint and AF_VSOCK guest-agent bridge.
 - [ ] Run the same fixed create/state/start/kill/delete OCI lifecycle used by

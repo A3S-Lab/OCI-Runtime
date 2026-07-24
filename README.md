@@ -198,8 +198,34 @@ codesign --force --sign - \
 
 This verifies the checksum-pinned runtime bundle, required libkrun symbols,
 context allocation, VM resource configuration, plain-vsock guest port mapping,
-and context release. It does not boot a guest or run an OCI workload. See
-[macOS HVF Development](docs/macos-hvf.md) for the exact boundary.
+and context release.
+
+The VM-entry gate then boots the bundled arm64 kernel with a pinned Alpine
+userspace and accepts success only after the guest writes an exact marker into
+the shared rootfs:
+
+```sh
+rootfs_dir="$(mktemp -d)"
+rootfs_archive="$rootfs_dir/alpine-minirootfs-3.22.5-aarch64.tar.gz"
+curl --fail --location --output "$rootfs_archive" \
+  https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz
+printf '%s  %s\n' \
+  '3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70' \
+  "$rootfs_archive" | shasum -a 256 --check
+mkdir "$rootfs_dir/rootfs"
+tar -xzf "$rootfs_archive" -C "$rootfs_dir/rootfs"
+
+"$smoke_dir/a3s-oci-krun-shim" vm-smoke \
+  --rootfs "$rootfs_dir/rootfs" \
+  --console "$rootfs_dir/console.log"
+```
+
+Because `krun_start_enter` takes over its process, the command configures and
+enters the VM in a private worker, enforces a 30-second bound, reaps the worker,
+checks its exit status, verifies and removes the guest marker, and fails closed
+when HVF is unavailable. See
+[macOS HVF Development](docs/macos-hvf.md) for the exact boundary and retained
+evidence.
 
 ### Windows utility VM diagnostics
 
@@ -284,7 +310,7 @@ boundary.
 | --- | --- | --- | --- |
 | Linux x86_64/aarch64 | Native Linux executor | Real rootful core lifecycle with `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy plus checksum-pinned libkrun context create/configure/vsock/release | `probe-only`; guest boot and workload driver not implemented |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned libkrun context lifecycle, and real Linux guest command with host-verified marker and natural exit code | `probe-only`; authenticated agent and workload driver not implemented |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -377,6 +403,8 @@ Security-sensitive platform controls include:
 - direct macOS Hypervisor.framework status reporting;
 - checksum-pinned macOS and Windows native bundles, with macOS assets
   reverified immediately before loading;
+- bounded macOS VM workers whose success requires a guest-written marker,
+  natural zero exit, worker reap, and marker cleanup;
 - fail-closed dedicated-VM selection;
 - no silent fallback from VM isolation to a shared host kernel.
 
@@ -410,7 +438,7 @@ Platform CI covers:
 
 - Ubuntu x86_64 native lifecycle without KVM;
 - Ubuntu aarch64 native lifecycle without KVM;
-- macOS HVF and isolated libkrun context gates;
+- macOS HVF, isolated libkrun context, and guest-marker gates;
 - Windows WHPX and libkrun context gates;
 - static x86_64 musl guest-agent output.
 

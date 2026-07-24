@@ -131,12 +131,18 @@ impl KrunVmSmokeReport {
         }
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     pub(crate) fn unsupported(platform: HostPlatform, config: VmConfig) -> Self {
         let mut report = Self::initial(platform, config);
         report.status = CapabilityStatus::Unsupported;
-        report.reason =
-            Some("the utility-VM entry smoke is implemented only for Windows x86_64/WHPX".into());
+        report.reason = Some(
+            "the utility-VM entry smoke is implemented only for Windows x86_64/WHPX and \
+             macOS aarch64/HVF"
+                .into(),
+        );
         report
     }
 
