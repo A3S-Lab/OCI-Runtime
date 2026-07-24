@@ -97,6 +97,53 @@ for candidate in "$bundle" "$bundle_b"; do
 done
 sudo chown -R 0:0 "$bundle/rootfs" "$bundle_b/rootfs"
 
+report_native_failure() {
+  local rootfs="$1"
+  local status
+
+  printf '%s\n' 'Native Linux host diagnostics:'
+  uname -a || true
+  printf 'LSM stack: '
+  cat /sys/kernel/security/lsm 2>/dev/null || printf '%s\n' unavailable
+  printf 'Runner profile: '
+  cat /proc/self/attr/current 2>/dev/null || printf '%s\n' unavailable
+  findmnt --target / --output TARGET,SOURCE,FSTYPE,OPTIONS --noheadings || true
+  findmnt --target "$rootfs" \
+    --output TARGET,SOURCE,FSTYPE,OPTIONS --noheadings || true
+  sudo sh -c \
+    'grep -E "^(NoNewPrivs|Seccomp|Cap(Inh|Prm|Eff|Bnd|Amb)):" /proc/self/status' ||
+    true
+  if command -v aa-status >/dev/null; then
+    sudo aa-status || true
+  fi
+
+  if sudo timeout 10s unshare \
+      --user --map-root-user --mount --fork -- \
+      sh -c \
+        'mount --make-rprivate / && mount --rbind "$1" "$1"' \
+        sh "$rootfs"; then
+    printf '%s\n' 'Combined user/mount namespace rbind probe: succeeded'
+  else
+    status=$?
+    printf 'Combined user/mount namespace rbind probe: failed (%s)\n' "$status"
+  fi
+
+  if sudo timeout 10s unshare \
+      --user --map-root-user --fork -- \
+      unshare --mount --fork -- \
+      sh -c \
+        'mount --make-rprivate / && mount --rbind "$1" "$1"' \
+        sh "$rootfs"; then
+    printf '%s\n' 'Sequential user-then-mount namespace rbind probe: succeeded'
+  else
+    status=$?
+    printf 'Sequential user-then-mount namespace rbind probe: failed (%s)\n' \
+      "$status"
+  fi
+
+  sudo dmesg --ctime 2>/dev/null | tail -n 120 || true
+}
+
 run_smoke() {
   local expected_kvm_present="$1"
   local output
@@ -111,6 +158,7 @@ run_smoke() {
   fi
   printf '%s\n' "$output"
   if ((status != 0)); then
+    report_native_failure "$bundle/rootfs"
     return "$status"
   fi
   jq --exit-status \
@@ -161,6 +209,7 @@ run_multi_container_smoke() {
   fi
   printf '%s\n' "$output"
   if ((status != 0)); then
+    report_native_failure "$bundle/rootfs"
     return "$status"
   fi
   jq --exit-status \
@@ -237,6 +286,7 @@ run_fault_cleanup() {
     fi
     printf '%s\n' "$output"
     if ((status != 0)); then
+      report_native_failure "$bundle/rootfs"
       return "$status"
     fi
     jq --exit-status --arg phase "$phase" \
