@@ -105,7 +105,7 @@ pub(super) async fn run(
     if let Err(reason) = exercise {
         append_reason(&mut report, reason);
     }
-    if lifecycle_succeeded(&report) {
+    if report.lifecycle_succeeded() {
         report.status = CapabilityStatus::Available;
         report.reason = None;
     }
@@ -162,27 +162,6 @@ async fn cleanup_session(
         ),
     }
     report
-}
-
-fn lifecycle_succeeded(report: &NativeLinuxSmokeReport) -> bool {
-    report.bundle_loaded
-        && !report.service_operations.is_empty()
-        && report.create_returned_created
-        && report.create_replayed
-        && report.created_pid.is_some_and(|pid| pid > 0)
-        && report.marker_absent_after_create
-        && report.start_released
-        && report.running_observed
-        && report.kill_delivered
-        && report.kill_replayed
-        && report.stopped_observed
-        && report.marker_verified
-        && report.delete_succeeded
-        && report.delete_replayed
-        && report.state_missing_after_delete
-        && report.marker_removed
-        && report.executor_runtime_clean
-        && report.session_root_clean
 }
 
 fn append_reason(report: &mut NativeLinuxSmokeReport, reason: impl Into<String>) {

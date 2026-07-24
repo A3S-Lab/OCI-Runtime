@@ -207,6 +207,8 @@ pub struct NativeLinuxSmokeReport {
     pub bundle_loaded: bool,
     /// Operations advertised by the explicitly opened native service.
     pub service_operations: Vec<RuntimeOperation>,
+    /// Whether dedicated-VM isolation failed before claiming the create ID.
+    pub dedicated_vm_rejected_before_create: bool,
     /// Whether create returned the exact OCI `created` barrier.
     pub create_returned_created: bool,
     /// Whether retrying create replayed its exact original result.
@@ -254,6 +256,7 @@ impl NativeLinuxSmokeReport {
             kvm_device_present: false,
             bundle_loaded: false,
             service_operations: Vec::new(),
+            dedicated_vm_rejected_before_create: false,
             create_returned_created: false,
             create_replayed: false,
             created_pid: None,
@@ -285,8 +288,11 @@ impl NativeLinuxSmokeReport {
     /// Return whether the complete native lifecycle and cleanup passed.
     #[must_use]
     pub fn is_success(&self) -> bool {
-        matches!(self.status, CapabilityStatus::Available)
-            && self.bundle_loaded
+        matches!(self.status, CapabilityStatus::Available) && self.lifecycle_succeeded()
+    }
+
+    pub(crate) fn lifecycle_succeeded(&self) -> bool {
+        self.bundle_loaded
             && self.service_operations
                 == [
                     RuntimeOperation::Features,
@@ -296,6 +302,7 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Kill,
                     RuntimeOperation::Delete,
                 ]
+            && self.dedicated_vm_rejected_before_create
             && self.create_returned_created
             && self.create_replayed
             && self.created_pid.is_some_and(|pid| pid > 0)

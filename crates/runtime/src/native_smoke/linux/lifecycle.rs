@@ -40,6 +40,14 @@ pub(super) async fn exercise(
             terminal_size: None,
         },
     };
+    let mut dedicated = create.clone();
+    dedicated.isolation = IsolationRequest::DedicatedVm;
+    report.dedicated_vm_rejected_before_create =
+        dedicated_vm_is_rejected(client, dedicated).await?;
+    if !report.dedicated_vm_rejected_before_create {
+        return Err("native runtime accepted dedicated-VM isolation".into());
+    }
+
     let created = native_call("create", client.create(create.clone())).await?;
     report.create_returned_created = *created.state.status() == ContainerState::Created;
     report.created_pid = *created.state.pid();
@@ -120,6 +128,18 @@ pub(super) async fn exercise(
         return Err("native state remained visible after delete".into());
     }
     Ok(())
+}
+
+async fn dedicated_vm_is_rejected(
+    client: &RuntimeClient,
+    request: CreateRequest,
+) -> Result<bool, String> {
+    match timeout(CALL_TIMEOUT, client.create(request)).await {
+        Ok(Err(error)) if error.code == ErrorCode::Unsupported => Ok(true),
+        Ok(Err(error)) => Err(native_error("dedicated-VM create", &error)),
+        Ok(Ok(_)) => Ok(false),
+        Err(_) => Err("dedicated-VM create timed out".into()),
+    }
 }
 
 pub(super) async fn best_effort_delete(client: &RuntimeClient, nonce: &str) {
