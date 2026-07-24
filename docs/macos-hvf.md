@@ -296,8 +296,13 @@ Build and install the static guest:
 
 ```sh
 rustup target add aarch64-unknown-linux-musl
-cargo build -p a3s-oci-agent --release \
-  --target aarch64-unknown-linux-musl
+host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+rust_lld="$(
+  rustc --print sysroot
+)/lib/rustlib/$host_triple/bin/rust-lld"
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld" \
+  cargo build -p a3s-oci-agent --release \
+    --target aarch64-unknown-linux-musl
 cargo build -p a3s-oci-cli -p a3s-oci-krun
 
 install -d "$rootfs/usr/bin"
