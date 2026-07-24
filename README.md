@@ -484,24 +484,37 @@ runtime prerequisite.
 
 ## Architecture
 
-The control plane is platform-neutral. Platform-specific isolation and native
-libraries stay behind explicit driver and shim boundaries:
+The platform-neutral control plane is independent of the host isolation
+mechanism. Native libraries and Linux-specific execution stay behind explicit
+driver, shim, and guest-agent boundaries:
 
-```mermaid
-flowchart TB
-    consumers["Consumers<br/>A3S Box · a3s-oci CLI · planned containerd shim"]
-    control["Platform-neutral control plane<br/>RuntimeClient → OciRuntimeService → HostRuntimeService<br/>validation · lifecycle · reconciliation"]
-    state[("Durable state<br/>exact bundle · generations · operation journal")]
-    selection{"RuntimeDriver<br/>explicit isolation selection"}
-    native["Native Linux<br/>NativeLinuxDriver · experimental opt-in"]
-    utility["Utility VM host · qualification path<br/>isolated a3s-oci-krun-shim → libkrun<br/>KVM · HVF · WHPX"]
-    agent["A3S Linux guest<br/>authenticated AF_VSOCK → a3s-oci-agent"]
-    executor["Shared LinuxExecutor<br/>namespaces · mounts · PID 1 · pidfd process control"]
-
-    consumers --> control --> selection
-    control <--> state
-    selection --> native --> executor
-    selection --> utility --> agent --> executor
+```text
+A3S Box / a3s-oci CLI / Rust SDK consumers
+                    │
+        RuntimeClient / OciRuntimeService
+                    │
+      in-process call or bounded local IPC
+                    │
+          OCI validation and lifecycle
+                    │
+            HostRuntimeService
+ exact bundle · generations · journal · reconciliation
+                    │
+               RuntimeDriver
+          ┌─────────┴──────────┐
+          │                    │
+ Native Linux host      Utility VM qualification
+ NativeLinuxDriver      a3s-oci-krun-shim → libkrun
+          │             KVM · HVF · WHPX
+          │                    │
+          │          authenticated guest protocol
+          │                    │
+          │              a3s-oci-agent
+          │                    │
+          └─────────┬──────────┘
+                    │
+             LinuxExecutor
+ namespaces · mounts · PID 1 · pidfds · wait · cleanup
 ```
 
 The same `LinuxExecutor` is called directly on Linux and through the guest
