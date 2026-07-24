@@ -15,7 +15,11 @@ mod context;
 ))]
 mod ffi;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_agent_smoke;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_context;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_process;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_vm_smoke;
 mod report;
@@ -299,6 +303,21 @@ pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
 #[must_use]
 pub fn run_macos_vm_smoke_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bool {
     macos_vm_smoke::run_worker(rootfs, console, marker_name)
+}
+
+/// Run the private macOS guest-agent VM worker.
+///
+/// This is exported only for the hidden shim process boundary.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_macos_agent_vm_worker(
+    rootfs: &Path,
+    console: &Path,
+    socket: &Path,
+    token: &a3s_oci_agent_protocol::SessionToken,
+) -> bool {
+    macos_agent_smoke::run_worker(rootfs, console, socket, token)
 }
 
 pub(crate) fn fallback_config() -> VmConfig {

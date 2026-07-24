@@ -227,6 +227,32 @@ when HVF is unavailable. See
 [macOS HVF Development](docs/macos-hvf.md) for the exact boundary and retained
 evidence.
 
+The authenticated bridge gate installs the static arm64 Linux agent into that
+rootfs and exercises the complete host-to-guest negotiation:
+
+```sh
+rustup target add aarch64-unknown-linux-musl
+cargo build -p a3s-oci-agent --release \
+  --target aarch64-unknown-linux-musl
+cargo build -p a3s-oci-cli
+
+install -d "$rootfs_dir/rootfs/usr/bin"
+install -m 0755 \
+  target/aarch64-unknown-linux-musl/release/a3s-oci-agent \
+  "$rootfs_dir/rootfs/usr/bin/a3s-oci-agent"
+
+target/debug/a3s-oci agent-vm-smoke \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --rootfs "$rootfs_dir/rootfs" \
+  --console "$rootfs_dir/agent-console.log"
+```
+
+An `a3s.oci.agent-vm-smoke.v2` success proves a private host socket, the
+expected shim and direct worker PID relationship, one-time token
+authentication, protocol version 1, the arm64 guest identity, and the exact
+five core lifecycle operations. It does not yet claim that the macOS driver
+can launch arbitrary OCI workloads.
+
 ### Windows utility VM diagnostics
 
 On a WHPX-capable Windows host:
@@ -310,7 +336,7 @@ boundary.
 | --- | --- | --- | --- |
 | Linux x86_64/aarch64 | Native Linux executor | Real rootful core lifecycle with `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned libkrun context lifecycle, and real Linux guest command with host-verified marker and natural exit code | `probe-only`; authenticated agent and workload driver not implemented |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, real Linux guest command, and authenticated static arm64 guest agent over a PID-verified Unix/vsock bridge | `probe-only`; fixed OCI lifecycle and workload driver not implemented |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -384,6 +410,10 @@ Security-sensitive platform controls include:
   reverified immediately before loading;
 - bounded macOS VM workers whose success requires a guest-written marker,
   natural zero exit, worker reap, and marker cleanup;
+- private `0700` macOS agent directories and `0600` Unix sockets, with
+  `LOCAL_PEERPID` plus direct shim-child verification before token negotiation;
+- isolated macOS shim process groups so timeout and failure cleanup terminate
+  both the public shim and its VM worker;
 - fail-closed dedicated-VM selection;
 - no silent fallback from VM isolation to a shared host kernel.
 
@@ -417,9 +447,10 @@ Platform CI covers:
 
 - Ubuntu x86_64 native lifecycle without KVM;
 - Ubuntu aarch64 native lifecycle without KVM;
-- macOS HVF, isolated libkrun context, and guest-marker gates;
+- macOS HVF, isolated libkrun context, guest-marker, authenticated-agent, and
+  missing-entitlement fail-closed gates;
 - Windows WHPX and libkrun context gates;
-- static x86_64 musl guest-agent output.
+- static x86_64 and aarch64 musl guest-agent output.
 
 Further design and test contracts:
 

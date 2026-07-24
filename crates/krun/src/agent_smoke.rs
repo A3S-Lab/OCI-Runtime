@@ -15,6 +15,7 @@ pub fn agent_vm_smoke(
     rootfs: &Path,
     console: &Path,
     endpoint: &AgentVsockEndpoint,
+    socket_path: Option<&Path>,
     token: &SessionToken,
 ) -> KrunAgentVmSmokeReport {
     let config = match VmConfig::new(1, 512) {
@@ -29,12 +30,33 @@ pub fn agent_vm_smoke(
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
+        let _ = socket_path;
         agent_vm_smoke_windows(rootfs, console, endpoint, token, config)
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        let _ = (rootfs, console, endpoint, token);
+        let Some(socket_path) = socket_path else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
+            report.reason = Some("the macOS guest-agent bridge requires a Unix socket path".into());
+            return report;
+        };
+        crate::macos_agent_smoke::agent_vm_smoke(
+            rootfs,
+            console,
+            endpoint,
+            socket_path,
+            token,
+            config,
+        )
+    }
+
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
+    {
+        let _ = (rootfs, console, endpoint, socket_path, token);
         KrunAgentVmSmokeReport::unsupported(HostPlatform::current(), config)
     }
 }

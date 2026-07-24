@@ -25,6 +25,7 @@ zeroize.workspace = true
 a3s-libkrun-sys.workspace = true
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+libc = "0.2"
 libloading.workspace = true
 sha2.workspace = true
 

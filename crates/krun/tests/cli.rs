@@ -70,3 +70,55 @@ fn vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
         .as_deref()
         .is_some_and(|reason| reason.contains("failed to resolve rootfs")));
 }
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn agent_vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
+    use a3s_oci_agent_protocol::{SessionToken, AGENT_SESSION_TOKEN_ENV};
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time must follow the Unix epoch")
+        .as_nanos();
+    let missing_rootfs = std::env::temp_dir().join(format!(
+        "a3s-oci-missing-agent-rootfs-{}-{nonce}",
+        std::process::id(),
+    ));
+    let console = std::env::temp_dir().join(format!(
+        "a3s-oci-missing-agent-console-{}-{nonce}.log",
+        std::process::id(),
+    ));
+    let missing_socket = std::env::temp_dir().join(format!(
+        "a3s-oci-missing-agent-socket-{}-{nonce}.sock",
+        std::process::id(),
+    ));
+    let token = SessionToken::generate().expect("operating-system random source");
+    let encoded = token.expose_hex();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci-krun-shim"))
+        .args(["agent-vm-smoke", "--rootfs"])
+        .arg(&missing_rootfs)
+        .arg("--console")
+        .arg(&console)
+        .args(["--pipe-name", "a3s-oci-agent-missing-rootfs"])
+        .arg("--socket-path")
+        .arg(&missing_socket)
+        .env(AGENT_SESSION_TOKEN_ENV, encoded.as_str())
+        .output()
+        .expect("agent VM smoke command must start");
+
+    let report: a3s_oci_krun::KrunAgentVmSmokeReport =
+        serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(report.schema_version, "a3s.oci.krun-agent-vm-smoke.v1");
+    assert!(!report.is_success());
+    assert!(!report.runtime_bundle_loaded);
+    assert!(!report.context_created);
+    assert!(!report.vm_entered);
+    assert!(!report.agent_binary_present);
+    assert!(!console.exists());
+    assert!(report
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("failed to resolve rootfs")));
+}

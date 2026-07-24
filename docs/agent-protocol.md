@@ -76,11 +76,28 @@ generate both an unguessable endpoint nonce and the session token from the OS,
 and reject a connected process whose PID is not the expected libkrun shim.
 PID verification occurs before the host sends the session token.
 
+macOS tests create a random private directory below `/private/tmp` with mode
+`0700`, bind a `0600` Unix socket, reject collisions and symlinks, and remove
+both entries on success, rejection, timeout, or drop. After accept, the host
+reads `LOCAL_PEERPID` and uses `proc_pidinfo(PROC_PIDTBSDINFO)` to require that
+the connected process is the direct worker child of the exact public libkrun
+shim. An unrelated peer is rejected before protocol bytes are read. A direct
+child with the wrong token is rejected during the following authentication
+step.
+
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
 pipe, authenticates the token, negotiates protocol version 1, and retains
 bounded host and shim evidence. The current guest must advertise the exact
 five core operations.
+
+The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
+binary, boots it through HVF, maps guest CID-host port 4093 to the verified
+Unix stream, and retains both the public shim PID and the direct VM worker PID
+in `a3s.oci.agent-vm-smoke.v2`. The signed path must negotiate protocol version
+1 and the exact five operations. The missing-entitlement path must exit with
+status `2`, report no negotiation, terminate the shim process group, and leave
+no private endpoint residue.
 
 The real WHPX `oci-vm-smoke` keeps the same authenticated connection open and
 proves a fixed bundle through create, state, exact create replay, start,

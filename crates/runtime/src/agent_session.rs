@@ -9,12 +9,18 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde_json::Value;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use tokio::net::windows::named_pipe::NamedPipeServer;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use crate::agent_pipe::WindowsAgentPipeListener;
 use crate::agent_smoke_process::{BoundedOutput, CompletedShim, RunningShim, MAX_CAPTURE_BYTES};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use crate::agent_socket::MacosAgentSocketListener;
 use crate::report::AgentVmSmokeReport;
 
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -34,20 +40,26 @@ const SHIM_TRUE_FIELDS: &[&str] = &[
     "console_created",
 ];
 
-pub(crate) struct WindowsAgentVmSession {
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+type PlatformAgentStream = NamedPipeServer;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+type PlatformAgentStream = UnixStream;
+
+pub(crate) struct AgentVmSession {
     report: AgentVmSmokeReport,
-    client: AgentClient<NamedPipeServer>,
+    client: AgentClient<PlatformAgentStream>,
     running: RunningShim,
     console: PathBuf,
 }
 
-impl WindowsAgentVmSession {
+impl AgentVmSession {
     pub(crate) async fn connect(
         shim: &Path,
         rootfs: &Path,
         console: &Path,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let mut report = AgentVmSmokeReport::initial(HostPlatform::Windows);
+        let platform = HostPlatform::current();
+        let mut report = AgentVmSmokeReport::initial(platform);
         let shim = match canonical_file(shim, "libkrun shim").await {
             Ok(path) => path,
             Err(reason) => return Err(failed(report, reason)),
@@ -65,7 +77,16 @@ impl WindowsAgentVmSession {
             Ok(endpoint) => endpoint,
             Err(error) => return Err(failed(report, error.to_string())),
         };
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         let listener = match WindowsAgentPipeListener::bind(endpoint.clone()) {
+            Ok(listener) => {
+                report.endpoint_bound = true;
+                listener
+            }
+            Err(error) => return Err(failed(report, error.to_string())),
+        };
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let listener = match MacosAgentSocketListener::bind(endpoint.clone()) {
             Ok(listener) => {
                 report.endpoint_bound = true;
                 listener
@@ -86,7 +107,10 @@ impl WindowsAgentVmSession {
             .arg("--console")
             .arg(&console)
             .arg("--pipe-name")
-            .arg(endpoint.pipe_name())
+            .arg(endpoint.pipe_name());
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        command.arg("--socket-path").arg(listener.socket_path());
+        command
             .env(AGENT_SESSION_TOKEN_ENV, encoded_token.as_str())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -117,10 +141,10 @@ impl WindowsAgentVmSession {
         report.shim_process_id = Some(shim_process_id);
 
         enum BridgeOutcome {
-            Connected(a3s_oci_sdk::Result<NamedPipeServer>),
+            Connected(a3s_oci_sdk::Result<(PlatformAgentStream, u32)>),
             ShimExited(io::Result<ExitStatus>),
         }
-        let accept = listener.accept_from_process(shim_process_id);
+        let accept = accept_bridge(listener, shim_process_id);
         tokio::pin!(accept);
         let bridge_outcome = timeout(BRIDGE_TIMEOUT, async {
             tokio::select! {
@@ -130,8 +154,9 @@ impl WindowsAgentVmSession {
         })
         .await;
         let stream = match bridge_outcome {
-            Ok(BridgeOutcome::Connected(Ok(stream))) => {
+            Ok(BridgeOutcome::Connected(Ok((stream, bridge_process_id)))) => {
                 report.shim_client_verified = true;
+                report.bridge_process_id = Some(bridge_process_id);
                 stream
             }
             Ok(BridgeOutcome::Connected(Err(error))) => {
@@ -194,7 +219,8 @@ impl WindowsAgentVmSession {
         Ok(session)
     }
 
-    pub(crate) const fn client(&self) -> &AgentClient<NamedPipeServer> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    pub(crate) const fn client(&self) -> &AgentClient<PlatformAgentStream> {
         &self.client
     }
 
@@ -216,8 +242,11 @@ impl WindowsAgentVmSession {
         if self.report.agent_version.as_deref() != Some(env!("CARGO_PKG_VERSION")) {
             return Some("guest agent version does not match the host runtime version".into());
         }
-        if self.report.guest_architecture.as_deref() != Some("x86_64") {
-            return Some("guest agent did not report the required x86_64 architecture".into());
+        let expected_architecture = expected_guest_architecture(self.report.platform);
+        if self.report.guest_architecture.as_deref() != Some(expected_architecture) {
+            return Some(format!(
+                "guest agent did not report the required {expected_architecture} architecture"
+            ));
         }
         None
     }
@@ -246,7 +275,7 @@ impl WindowsAgentVmSession {
                 &completed,
             );
         }
-        let shim_report = match parse_shim_report(&completed.stdout) {
+        let shim_report = match parse_shim_report(&completed.stdout, report.platform) {
             Ok(shim_report) => shim_report,
             Err(reason) => return failed_with_output(report, &reason, &completed),
         };
@@ -358,7 +387,7 @@ async fn prepare_console_path(path: &Path) -> Result<PathBuf, String> {
     Ok(console)
 }
 
-fn parse_shim_report(output: &BoundedOutput) -> Result<Value, String> {
+fn parse_shim_report(output: &BoundedOutput, platform: HostPlatform) -> Result<Value, String> {
     if output.truncated {
         return Err(format!(
             "libkrun shim report exceeded the {MAX_CAPTURE_BYTES}-byte evidence limit"
@@ -375,8 +404,15 @@ fn parse_shim_report(output: &BoundedOutput) -> Result<Value, String> {
     if object.get("status").and_then(Value::as_str) != Some("available") {
         return Err("libkrun shim did not report the guest-agent VM path available".into());
     }
-    if object.get("platform").and_then(Value::as_str) != Some("windows") {
-        return Err("libkrun shim evidence did not identify the Windows host".into());
+    let expected_platform = match platform {
+        HostPlatform::Windows => "windows",
+        HostPlatform::Macos => "macos",
+        _ => return Err("guest-agent session ran on an unsupported host platform".into()),
+    };
+    if object.get("platform").and_then(Value::as_str) != Some(expected_platform) {
+        return Err(format!(
+            "libkrun shim evidence did not identify the {expected_platform} host"
+        ));
     }
     for field in SHIM_TRUE_FIELDS {
         if object.get(*field).and_then(Value::as_bool) != Some(true) {
@@ -405,6 +441,31 @@ fn expected_operations() -> Vec<AgentOperation> {
         AgentOperation::Kill,
         AgentOperation::Delete,
     ]
+}
+
+const fn expected_guest_architecture(platform: HostPlatform) -> &'static str {
+    match platform {
+        HostPlatform::Windows => "x86_64",
+        HostPlatform::Macos => "aarch64",
+        _ => "",
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+async fn accept_bridge(
+    listener: WindowsAgentPipeListener,
+    shim_process_id: u32,
+) -> a3s_oci_sdk::Result<(PlatformAgentStream, u32)> {
+    let stream = listener.accept_from_process(shim_process_id).await?;
+    Ok((stream, shim_process_id))
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+async fn accept_bridge(
+    listener: MacosAgentSocketListener,
+    shim_process_id: u32,
+) -> a3s_oci_sdk::Result<(PlatformAgentStream, u32)> {
+    listener.accept_from_child(shim_process_id).await
 }
 
 fn apply_completed(report: &mut AgentVmSmokeReport, completed: &CompletedShim) {
