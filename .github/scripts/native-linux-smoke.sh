@@ -133,6 +133,7 @@ report_native_failure() {
   findmnt --target / --output TARGET,SOURCE,FSTYPE,OPTIONS --noheadings || true
   findmnt --target "$rootfs" \
     --output TARGET,SOURCE,FSTYPE,OPTIONS --noheadings || true
+  namei --long "$rootfs" || true
   sudo sh -c \
     'grep -E "^(NoNewPrivs|Seccomp|Cap(Inh|Prm|Eff|Bnd|Amb)):" /proc/self/status' ||
     true
