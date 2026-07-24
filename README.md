@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#overview">Overview</a> •
-  <a href="#capabilities">Capabilities</a> •
+  <a href="#features">Features</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#runtime-model">Runtime Model</a> •
   <a href="#platform-status">Platform Status</a> •
@@ -72,7 +72,7 @@ async fn main() -> a3s_oci_sdk::Result<()> {
 Normal discovery exposes only operations backed by the selected implementation.
 Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 
-## Capabilities
+## Features
 
 - **Complete OCI Types**: Preserve official OCI runtime models and exact
   accepted `config.json` text across SDK and wire boundaries
@@ -322,39 +322,18 @@ runtime prerequisite.
 The SDK and lifecycle core are platform-neutral. Platform-specific hypervisor
 and native-library code stays behind explicit driver or shim boundaries:
 
-```text
- A3S Box / a3s-oci CLI / future containerd shim
-                         │
-                         ▼
-                   a3s-oci-sdk
-             typed OCI requests + local IPC
-                         │
-                         ▼
-                HostRuntimeService
-       validation │ durable state │ operation journal
-                         │
-             explicit driver selection
-                         │
-          ┌──────────────┴──────────────────┐
-          │                                 │
-          ▼                                 ▼
- NativeLinuxDriver               Utility-VM host path
-  explicit experimental             (in development)
-          │                                 │
-          │                        isolated libkrun shim
-          │                                 │
-          │                          KVM / HVF / WHPX
-          │                                 │
-          │                          A3S Linux guest
-          │                                 │
-          │                         authenticated AF_VSOCK
-          │                                 │
-          │                           a3s-oci-agent
-          │                                 │
-          └──────────────┬──────────────────┘
-                         ▼
-                   LinuxExecutor
-       namespaces │ mounts │ cgroups │ processes
+```mermaid
+flowchart LR
+    callers["A3S Box · a3s-oci CLI · planned containerd shim<br/>Box owns images, builds, volumes, networks, and product policy"]
+    control["Platform-neutral control plane<br/>a3s-oci-sdk → OciRuntimeService → HostRuntimeService<br/>Typed OCI · validation · durable state · operation journal"]
+    selection{"Explicit driver selection"}
+    native["Native Linux path<br/>NativeLinuxDriver · experimental opt-in"]
+    utility["Utility VM path<br/>a3s-oci-krun-shim → KVM / HVF / WHPX → A3S Linux guest<br/>Authenticated AF_VSOCK → a3s-oci-agent"]
+    executor["LinuxExecutor<br/>Namespaces · mounts · cgroups · processes"]
+
+    callers --> control --> selection
+    selection --> native --> executor
+    selection --> utility --> executor
 ```
 
 The same `LinuxExecutor` is called directly on Linux and through the guest
