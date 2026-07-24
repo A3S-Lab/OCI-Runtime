@@ -44,6 +44,8 @@ Completed:
   initialization;
 - Apple Silicon and Hypervisor.framework capability reporting through a
   direct `kern.hv_support` query;
+- entitlement-aware direct Hypervisor.framework VM-object create/destroy
+  evidence with versioned, fail-closed diagnostics;
 - explicit rootful native Linux driver integration that reuses the shared
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
@@ -200,6 +202,33 @@ Exit gate: a fresh Windows host test boots a utility VM, runs the fixed OCI
 bundle, validates negative isolation cases, and leaves no process, handle, or
 runtime-root leak. Only then may WHPX become `experimental`.
 
+### R2M — macOS HVF Utility VM
+
+- [x] Query Apple Silicon Hypervisor.framework support directly.
+- [x] Add the minimal checked-in Hypervisor entitlement used to sign runtime
+  development and CI artifacts.
+- [x] Create and destroy a real process-owned HVF VM object through the system
+  framework, with symbolic failure reporting and cleanup ownership.
+- [x] Retain the versioned success or fail-closed unavailable report in the
+  CLI and macOS CI.
+- [x] Verify a signed round trip on a local Apple Silicon host and verify that
+  a missing entitlement returns `HV_DENIED`.
+- [ ] Stage a runtime-owned, checksum-verified macOS libkrun bundle only for
+  the isolated shim.
+- [ ] Create, configure, and release one libkrun HVF context.
+- [ ] Boot the pinned A3S Linux kernel and immutable system root.
+- [ ] Establish the macOS host endpoint and AF_VSOCK guest-agent bridge.
+- [ ] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
+  WHPX.
+- [ ] Prove deterministic VM, process, descriptor, and filesystem cleanup.
+- [ ] Retain negative evidence for missing entitlement, unavailable
+  virtualization, invalid runtime assets, and failed guest startup.
+
+Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
+fixed OCI lifecycle through the authenticated guest agent, validates negative
+isolation cases, and leaves no process, descriptor, or runtime-root leak. Only
+then may HVF become `experimental`.
+
 ### R3 — Shared Linux Executor And Guest Agent
 
 - [ ] Multi-container guest registry with per-container generations.
@@ -286,7 +315,7 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
 | Windows libkrun/WHPX | Capability and partition smoke | Fixed bundle plus full SDK lifecycle | OCI, security, recovery, and soak gates |
 | Native Linux | Host feature inventory | Full A3S Box Sandbox suite without KVM | OCI and adversarial gates on x86_64/aarch64 |
 | Linux libkrun/KVM | KVM capability evidence | Same guest lifecycle as WHPX | Driver-specific isolation and soak gates |
-| macOS libkrun/HVF | HVF capability evidence | Same guest lifecycle as WHPX | Driver-specific isolation and soak gates |
+| macOS libkrun/HVF | HVF capability and signed VM-object evidence | Same guest lifecycle as WHPX | Driver-specific isolation and soak gates |
 
 Promotion is monotonic and evidence-based. Host hypervisor availability alone
 never enables workload launch.

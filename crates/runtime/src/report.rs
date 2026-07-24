@@ -7,6 +7,8 @@ use serde_json::Value;
 
 /// Schema emitted by the WHPX smoke command.
 pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
+/// Schema emitted by the Hypervisor.framework VM-object smoke.
+pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
 pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v1";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
@@ -80,6 +82,65 @@ impl WhpxSmokeReport {
             && self.dll_loaded
             && self.hypervisor_present
             && self.partition_object_round_trip
+    }
+}
+
+/// Result of querying Hypervisor.framework and creating then destroying a VM.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HvfSmokeReport {
+    /// Version of this JSON-compatible schema.
+    pub schema_version: String,
+    /// Host on which the smoke was attempted.
+    pub platform: HostPlatform,
+    /// Host status of the Hypervisor.framework prerequisite.
+    pub status: CapabilityStatus,
+    /// Whether the runtime target is Apple Silicon.
+    pub apple_silicon: bool,
+    /// Value returned by the direct `kern.hv_support` query.
+    pub hypervisor_supported: Option<bool>,
+    /// Whether `hv_vm_create` created a process-owned VM object.
+    pub vm_created: bool,
+    /// Whether `hv_vm_destroy` released that VM object.
+    pub vm_destroyed: bool,
+    /// Diagnostic reason when the smoke was not successful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl HvfSmokeReport {
+    pub(crate) fn initial(
+        platform: HostPlatform,
+        apple_silicon: bool,
+        hypervisor_supported: Option<bool>,
+    ) -> Self {
+        Self {
+            schema_version: HVF_SMOKE_SCHEMA_VERSION.to_string(),
+            platform,
+            status: CapabilityStatus::Unavailable,
+            apple_silicon,
+            hypervisor_supported,
+            vm_created: false,
+            vm_destroyed: false,
+            reason: None,
+        }
+    }
+
+    pub(crate) fn unsupported(platform: HostPlatform, reason: impl Into<String>) -> Self {
+        let mut report = Self::initial(platform, false, None);
+        report.status = CapabilityStatus::Unsupported;
+        report.reason = Some(reason.into());
+        report
+    }
+
+    /// Return whether the real VM-object round trip succeeded.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        matches!(self.status, CapabilityStatus::Available)
+            && self.platform == HostPlatform::Macos
+            && self.apple_silicon
+            && self.hypervisor_supported == Some(true)
+            && self.vm_created
+            && self.vm_destroyed
     }
 }
 

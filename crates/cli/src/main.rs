@@ -20,6 +20,8 @@ enum Command {
     Features,
     /// Query WHPX and create then delete one partition object.
     WhpxSmoke,
+    /// Create then destroy one real Hypervisor.framework VM object.
+    HvfSmoke,
     /// Run the experimental native Linux core lifecycle through the Rust SDK.
     NativeLinuxSmoke {
         /// Matching a3s-oci-agent executable used for the prepared init mode.
@@ -90,6 +92,16 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
         }
         Command::WhpxSmoke => {
             let report = a3s_oci_runtime::whpx_smoke();
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::HvfSmoke => {
+            let report = a3s_oci_runtime::hvf_smoke();
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

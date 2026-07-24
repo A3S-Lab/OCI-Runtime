@@ -2,7 +2,6 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(not(windows))]
 mod unsupported;
 #[cfg(windows)]
 mod windows;
@@ -12,7 +11,7 @@ pub(crate) use linux::native_driver_capability;
 
 use a3s_oci_core::RuntimeFeatures;
 
-use crate::WhpxSmokeReport;
+use crate::{HvfSmokeReport, WhpxSmokeReport};
 
 pub(crate) fn features() -> RuntimeFeatures {
     #[cfg(windows)]
@@ -45,5 +44,17 @@ pub(crate) fn whpx_smoke() -> WhpxSmokeReport {
     #[cfg(not(windows))]
     {
         unsupported::whpx_smoke()
+    }
+}
+
+pub(crate) fn hvf_smoke() -> HvfSmokeReport {
+    #[cfg(target_os = "macos")]
+    {
+        macos::hvf_smoke()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        unsupported::hvf_smoke()
     }
 }
