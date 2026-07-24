@@ -252,10 +252,13 @@ target/debug/a3s-oci agent-vm-smoke \
   --console "$rootfs_dir/agent-console.log"
 ```
 
-An `a3s.oci.agent-vm-smoke.v2` success proves a private host socket, the
+An `a3s.oci.agent-vm-smoke.v3` success proves a private host socket, the
 expected shim and direct worker PID relationship, one-time token
 authentication, protocol version 1, the arm64 guest identity, and the exact
-five core lifecycle operations.
+five core lifecycle operations. It also requires the exact runtime-owned
+endpoint to be removed, the current process's complete descriptor inventory to
+return to its pre-session baseline, and both observed host process IDs to
+disappear.
 
 The fixed lifecycle gate then runs the same reviewed OCI bundle through HVF
 that the Windows qualification runs through WHPX:

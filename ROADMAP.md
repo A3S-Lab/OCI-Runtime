@@ -54,7 +54,8 @@ Completed:
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
   one-time token authentication, protocol-v1 negotiation, exact core
-  operation advertisement, process-group termination, and endpoint cleanup;
+  operation advertisement, process-group termination, exact endpoint removal,
+  observed PID reap, and in-process descriptor-inventory restoration;
 - real macOS fixed-bundle create/state/start/kill/delete evidence using the
   shared Windows lifecycle harness, including exact mutation retries,
   create/start separation, running and stopped observation, post-delete
@@ -241,7 +242,10 @@ runtime-root leak. Only then may WHPX become `experimental`.
   authenticate protocol-v1 negotiation with a one-time token.
 - [x] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
   WHPX.
-- [ ] Prove deterministic VM, process, descriptor, and filesystem cleanup.
+- [ ] Prove deterministic VM, process, descriptor, and filesystem cleanup
+  under injected faults. Signed and missing-entitlement gates already require
+  exact endpoint removal, observed-PID reap, and descriptor-inventory
+  restoration.
 - [x] Retain fail-closed unavailable-virtualization, missing-entitlement,
   invalid-runtime-asset, missing-agent-rootfs, wrong-token, and unexpected-peer
   evidence without reporting false negotiation.

@@ -9,7 +9,7 @@ use a3s_oci_agent_protocol::AgentVsockEndpoint;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use tokio::net::{UnixListener, UnixStream};
 
-const PRIVATE_TMP_ROOT: &str = "/private/tmp";
+pub(crate) const PRIVATE_TMP_ROOT: &str = "/private/tmp";
 const SOCKET_FILE_NAME: &str = "agent.sock";
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_SOCKET_MODE: u32 = 0o600;

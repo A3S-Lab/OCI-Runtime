@@ -95,9 +95,17 @@ pub(super) async fn run(
         Err(reason) => return failed(report, reason),
     };
 
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
     let session = match AgentVmSession::connect(shim, &vm_rootfs, console).await {
         Ok(session) => session,
         Err(bridge) => {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            let bridge = {
+                let mut bridge = bridge;
+                cleanup.apply(&mut bridge).await;
+                bridge
+            };
             report.reason = bridge.reason.clone();
             report.bridge = bridge;
             return report;
@@ -121,6 +129,8 @@ pub(super) async fn run(
         Ok(()) => session.finish().await,
         Err(reason) => session.finish_with_failure(reason).await,
     };
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    cleanup.apply(&mut report.bridge).await;
 
     match remove_marker(&marker).await {
         Ok(()) => report.marker_removed = true,

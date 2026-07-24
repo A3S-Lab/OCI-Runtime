@@ -77,6 +77,7 @@ impl AgentVmSession {
             Ok(endpoint) => endpoint,
             Err(error) => return Err(failed(report, error.to_string())),
         };
+        report.endpoint_name = Some(endpoint.pipe_name().to_string());
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         let listener = match WindowsAgentPipeListener::bind(endpoint.clone()) {
             Ok(listener) => {

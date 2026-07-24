@@ -320,15 +320,16 @@ target/debug/a3s-oci agent-vm-smoke \
   --console "$asset_dir/agent-console.log"
 ```
 
-The top-level report is `a3s.oci.agent-vm-smoke.v2`. A successful local Apple
+The top-level report is `a3s.oci.agent-vm-smoke.v3`. A successful local Apple
 Silicon qualification run retained the following contract:
 
 ```json
 {
-  "schema_version": "a3s.oci.agent-vm-smoke.v2",
+  "schema_version": "a3s.oci.agent-vm-smoke.v3",
   "platform": "macos",
   "status": "available",
   "endpoint_bound": true,
+  "endpoint_name": "a3s-oci-agent-<32 lowercase hex characters>",
   "shim_spawned": true,
   "shim_process_id": 12345,
   "bridge_process_id": 12346,
@@ -346,13 +347,24 @@ Silicon qualification run retained the following contract:
   ],
   "shim_report_verified": true,
   "shim_exit_code": 0,
-  "console_created": true
+  "console_created": true,
+  "macos_cleanup": {
+    "endpoint_removed": true,
+    "shim_reaped": true,
+    "bridge_reaped": true,
+    "open_descriptors_before": 11,
+    "open_descriptors_after": 11,
+    "descriptor_inventory_restored": true
+  }
 }
 ```
 
 The numeric PIDs are observations rather than stable values. Success requires
 both to be nonzero and different: the first identifies the public shim and the
-second the kernel-identified direct worker child.
+second the kernel-identified direct worker child. Descriptor counts are also
+observations rather than fixed values. Success requires a positive baseline,
+an identical post-session count and complete `(fd, fd_type)` inventory, removal
+of the exact reported endpoint, and disappearance of both observed processes.
 
 The same local build without the Hypervisor entitlement completed all bounded
 shim configuration, failed `krun_start_enter`, returned status `2`, reported
@@ -365,8 +377,8 @@ reap the entire shim process group on timeout.
 macOS CI builds the static aarch64 musl agent and runs both signed and
 missing-entitlement paths. A virtualization-capable runner must complete the
 full authenticated report. An unavailable host must remain fail closed. Every
-branch requires the private endpoint inventory before and after the command to
-match exactly.
+branch requires both the command's in-process cleanup evidence and the shell's
+independent private-endpoint baseline comparison to pass.
 
 ## Fixed OCI lifecycle
 
@@ -393,13 +405,14 @@ target/debug/a3s-oci oci-vm-smoke \
 ```
 
 The signed Apple Silicon qualification completed all fields in
-`a3s.oci.oci-vm-smoke.v2`: bundle loading, created state, exact create replay,
+`a3s.oci.oci-vm-smoke.v3`: bundle loading, created state, exact create replay,
 pre-start marker absence, start, running observation, exact kill replay,
 stopped observation, marker verification, stopped-only delete, exact delete
 replay, post-delete NotFound, marker removal, guest-runtime cleanup, and the
 complete nested authenticated bridge report. The observed container PID was
-positive, and both the endpoint inventory and shim/worker process inventory
-matched their pre-run baselines after exit.
+positive, and the nested report proved exact endpoint removal, complete
+current-process descriptor-inventory restoration, and disappearance of both
+shim/worker PIDs after exit.
 
 The same command with an unsigned shim returned status `2` before protocol
 negotiation, retained the nested `krun_start_enter` failure, wrote no workload
