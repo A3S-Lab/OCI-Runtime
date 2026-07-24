@@ -108,26 +108,82 @@ retains the fail-closed branch. The signed local Apple Silicon run supplies
 the positive host lifecycle evidence until a virtualization-capable CI runner
 is available.
 
+## Isolated libkrun context gate
+
+The separate `a3s-oci-krun-shim` owns the native libkrun boundary. The main
+runtime, public SDK, and feature CLI do not link or load libkrun.
+
+The macOS arm64 shim carries a deterministic archive derived from the
+A3S Box v3.1.0 release:
+
+`crates/krun/runtime/macos-aarch64/krun-macos-arm64.tar.xz`
+
+The build verifies the archive and both native files before staging them next
+to the shim. The shim then:
+
+1. rejects a runtime directory or asset that is a symbolic link;
+2. recomputes both file hashes immediately before loading;
+3. loads `libkrunfw.5.dylib` and `libkrun.1.17.0.dylib` by absolute path;
+4. resolves only the six functions required by the context smoke;
+5. creates one libkrun configuration context;
+6. records one vCPU and 128 MiB of memory;
+7. replaces implicit TSI with plain vsock and maps guest port 4093 to a
+   generated macOS Unix-socket path;
+8. releases the context through an ownership guard.
+
+Run a relocatable, signed copy:
+
+```sh
+cargo build -p a3s-oci-krun
+
+smoke_dir="$(mktemp -d)"
+cp target/debug/a3s-oci-krun-shim "$smoke_dir/"
+cp -R target/debug/a3s-oci-krun-runtime "$smoke_dir/"
+codesign --force --sign - \
+  --entitlements packaging/macos/a3s-oci-hvf.entitlements \
+  "$smoke_dir/a3s-oci-krun-shim"
+"$smoke_dir/a3s-oci-krun-shim" context-smoke
+```
+
+A successful `a3s.oci.krun-context-smoke.v2` report requires:
+
+```json
+{
+  "schema_version": "a3s.oci.krun-context-smoke.v2",
+  "platform": "macos",
+  "status": "available",
+  "runtime_bundle_loaded": true,
+  "context_created": true,
+  "vm_configured": true,
+  "agent_vsock_configured": true,
+  "context_released": true,
+  "vcpus": 1,
+  "memory_mib": 128
+}
+```
+
+macOS CI runs this gate independently of `kern.hv_support`, because allocating
+and configuring a libkrun context does not enter a VM. CI also changes one byte
+in a copied runtime asset and requires rejection before context creation.
+Native runtime hashes and source provenance are recorded in
+[Runtime Provenance](../crates/krun/RUNTIME-PROVENANCE.md).
+
 ## Remaining workload gates
 
-VM-object creation is not workload execution. The current smoke does not:
+HVF VM-object creation and libkrun context configuration are still not workload
+execution. The current gates do not:
 
-- load or initialize libkrun;
-- stage or verify a runtime bundle;
-- allocate a vCPU or guest memory;
 - boot the pinned A3S kernel or immutable Linux system image;
-- establish the AF_VSOCK guest-agent protocol;
+- bind the real host Unix socket or authenticate a guest-agent session;
 - execute any OCI lifecycle operation.
 
 The next macOS increments must add, in order:
 
-1. an isolated libkrun shim and checksum-verified macOS runtime assets;
-2. a context create/configure/release round trip;
-3. the pinned A3S kernel and immutable system root;
-4. authenticated guest-agent negotiation;
-5. the same fixed OCI create/start/kill/delete lifecycle used by WHPX;
-6. deterministic process, descriptor, file, and VM cleanup;
-7. negative tests for invalid assets, failed guest boot, isolation weakening,
+1. the pinned A3S kernel and immutable system root;
+2. authenticated guest-agent negotiation over the macOS Unix-socket bridge;
+3. the same fixed OCI create/start/kill/delete lifecycle used by WHPX;
+4. deterministic process, descriptor, file, and VM cleanup;
+5. negative tests for failed guest boot, isolation weakening,
    and recovery.
 
 Only after those gates and the shared Linux executor requirements pass may

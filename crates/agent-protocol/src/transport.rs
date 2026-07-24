@@ -1,9 +1,9 @@
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
-/// Guest control port reserved by the pinned Windows libkrun bridge.
+/// Guest control port reserved by every libkrun host bridge.
 pub const AGENT_VSOCK_PORT: u32 = 4_093;
 
-/// Exact host endpoint mapped to the guest-agent vsock port.
+/// Exact endpoint basename mapped to the guest-agent vsock port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentVsockEndpoint {
     pipe_name: String,
@@ -34,7 +34,7 @@ impl AgentVsockEndpoint {
         Self::new(pipe_name)
     }
 
-    /// Validate a bare pipe name that the pinned libkrun fork preserves.
+    /// Validate a portable basename from which the host endpoint is derived.
     pub fn new(pipe_name: impl Into<String>) -> Result<Self> {
         let pipe_name = pipe_name.into();
         if pipe_name.is_empty()

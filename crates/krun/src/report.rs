@@ -28,13 +28,16 @@ pub struct KrunContextSmokeReport {
 }
 
 impl KrunContextSmokeReport {
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    pub(crate) fn windows(config: VmConfig) -> Self {
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
+    fn initial(platform: HostPlatform, config: VmConfig, runtime_bundle_loaded: bool) -> Self {
         Self {
             schema_version: KRUN_CONTEXT_SMOKE_SCHEMA_VERSION.to_string(),
-            platform: HostPlatform::Windows,
+            platform,
             status: CapabilityStatus::Unavailable,
-            runtime_bundle_loaded: option_env!("A3S_OCI_KRUN_RUNTIME_DIR").is_some(),
+            runtime_bundle_loaded,
             context_created: false,
             vm_configured: false,
             agent_vsock_configured: false,
@@ -46,20 +49,27 @@ impl KrunContextSmokeReport {
     }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    pub(crate) fn windows(config: VmConfig) -> Self {
+        Self::initial(
+            HostPlatform::Windows,
+            config,
+            option_env!("A3S_OCI_KRUN_RUNTIME_DIR").is_some(),
+        )
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub(crate) fn macos(config: VmConfig) -> Self {
+        Self::initial(HostPlatform::Macos, config, false)
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     pub(crate) fn failed(reason: String) -> Self {
-        Self {
-            schema_version: KRUN_CONTEXT_SMOKE_SCHEMA_VERSION.to_string(),
-            platform: HostPlatform::Windows,
-            status: CapabilityStatus::Unavailable,
-            runtime_bundle_loaded: option_env!("A3S_OCI_KRUN_RUNTIME_DIR").is_some(),
-            context_created: false,
-            vm_configured: false,
-            agent_vsock_configured: false,
-            context_released: false,
+        let mut report = Self::windows(VmConfig {
             vcpus: 1,
             memory_mib: 128,
-            reason: Some(reason),
-        }
+        });
+        report.reason = Some(reason);
+        report
     }
 
     /// Return whether every context-lifecycle step succeeded.

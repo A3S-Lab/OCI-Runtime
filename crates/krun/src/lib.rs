@@ -9,6 +9,8 @@ use std::path::Path;
 mod agent_smoke;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod context;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_context;
 mod report;
 
 pub use a3s_oci_agent_protocol::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
@@ -82,7 +84,15 @@ pub fn context_smoke() -> KrunContextSmokeReport {
         context_smoke_windows()
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        context_smoke_macos()
+    }
+
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     {
         KrunContextSmokeReport {
             schema_version: KRUN_CONTEXT_SMOKE_SCHEMA_VERSION.to_string(),
@@ -96,7 +106,9 @@ pub fn context_smoke() -> KrunContextSmokeReport {
             vcpus: 1,
             memory_mib: 128,
             reason: Some(
-                "the current context smoke is implemented only for Windows x86_64/WHPX".into(),
+                "the current context smoke is implemented only for Windows x86_64/WHPX and \
+                 macOS aarch64/HVF"
+                    .into(),
             ),
         }
     }
@@ -154,6 +166,85 @@ fn context_smoke_windows() -> KrunContextSmokeReport {
         Err(error) => report.reason = Some(error.to_string()),
     }
     report
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn context_smoke_macos() -> KrunContextSmokeReport {
+    use std::path::Path;
+
+    use macos_context::{KrunContext, MacosKrunApi};
+
+    let config = match VmConfig::new(1, 128) {
+        Ok(config) => config,
+        Err(error) => {
+            let mut report = KrunContextSmokeReport::macos(fallback_context_config());
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    let mut report = KrunContextSmokeReport::macos(config);
+
+    let api = match MacosKrunApi::load() {
+        Ok(api) => {
+            report.runtime_bundle_loaded = true;
+            api
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+
+    let mut context = match KrunContext::create(api) {
+        Ok(context) => {
+            report.context_created = true;
+            context
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+
+    if let Err(error) = context.set_vm_config(config) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.vm_configured = true;
+
+    let endpoint = match AgentVsockEndpoint::generate() {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            report.context_released = context.close().is_ok();
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    let socket_path = Path::new("/tmp").join(format!("{}.sock", endpoint.pipe_name()));
+    if let Err(error) = context.set_agent_vsock(&socket_path, endpoint.port()) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.agent_vsock_configured = true;
+
+    match context.close() {
+        Ok(()) => {
+            report.context_released = true;
+            report.status = CapabilityStatus::Available;
+        }
+        Err(error) => report.reason = Some(error.to_string()),
+    }
+    report
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const fn fallback_context_config() -> VmConfig {
+    VmConfig {
+        vcpus: 1,
+        memory_mib: 128,
+    }
 }
 
 /// Enter a real utility VM, execute `/bin/sh`, and verify a guest-written marker.
