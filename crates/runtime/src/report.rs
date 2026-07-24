@@ -481,15 +481,21 @@ impl OciVmSmokeReport {
         }
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     pub(crate) fn unsupported(platform: HostPlatform) -> Self {
         let mut report = Self::initial(platform);
         report.status = CapabilityStatus::Unsupported;
         report.bridge.status = CapabilityStatus::Unsupported;
         report.bridge.reason =
             Some("the authenticated guest bridge was not attempted for this OCI VM smoke".into());
-        report.reason =
-            Some("the fixed OCI VM smoke is implemented only for Windows x86_64/WHPX".into());
+        report.reason = Some(
+            "the fixed OCI VM smoke is implemented only for Windows x86_64/WHPX and \
+             macOS aarch64/HVF"
+                .into(),
+        );
         report
     }
 

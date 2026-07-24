@@ -99,15 +99,15 @@ in `a3s.oci.agent-vm-smoke.v2`. The signed path must negotiate protocol version
 status `2`, report no negotiation, terminate the shim process group, and leave
 no private endpoint residue.
 
-The real WHPX `oci-vm-smoke` keeps the same authenticated connection open and
-proves a fixed bundle through create, state, exact create replay, start,
-running observation, marker verification, signal delivery, exact kill replay,
-stopped observation, stopped-only delete, exact delete replay, and a final
-NotFound state query. The marker proves that the workload did not run before
-start and did run afterward. The init wrapper reads both configured UTS names
-back before create returns, and the workload independently checks its
-hostname. When requested, the same create barrier also covers a new mount
-namespace, recursively private propagation, a self-bound rootfs, and
+The real Windows and macOS `oci-vm-smoke` paths keep the same authenticated
+connection open and prove a fixed bundle through create, state, exact create
+replay, start, running observation, marker verification, signal delivery,
+exact kill replay, stopped observation, stopped-only delete, exact delete
+replay, and a final NotFound state query. The marker proves that the workload
+did not run before start and did run afterward. The init wrapper reads both
+configured UTS names back before create returns, and the workload independently
+checks its hostname. When requested, the same create barrier also covers a new
+mount namespace, recursively private propagation, a self-bound rootfs, and
 `pivot_root`. Ordered existing-target mount entries run before that pivot,
 including relative bundle bind sources, common VFS flags, propagation, and
 bounded filesystem-specific data. Requested IPC, network, cgroup, and PID

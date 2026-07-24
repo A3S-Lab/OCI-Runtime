@@ -219,7 +219,6 @@ impl AgentVmSession {
         Ok(session)
     }
 
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     pub(crate) const fn client(&self) -> &AgentClient<PlatformAgentStream> {
         &self.client
     }

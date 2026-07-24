@@ -280,6 +280,116 @@ jobs:
               -name 'a3s-oci-agent-*' -print | sort
           )"
           test "$endpoint_after" = "$endpoint_baseline"
+      - if: runner.os == 'macOS'
+        name: Fixed macOS OCI lifecycle or fail-closed worker
+        shell: bash
+        run: |
+          rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
+          rootfs_archive="$RUNNER_TEMP/alpine-minirootfs-3.22.5-aarch64.tar.gz"
+          signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
+          unsigned_dir="$RUNNER_TEMP/a3s-oci-agent-vm-unsigned"
+          bundle_dir="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
+          container_rootfs="$bundle_dir/rootfs"
+          marker="$container_rootfs/.a3s-oci-create-start-smoke"
+          console="$RUNNER_TEMP/a3s-oci-fixed-lifecycle.log"
+          unsigned_console="$RUNNER_TEMP/a3s-oci-fixed-lifecycle-unsigned.log"
+          mkdir -p "$container_rootfs"
+          cp fixtures/utility-vm/config.json "$bundle_dir/config.json"
+          tar -xzf "$rootfs_archive" -C "$container_rootfs"
+
+          endpoint_baseline="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          set +e
+          output="$(
+            target/debug/a3s-oci oci-vm-smoke \
+              --shim "$signed_dir/a3s-oci-krun-shim" \
+              --vm-rootfs "$rootfs_dir" \
+              --bundle "$bundle_dir" \
+              --console "$console"
+          )"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+
+          support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+          if [[ "$support" == "1" ]]; then
+            test "$status" -eq 0
+            jq --exit-status \
+              '.schema_version == "a3s.oci.oci-vm-smoke.v2"
+               and .platform == "macos" and .status == "available"
+               and .bundle_loaded
+               and .create_returned_created and .create_replayed
+               and (.created_pid > 0)
+               and .marker_absent_after_create
+               and .start_released and .running_observed
+               and .kill_delivered and .kill_replayed
+               and .stopped_observed and .marker_verified
+               and .delete_succeeded and .delete_replayed
+               and .state_missing_after_delete
+               and .marker_removed and .guest_runtime_clean
+               and .bridge.platform == "macos"
+               and .bridge.status == "available"
+               and .bridge.endpoint_bound and .bridge.shim_spawned
+               and (.bridge.shim_process_id > 0)
+               and (.bridge.bridge_process_id > 0)
+               and (.bridge.bridge_process_id
+                    != .bridge.shim_process_id)
+               and .bridge.shim_client_verified
+               and .bridge.protocol_negotiated
+               and .bridge.selected_protocol == 1
+               and .bridge.guest_architecture == "aarch64"
+               and .bridge.advertised_operations
+                   == ["create", "state", "start", "kill", "delete"]
+               and .bridge.shim_report_verified
+               and .bridge.shim_exit_code == 0
+               and .bridge.console_created' \
+              <<<"$output" >/dev/null
+          else
+            test "$status" -eq 2
+            jq --exit-status \
+              '.schema_version == "a3s.oci.oci-vm-smoke.v2"
+               and .platform == "macos" and .status == "unavailable"
+               and .bundle_loaded
+               and .bridge.platform == "macos"
+               and .bridge.status == "unavailable"
+               and (.bridge.protocol_negotiated | not)
+               and (.reason | length > 0)' \
+              <<<"$output" >/dev/null
+          fi
+
+          set +e
+          unsigned_output="$(
+            target/debug/a3s-oci oci-vm-smoke \
+              --shim "$unsigned_dir/a3s-oci-krun-shim" \
+              --vm-rootfs "$rootfs_dir" \
+              --bundle "$bundle_dir" \
+              --console "$unsigned_console"
+          )"
+          unsigned_status=$?
+          set -e
+          printf '%s\n' "$unsigned_output"
+          test "$unsigned_status" -eq 2
+          jq --exit-status \
+            '.schema_version == "a3s.oci.oci-vm-smoke.v2"
+             and .platform == "macos" and .status == "unavailable"
+             and .bundle_loaded
+             and (.create_returned_created | not)
+             and .bridge.platform == "macos"
+             and .bridge.status == "unavailable"
+             and .bridge.endpoint_bound and .bridge.shim_spawned
+             and (.bridge.protocol_negotiated | not)
+             and (.bridge.shim_report_verified | not)
+             and (.reason | length > 0)' \
+            <<<"$unsigned_output" >/dev/null
+
+          endpoint_after="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          test "$endpoint_after" = "$endpoint_baseline"
+          test ! -e "$marker"
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
         run: bash .github/scripts/native-linux-smoke.sh

@@ -120,6 +120,10 @@ below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
+The macOS path uses the same static agent, fixed fixture, protocol, and
+lifecycle harness over the PID-verified Unix/vsock bridge. Only the host
+endpoint and libkrun hypervisor backend differ.
+
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
 minirootfs and the 6,328,408-byte static agent with SHA-256
 `4b21a230d4183abe053823a63893f5ab0663c118811c81229bdfba0816fc9b81`.

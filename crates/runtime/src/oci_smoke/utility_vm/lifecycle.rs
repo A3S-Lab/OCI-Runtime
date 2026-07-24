@@ -11,7 +11,7 @@ use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, IoMode, OciBundle, OperationContext,
     OperationId, ProcessIo, Signal,
 };
-use tokio::net::windows::named_pipe::NamedPipeServer;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{sleep, timeout, Instant};
 
 use super::{path_exists, read_marker, OciVmSmokeReport};
@@ -23,8 +23,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const LINUX_SIGTERM: i32 = 15;
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-v1\n";
 
-pub(super) async fn exercise(
-    client: &AgentClient<NamedPipeServer>,
+pub(super) trait AgentStream: AsyncRead + AsyncWrite + Unpin + Send {}
+
+impl<T> AgentStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
+pub(super) async fn exercise<T: AgentStream>(
+    client: &AgentClient<T>,
     bundle: &OciBundle,
     guest_bundle: GuestPath,
     target: &ContainerTarget,
@@ -119,8 +123,8 @@ pub(super) async fn exercise(
     Ok(())
 }
 
-async fn wait_for_running_marker(
-    client: &AgentClient<NamedPipeServer>,
+async fn wait_for_running_marker<T: AgentStream>(
+    client: &AgentClient<T>,
     target: &ContainerTarget,
     marker: &Path,
     report: &mut OciVmSmokeReport,
@@ -156,8 +160,8 @@ async fn wait_for_running_marker(
     }
 }
 
-async fn wait_until_stopped(
-    client: &AgentClient<NamedPipeServer>,
+async fn wait_until_stopped<T: AgentStream>(
+    client: &AgentClient<T>,
     target: &ContainerTarget,
 ) -> Result<bool, String> {
     let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
@@ -184,8 +188,8 @@ async fn wait_until_stopped(
     }
 }
 
-async fn state_is_missing(
-    client: &AgentClient<NamedPipeServer>,
+async fn state_is_missing<T: AgentStream>(
+    client: &AgentClient<T>,
     target: &ContainerTarget,
 ) -> Result<bool, String> {
     match timeout(
@@ -203,8 +207,8 @@ async fn state_is_missing(
     }
 }
 
-pub(super) async fn best_effort_delete(
-    client: &AgentClient<NamedPipeServer>,
+pub(super) async fn best_effort_delete<T: AgentStream>(
+    client: &AgentClient<T>,
     target: &ContainerTarget,
     nonce: &str,
 ) {
