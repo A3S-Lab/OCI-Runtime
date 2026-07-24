@@ -123,14 +123,13 @@ that path, which is present but unusable as a KVM device. The script validates
 the corresponding `kvm_device_present` report field and restores any original
 device after the test.
 
-Ubuntu 24.04 GitHub-hosted runners enable an AppArmor policy that rejects the
-fixture's mount operations inside its new user namespace. Only when
-`GITHUB_ACTIONS=true`, the smoke script loads a temporary profile attached to
-the exact built `a3s-oci-agent` path. The profile grants the AppArmor `userns`
-permission without changing the system-wide restriction and is removed on
-exit. The runtime itself never changes host security policy. A production host
-must provide an appropriate narrow LSM policy for the requested OCI profile; a
-denied mount fails the create operation.
+The fixture is created beneath a private `/var/tmp` directory whose complete
+ancestor chain is searchable by the mapped host root identity. This is required
+after entering the child user namespace: its capabilities no longer bypass
+mode bits owned by the initial user namespace. The script does not weaken
+AppArmor or another host security policy. A production rootfs must likewise be
+reachable by its configured host mappings; an inaccessible ancestor or an LSM
+denial fails the create operation.
 
 Run the same gate on a supported Ubuntu host:
 
@@ -140,8 +139,8 @@ bash .github/scripts/native-linux-smoke.sh
 
 The script installs `busybox-static` and `jq`, builds the matching
 `a3s-oci-agent` and CLI binaries, constructs the checked-in fixture with a
-root-owned rootfs and `/proc` mount target, and executes both KVM-independent
-cases.
+root-owned, searchable rootfs and `/proc` mount target, executes both
+KVM-independent cases, and removes its qualification directory on exit.
 
 ## Multi-container generation gate
 

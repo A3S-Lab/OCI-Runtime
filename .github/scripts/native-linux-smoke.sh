@@ -2,14 +2,8 @@
 
 set -euo pipefail
 
-runner_temp="${RUNNER_TEMP:?RUNNER_TEMP must identify the CI job temporary directory}"
-run_id="${GITHUB_RUN_ID:?GITHUB_RUN_ID must identify the CI run}"
-run_attempt="${GITHUB_RUN_ATTEMPT:?GITHUB_RUN_ATTEMPT must identify the CI attempt}"
-apparmor_userns_policy="/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
-apparmor_profile_name="a3s-oci-agent-ci"
-apparmor_profile_file="$runner_temp/a3s-oci-agent-ci.apparmor"
-apparmor_profile_loaded=false
-saved_kvm="/dev/a3s-oci-kvm-${run_id}-${run_attempt}"
+qualification_root=""
+saved_kvm="/dev/a3s-oci-kvm-$$"
 kvm_original_moved=false
 kvm_test_directory_created=false
 
@@ -20,20 +14,15 @@ restore_host() {
   trap - EXIT
   set +e
 
-  if [[ "$apparmor_profile_loaded" == true ]]; then
-    sudo apparmor_parser -R "$apparmor_profile_file"
+  if [[ "$kvm_test_directory_created" == true && -d /dev/kvm ]]; then
+    sudo rmdir /dev/kvm
     status=$?
     if ((status != 0)); then
       cleanup_status=$status
     fi
   fi
-  rm -f "$apparmor_profile_file"
-  status=$?
-  if ((status != 0)); then
-    cleanup_status=$status
-  fi
-  if [[ "$kvm_test_directory_created" == true && -d /dev/kvm ]]; then
-    sudo rmdir /dev/kvm
+  if [[ -n "$qualification_root" && -d "$qualification_root" ]]; then
+    sudo rm -rf --one-file-system "$qualification_root"
     status=$?
     if ((status != 0)); then
       cleanup_status=$status
@@ -53,45 +42,9 @@ restore_host() {
 }
 trap restore_host EXIT
 
-prepare_github_user_namespace_profile() {
-  local agent_path
-
-  if [[ "${GITHUB_ACTIONS:-}" != "true" || ! -r "$apparmor_userns_policy" ]]; then
-    return
-  fi
-  printf 'AppArmor unprivileged user namespace restriction: %s\n' \
-    "$(<"$apparmor_userns_policy")"
-  if [[ "$(<"$apparmor_userns_policy")" != "1" ]]; then
-    return
-  fi
-
-  agent_path="$(realpath "$PWD/target/debug/a3s-oci-agent")"
-  if [[ "$agent_path" == *\"* ||
-    "$agent_path" == *$'\n'* ||
-    "$agent_path" == *$'\r'* ]]; then
-    printf 'The AppArmor attachment path cannot be represented safely: %s\n' \
-      "$agent_path" >&2
-    return 1
-  fi
-
-  {
-    printf '%s\n' 'abi <abi/4.0>,'
-    printf '%s\n\n' 'include <tunables/global>'
-    printf 'profile %s "%s" flags=(unconfined) {\n' \
-      "$apparmor_profile_name" "$agent_path"
-    printf '%s\n' '  userns,'
-    printf '%s\n' '}'
-  } >"$apparmor_profile_file"
-  sudo apparmor_parser -r -W "$apparmor_profile_file"
-  apparmor_profile_loaded=true
-  printf 'Loaded temporary AppArmor profile %s for %s\n' \
-    "$apparmor_profile_name" "$agent_path"
-}
-
 sudo apt-get update
 sudo apt-get install --yes busybox-static jq
 cargo build -p a3s-oci-agent -p a3s-oci-cli
-prepare_github_user_namespace_profile
 
 features="$("$PWD/target/debug/a3s-oci" features)"
 printf '%s\n' "$features"
@@ -106,9 +59,10 @@ jq --exit-status \
    )' \
   <<<"$features" >/dev/null
 
-bundle="$runner_temp/a3s-native-bundle"
-bundle_b="$runner_temp/a3s-native-bundle-b"
-work_parent="$runner_temp/a3s-native-work"
+qualification_root="$(mktemp -d /var/tmp/a3s-oci-native.XXXXXXXX)"
+bundle="$qualification_root/bundle"
+bundle_b="$qualification_root/bundle-b"
+work_parent="$qualification_root/work"
 mkdir -p \
   "$bundle/rootfs/bin" "$bundle/rootfs/proc" \
   "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
@@ -118,7 +72,8 @@ for candidate in "$bundle" "$bundle_b"; do
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
 done
-sudo chown -R 0:0 "$bundle/rootfs" "$bundle_b/rootfs"
+sudo chown -R 0:0 "$qualification_root"
+sudo chmod 0755 "$qualification_root"
 
 report_native_failure() {
   local rootfs="$1"
@@ -137,10 +92,6 @@ report_native_failure() {
   sudo sh -c \
     'grep -E "^(NoNewPrivs|Seccomp|Cap(Inh|Prm|Eff|Bnd|Amb)):" /proc/self/status' ||
     true
-  if command -v aa-status >/dev/null; then
-    sudo aa-status || true
-  fi
-
   if sudo timeout 10s unshare \
       --user --map-root-user --mount --fork -- \
       sh -c \
@@ -163,33 +114,6 @@ report_native_failure() {
     status=$?
     printf 'Sequential user-then-mount namespace rbind probe: failed (%s)\n' \
       "$status"
-  fi
-
-  if [[ "$apparmor_profile_loaded" == true ]] &&
-    command -v aa-exec >/dev/null; then
-    if sudo timeout 10s aa-exec -p "$apparmor_profile_name" -- \
-        unshare --user --map-root-user --mount --fork -- \
-        sh -c \
-          'printf "Profile-qualified bind context: "; cat /proc/self/attr/current; mount --make-rprivate / && mount --bind "$1" "$1"' \
-          sh "$rootfs"; then
-      printf '%s\n' 'Profile-qualified user/mount namespace bind probe: succeeded'
-    else
-      status=$?
-      printf 'Profile-qualified user/mount namespace bind probe: failed (%s)\n' \
-        "$status"
-    fi
-
-    if sudo timeout 10s aa-exec -p "$apparmor_profile_name" -- \
-        unshare --user --map-root-user --mount --fork -- \
-        sh -c \
-          'printf "Profile-qualified probe context: "; cat /proc/self/attr/current; mount --make-rprivate / && mount --rbind "$1" "$1"' \
-          sh "$rootfs"; then
-      printf '%s\n' 'Profile-qualified user/mount namespace rbind probe: succeeded'
-    else
-      status=$?
-      printf 'Profile-qualified user/mount namespace rbind probe: failed (%s)\n' \
-        "$status"
-    fi
   fi
 
   sudo dmesg --ctime 2>/dev/null | tail -n 120 || true
