@@ -368,21 +368,58 @@ full authenticated report. An unavailable host must remain fail closed. Every
 branch requires the private endpoint inventory before and after the command to
 match exactly.
 
+## Fixed OCI lifecycle
+
+`oci-vm-smoke` reuses the Windows lifecycle harness without introducing a
+macOS-specific OCI profile. The checked-in
+`fixtures/utility-vm/config.json` requests new UTS, mount, IPC, network,
+cgroup, and PID namespaces. Its namespace PID 1 installs an explicit
+`SIGTERM` handler, writes the known marker only after start, and remains
+running until the host delivers the lifecycle signal.
+
+Prepare a contained bundle from the already verified Alpine archive:
+
+```sh
+bundle="$rootfs/var/lib/a3s-oci-smoke/bundle"
+mkdir -p "$bundle/rootfs"
+cp fixtures/utility-vm/config.json "$bundle/config.json"
+tar -xzf "$archive" -C "$bundle/rootfs"
+
+target/debug/a3s-oci oci-vm-smoke \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --vm-rootfs "$rootfs" \
+  --bundle "$bundle" \
+  --console "$asset_dir/oci-console.log"
+```
+
+The signed Apple Silicon qualification completed all fields in
+`a3s.oci.oci-vm-smoke.v2`: bundle loading, created state, exact create replay,
+pre-start marker absence, start, running observation, exact kill replay,
+stopped observation, marker verification, stopped-only delete, exact delete
+replay, post-delete NotFound, marker removal, guest-runtime cleanup, and the
+complete nested authenticated bridge report. The observed container PID was
+positive, and both the endpoint inventory and shim/worker process inventory
+matched their pre-run baselines after exit.
+
+The same command with an unsigned shim returned status `2` before protocol
+negotiation, retained the nested `krun_start_enter` failure, wrote no workload
+marker, and left no endpoint or VM worker. CI exercises the signed lifecycle
+when virtualization is available and otherwise requires the same fail-closed
+pre-entry behavior.
+
 ## Remaining workload gates
 
-The authenticated smoke proves the real static A3S Linux guest and transport
-boundary, but it is not yet an arbitrary OCI workload driver. The current
-gates do not:
+The fixed lifecycle proves the real static A3S Linux guest, transport, and
+reviewed executor slice, but it is not yet an arbitrary OCI workload driver.
+The current gates do not:
 
-- boot the production A3S immutable Linux system image;
-- execute any OCI lifecycle operation.
+- boot the production A3S immutable Linux system image.
 
 The next macOS increments must add, in order:
 
 1. the production A3S immutable system root;
-2. the same fixed OCI create/start/kill/delete lifecycle used by WHPX;
-3. deterministic descriptor and runtime-root cleanup around that lifecycle;
-4. negative tests for isolation weakening and recovery.
+2. deterministic descriptor and runtime-root cleanup under fault injection;
+3. negative tests for isolation weakening and recovery.
 
 Only after those gates and the shared Linux executor requirements pass may
 the HVF driver move from `probe-only` to `experimental`.

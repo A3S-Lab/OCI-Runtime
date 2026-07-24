@@ -1,14 +1,20 @@
 use std::path::Path;
 
-#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+#[cfg(not(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+)))]
 use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
 
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-mod windows;
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+mod utility_vm;
 
-/// Exercise the fixed OCI core lifecycle inside one WHPX utility VM.
+/// Exercise the fixed OCI core lifecycle inside one utility VM.
 ///
 /// This diagnostic accepts only a bundle contained by the supplied VM
 /// rootfs. The guest executor validates the exact bootstrap profile and
@@ -20,12 +26,18 @@ pub async fn oci_vm_smoke(
     bundle: &Path,
     console: &Path,
 ) -> OciVmSmokeReport {
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     {
-        windows::run(shim, vm_rootfs, bundle, console).await
+        utility_vm::run(shim, vm_rootfs, bundle, console).await
     }
 
-    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     {
         let _ = (shim, vm_rootfs, bundle, console);
         OciVmSmokeReport::unsupported(HostPlatform::current())

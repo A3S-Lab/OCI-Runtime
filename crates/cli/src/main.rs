@@ -46,7 +46,7 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
     },
-    /// Run a fixed OCI core lifecycle inside one WHPX utility VM.
+    /// Run a fixed OCI core lifecycle inside one utility VM.
     OciVmSmoke {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]

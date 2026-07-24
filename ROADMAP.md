@@ -55,6 +55,10 @@ Completed:
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
   one-time token authentication, protocol-v1 negotiation, exact core
   operation advertisement, process-group termination, and endpoint cleanup;
+- real macOS fixed-bundle create/state/start/kill/delete evidence using the
+  shared Windows lifecycle harness, including exact mutation retries,
+  create/start separation, running and stopped observation, post-delete
+  NotFound, and nominal process, endpoint, marker, and runtime-root cleanup;
 - explicit rootful native Linux driver integration that reuses the shared
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
@@ -235,7 +239,7 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
   authenticate protocol-v1 negotiation with a one-time token.
-- [ ] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
+- [x] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
   WHPX.
 - [ ] Prove deterministic VM, process, descriptor, and filesystem cleanup.
 - [x] Retain fail-closed unavailable-virtualization, missing-entitlement,

@@ -24,7 +24,7 @@ pub(super) async fn run(
     bundle_directory: &Path,
     console: &Path,
 ) -> OciVmSmokeReport {
-    let mut report = OciVmSmokeReport::initial(HostPlatform::Windows);
+    let mut report = OciVmSmokeReport::initial(HostPlatform::current());
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
