@@ -36,8 +36,15 @@ calls it directly; utility-VM drivers call it through a versioned guest agent.
 Backend identity, driver maturity, and effective isolation are always reported
 separately.
 
-The project is experimental. The current Windows milestone implements:
+The project is experimental. The current cross-platform foundation implements:
 
+- a native Linux prerequisite probe that verifies the required namespace API
+  and cgroup v2 without opening `/dev/kvm` or initializing libkrun;
+- a separate Linux KVM probe that distinguishes an absent device, an
+  inaccessible device, a failed `KVM_GET_API_VERSION`, and the supported API
+  version 12;
+- an Apple Silicon Hypervisor.framework probe that reads
+  `kern.hv_support` directly without spawning `sysctl`;
 - versioned, machine-readable driver capability output;
 - an async, transport-independent `a3s-oci-sdk` contract for the full OCI
   lifecycle and A3S Box process-control surface;
@@ -116,7 +123,7 @@ The project is experimental. The current Windows milestone implements:
   stopped, verifies and removes its marker, returns NotFound after delete, and
   leaves no new guest runtime directory;
 - the pure OCI `creating -> created -> running -> stopped` state contract;
-- Windows and Linux CI scaffolding.
+- Windows, Linux, and macOS CI scaffolding.
 
 The durable host lifecycle and its driver-facing Rust API are implemented and
 tested with an injected conformance driver. The static A3S guest agent now
@@ -126,8 +133,8 @@ slice, not full OCI enforcement: user/time namespaces, all namespace joins,
 mount target creation, idmapped and recursive-attribute mounts, rootfs
 propagation overrides, cgroup resources, capabilities, hooks, seccomp,
 complete I/O, recovery, and the remaining SDK operations are still pending.
-The built-in WHPX driver therefore remains `probe-only`, and the default host
-service advertises only `features`.
+Every built-in platform entry therefore remains `probe-only`, and the default
+host service advertises only `features`.
 
 See [Roadmap](ROADMAP.md) and
 [OCI 1.3 Conformance Contract](docs/oci-conformance.md) for the release gates
@@ -148,6 +155,13 @@ cd OCI-Runtime
 
 cargo run -p a3s-oci-cli -- features
 ```
+
+On Linux, feature output contains separate `native-linux` and `libkrun-kvm`
+entries. The native probe never opens `/dev/kvm`; the KVM probe opens the
+device only for a `KVM_GET_API_VERSION` capability query. On Apple Silicon,
+feature output contains `libkrun-hvf` with the direct `kern.hv_support`
+observation. Host availability is not workload readiness: every current entry
+remains `probe-only` and `can_launch()` remains false.
 
 On a WHPX-capable Windows host, the versioned feature inventory resembles:
 
@@ -483,9 +497,9 @@ state, and cleanup.
 | Host | Execution path | Current state |
 | --- | --- | --- |
 | Windows x86_64 | libkrun + WHPX utility VM | Fixed OCI create/start/kill/delete vertical slice passes; complete enforcement and recovery pending; driver is `probe-only` |
-| Linux x86_64/aarch64 without KVM | Native Linux executor | Required before `crun` removal; not implemented |
-| Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Planned after the shared executor contract |
-| macOS arm64 | libkrun + HVF utility VM | Planned after the shared executor contract |
+| Linux x86_64/aarch64 without KVM | Native Linux executor | Namespace and cgroup v2 prerequisites are reported without touching KVM; native driver is not implemented |
+| Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Device access and KVM API version are reported separately; VM driver is not implemented |
+| macOS arm64 | libkrun + HVF utility VM | Apple Silicon and `kern.hv_support` are reported; HVF driver is not implemented |
 
 Linux installation, runtime inspection, A3S Box Sandbox isolation, and Rust,
 Python, and TypeScript SDK operations must work when `/dev/kvm` is absent or
@@ -548,7 +562,7 @@ crates/
 |       |-- agent_session.rs
 |       |                   # Reusable authenticated WHPX agent session
 |       |-- oci_smoke/     # Fixed-bundle core lifecycle evidence
-|       |-- platform/      # Windows WHPX and unsupported-host probes
+|       |-- platform/      # Linux, macOS HVF, Windows WHPX, and fallback probes
 |       |-- report.rs      # Versioned WHPX, bridge, and OCI smoke results
 |       |-- service.rs     # Host implementation of the SDK contract
 |       `-- state/         # Durable records, generations, operation journals
@@ -696,7 +710,9 @@ startup contract,
 phase/rule boundary, and
 [Normative Coverage](docs/normative-coverage.md) for the generated
 requirements lock and promotion rules. The internal persistence contract is
-documented in [Durable State](docs/durable-state.md).
+documented in [Durable State](docs/durable-state.md). Platform probe contracts
+are documented in [Native Linux Development](docs/linux-native.md) and
+[macOS HVF Development](docs/macos-hvf.md).
 
 ```rust
 use a3s_oci_runtime::HostRuntimeService;

@@ -222,13 +222,22 @@ fn rejects_unimplemented_or_joined_namespaces() {
     root.remove("hostname");
     root.remove("domainname");
     user["linux"]["namespaces"][0]["type"] = serde_json::Value::String("user".into());
+    user["linux"]["uidMappings"] = serde_json::json!([{"containerID": 0, "hostID": 0, "size": 1}]);
+    user["linux"]["gidMappings"] = serde_json::json!([{"containerID": 0, "hostID": 0, "size": 1}]);
     let user = serde_json::to_string(&user).expect("encode user namespace test");
     let error = InitPlan::from_bundle(&bundle(&user), &null_io())
         .expect_err("single user namespace unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("namespaces[0].type"));
 
-    let multiple = UTS_CONFIG.replace(r#""type": "uts""#, r#""type": "uts"}, {"type": "user""#);
+    let mut multiple: serde_json::Value =
+        serde_json::from_str(UTS_CONFIG).expect("decode mixed namespace configuration");
+    multiple["linux"] = serde_json::json!({
+        "namespaces": [{"type": "uts"}, {"type": "user"}],
+        "uidMappings": [{"containerID": 0, "hostID": 0, "size": 1}],
+        "gidMappings": [{"containerID": 0, "hostID": 0, "size": 1}]
+    });
+    let multiple = serde_json::to_string(&multiple).expect("encode mixed namespace configuration");
     let error = InitPlan::from_bundle(&bundle(&multiple), &null_io())
         .expect_err("mixed UTS and user namespaces unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
