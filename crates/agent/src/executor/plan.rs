@@ -26,6 +26,9 @@ pub(super) struct InitPlan {
     pub(super) no_new_privileges: bool,
     pub(super) new_uts_namespace: bool,
     pub(super) new_mount_namespace: bool,
+    pub(super) new_ipc_namespace: bool,
+    pub(super) new_network_namespace: bool,
+    pub(super) new_cgroup_namespace: bool,
     pub(super) mounts: Vec<MountPlan>,
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
@@ -142,6 +145,9 @@ impl InitPlan {
             no_new_privileges: true,
             new_uts_namespace: namespaces.new_uts,
             new_mount_namespace: namespaces.new_mount,
+            new_ipc_namespace: namespaces.new_ipc,
+            new_network_namespace: namespaces.new_network,
+            new_cgroup_namespace: namespaces.new_cgroup,
             mounts,
             hostname,
             domainname,
@@ -214,10 +220,13 @@ fn validate_profile(raw: &Value) -> Result<()> {
             .get("type")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid(format!("{field}.type must be a string")))?;
-        if !matches!(namespace_type, "uts" | "mount") {
+        if !matches!(
+            namespace_type,
+            "uts" | "mount" | "ipc" | "network" | "cgroup"
+        ) {
             return Err(unsupported(
                 &format!("{field}.type"),
-                "only new UTS and mount namespaces are implemented",
+                "only new UTS, mount, IPC, network, and cgroup namespaces are implemented",
             ));
         }
         if namespace.contains_key("path") {
@@ -234,6 +243,9 @@ fn validate_profile(raw: &Value) -> Result<()> {
 struct NamespacePlan {
     new_uts: bool,
     new_mount: bool,
+    new_ipc: bool,
+    new_network: bool,
+    new_cgroup: bool,
 }
 
 fn validate_linux_namespaces(
@@ -256,10 +268,13 @@ fn validate_linux_namespaces(
         let present = match namespace.typ() {
             LinuxNamespaceType::Uts => &mut plan.new_uts,
             LinuxNamespaceType::Mount => &mut plan.new_mount,
+            LinuxNamespaceType::Ipc => &mut plan.new_ipc,
+            LinuxNamespaceType::Network => &mut plan.new_network,
+            LinuxNamespaceType::Cgroup => &mut plan.new_cgroup,
             _ => {
                 return Err(unsupported(
                     &format!("linux.namespaces[{index}].type"),
-                    "only new UTS and mount namespaces are implemented",
+                    "only new UTS, mount, IPC, network, and cgroup namespaces are implemented",
                 ));
             }
         };

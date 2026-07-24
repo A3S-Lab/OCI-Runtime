@@ -58,6 +58,9 @@ fn accepts_the_exact_bootstrap_profile() {
     assert!(plan.no_new_privileges);
     assert!(!plan.new_uts_namespace);
     assert!(!plan.new_mount_namespace);
+    assert!(!plan.new_ipc_namespace);
+    assert!(!plan.new_network_namespace);
+    assert!(!plan.new_cgroup_namespace);
 }
 
 #[test]
@@ -137,6 +140,30 @@ fn accepts_new_uts_and_mount_namespaces_in_any_order() {
 }
 
 #[test]
+fn accepts_new_ipc_network_and_cgroup_namespaces_in_any_order() {
+    for namespaces in [
+        ["ipc", "network", "cgroup"],
+        ["cgroup", "ipc", "network"],
+        ["network", "cgroup", "ipc"],
+    ] {
+        let mut config: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+        config["linux"] = serde_json::json!({
+            "namespaces": namespaces
+                .into_iter()
+                .map(|namespace| serde_json::json!({"type": namespace}))
+                .collect::<Vec<_>>()
+        });
+        let config = serde_json::to_string(&config).expect("encode namespace configuration");
+        let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+            .expect("new IPC, network, and cgroup namespaces");
+        assert!(plan.new_ipc_namespace);
+        assert!(plan.new_network_namespace);
+        assert!(plan.new_cgroup_namespace);
+    }
+}
+
+#[test]
 fn rejects_uts_names_outside_the_supported_profile() {
     let too_long = UTS_CONFIG.replace("a3s-smoke", &"h".repeat(65));
     let error =
@@ -197,6 +224,15 @@ fn rejects_unimplemented_or_joined_namespaces() {
     );
     let error = InitPlan::from_bundle(&bundle(&joined_mount), &null_io())
         .expect_err("joined mount namespace unsupported");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("namespaces[1].path"));
+
+    let joined_network = UTS_CONFIG.replace(
+        r#"{"type": "uts"}"#,
+        r#"{"type": "uts"}, {"type": "network", "path": "/proc/1/ns/net"}"#,
+    );
+    let error = InitPlan::from_bundle(&bundle(&joined_network), &null_io())
+        .expect_err("joined network namespace unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("namespaces[1].path"));
 }

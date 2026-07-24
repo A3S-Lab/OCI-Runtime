@@ -93,8 +93,10 @@ hostname. When requested, the same create barrier also covers a new mount
 namespace, recursively private propagation, a self-bound rootfs, and
 `pivot_root`. Ordered existing-target mount entries run before that pivot,
 including relative bundle bind sources, common VFS flags, propagation, and
-bounded filesystem-specific data. The host verifies marker removal and that
-VM shutdown leaves no new guest-agent runtime directory.
+bounded filesystem-specific data. Requested IPC, network, and cgroup
+namespaces are created atomically with UTS and mount isolation. The host
+verifies marker removal and that VM shutdown leaves no new guest-agent runtime
+directory.
 
 The private parent/init control channel reports either readiness or a bounded,
 typed SDK error. The parent validates the kernel-reported peer PID before
@@ -103,6 +105,7 @@ their exact error class and context without trusting a pathname socket.
 
 This is the first Linux executor vertical slice, not complete OCI
 enforcement. A pinned immutable system image, complete process I/O, remaining
-namespace types and joins, advanced mount semantics, resources, hooks,
-recovery, negative isolation cases, fault cleanup, and full lifecycle evidence
-remain required before the WHPX driver can advance beyond `probe-only`.
+PID/user/time namespace creation, namespace joins, advanced mount semantics,
+resources, hooks, recovery, negative isolation cases, fault cleanup, and full
+lifecycle evidence remain required before the WHPX driver can advance beyond
+`probe-only`.

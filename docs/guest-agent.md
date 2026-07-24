@@ -42,16 +42,17 @@ The accepted bootstrap profile requires:
 - numeric UID, GID, optional supplementary groups, and optional umask;
 - bounded arguments and environment with unique environment names.
 
-When `linux.namespaces` is present, it accepts only unique, newly created UTS
-and mount namespace entries, in either order, with no join paths. Omitting a
-namespace inherits the runtime namespace of that type. Configured hostname and
-domainname values are bounded to the Linux kernel limit and require the new
-UTS namespace.
+When `linux.namespaces` is present, it accepts only unique, newly created UTS,
+mount, IPC, network, and cgroup namespace entries, in any order, with no join
+paths. Omitting a namespace inherits the runtime namespace of that type.
+Configured hostname and domainname values are bounded to the Linux kernel
+limit and require the new UTS namespace.
 
-The wrapper creates all requested namespaces in one `unshare` call. It applies
-and reads back hostname and domainname with `uname`. When a mount namespace is
-requested, it then makes `/` recursively private, recursively bind-mounts the
-rootfs onto itself, applies every configured mount in listed order, and uses
+The wrapper creates all requested UTS, mount, IPC, network, and cgroup
+namespaces atomically in one `unshare` call. It applies and reads back hostname
+and domainname with `uname`. When a mount namespace is requested, it then makes
+`/` recursively private, recursively bind-mounts the rootfs onto itself,
+applies every configured mount in listed order, and uses
 `pivot_root(".", ".")` followed by a detached unmount of the old root. All of
 this succeeds before readiness is reported, so namespace, mount, and rootfs
 isolation are part of the create barrier. When a mount namespace is omitted,
@@ -93,10 +94,10 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor currently rejects mount-target creation, rootfs propagation
 overrides, idmapped and recursive-attribute mounts, every namespace type other
-than UTS and mount, all namespace joins, cgroups, capabilities, seccomp, hooks,
-read-only rootfs, terminals, non-null I/O, process-group signals, and every
-other unimplemented OCI property. These are release blockers, not silently
-accepted compatibility gaps.
+than UTS, mount, IPC, network, and cgroup, all namespace joins, cgroup
+resources, capabilities, seccomp, hooks, read-only rootfs, terminals, non-null
+I/O, process-group signals, and every other unimplemented OCI property. These
+are release blockers, not silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -115,14 +116,15 @@ observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
-minirootfs and the 6,327,624-byte static agent with SHA-256
-`e5aa252765186e649d4b1927672c647137b804b0630c5924ba42a7d05190d630`.
-The positive bundle requested both new UTS and mount namespaces, then ordered a
-relative-source rbind, a nested proc mount made possible by that bind, and a
-relative-destination tmpfs. The workload verified both filesystem types from
-`/proc/self/mountinfo` before producing its marker. A missing-mount-namespace
-negative bundle retained its typed `Unsupported` error and left no guest
-runtime state. This proves the fixed bootstrap slice, not the immutable A3S
-system image, complete OCI enforcement, process I/O, networking, restart
-recovery, or fault-injected cleanup. The WHPX driver therefore remains
-`probe-only`.
+minirootfs and the 6,328,408-byte static agent with SHA-256
+`4b21a230d4183abe053823a63893f5ab0663c118811c81229bdfba0816fc9b81`.
+The positive bundle requested new UTS, mount, IPC, network, and cgroup
+namespaces, then ordered a relative-source rbind, a nested proc mount made
+possible by that bind, and a relative-destination tmpfs. The workload verified
+both filesystem types and proved that its IPC, network, and cgroup namespace
+identities differed from guest PID 1 before producing its marker. A
+joined-network negative bundle retained its typed `Unsupported` error and left
+no guest runtime state. This proves the fixed bootstrap slice, not the
+immutable A3S system image, complete OCI enforcement, process I/O, configured
+networking, restart recovery, or fault-injected cleanup. The WHPX driver
+therefore remains `probe-only`.

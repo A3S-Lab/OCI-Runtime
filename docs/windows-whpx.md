@@ -111,6 +111,8 @@ A successful fixed OCI VM smoke additionally proves that:
 - create applies existing-target mount entries in listed order, including
   relative bundle bind sources, common VFS flags, propagation modes, and
   filesystem-specific data;
+- create atomically enters requested IPC, network, and cgroup namespaces before
+  reporting ready;
 - create returns `created` and a positive guest PID without running the
   configured process;
 - state and an exact create retry match the original result;
@@ -132,9 +134,9 @@ minirootfs archive with SHA-256
 The fixed runtime completed five consecutive marker runs without setting
 `LIBKRUN_WINDOWS_HYPERV_ENLIGHTENMENTS`.
 
-The fixed OCI lifecycle qualification used the 6,327,624-byte static musl agent
+The fixed OCI lifecycle qualification used the 6,328,408-byte static musl agent
 with SHA-256
-`e5aa252765186e649d4b1927672c647137b804b0630c5924ba42a7d05190d630`.
+`4b21a230d4183abe053823a63893f5ab0663c118811c81229bdfba0816fc9b81`.
 Its report selected protocol version 1, identified the guest as `x86_64`,
 verified every fixed lifecycle field, retained the complete successful shim
 report, and returned exit status zero.
@@ -155,6 +157,14 @@ companion bundle omitted the mount namespace; create retained the exact typed
 `Unsupported` rejection and left no guest runtime directory. A joined-mount
 namespace negative remains rejected as well.
 
+The namespace qualification combined that ordered mount sequence with new IPC,
+network, and cgroup namespaces. The workload compared
+`/proc/self/ns/{ipc,net,cgroup}` with guest PID 1 and produced its marker only
+after all three identities differed. The full lifecycle and cleanup report
+passed. A companion bundle supplied `/proc/1/ns/net` as a network namespace
+join path; create retained the exact typed `Unsupported` rejection and left no
+guest runtime directory.
+
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
 does not build it.
@@ -162,9 +172,9 @@ does not build it.
 The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
-- networking or complete process I/O works;
-- remaining namespace types and joins, advanced mount semantics, resources,
-  capabilities, seccomp, or hooks work;
+- configured networking or complete process I/O works;
+- PID/user/time namespaces, namespace joins, advanced mount semantics,
+  resources, capabilities, seccomp, or hooks work;
 - restart recovery, concurrent containers, or shared-guest-kernel isolation
   work;
 - the driver is production ready.
@@ -179,8 +189,8 @@ The next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
-3. add remaining namespace, advanced mount, capability, resource, seccomp, and
-   hook enforcement;
+3. add PID/user/time namespaces, namespace joins, advanced mount, capability,
+   resource, seccomp, and hook enforcement;
 4. return stdout, stderr, and the natural exit code;
 5. reconcile stopped state after host runtime restart;
 6. add concurrent-container and negative isolation evidence;

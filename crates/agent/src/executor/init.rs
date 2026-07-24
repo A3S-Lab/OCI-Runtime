@@ -140,6 +140,15 @@ fn prepare_create_environment(
     if plan.new_mount_namespace {
         namespace_flags |= libc::CLONE_NEWNS;
     }
+    if plan.new_ipc_namespace {
+        namespace_flags |= libc::CLONE_NEWIPC;
+    }
+    if plan.new_network_namespace {
+        namespace_flags |= libc::CLONE_NEWNET;
+    }
+    if plan.new_cgroup_namespace {
+        namespace_flags |= libc::CLONE_NEWCGROUP;
+    }
     if namespace_flags != 0 {
         // SAFETY: `unshare` has no pointer preconditions. This dedicated
         // wrapper is single-threaded before it reports the created barrier.
