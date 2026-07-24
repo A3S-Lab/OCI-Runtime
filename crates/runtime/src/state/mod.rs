@@ -20,10 +20,14 @@ use a3s_oci_sdk::{
 };
 use tokio::sync::Mutex;
 
+#[cfg(test)]
+use crate::fault::NoFaultInjector;
+use crate::fault::{DurableMutation, FaultInjector};
+
 use create::{create_request_digest, validate_create_retry};
 use filesystem::{
-    atomic_write, atomic_write_json, create_private_directory, ensure_plain_directory, path_exists,
-    read_json, read_utf8, state_error, RootLock,
+    create_private_directory, ensure_plain_directory, path_exists, read_json, read_utf8,
+    state_error, RootLock,
 };
 use model::{
     StoredContainer, StoredGeneration, StoredOperation, StoredOperationKind, StoredOperationStatus,
@@ -63,16 +67,26 @@ pub(crate) struct DurableStateStore {
     root: Arc<PathBuf>,
     gate: Arc<Mutex<()>>,
     _root_lock: Arc<RootLock>,
+    faults: Arc<dyn FaultInjector>,
 }
 
 impl DurableStateStore {
     /// Open or initialize one absolute runtime-owned state root.
+    #[cfg(test)]
     pub(crate) async fn open(root: impl AsRef<Path>) -> Result<Self> {
-        let (root, root_lock) = filesystem::open_root(root.as_ref()).await?;
+        Self::open_with_fault_injector(root, Arc::new(NoFaultInjector)).await
+    }
+
+    pub(crate) async fn open_with_fault_injector(
+        root: impl AsRef<Path>,
+        faults: Arc<dyn FaultInjector>,
+    ) -> Result<Self> {
+        let (root, root_lock) = filesystem::open_root(root.as_ref(), faults.as_ref()).await?;
         Ok(Self {
             root: Arc::new(root),
             gate: Arc::new(Mutex::new(())),
             _root_lock: root_lock,
+            faults,
         })
     }
 
@@ -106,6 +120,7 @@ impl DurableStateStore {
                         self,
                         &mut stored,
                         &request.context.operation_id,
+                        DurableMutation::ClaimCreateOperation,
                         "prepare-create",
                     )
                     .await?;
@@ -149,7 +164,8 @@ impl DurableStateStore {
             request_digest,
             outcome: StoredOperationStatus::Prepared,
         };
-        atomic_write_json(
+        self.write_json(
+            DurableMutation::PrepareCreateOperation,
             &self.operation_path(&request.context.operation_id),
             &operation,
         )
@@ -190,7 +206,12 @@ impl DurableStateStore {
                 ));
             }
         } else {
-            atomic_write(&config_path, request.bundle.config_bytes()).await?;
+            self.write_bytes(
+                DurableMutation::StoreCreateConfig,
+                &config_path,
+                request.bundle.config_bytes(),
+            )
+            .await?;
         }
 
         let record_path = container_directory.join(CONTAINER_RECORD_FILE);
@@ -226,7 +247,12 @@ impl DurableStateStore {
             record,
             active_operation: Some(request.context.operation_id.clone()),
         };
-        atomic_write_json(&record_path, &stored).await?;
+        self.write_json(
+            DurableMutation::StoreCreatingContainer,
+            &record_path,
+            &stored,
+        )
+        .await?;
         Ok(stored)
     }
 
@@ -316,7 +342,8 @@ impl DurableStateStore {
 
         ensure_active_operation(&stored, operation_id, "complete-create")?;
         stored.active_operation = None;
-        atomic_write_json(
+        self.write_json(
+            DurableMutation::CompleteCreateContainer,
             &self
                 .container_directory(&operation.container_id)
                 .join(CONTAINER_RECORD_FILE),
@@ -327,7 +354,12 @@ impl DurableStateStore {
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
         };
-        atomic_write_json(&self.operation_path(operation_id), &operation).await?;
+        self.write_json(
+            DurableMutation::CompleteCreateOperation,
+            &self.operation_path(operation_id),
+            &operation,
+        )
+        .await?;
         Ok(response)
     }
 
@@ -388,7 +420,8 @@ impl DurableStateStore {
             )
         })?;
         let generation = Generation(next);
-        atomic_write_json(
+        self.write_json(
+            DurableMutation::AllocateGeneration,
             &path,
             &StoredGeneration {
                 schema_version: GENERATION_SCHEMA_VERSION.to_string(),
@@ -545,6 +578,33 @@ impl DurableStateStore {
             .join("quarantine")
             .join(format!("{}.failed-create", operation_id.as_str()))
     }
+
+    async fn write_json(
+        &self,
+        mutation: DurableMutation,
+        path: &Path,
+        value: &impl serde::Serialize,
+    ) -> Result<()> {
+        filesystem::atomic_write_json(self.faults.as_ref(), mutation, path, value).await
+    }
+
+    async fn write_bytes(
+        &self,
+        mutation: DurableMutation,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<()> {
+        filesystem::atomic_write(self.faults.as_ref(), mutation, path, bytes).await
+    }
+
+    async fn move_directory(
+        &self,
+        mutation: DurableMutation,
+        source: &Path,
+        destination: &Path,
+    ) -> Result<()> {
+        filesystem::atomic_move_directory(self.faults.as_ref(), mutation, source, destination).await
+    }
 }
 
 fn generation_conflict(
@@ -586,6 +646,7 @@ async fn claim_active_operation(
     store: &DurableStateStore,
     stored: &mut StoredContainer,
     operation_id: &OperationId,
+    mutation: DurableMutation,
     operation: &'static str,
 ) -> Result<()> {
     match stored.active_operation.as_ref() {
@@ -602,13 +663,15 @@ async fn claim_active_operation(
         }
         None => stored.active_operation = Some(operation_id.clone()),
     }
-    atomic_write_json(
-        &store
-            .container_directory(&stored.id)
-            .join(CONTAINER_RECORD_FILE),
-        stored,
-    )
-    .await
+    store
+        .write_json(
+            mutation,
+            &store
+                .container_directory(&stored.id)
+                .join(CONTAINER_RECORD_FILE),
+            stored,
+        )
+        .await
 }
 
 #[cfg(test)]

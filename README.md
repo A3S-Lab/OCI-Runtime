@@ -81,7 +81,8 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   state mutation
 - **Durable Lifecycle**: Persist create, state, start, kill, and delete with
   monotonic generations, operation IDs, replay, fencing, reconciliation, and
-  quarantine
+  quarantine, backed by exhaustive durable-write and driver-boundary fault
+  matrices
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, process,
   and cleanup implementation directly on Linux and through the guest agent
 - **Cross-Platform Drivers**: Inspect native Linux, KVM, HVF, and WHPX
@@ -471,8 +472,9 @@ RFC 2119 keyword occurrences from the normative specification. CI verifies:
 
 This is not yet a claim of full OCI conformance. Remaining normative entries,
 complete enforcement, hooks, descriptor-relative filesystem operations,
-recovery fault injection, upstream lifecycle suites, and platform security
-certification must pass before a driver becomes `supported`.
+utility-VM host/agent transition fault injection, upstream lifecycle suites,
+and platform security certification must pass before a driver becomes
+`supported`.
 
 Security-sensitive platform controls include:
 
@@ -523,6 +525,8 @@ cargo clippy \
 
 Platform CI covers:
 
+- the 237-point durable commit matrix and all 12 `RuntimeDriver` call
+  boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native lifecycle and three-phase no-delete cleanup without KVM;
 - Ubuntu aarch64 native lifecycle and three-phase no-delete cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,

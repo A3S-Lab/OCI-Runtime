@@ -6,7 +6,9 @@ use a3s_oci_sdk::{
 };
 use serde::Serialize;
 
-use super::filesystem::{atomic_move_directory, atomic_write_json, path_exists, state_error};
+use crate::fault::DurableMutation;
+
+use super::filesystem::{path_exists, state_error};
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
@@ -62,6 +64,7 @@ impl DurableStateStore {
                                 self,
                                 &mut stored,
                                 &request.context.operation_id,
+                                DurableMutation::ClaimDeleteOperation,
                                 "prepare-delete",
                             )
                             .await?;
@@ -69,7 +72,8 @@ impl DurableStateStore {
                         }
                         (false, true) => {
                             operation.outcome = StoredOperationStatus::SucceededEmpty;
-                            atomic_write_json(
+                            self.write_json(
+                                DurableMutation::ReconcileDeleteOperation,
                                 &self.operation_path(&request.context.operation_id),
                                 &operation,
                             )
@@ -89,7 +93,8 @@ impl DurableStateStore {
                                 ))
                             } else {
                                 operation.outcome = StoredOperationStatus::SucceededEmpty;
-                                atomic_write_json(
+                                self.write_json(
+                                    DurableMutation::ReconcileDeleteOperation,
                                     &self.operation_path(&request.context.operation_id),
                                     &operation,
                                 )
@@ -160,7 +165,8 @@ impl DurableStateStore {
             request_digest: digest,
             outcome: StoredOperationStatus::Prepared,
         };
-        atomic_write_json(
+        self.write_json(
+            DurableMutation::PrepareDeleteOperation,
             &self.operation_path(&request.context.operation_id),
             &operation,
         )
@@ -169,6 +175,7 @@ impl DurableStateStore {
             self,
             &mut stored,
             &request.context.operation_id,
+            DurableMutation::ClaimDeleteOperation,
             "prepare-delete",
         )
         .await?;
@@ -206,7 +213,8 @@ impl DurableStateStore {
                     .load_stored_exact(&operation.container_id, operation.generation)
                     .await?;
                 ensure_active_operation(&stored, operation_id, "complete-delete")?;
-                atomic_move_directory(&source, &tombstone).await?;
+                self.move_directory(DurableMutation::MoveDeleteTombstone, &source, &tombstone)
+                    .await?;
             }
             (false, true) => {}
             (true, true) => {
@@ -234,7 +242,12 @@ impl DurableStateStore {
         }
 
         operation.outcome = StoredOperationStatus::SucceededEmpty;
-        atomic_write_json(&self.operation_path(operation_id), &operation).await
+        self.write_json(
+            DurableMutation::CompleteDeleteOperation,
+            &self.operation_path(operation_id),
+            &operation,
+        )
+        .await
     }
 
     fn delete_tombstone(&self, operation_id: &OperationId) -> PathBuf {

@@ -1,6 +1,8 @@
 use a3s_oci_sdk::{Error, ErrorCode, OperationId, Result};
 
-use super::filesystem::{atomic_move_directory, atomic_write_json, path_exists, state_error};
+use crate::fault::DurableMutation;
+
+use super::filesystem::{path_exists, state_error};
 use super::model::{StoredOperationKind, StoredOperationStatus};
 use super::{ensure_active_operation, DurableStateStore, CONTAINER_RECORD_FILE};
 
@@ -48,17 +50,31 @@ impl DurableStateStore {
             operation.outcome = StoredOperationStatus::Failed {
                 error: error.clone(),
             };
-            atomic_write_json(&self.operation_path(operation_id), &operation).await?;
+            self.write_json(
+                DurableMutation::RecordCreateFailure,
+                &self.operation_path(operation_id),
+                &operation,
+            )
+            .await?;
             self.reconcile_failed_create(&operation).await?;
             return Ok(());
         }
 
+        let (release_mutation, failure_mutation) =
+            failure_mutations(operation.kind).ok_or_else(|| {
+                state_error(
+                    ErrorCode::Internal,
+                    "fail-operation",
+                    format!("create operation {operation_id} reached non-create failure handling"),
+                )
+            })?;
         let mut stored = self
             .load_stored_exact(&operation.container_id, operation.generation)
             .await?;
         ensure_active_operation(&stored, operation_id, "fail-operation")?;
         stored.active_operation = None;
-        atomic_write_json(
+        self.write_json(
+            release_mutation,
             &self
                 .container_directory(&operation.container_id)
                 .join(CONTAINER_RECORD_FILE),
@@ -68,7 +84,12 @@ impl DurableStateStore {
         operation.outcome = StoredOperationStatus::Failed {
             error: error.clone(),
         };
-        atomic_write_json(&self.operation_path(operation_id), &operation).await
+        self.write_json(
+            failure_mutation,
+            &self.operation_path(operation_id),
+            &operation,
+        )
+        .await
     }
 
     pub(super) async fn reconcile_failed_create(
@@ -102,7 +123,12 @@ impl DurableStateStore {
                     &operation.operation_id,
                     "reconcile-failed-create",
                 )?;
-                atomic_move_directory(&source, &tombstone).await
+                self.move_directory(
+                    DurableMutation::MoveFailedCreateTombstone,
+                    &source,
+                    &tombstone,
+                )
+                .await
             }
             (true, true) => {
                 let live = self.load_stored_container(&operation.container_id).await?;
@@ -123,5 +149,25 @@ impl DurableStateStore {
             }
             (false, true) | (false, false) => Ok(()),
         }
+    }
+}
+
+const fn failure_mutations(
+    kind: StoredOperationKind,
+) -> Option<(DurableMutation, DurableMutation)> {
+    match kind {
+        StoredOperationKind::Create => None,
+        StoredOperationKind::Start => Some((
+            DurableMutation::ReleaseFailedStartClaim,
+            DurableMutation::RecordStartFailure,
+        )),
+        StoredOperationKind::Kill => Some((
+            DurableMutation::ReleaseFailedKillClaim,
+            DurableMutation::RecordKillFailure,
+        )),
+        StoredOperationKind::Delete => Some((
+            DurableMutation::ReleaseFailedDeleteClaim,
+            DurableMutation::RecordDeleteFailure,
+        )),
     }
 }

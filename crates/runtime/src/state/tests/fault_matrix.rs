@@ -1,0 +1,910 @@
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use a3s_oci_sdk::ContainerRecord;
+
+use super::*;
+use crate::fault::testing::RecordingFaultInjector;
+use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
+use crate::state::model::{StoredContainer, StoredGeneration};
+use crate::state::oci_state::rebuild_state;
+use crate::state::DeletePreparation;
+
+#[derive(Debug, Clone, Copy)]
+enum Scenario {
+    RuntimeRoot,
+    SuccessfulLifecycle,
+    CreateClaimRecovery,
+    StartRecovery,
+    KillRecovery,
+    DeleteRecovery,
+    CreateFailure,
+    StartFailure,
+    KillFailure,
+    DeleteFailure,
+    Observation,
+}
+
+struct Fixture {
+    _temporary: TempDir,
+    root: PathBuf,
+    bundle: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = state_root(&temporary);
+        let bundle = temporary.path().join("bundle");
+        fs::create_dir(&bundle).expect("bundle directory");
+        Self {
+            _temporary: temporary,
+            root,
+            bundle,
+        }
+    }
+
+    fn create(&self, operation: &str) -> CreateRequest {
+        create_request(&self.bundle, "fault-container", operation)
+    }
+}
+
+#[tokio::test]
+async fn every_registered_durable_commit_stage_recovers_after_reopen() {
+    let registry = FaultPoint::durable_registry();
+    assert_eq!(
+        registry.len(),
+        237,
+        "update the durable fault contract when the registry changes"
+    );
+    for point in registry {
+        let mutation = match point {
+            FaultPoint::DurableFile { mutation, .. }
+            | FaultPoint::DurableDirectory { mutation, .. } => mutation,
+            FaultPoint::DriverBoundary { .. } => {
+                panic!("durable registry contained driver point {point}")
+            }
+        };
+        exercise(scenario_for(mutation), point).await;
+    }
+}
+
+const fn scenario_for(mutation: DurableMutation) -> Scenario {
+    match mutation {
+        DurableMutation::RuntimeRootMarker => Scenario::RuntimeRoot,
+        DurableMutation::ClaimCreateOperation => Scenario::CreateClaimRecovery,
+        DurableMutation::ReconcileStartContainer | DurableMutation::ReconcileStartOperation => {
+            Scenario::StartRecovery
+        }
+        DurableMutation::ReconcileKillContainer | DurableMutation::ReconcileKillOperation => {
+            Scenario::KillRecovery
+        }
+        DurableMutation::ReconcileDeleteOperation => Scenario::DeleteRecovery,
+        DurableMutation::RecordCreateFailure | DurableMutation::MoveFailedCreateTombstone => {
+            Scenario::CreateFailure
+        }
+        DurableMutation::ReleaseFailedStartClaim | DurableMutation::RecordStartFailure => {
+            Scenario::StartFailure
+        }
+        DurableMutation::ReleaseFailedKillClaim | DurableMutation::RecordKillFailure => {
+            Scenario::KillFailure
+        }
+        DurableMutation::ReleaseFailedDeleteClaim | DurableMutation::RecordDeleteFailure => {
+            Scenario::DeleteFailure
+        }
+        DurableMutation::ObserveContainer | DurableMutation::CompleteObservedOperation => {
+            Scenario::Observation
+        }
+        DurableMutation::AllocateGeneration
+        | DurableMutation::PrepareCreateOperation
+        | DurableMutation::StoreCreateConfig
+        | DurableMutation::StoreCreatingContainer
+        | DurableMutation::CompleteCreateContainer
+        | DurableMutation::CompleteCreateOperation
+        | DurableMutation::PrepareStartOperation
+        | DurableMutation::ClaimStartOperation
+        | DurableMutation::CompleteStartContainer
+        | DurableMutation::CompleteStartOperation
+        | DurableMutation::PrepareKillOperation
+        | DurableMutation::ClaimKillOperation
+        | DurableMutation::CompleteKillContainer
+        | DurableMutation::CompleteKillOperation
+        | DurableMutation::PrepareDeleteOperation
+        | DurableMutation::ClaimDeleteOperation
+        | DurableMutation::MoveDeleteTombstone
+        | DurableMutation::CompleteDeleteOperation => Scenario::SuccessfulLifecycle,
+    }
+}
+
+async fn exercise(scenario: Scenario, point: FaultPoint) {
+    match scenario {
+        Scenario::RuntimeRoot => exercise_runtime_root(point).await,
+        Scenario::SuccessfulLifecycle => exercise_successful_lifecycle(point).await,
+        Scenario::CreateClaimRecovery => exercise_create_claim_recovery(point).await,
+        Scenario::StartRecovery => exercise_start_recovery(point).await,
+        Scenario::KillRecovery => exercise_kill_recovery(point).await,
+        Scenario::DeleteRecovery => exercise_delete_recovery(point).await,
+        Scenario::CreateFailure => exercise_create_failure(point).await,
+        Scenario::StartFailure => exercise_start_failure(point).await,
+        Scenario::KillFailure => exercise_kill_failure(point).await,
+        Scenario::DeleteFailure => exercise_delete_failure(point).await,
+        Scenario::Observation => exercise_observation(point).await,
+    }
+}
+
+async fn exercise_runtime_root(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let error = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect_err("root marker checkpoint must inject");
+    assert_injected(&error, point, &injector);
+
+    let store = DurableStateStore::open(&fixture.root)
+        .await
+        .unwrap_or_else(|error| panic!("recover root marker after {point}: {error}"));
+    assert!(store.root().join("root.json").is_file(), "{point}");
+    assert_consistent_layout(store.root());
+}
+
+async fn exercise_successful_lifecycle(point: FaultPoint) {
+    let fixture = Fixture::new();
+    initialize_root(&fixture.root).await;
+    let create = fixture.create("matrix-create");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open injected lifecycle store");
+    let error = drive_successful_lifecycle(&store, &create)
+        .await
+        .expect_err("selected lifecycle checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .unwrap_or_else(|error| panic!("reopen after {point}: {error}"));
+    let generation = drive_successful_lifecycle(&recovered, &create)
+        .await
+        .unwrap_or_else(|error| panic!("recover lifecycle after {point}: {error}"));
+    assert!(generation.0 > 0, "{point}");
+    assert_eq!(
+        drive_successful_lifecycle(&recovered, &create)
+            .await
+            .expect("replay recovered lifecycle"),
+        generation,
+        "{point}"
+    );
+    let durable_generation: StoredGeneration = serde_json::from_slice(
+        &fs::read(
+            recovered
+                .root()
+                .join("generations")
+                .join(format!("{}.json", create.id.as_str())),
+        )
+        .expect("read generation record"),
+    )
+    .expect("decode generation record");
+    assert_eq!(durable_generation.last_generation, generation, "{point}");
+    let missing = recovered
+        .state(&ContainerTarget::current(create.id))
+        .await
+        .expect_err("recovered lifecycle must finish delete");
+    assert_eq!(missing.code, ErrorCode::NotFound, "{point}");
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_create_claim_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    initialize_root(&fixture.root).await;
+    let create = fixture.create("claim-create");
+    prepare_created_record_without_outcome(&fixture.root, &create).await;
+
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open create-claim recovery");
+    let error = drive_create(&store, &create)
+        .await
+        .expect_err("create claim checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen create-claim recovery");
+    let record = drive_create(&recovered, &create)
+        .await
+        .unwrap_or_else(|error| panic!("recover create claim after {point}: {error}"));
+    assert_eq!(*record.state.status(), ContainerState::Created, "{point}");
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_start_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("start-recovery-create");
+    let (target, start) = prepare_split_start_state(&fixture.root, &create).await;
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open start recovery");
+    let error = store
+        .prepare_start(&start)
+        .await
+        .expect_err("start recovery checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen start recovery");
+    let replayed = recovered
+        .prepare_start(&start)
+        .await
+        .unwrap_or_else(|error| panic!("recover start after {point}: {error}"));
+    assert!(matches!(replayed, RecordOperationPreparation::Replayed(_)));
+    assert_eq!(
+        *recovered
+            .state(&target)
+            .await
+            .expect("running state")
+            .state
+            .status(),
+        ContainerState::Running
+    );
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_kill_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("kill-recovery-create");
+    let (target, kill) = prepare_split_kill_state(&fixture.root, &create).await;
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open kill recovery");
+    let error = store
+        .prepare_kill(&kill)
+        .await
+        .expect_err("kill recovery checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen kill recovery");
+    let replayed = recovered
+        .prepare_kill(&kill)
+        .await
+        .unwrap_or_else(|error| panic!("recover kill after {point}: {error}"));
+    assert!(matches!(replayed, RecordOperationPreparation::Replayed(_)));
+    assert_eq!(
+        *recovered
+            .state(&target)
+            .await
+            .expect("stopped state")
+            .state
+            .status(),
+        ContainerState::Stopped
+    );
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_delete_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("delete-recovery-create");
+    let delete = prepare_moved_delete(&fixture.root, &create).await;
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open delete recovery");
+    let error = store
+        .prepare_delete(&delete)
+        .await
+        .expect_err("delete recovery checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen delete recovery");
+    assert_eq!(
+        recovered
+            .prepare_delete(&delete)
+            .await
+            .unwrap_or_else(|error| panic!("recover delete after {point}: {error}")),
+        DeletePreparation::Replayed
+    );
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_create_failure(point: FaultPoint) {
+    let fixture = Fixture::new();
+    initialize_root(&fixture.root).await;
+    let create = fixture.create("failed-create");
+    let failure = terminal_failure("create");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open create failure store");
+    let error = drive_failed_create(&store, &create, &failure)
+        .await
+        .expect_err("create failure checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen create failure");
+    drive_failed_create(&recovered, &create, &failure)
+        .await
+        .unwrap_or_else(|error| panic!("recover create failure after {point}: {error}"));
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_start_failure(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("start-failure-create");
+    let (target, request) = prepare_created_for_start(&fixture.root, &create).await;
+    let failure = terminal_failure("start");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open start failure store");
+    let error = drive_failed_start(&store, &request, &failure)
+        .await
+        .expect_err("start failure checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen start failure");
+    drive_failed_start(&recovered, &request, &failure)
+        .await
+        .unwrap_or_else(|error| panic!("recover start failure after {point}: {error}"));
+    drive_start(
+        &recovered,
+        &StartRequest {
+            context: OperationContext::new(operation_id("start-after-failure")),
+            target,
+        },
+    )
+    .await
+    .expect("claim released after failed start");
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_kill_failure(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("kill-failure-create");
+    let (target, request) = prepare_running_for_kill(&fixture.root, &create).await;
+    let failure = terminal_failure("kill");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open kill failure store");
+    let error = drive_failed_kill(&store, &request, &failure)
+        .await
+        .expect_err("kill failure checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen kill failure");
+    drive_failed_kill(&recovered, &request, &failure)
+        .await
+        .unwrap_or_else(|error| panic!("recover kill failure after {point}: {error}"));
+    drive_kill(
+        &recovered,
+        &KillRequest {
+            context: OperationContext::new(operation_id("kill-after-failure")),
+            target,
+            signal: Signal::new(9).expect("signal"),
+            all: false,
+        },
+    )
+    .await
+    .expect("claim released after failed kill");
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_delete_failure(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("delete-failure-create");
+    let request = prepare_stopped_for_delete(&fixture.root, &create).await;
+    let failure = terminal_failure("delete");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open delete failure store");
+    let error = drive_failed_delete(&store, &request, &failure)
+        .await
+        .expect_err("delete failure checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen delete failure");
+    drive_failed_delete(&recovered, &request, &failure)
+        .await
+        .unwrap_or_else(|error| panic!("recover delete failure after {point}: {error}"));
+    let delete = DeleteRequest {
+        context: OperationContext::new(operation_id("delete-after-failure")),
+        target: request.target,
+        mode: DeleteMode::StoppedOnly,
+    };
+    drive_delete(&recovered, &delete)
+        .await
+        .expect("claim released after failed delete");
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_observation(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("observation-create");
+    let (target, start) = prepare_created_for_start(&fixture.root, &create).await;
+    let setup = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("open observation setup");
+    setup.prepare_start(&start).await.expect("prepare start");
+    drop(setup);
+
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open observation store");
+    let error = store
+        .observe_state(&target, ContainerState::Running, Some(4_242))
+        .await
+        .expect_err("observation checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen observation");
+    recovered
+        .observe_state(&target, ContainerState::Running, Some(4_242))
+        .await
+        .unwrap_or_else(|error| panic!("recover observation after {point}: {error}"));
+    let replayed = recovered
+        .prepare_start(&start)
+        .await
+        .unwrap_or_else(|error| panic!("complete observed start after {point}: {error}"));
+    assert!(matches!(replayed, RecordOperationPreparation::Replayed(_)));
+    assert_consistent_layout(recovered.root());
+}
+
+async fn open_injected(
+    root: &Path,
+    injector: Arc<RecordingFaultInjector>,
+) -> a3s_oci_sdk::Result<DurableStateStore> {
+    let faults: Arc<dyn FaultInjector> = injector;
+    DurableStateStore::open_with_fault_injector(root, faults).await
+}
+
+async fn initialize_root(root: &Path) {
+    drop(
+        DurableStateStore::open(root)
+            .await
+            .expect("initialize state root"),
+    );
+}
+
+async fn drive_successful_lifecycle(
+    store: &DurableStateStore,
+    create: &CreateRequest,
+) -> a3s_oci_sdk::Result<Generation> {
+    let created = drive_create(store, create).await?;
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    drive_start(
+        store,
+        &StartRequest {
+            context: OperationContext::new(operation_id("matrix-start")),
+            target: target.clone(),
+        },
+    )
+    .await?;
+    drive_kill(
+        store,
+        &KillRequest {
+            context: OperationContext::new(operation_id("matrix-kill")),
+            target: target.clone(),
+            signal: Signal::new(15).expect("signal"),
+            all: true,
+        },
+    )
+    .await?;
+    drive_delete(
+        store,
+        &DeleteRequest {
+            context: OperationContext::new(operation_id("matrix-delete")),
+            target,
+            mode: DeleteMode::StoppedOnly,
+        },
+    )
+    .await?;
+    Ok(created.generation)
+}
+
+async fn drive_create(
+    store: &DurableStateStore,
+    request: &CreateRequest,
+) -> a3s_oci_sdk::Result<ContainerRecord> {
+    match store
+        .prepare_create(request, DriverKind::LibkrunWhpx)
+        .await?
+    {
+        RecordOperationPreparation::Prepared(_) | RecordOperationPreparation::Resume(_) => {
+            store
+                .complete_create(&request.context.operation_id, 4_242)
+                .await
+        }
+        RecordOperationPreparation::Replayed(record) => Ok(record),
+    }
+}
+
+async fn drive_start(
+    store: &DurableStateStore,
+    request: &StartRequest,
+) -> a3s_oci_sdk::Result<ContainerRecord> {
+    match store.prepare_start(request).await? {
+        RecordOperationPreparation::Prepared(_) | RecordOperationPreparation::Resume(_) => {
+            store
+                .complete_start(
+                    &request.context.operation_id,
+                    ContainerState::Running,
+                    Some(4_242),
+                )
+                .await
+        }
+        RecordOperationPreparation::Replayed(record) => Ok(record),
+    }
+}
+
+async fn drive_kill(
+    store: &DurableStateStore,
+    request: &KillRequest,
+) -> a3s_oci_sdk::Result<ContainerRecord> {
+    match store.prepare_kill(request).await? {
+        RecordOperationPreparation::Prepared(_) | RecordOperationPreparation::Resume(_) => {
+            store
+                .complete_kill(&request.context.operation_id, ContainerState::Stopped, None)
+                .await
+        }
+        RecordOperationPreparation::Replayed(record) => Ok(record),
+    }
+}
+
+async fn drive_delete(
+    store: &DurableStateStore,
+    request: &DeleteRequest,
+) -> a3s_oci_sdk::Result<()> {
+    match store.prepare_delete(request).await? {
+        DeletePreparation::Prepared(_) | DeletePreparation::Resume(_) => {
+            store.complete_delete(&request.context.operation_id).await
+        }
+        DeletePreparation::Replayed => Ok(()),
+    }
+}
+
+async fn drive_failed_create(
+    store: &DurableStateStore,
+    request: &CreateRequest,
+    failure: &Error,
+) -> a3s_oci_sdk::Result<()> {
+    match store.prepare_create(request, DriverKind::LibkrunWhpx).await {
+        Ok(RecordOperationPreparation::Prepared(_)) | Ok(RecordOperationPreparation::Resume(_)) => {
+            store
+                .fail_operation(&request.context.operation_id, failure)
+                .await?;
+        }
+        Ok(RecordOperationPreparation::Replayed(_)) => {
+            panic!("failed create unexpectedly replayed success")
+        }
+        Err(error) if error == *failure => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    expect_failure(
+        store.prepare_create(request, DriverKind::LibkrunWhpx).await,
+        failure,
+    )
+}
+
+async fn drive_failed_start(
+    store: &DurableStateStore,
+    request: &StartRequest,
+    failure: &Error,
+) -> a3s_oci_sdk::Result<()> {
+    match store.prepare_start(request).await {
+        Ok(RecordOperationPreparation::Prepared(_)) | Ok(RecordOperationPreparation::Resume(_)) => {
+            store
+                .fail_operation(&request.context.operation_id, failure)
+                .await?;
+        }
+        Ok(RecordOperationPreparation::Replayed(_)) => {
+            panic!("failed start unexpectedly replayed success")
+        }
+        Err(error) if error == *failure => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    expect_failure(store.prepare_start(request).await, failure)
+}
+
+async fn drive_failed_kill(
+    store: &DurableStateStore,
+    request: &KillRequest,
+    failure: &Error,
+) -> a3s_oci_sdk::Result<()> {
+    match store.prepare_kill(request).await {
+        Ok(RecordOperationPreparation::Prepared(_)) | Ok(RecordOperationPreparation::Resume(_)) => {
+            store
+                .fail_operation(&request.context.operation_id, failure)
+                .await?;
+        }
+        Ok(RecordOperationPreparation::Replayed(_)) => {
+            panic!("failed kill unexpectedly replayed success")
+        }
+        Err(error) if error == *failure => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    expect_failure(store.prepare_kill(request).await, failure)
+}
+
+async fn drive_failed_delete(
+    store: &DurableStateStore,
+    request: &DeleteRequest,
+    failure: &Error,
+) -> a3s_oci_sdk::Result<()> {
+    match store.prepare_delete(request).await {
+        Ok(DeletePreparation::Prepared(_)) | Ok(DeletePreparation::Resume(_)) => {
+            store
+                .fail_operation(&request.context.operation_id, failure)
+                .await?;
+        }
+        Ok(DeletePreparation::Replayed) => panic!("failed delete unexpectedly replayed success"),
+        Err(error) if error == *failure => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    expect_failure(store.prepare_delete(request).await, failure)
+}
+
+fn expect_failure<T>(result: a3s_oci_sdk::Result<T>, expected: &Error) -> a3s_oci_sdk::Result<()> {
+    match result {
+        Err(error) if error == *expected => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => panic!("terminal operation unexpectedly succeeded"),
+    }
+}
+
+fn terminal_failure(operation: &'static str) -> Error {
+    Error::new(
+        ErrorCode::FailedPrecondition,
+        format!("injected terminal {operation} failure"),
+    )
+    .for_operation(operation)
+}
+
+async fn prepare_created_for_start(
+    root: &Path,
+    create: &CreateRequest,
+) -> (ContainerTarget, StartRequest) {
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open create setup");
+    let created = drive_create(&store, create)
+        .await
+        .expect("create setup container");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    let request = StartRequest {
+        context: OperationContext::new(operation_id("failure-start")),
+        target: target.clone(),
+    };
+    drop(store);
+    (target, request)
+}
+
+async fn prepare_running_for_kill(
+    root: &Path,
+    create: &CreateRequest,
+) -> (ContainerTarget, KillRequest) {
+    let (target, start) = prepare_created_for_start(root, create).await;
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open start setup");
+    drive_start(&store, &start)
+        .await
+        .expect("start setup container");
+    let request = KillRequest {
+        context: OperationContext::new(operation_id("failure-kill")),
+        target: target.clone(),
+        signal: Signal::new(15).expect("signal"),
+        all: false,
+    };
+    drop(store);
+    (target, request)
+}
+
+async fn prepare_stopped_for_delete(root: &Path, create: &CreateRequest) -> DeleteRequest {
+    let (target, kill) = prepare_running_for_kill(root, create).await;
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open kill setup");
+    drive_kill(&store, &kill)
+        .await
+        .expect("stop setup container");
+    drop(store);
+    DeleteRequest {
+        context: OperationContext::new(operation_id("failure-delete")),
+        target,
+        mode: DeleteMode::StoppedOnly,
+    }
+}
+
+async fn prepare_created_record_without_outcome(root: &Path, create: &CreateRequest) {
+    let setup_point = FaultPoint::DurableFile {
+        mutation: DurableMutation::CompleteCreateOperation,
+        stage: FileCommitStage::TemporaryFileCreated,
+    };
+    let injector = Arc::new(RecordingFaultInjector::fail_once(setup_point));
+    let store = open_injected(root, injector.clone())
+        .await
+        .expect("open create-claim setup");
+    let error = drive_create(&store, create)
+        .await
+        .expect_err("interrupt create outcome");
+    assert_injected(&error, setup_point, &injector);
+}
+
+async fn prepare_split_start_state(
+    root: &Path,
+    create: &CreateRequest,
+) -> (ContainerTarget, StartRequest) {
+    let (target, start) = prepare_created_for_start(root, create).await;
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open split-start setup");
+    store
+        .prepare_start(&start)
+        .await
+        .expect("prepare split start");
+    write_split_container_state(
+        store.root(),
+        &create.id,
+        ContainerState::Running,
+        Some(4_242),
+    );
+    drop(store);
+    (target, start)
+}
+
+async fn prepare_split_kill_state(
+    root: &Path,
+    create: &CreateRequest,
+) -> (ContainerTarget, KillRequest) {
+    let (target, kill) = prepare_running_for_kill(root, create).await;
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open split-kill setup");
+    store.prepare_kill(&kill).await.expect("prepare split kill");
+    write_split_container_state(store.root(), &create.id, ContainerState::Stopped, None);
+    drop(store);
+    (target, kill)
+}
+
+async fn prepare_moved_delete(root: &Path, create: &CreateRequest) -> DeleteRequest {
+    let delete = prepare_stopped_for_delete(root, create).await;
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open moved-delete setup");
+    store
+        .prepare_delete(&delete)
+        .await
+        .expect("prepare moved delete");
+    fs::rename(
+        store.root().join("containers").join(create.id.as_str()),
+        store
+            .root()
+            .join("quarantine")
+            .join(format!("{}.deleted", delete.context.operation_id.as_str())),
+    )
+    .expect("move delete tombstone");
+    drop(store);
+    delete
+}
+
+fn write_split_container_state(
+    root: &Path,
+    id: &ContainerId,
+    status: ContainerState,
+    pid: Option<i32>,
+) {
+    let path = root
+        .join("containers")
+        .join(id.as_str())
+        .join("record.json");
+    let mut stored: StoredContainer =
+        serde_json::from_slice(&fs::read(&path).expect("read container record"))
+            .expect("decode container record");
+    stored.record.state =
+        rebuild_state(&stored.record.state, status, pid).expect("rebuild split state");
+    let mut bytes = serde_json::to_vec_pretty(&stored).expect("encode split state");
+    bytes.push(b'\n');
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .expect("open split state");
+    file.write_all(&bytes).expect("write split state");
+    file.sync_all().expect("sync split state");
+}
+
+fn assert_injected(error: &Error, point: FaultPoint, injector: &RecordingFaultInjector) {
+    assert_eq!(error.code, ErrorCode::Unavailable, "{point}");
+    assert_eq!(
+        error.operation.as_deref(),
+        Some("fault-injection"),
+        "{point}"
+    );
+    assert!(error.retryable, "{point}");
+    assert!(error.message.contains(&point.to_string()), "{point}");
+    assert!(injector.fired(), "fault point was not reached: {point}");
+    assert!(injector.events().contains(&point), "{point}");
+}
+
+fn assert_consistent_layout(root: &Path) {
+    for directory in ["containers", "generations", "operations", "quarantine"] {
+        assert!(root.join(directory).is_dir(), "missing {directory}");
+    }
+    assert_no_transaction_files(root);
+
+    let containers = root.join("containers");
+    let quarantine = root.join("quarantine");
+    for entry in fs::read_dir(&quarantine).expect("inspect quarantine") {
+        let entry = entry.expect("quarantine entry");
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let record_path = entry.path().join("record.json");
+        if !record_path.exists() {
+            continue;
+        }
+        let quarantined: StoredContainer =
+            serde_json::from_slice(&fs::read(record_path).expect("read quarantine record"))
+                .expect("decode quarantine record");
+        let live_path = containers.join(quarantined.id.as_str()).join("record.json");
+        if live_path.exists() {
+            let live: StoredContainer =
+                serde_json::from_slice(&fs::read(live_path).expect("read live record"))
+                    .expect("decode live record");
+            assert_ne!(
+                live.record.generation, quarantined.record.generation,
+                "one generation cannot be both live and quarantined"
+            );
+        }
+    }
+}
+
+fn assert_no_transaction_files(root: &Path) {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).expect("inspect state directory") {
+            let entry = entry.expect("state directory entry");
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                assert!(
+                    !entry.file_name().to_string_lossy().ends_with(".next"),
+                    "stale transaction file after recovery: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+}

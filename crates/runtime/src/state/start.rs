@@ -6,7 +6,9 @@ use a3s_oci_sdk::{
 };
 use serde::Serialize;
 
-use super::filesystem::{atomic_write_json, state_error};
+use crate::fault::DurableMutation;
+
+use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
@@ -59,6 +61,7 @@ impl DurableStateStore {
                                 self,
                                 &mut stored,
                                 &request.context.operation_id,
+                                DurableMutation::ClaimStartOperation,
                                 "prepare-start",
                             )
                             .await?;
@@ -72,7 +75,8 @@ impl DurableStateStore {
                             )?;
                             if stored.active_operation.is_some() {
                                 stored.active_operation = None;
-                                atomic_write_json(
+                                self.write_json(
+                                    DurableMutation::ReconcileStartContainer,
                                     &self
                                         .container_directory(&operation.container_id)
                                         .join(super::CONTAINER_RECORD_FILE),
@@ -83,7 +87,8 @@ impl DurableStateStore {
                             operation.outcome = StoredOperationStatus::Succeeded {
                                 response: stored.record.clone(),
                             };
-                            atomic_write_json(
+                            self.write_json(
+                                DurableMutation::ReconcileStartOperation,
                                 &self.operation_path(&request.context.operation_id),
                                 &operation,
                             )
@@ -140,7 +145,8 @@ impl DurableStateStore {
             request_digest: digest,
             outcome: StoredOperationStatus::Prepared,
         };
-        atomic_write_json(
+        self.write_json(
+            DurableMutation::PrepareStartOperation,
             &self.operation_path(&request.context.operation_id),
             &operation,
         )
@@ -149,6 +155,7 @@ impl DurableStateStore {
             self,
             &mut stored,
             &request.context.operation_id,
+            DurableMutation::ClaimStartOperation,
             "prepare-start",
         )
         .await?;
@@ -277,7 +284,8 @@ impl DurableStateStore {
 
         ensure_active_operation(&stored, operation_id, "complete-start")?;
         stored.active_operation = None;
-        atomic_write_json(
+        self.write_json(
+            DurableMutation::CompleteStartContainer,
             &self
                 .container_directory(&operation.container_id)
                 .join(super::CONTAINER_RECORD_FILE),
@@ -288,7 +296,12 @@ impl DurableStateStore {
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
         };
-        atomic_write_json(&self.operation_path(operation_id), &operation).await?;
+        self.write_json(
+            DurableMutation::CompleteStartOperation,
+            &self.operation_path(operation_id),
+            &operation,
+        )
+        .await?;
         Ok(response)
     }
 }

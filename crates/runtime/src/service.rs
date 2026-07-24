@@ -18,6 +18,9 @@ use a3s_oci_sdk::{
 use crate::driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, RuntimeDriver,
 };
+use crate::fault::{
+    DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
+};
 use crate::state::{DeletePreparation, DurableStateStore, RecordOperationPreparation};
 
 /// In-process host implementation used by the CLI and A3S Box adapter.
@@ -30,6 +33,7 @@ struct LifecycleHost {
     store: DurableStateStore,
     driver: Arc<dyn RuntimeDriver>,
     capability: DriverCapability,
+    faults: Arc<dyn FaultInjector>,
 }
 
 impl fmt::Debug for HostRuntimeService {
@@ -59,7 +63,23 @@ impl HostRuntimeService {
         state_root: impl AsRef<Path>,
         driver: Arc<dyn RuntimeDriver>,
     ) -> Result<Self> {
+        Self::open_with_fault_injector(state_root, driver, Arc::new(NoFaultInjector)).await
+    }
+
+    pub(crate) async fn open_with_fault_injector(
+        state_root: impl AsRef<Path>,
+        driver: Arc<dyn RuntimeDriver>,
+        faults: Arc<dyn FaultInjector>,
+    ) -> Result<Self> {
+        faults.check(FaultPoint::DriverBoundary {
+            operation: DriverOperation::Capability,
+            stage: DriverBoundaryStage::BeforeCall,
+        })?;
         let capability = driver.capability();
+        faults.check(FaultPoint::DriverBoundary {
+            operation: DriverOperation::Capability,
+            stage: DriverBoundaryStage::AfterCall,
+        })?;
         if !capability.can_launch() {
             let code = if capability.status == CapabilityStatus::Unavailable {
                 ErrorCode::Unavailable
@@ -85,12 +105,14 @@ impl HostRuntimeService {
             )
             .for_operation("open-host-runtime"));
         }
-        let store = DurableStateStore::open(state_root).await?;
+        let store =
+            DurableStateStore::open_with_fault_injector(state_root, Arc::clone(&faults)).await?;
         Ok(Self {
             lifecycle: Some(Arc::new(LifecycleHost {
                 store,
                 driver,
                 capability,
+                faults,
             })),
         })
     }
@@ -119,6 +141,15 @@ impl HostRuntimeService {
 }
 
 impl LifecycleHost {
+    fn driver_boundary(
+        &self,
+        operation: DriverOperation,
+        stage: DriverBoundaryStage,
+    ) -> Result<()> {
+        self.faults
+            .check(FaultPoint::DriverBoundary { operation, stage })
+    }
+
     fn ensure_isolation(&self, request: &CreateRequest) -> Result<()> {
         let isolation = request.isolation.class();
         if self.capability.isolation_classes.contains(&isolation) {
@@ -228,7 +259,8 @@ impl OciRuntimeService for HostRuntimeService {
         };
         let target = ContainerTarget::exact(request.id.clone(), record.generation);
         let durable_bundle = lifecycle.store.bundle(&target).await?;
-        let observed = match lifecycle
+        lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
             .driver
             .create(DriverCreateRequest {
                 context: request.context.clone(),
@@ -237,8 +269,9 @@ impl OciRuntimeService for HostRuntimeService {
                 isolation: request.isolation,
                 io: request.io,
             })
-            .await
-        {
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::AfterCall)?;
+        let observed = match result {
             Ok(observed) => observed,
             Err(error) => {
                 return lifecycle
@@ -273,7 +306,10 @@ impl OciRuntimeService for HostRuntimeService {
             return Ok(durable);
         }
         let target = ContainerTarget::exact(request.target.id, durable.generation);
-        let observed = lifecycle.driver.state(target.clone()).await?;
+        lifecycle.driver_boundary(DriverOperation::State, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle.driver.state(target.clone()).await;
+        lifecycle.driver_boundary(DriverOperation::State, DriverBoundaryStage::AfterCall)?;
+        let observed = result?;
         lifecycle
             .store
             .observe_state(&target, observed.status(), observed.pid())
@@ -290,15 +326,17 @@ impl OciRuntimeService for HostRuntimeService {
         };
         let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
         let bundle = lifecycle.store.bundle(&target).await?;
-        let observed = match lifecycle
+        lifecycle.driver_boundary(DriverOperation::Start, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
             .driver
             .start(DriverStartRequest {
                 context: request.context.clone(),
                 target,
                 bundle,
             })
-            .await
-        {
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Start, DriverBoundaryStage::AfterCall)?;
+        let observed = match result {
             Ok(observed) => observed,
             Err(error) => {
                 return lifecycle
@@ -334,7 +372,8 @@ impl OciRuntimeService for HostRuntimeService {
             | RecordOperationPreparation::Resume(record) => record,
         };
         let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
-        let observed = match lifecycle
+        lifecycle.driver_boundary(DriverOperation::Kill, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
             .driver
             .kill(DriverKillRequest {
                 context: request.context.clone(),
@@ -342,8 +381,9 @@ impl OciRuntimeService for HostRuntimeService {
                 signal: request.signal,
                 all: request.all,
             })
-            .await
-        {
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Kill, DriverBoundaryStage::AfterCall)?;
+        let observed = match result {
             Ok(observed) => observed,
             Err(error) => {
                 return lifecycle
@@ -369,15 +409,17 @@ impl OciRuntimeService for HostRuntimeService {
             DeletePreparation::Prepared(record) | DeletePreparation::Resume(record) => record,
         };
         let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
-        if let Err(error) = lifecycle
+        lifecycle.driver_boundary(DriverOperation::Delete, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
             .driver
             .delete(DriverDeleteRequest {
                 context: request.context.clone(),
                 target,
                 mode: request.mode,
             })
-            .await
-        {
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Delete, DriverBoundaryStage::AfterCall)?;
+        if let Err(error) = result {
             return lifecycle
                 .fail_driver_operation(&request.context.operation_id, error)
                 .await;

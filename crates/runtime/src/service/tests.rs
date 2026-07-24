@@ -19,6 +19,8 @@ use crate::{
     RuntimeDriver,
 };
 
+mod fault_matrix;
+
 const TEST_CONFIG: &str = concat!(
     "{\n",
     "  \"ociVersion\": \"1.3.0\",\n",

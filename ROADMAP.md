@@ -115,6 +115,8 @@ Completed:
   terminal failure replay, crash reconciliation, and quarantine;
 - async `RuntimeDriver` integration plus a tested host implementation of
   `create`, `state`, `start`, `kill`, and `delete`;
+- typed, exhaustive recovery injection at all 237 registered durable commit
+  stages and all 12 before/after `RuntimeDriver` method boundaries;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -122,7 +124,7 @@ Completed:
 
 Not yet complete:
 
-- fault injection at every durable write and host/driver boundary;
+- fault injection inside every utility-VM host/agent transport transition;
 - descriptor-relative path resolution;
 - complete shared guest OCI executor;
 - a production workload driver;
@@ -181,11 +183,14 @@ enforce it. No property is silently ignored.
 - [x] Preserve the exact create/start barrier in the durable host/driver
   contract.
 - [x] Verify the barrier against the real Linux guest bootstrap executor.
+- [x] Fault-inject every registered core-lifecycle durable commit stage and
+  every `RuntimeDriver` method boundary, then reopen and replay.
 - [ ] Implement all OCI hook phases and error behavior.
 - [ ] Implement `run` as a client composition, not a second lifecycle.
 
 Exit gate: lifecycle tests pass under fault injection at every durable write
-and host/agent transition.
+and host/agent transition. The durable-write and `RuntimeDriver` portions pass;
+the utility-VM host/agent transport portion remains open.
 
 ### R2 — Windows WHPX Utility VM
 

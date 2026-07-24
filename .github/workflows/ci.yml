@@ -24,6 +24,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Exhaustive durable-state and host-driver fault matrix
+        run: cargo test -p a3s-oci-runtime fault_matrix
       - run: cargo test --workspace --all-targets
       - run: cargo run -p a3s-oci-cli -- features
       - if: runner.os == 'macOS'
@@ -599,6 +601,12 @@ jobs:
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             agent="target/$target/release/a3s-oci-agent"
             file "$agent"
-            ! readelf --program-headers "$agent" | grep --quiet INTERP
-            ! readelf --dynamic "$agent" | grep --quiet NEEDED
+            if readelf --program-headers "$agent" | grep --quiet INTERP; then
+              echo "$agent contains a dynamic interpreter" >&2
+              exit 1
+            fi
+            if readelf --dynamic "$agent" | grep --quiet NEEDED; then
+              echo "$agent contains a dynamic dependency" >&2
+              exit 1
+            fi
           done
