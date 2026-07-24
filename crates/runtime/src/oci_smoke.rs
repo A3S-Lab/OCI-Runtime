@@ -7,6 +7,7 @@ use std::path::Path;
 use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
+use crate::{LifecycleFaultPoint, OciVmFaultCleanupReport};
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
@@ -41,5 +42,36 @@ pub async fn oci_vm_smoke(
     {
         let _ = (shim, vm_rootfs, bundle, console);
         OciVmSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Interrupt a utility-VM lifecycle at one explicit boundary and prove cleanup.
+///
+/// This diagnostic deliberately skips the normal OCI delete operation. Closing
+/// the authenticated session must shut down the guest executor, VM worker,
+/// bridge endpoint, and runtime-owned transient state.
+#[must_use]
+pub async fn oci_vm_fault_cleanup(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console: &Path,
+    fault: LifecycleFaultPoint,
+) -> OciVmFaultCleanupReport {
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
+    {
+        utility_vm::run_fault_cleanup(shim, vm_rootfs, bundle, console, fault).await
+    }
+
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console);
+        OciVmFaultCleanupReport::unsupported(HostPlatform::current(), fault)
     }
 }

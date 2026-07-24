@@ -162,6 +162,24 @@ observation, idempotent mutation replay, marker verification, post-delete
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
 remaining production gates.
 
+The separate fault-cleanup diagnostic deliberately stops before OCI delete and
+requires executor shutdown to reclaim the live process and all scoped state:
+
+```sh
+for fault in after-create after-start after-kill; do
+  sudo target/debug/a3s-oci native-linux-fault-cleanup \
+    --agent "$PWD/target/debug/a3s-oci-agent" \
+    --bundle "$bundle" \
+    --work-parent "$work_parent" \
+    --fault-after "$fault"
+done
+```
+
+Each `a3s.oci.native-linux-fault-cleanup.v1` success identifies the exact
+injected boundary, records that normal delete was not attempted, and proves
+that the init PID, executor root, marker, and complete diagnostic session were
+removed.
+
 ### macOS host gates
 
 On Apple Silicon, sign a disposable CLI copy with the checked-in Hypervisor
@@ -281,6 +299,26 @@ running and stopped observation, marker verification, post-delete `NotFound`,
 and nominal endpoint, process, marker, and guest-runtime cleanup. This remains
 a fixed development profile rather than an arbitrary-workload driver.
 
+Fault cleanup reuses the same signed shim and bundle but stops after each
+successful lifecycle boundary:
+
+```sh
+fault_dir="$(mktemp -d)"
+for fault in after-create after-start after-kill; do
+  target/debug/a3s-oci oci-vm-fault-cleanup \
+    --shim "$smoke_dir/a3s-oci-krun-shim" \
+    --vm-rootfs "$rootfs_dir/rootfs" \
+    --bundle "$bundle" \
+    --console "$fault_dir/$fault.log" \
+    --fault-after "$fault"
+done
+```
+
+An `a3s.oci.oci-vm-fault-cleanup.v1` success requires no normal delete call,
+guest executor shutdown, marker and runtime-root removal, exact endpoint
+removal, shim and VM-worker reap, and restoration of the complete host
+descriptor inventory.
+
 ### Windows utility VM diagnostics
 
 On a WHPX-capable Windows host:
@@ -362,9 +400,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Real rootful core lifecycle with `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Real rootful core lifecycle plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, real Linux guest command, authenticated static arm64 guest agent, and fixed OCI core lifecycle over a PID-verified Unix/vsock bridge | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated static arm64 guest agent, fixed OCI core lifecycle, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -451,6 +489,9 @@ Security-sensitive platform controls include:
   both the public shim and its VM worker;
 - shared Windows/macOS fixed-lifecycle evidence with exact mutation replay,
   marker removal, and nominal guest-runtime cleanup;
+- macOS no-delete fault cleanup after create, start, and kill, with exact
+  endpoint removal, descriptor-inventory restoration, process reap, marker
+  removal, and guest-runtime restoration;
 - fail-closed dedicated-VM selection;
 - no silent fallback from VM isolation to a shared host kernel.
 
@@ -482,10 +523,11 @@ cargo clippy \
 
 Platform CI covers:
 
-- Ubuntu x86_64 native lifecycle without KVM;
-- Ubuntu aarch64 native lifecycle without KVM;
+- Ubuntu x86_64 native lifecycle and three-phase no-delete cleanup without KVM;
+- Ubuntu aarch64 native lifecycle and three-phase no-delete cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,
-  fixed OCI lifecycle, and missing-entitlement fail-closed gates;
+  fixed OCI lifecycle, three-phase no-delete cleanup, and missing-entitlement
+  fail-closed gates;
 - Windows WHPX and libkrun context gates;
 - static x86_64 and aarch64 musl guest-agent output.
 

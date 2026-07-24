@@ -14,9 +14,20 @@ const MARKER_NAME: &str = ".a3s-oci-create-start-smoke";
 const MAX_MARKER_BYTES: u64 = 1_024;
 const GUEST_RUNTIME_PREFIX: &str = "a3s-oci-agent-";
 
+mod fault_cleanup;
 mod lifecycle;
 
 use lifecycle::{best_effort_delete, exercise};
+
+pub(super) async fn run_fault_cleanup(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_directory: &Path,
+    console: &Path,
+    fault: crate::LifecycleFaultPoint,
+) -> crate::OciVmFaultCleanupReport {
+    fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, fault).await
+}
 
 pub(super) async fn run(
     shim: &Path,

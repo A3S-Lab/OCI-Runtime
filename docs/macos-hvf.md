@@ -420,6 +420,37 @@ marker, and left no endpoint or VM worker. CI exercises the signed lifecycle
 when virtualization is available and otherwise requires the same fail-closed
 pre-entry behavior.
 
+## Fault-injected shutdown cleanup
+
+`oci-vm-fault-cleanup` deliberately skips OCI delete after a successful create,
+start, or kill boundary:
+
+```sh
+fault_dir="$(mktemp -d)"
+for fault in after-create after-start after-kill; do
+  target/debug/a3s-oci oci-vm-fault-cleanup \
+    --shim "$smoke_dir/a3s-oci-krun-shim" \
+    --vm-rootfs "$rootfs" \
+    --bundle "$bundle" \
+    --console "$fault_dir/$fault.log" \
+    --fault-after "$fault"
+done
+```
+
+Each `a3s.oci.oci-vm-fault-cleanup.v1` success retains the exact requested and
+injected boundary, a positive guest init PID, pre-start non-execution, and
+`normal_delete_attempted: false`. Closing the authenticated connection must
+then make the guest executor force-stop any live init and remove its runtime
+root before the agent and VM exit.
+
+The nested `a3s.oci.agent-vm-smoke.v3` report independently requires exact
+endpoint removal, shim and direct VM-worker PID disappearance, and complete
+`(fd, fd_type)` inventory restoration. The outer report additionally requires
+marker removal and no new `a3s-oci-agent-*` directory under the guest `/run`.
+Both local Apple Silicon qualification and macOS CI run all three boundaries;
+the CI shell compares endpoint and guest-runtime inventories around every
+command.
+
 ## Remaining workload gates
 
 The fixed lifecycle proves the real static A3S Linux guest, transport, and
@@ -431,8 +462,7 @@ The current gates do not:
 The next macOS increments must add, in order:
 
 1. the production A3S immutable system root;
-2. deterministic descriptor and runtime-root cleanup under fault injection;
-3. negative tests for isolation weakening and recovery.
+2. negative tests for isolation weakening and exhaustive recovery injection.
 
 Only after those gates and the shared Linux executor requirements pass may
 the HVF driver move from `probe-only` to `experimental`.

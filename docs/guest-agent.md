@@ -120,6 +120,12 @@ below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, signal-driven stop, post-delete
 NotFound, marker cleanup, and nominal guest runtime cleanup.
 
+`a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
+records that delete was not attempted, and requires guest executor shutdown to
+remove the container process and runtime root. On macOS the nested report also
+requires exact endpoint removal, both host PIDs to disappear, and the complete
+descriptor inventory to return to its baseline.
+
 The macOS path uses the same static agent, fixed fixture, protocol, and
 lifecycle harness over the PID-verified Unix/vsock bridge. Only the host
 endpoint and libkrun hypervisor backend differ.
@@ -135,8 +141,8 @@ identities differed from guest PID 1 before producing its marker. A
 joined-network negative bundle retained its typed `Unsupported` error and left
 no guest runtime state. This proves the fixed bootstrap slice, not the
 immutable A3S system image, complete OCI enforcement, process I/O, configured
-networking, restart recovery, or fault-injected cleanup. The WHPX driver
-therefore remains `probe-only`.
+networking, restart recovery, or exhaustive durable-write fault injection. The
+WHPX driver therefore remains `probe-only`.
 
 The PID qualification used the 6,371,704-byte static agent with SHA-256
 `45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.

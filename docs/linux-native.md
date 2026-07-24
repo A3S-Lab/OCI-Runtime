@@ -112,6 +112,35 @@ The script installs `busybox-static` and `jq`, builds the matching
 `a3s-oci-agent` and CLI binaries, constructs the checked-in fixture, and
 executes both KVM-independent cases.
 
+## Fault-injected shutdown cleanup
+
+`native-linux-fault-cleanup` accepts exactly `after-create`, `after-start`, or
+`after-kill`. It crosses the requested successful lifecycle boundary, records
+the typed interruption, and closes the service without calling OCI delete:
+
+```sh
+for fault in after-create after-start after-kill; do
+  sudo target/debug/a3s-oci native-linux-fault-cleanup \
+    --agent "$PWD/target/debug/a3s-oci-agent" \
+    --bundle "$bundle" \
+    --work-parent "$work_parent" \
+    --fault-after "$fault"
+done
+```
+
+The versioned `a3s.oci.native-linux-fault-cleanup.v1` report requires:
+
+1. the exact requested prefix and a positive runtime-visible init PID;
+2. marker absence behind create and exact marker contents after start;
+3. `normal_delete_attempted: false`;
+4. successful executor shutdown and disappearance of the init PID;
+5. removal of the marker, executor runtime root, durable state, and complete
+   diagnostic session root.
+
+The x86_64 and aarch64 CI jobs run all three phases while `/dev/kvm` is absent.
+The shell also independently requires an empty work parent and no marker after
+every command.
+
 ## Remaining promotion gates
 
 This evidence proves one rootful bootstrap profile, not general OCI support.
@@ -122,8 +151,8 @@ The default driver must remain `probe-only` until at least the following pass:
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
 - init supervision, zombie reaping, pidfd signaling, and complete process I/O;
-- hooks, fault-injected recovery, descriptor-relative path handling, and
-  adversarial cleanup;
+- hooks, exhaustive durable-write and driver-error recovery injection,
+  descriptor-relative path handling, and adversarial cleanup;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
   x86_64 and aarch64 without KVM.
 

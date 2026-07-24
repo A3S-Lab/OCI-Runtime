@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{sleep, timeout, Instant};
 
 use super::{path_exists, read_marker, OciVmSmokeReport};
+use crate::{FaultInjectionEvidence, LifecycleFaultPoint};
 
 const GUEST_CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -123,11 +124,107 @@ pub(super) async fn exercise<T: AgentStream>(
     Ok(())
 }
 
+pub(super) async fn exercise_until_fault<T: AgentStream>(
+    client: &AgentClient<T>,
+    bundle: &OciBundle,
+    guest_bundle: GuestPath,
+    target: &ContainerTarget,
+    nonce: &str,
+    marker: &Path,
+    evidence: &mut FaultInjectionEvidence,
+) -> Result<(), String> {
+    let created = guest_call(
+        "fault create",
+        client.create(AgentCreateRequest {
+            context: fault_operation(nonce, "create")?,
+            target: target.clone(),
+            bundle: AgentBundle::new(bundle, guest_bundle),
+            io: null_io(),
+        }),
+    )
+    .await?;
+    if created.status() != ContainerState::Created {
+        return Err("guest fault create did not preserve the OCI created barrier".into());
+    }
+    evidence.create_completed = true;
+    evidence.created_pid = created.pid();
+    let observed = guest_call(
+        "fault state after create",
+        client.state(AgentStateRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    if observed != created {
+        return Err("guest fault state after create did not match create".into());
+    }
+    evidence.marker_absent_after_create = !path_exists(marker).await?;
+    if !evidence.marker_absent_after_create {
+        return Err("guest fault workload ran before OCI start".into());
+    }
+    if evidence.requested_fault == LifecycleFaultPoint::AfterCreate {
+        evidence.injected_fault = Some(LifecycleFaultPoint::AfterCreate);
+        return Ok(());
+    }
+
+    let started = guest_call(
+        "fault start",
+        client.start(AgentStartRequest {
+            context: fault_operation(nonce, "start")?,
+            target: target.clone(),
+            expected_config_digest: bundle.config_digest().to_string(),
+        }),
+    )
+    .await?;
+    if started.status() != ContainerState::Running {
+        return Err("guest fault start did not leave the workload running".into());
+    }
+    evidence.start_completed = true;
+    wait_for_exact_marker(client, target, marker).await?;
+    evidence.marker_verified_after_start = true;
+    if evidence.requested_fault == LifecycleFaultPoint::AfterStart {
+        evidence.injected_fault = Some(LifecycleFaultPoint::AfterStart);
+        return Ok(());
+    }
+
+    let killed = guest_call(
+        "fault kill",
+        client.kill(AgentKillRequest {
+            context: fault_operation(nonce, "kill")?,
+            target: target.clone(),
+            signal: Signal::new(LINUX_SIGTERM)
+                .map_err(|error| format!("invalid fault cleanup signal: {error}"))?,
+            all: false,
+        }),
+    )
+    .await?;
+    if !matches!(
+        killed.status(),
+        ContainerState::Running | ContainerState::Stopped
+    ) {
+        return Err("guest fault kill returned an unexpected lifecycle state".into());
+    }
+    evidence.kill_completed = true;
+    evidence.injected_fault = Some(LifecycleFaultPoint::AfterKill);
+    Ok(())
+}
+
 async fn wait_for_running_marker<T: AgentStream>(
     client: &AgentClient<T>,
     target: &ContainerTarget,
     marker: &Path,
     report: &mut OciVmSmokeReport,
+) -> Result<(), String> {
+    wait_for_exact_marker(client, target, marker).await?;
+    report.running_observed = true;
+    report.marker_verified = true;
+    Ok(())
+}
+
+async fn wait_for_exact_marker<T: AgentStream>(
+    client: &AgentClient<T>,
+    target: &ContainerTarget,
+    marker: &Path,
 ) -> Result<(), String> {
     let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
     loop {
@@ -139,7 +236,7 @@ async fn wait_for_running_marker<T: AgentStream>(
         )
         .await?;
         match state.status() {
-            ContainerState::Running => report.running_observed = true,
+            ContainerState::Running => {}
             status => {
                 return Err(format!(
                     "guest reported unexpected state {status} before kill"
@@ -147,8 +244,7 @@ async fn wait_for_running_marker<T: AgentStream>(
             }
         }
         if path_exists(marker).await? {
-            report.marker_verified = read_marker(marker).await? == MARKER_CONTENTS;
-            if report.marker_verified {
+            if read_marker(marker).await? == MARKER_CONTENTS {
                 return Ok(());
             }
             return Err("configured process produced unexpected marker contents".into());
@@ -247,6 +343,12 @@ fn guest_error(operation: &str, error: &Error) -> String {
 fn operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
     let id = OperationId::new(format!("smoke-{nonce}-{name}"))
         .map_err(|error| format!("failed to construct {name} operation ID: {error}"))?;
+    Ok(OperationContext::new(id))
+}
+
+fn fault_operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
+    let id = OperationId::new(format!("fault-smoke-{nonce}-{name}"))
+        .map_err(|error| format!("failed to construct fault {name} operation ID: {error}"))?;
     Ok(OperationContext::new(id))
 }
 

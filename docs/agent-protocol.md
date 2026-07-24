@@ -119,6 +119,12 @@ namespace, the container init runs as namespace PID 1 while the guest agent
 authenticates and reports its host-visible PID. The host verifies marker
 removal and that VM shutdown leaves no new guest-agent runtime directory.
 
+The `oci-vm-fault-cleanup` companion stops after a successful create, start, or
+kill request and never sends delete. Session EOF must still make the agent call
+`LinuxExecutor::shutdown`, force-stop any retained init process, remove the
+executor root, and exit successfully. The host retains the exact requested and
+injected boundary together with guest-runtime and platform cleanup evidence.
+
 The private parent/init control channel reports either readiness with a
 positive runtime-visible PID or a bounded, typed SDK error. The parent validates
 the kernel-reported supervisor peer PID before reading that outcome. For PID
@@ -130,6 +136,6 @@ without trusting a pathname socket.
 This is the first Linux executor vertical slice, not complete OCI
 enforcement. A pinned immutable system image, complete process I/O, remaining
 user/time namespace creation, namespace joins, advanced mount semantics,
-resources, hooks, recovery, negative isolation cases, fault cleanup, and full
-lifecycle evidence remain required before the WHPX driver can advance beyond
-`probe-only`.
+resources, hooks, exhaustive recovery injection, negative isolation cases, and
+full lifecycle evidence remain required before the WHPX driver can advance
+beyond `probe-only`.
