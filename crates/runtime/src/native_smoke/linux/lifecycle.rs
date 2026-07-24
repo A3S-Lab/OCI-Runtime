@@ -84,7 +84,10 @@ pub(super) async fn exercise(
     let kill = KillRequest {
         context: operation(nonce, "kill")?,
         target: target.clone(),
-        signal: Signal::new(libc::SIGTERM)
+        // The workload is PID 1 in its namespace. Linux deliberately ignores
+        // default-action signals such as SIGTERM for a namespace init, while
+        // SIGKILL is guaranteed to terminate it from the parent namespace.
+        signal: Signal::new(libc::SIGKILL)
             .map_err(|error| format!("failed to construct native smoke signal: {error}"))?,
         all: false,
     };
