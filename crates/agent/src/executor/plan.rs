@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::mount::{self, MountPlan};
@@ -13,6 +15,77 @@ const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
 const MAX_EXEC_BYTES: usize = 1024 * 1024;
 const MAX_RESTRICTED_PATHS: usize = 4_096;
 const LINUX_UTS_NAME_MAX: usize = 64;
+
+/// Validated process fields shared by configured init and exec launch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ProcessPlan {
+    pub(super) args: Vec<String>,
+    pub(super) environment: Vec<String>,
+    pub(super) cwd: String,
+    pub(super) uid: u32,
+    pub(super) gid: u32,
+    pub(super) additional_gids: Vec<u32>,
+    pub(super) umask: Option<u32>,
+    pub(super) no_new_privileges: bool,
+}
+
+impl ProcessPlan {
+    pub(super) fn from_process(process: &Process, io: &ProcessIo) -> Result<Self> {
+        validate_null_io(io)?;
+        validate_process_profile(process)?;
+        if process.terminal().unwrap_or(false) {
+            return Err(unsupported(
+                "process.terminal",
+                "terminal allocation is not implemented",
+            ));
+        }
+        if process.no_new_privileges() != Some(true) {
+            return Err(unsupported(
+                "process.noNewPrivileges",
+                "the bootstrap executor requires noNewPrivileges=true",
+            ));
+        }
+
+        let args = process
+            .args()
+            .as_ref()
+            .filter(|args| !args.is_empty())
+            .ok_or_else(|| invalid("process.args must contain an executable"))?
+            .clone();
+        validate_string_vector("process.args", &args, MAX_ARGUMENTS)?;
+        linux_path(Path::new(&args[0]), "process.args[0]", true)?;
+
+        let environment = process.env().as_ref().cloned().unwrap_or_default();
+        validate_environment(&environment)?;
+        let cwd = linux_path(process.cwd(), "process.cwd", true)?;
+
+        let user = process.user();
+        if user.username().is_some() {
+            return Err(unsupported(
+                "process.user.username",
+                "username lookup is not implemented",
+            ));
+        }
+        let additional_gids = user.additional_gids().as_ref().cloned().unwrap_or_default();
+        if user.umask().is_some_and(|umask| umask > 0o777) {
+            return Err(invalid(
+                "process.user.umask must fit the POSIX permission mask",
+            ));
+        }
+
+        Ok(Self {
+            args,
+            environment,
+            cwd,
+            uid: user.uid(),
+            gid: user.gid(),
+            additional_gids,
+            umask: user.umask(),
+            no_new_privileges: true,
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitPlan {
@@ -65,50 +138,12 @@ impl InitPlan {
             .process()
             .as_ref()
             .ok_or_else(|| invalid("OCI bootstrap executor requires process for create/start"))?;
-        if process.terminal().unwrap_or(false) {
-            return Err(unsupported(
-                "process.terminal",
-                "terminal allocation is not implemented",
-            ));
-        }
-        if process.no_new_privileges() != Some(true) {
-            return Err(unsupported(
-                "process.noNewPrivileges",
-                "the bootstrap executor requires noNewPrivileges=true",
-            ));
-        }
-
-        let args = process
-            .args()
-            .as_ref()
-            .filter(|args| !args.is_empty())
-            .ok_or_else(|| invalid("process.args must contain an executable"))?
-            .clone();
-        validate_string_vector("process.args", &args, MAX_ARGUMENTS)?;
-        linux_path(Path::new(&args[0]), "process.args[0]", true)?;
-
-        let environment = process.env().as_ref().cloned().unwrap_or_default();
-        validate_environment(&environment)?;
-        let cwd = linux_path(process.cwd(), "process.cwd", true)?;
-
-        let user = process.user();
-        if user.username().is_some() {
-            return Err(unsupported(
-                "process.user.username",
-                "username lookup is not implemented",
-            ));
-        }
-        let additional_gids = user.additional_gids().as_ref().cloned().unwrap_or_default();
-        if user.umask().is_some_and(|umask| umask > 0o777) {
-            return Err(invalid(
-                "process.user.umask must fit the POSIX permission mask",
-            ));
-        }
+        let process_plan = ProcessPlan::from_process(process, io)?;
         let namespaces = NamespacePlan::from_linux(
             spec.linux().as_ref(),
-            user.uid(),
-            user.gid(),
-            &additional_gids,
+            process_plan.uid,
+            process_plan.gid,
+            &process_plan.additional_gids,
         )?;
         let rootfs_propagation = spec
             .linux()
@@ -171,14 +206,14 @@ impl InitPlan {
         Ok(Self {
             bundle_directory: bundle.directory().to_path_buf(),
             rootfs: bundle.directory().join(root_path),
-            args,
-            environment,
-            cwd,
-            uid: user.uid(),
-            gid: user.gid(),
-            additional_gids,
-            umask: user.umask(),
-            no_new_privileges: true,
+            args: process_plan.args,
+            environment: process_plan.environment,
+            cwd: process_plan.cwd,
+            uid: process_plan.uid,
+            gid: process_plan.gid,
+            additional_gids: process_plan.additional_gids,
+            umask: process_plan.umask,
+            no_new_privileges: process_plan.no_new_privileges,
             namespaces,
             mounts,
             root_readonly,
@@ -189,6 +224,33 @@ impl InitPlan {
             domainname,
         })
     }
+}
+
+fn validate_process_profile(process: &Process) -> Result<()> {
+    let raw = serde_json::to_value(process).map_err(|error| {
+        Error::new(
+            ErrorCode::Internal,
+            format!("validated OCI process could not be encoded: {error}"),
+        )
+        .for_operation("plan-guest-init")
+    })?;
+    let process = object(&raw, "process")?;
+    reject_unimplemented_keys(
+        process,
+        "process",
+        &["terminal", "user", "args", "env", "cwd", "noNewPrivileges"],
+    )?;
+    let user = object(
+        process
+            .get("user")
+            .ok_or_else(|| invalid("process.user is required"))?,
+        "process.user",
+    )?;
+    reject_unimplemented_keys(
+        user,
+        "process.user",
+        &["uid", "gid", "umask", "additionalGids", "username"],
+    )
 }
 
 fn validate_profile(raw: &Value) -> Result<()> {

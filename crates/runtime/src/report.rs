@@ -321,6 +321,9 @@ impl AgentVmSmokeReport {
                     AgentOperation::Kill,
                     AgentOperation::Delete,
                     AgentOperation::Wait,
+                    AgentOperation::Exec,
+                    AgentOperation::SignalProcess,
+                    AgentOperation::WaitProcess,
                 ]
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)

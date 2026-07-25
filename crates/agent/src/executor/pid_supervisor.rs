@@ -1,4 +1,5 @@
 use std::io::{self, Read, Write};
+use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -144,6 +145,69 @@ pub(super) fn supervise_payload(payload_pid: libc::pid_t) -> Result<ChildOutcome
     Ok(payload_outcome)
 }
 
+pub(super) fn supervise_exec_payload(
+    payload_pid: libc::pid_t,
+    init_pidfd: RawFd,
+) -> Result<ChildOutcome> {
+    if payload_pid <= 0 || init_pidfd < 0 {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            format!(
+                "exec supervision requires a positive payload PID and live init pidfd; received \
+                 PID {payload_pid}, fd {init_pidfd}"
+            ),
+        ));
+    }
+    loop {
+        if let Some(outcome) = peek_child_outcome(payload_pid)? {
+            // Keep the exited leader as a zombie while signaling its process
+            // group. This is the same WNOWAIT ownership pattern used by the
+            // A3S Box PID 1 reaper and prevents the kernel from reusing the
+            // leader PID/PGID before descendant cleanup.
+            terminate_process_group(payload_pid);
+            let reaped = wait_for_child(payload_pid)?;
+            if reaped != outcome {
+                return Err(supervisor_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "peeked exec payload outcome {outcome:?} changed to {reaped:?} while reaping"
+                    ),
+                ));
+            }
+            return Ok(outcome);
+        }
+
+        let mut descriptor = libc::pollfd {
+            fd: init_pidfd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `descriptor` points to one initialized pollfd and remains
+        // writable for the call. A bounded timeout keeps payload observation
+        // responsive without a busy loop.
+        let polled = unsafe { libc::poll(&mut descriptor, 1, 10) };
+        if polled < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            terminate_pid(payload_pid);
+            let _ = wait_for_child(payload_pid);
+            return Err(supervisor_error(
+                error_code(&error),
+                format!("monitor configured-process pidfd failed: {error}"),
+            ));
+        }
+        let fatal_events = libc::POLLERR | libc::POLLHUP | libc::POLLNVAL;
+        if descriptor.revents & (libc::POLLIN | fatal_events) != 0 {
+            terminate_process_group(payload_pid);
+            terminate_pid(payload_pid);
+            let outcome = wait_for_child(payload_pid)?;
+            return Ok(outcome);
+        }
+    }
+}
+
 pub(super) fn report_supervised_outcome(
     channel: &mut UnixStream,
     outcome: ChildOutcome,
@@ -213,7 +277,18 @@ pub(super) fn terminate_pid(pid: libc::pid_t) {
     }
 }
 
-fn arm_parent_death_signal(role: &str) -> Result<()> {
+pub(super) fn terminate_process_group(leader_pid: libc::pid_t) {
+    if leader_pid > 0 {
+        // SAFETY: a negative PID targets the process group whose leader was
+        // created and authenticated by this helper. SIGKILL has no pointer
+        // preconditions.
+        unsafe {
+            libc::kill(-leader_pid, libc::SIGKILL);
+        }
+    }
+}
+
+pub(super) fn arm_parent_death_signal(role: &str) -> Result<()> {
     // SAFETY: `prctl` receives only integer arguments. A fatal parent-death
     // signal prevents either internal wrapper from becoming detached from its
     // authenticated owner.
@@ -237,6 +312,60 @@ fn wait_for_any_child() -> Result<(libc::pid_t, ChildOutcome)> {
             continue;
         }
         return Err(last_os_error("reap namespace child"));
+    }
+}
+
+fn peek_child_outcome(pid: libc::pid_t) -> Result<Option<ChildOutcome>> {
+    // SAFETY: an all-zero siginfo_t is the required sentinel for WNOHANG;
+    // waitid initializes it when the selected child has changed state.
+    let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+    // SAFETY: `info` points to writable storage and `pid` identifies the
+    // direct child retained by this supervisor. WNOWAIT leaves the child
+    // waitable so its PID and process-group identity cannot be reused yet.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            return Ok(None);
+        }
+        return Err(supervisor_error(
+            error_code(&error),
+            format!("inspect supervised exec payload failed: {error}"),
+        ));
+    }
+    // SAFETY: waitid initialized the child identity when si_pid is non-zero.
+    let reported_pid = unsafe { info.si_pid() };
+    if reported_pid == 0 {
+        return Ok(None);
+    }
+    if reported_pid != pid {
+        return Err(supervisor_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "waitid reported exec payload PID {reported_pid}, expected supervised child {pid}"
+            ),
+        ));
+    }
+    // SAFETY: waitid initialized si_status for the CLD_* outcome in si_code.
+    let status = unsafe { info.si_status() };
+    match info.si_code {
+        libc::CLD_EXITED if (0..=255).contains(&status) => Ok(Some(ChildOutcome::Exited(status))),
+        libc::CLD_KILLED | libc::CLD_DUMPED if is_valid_signal(status) => {
+            Ok(Some(ChildOutcome::Signaled(status)))
+        }
+        code => Err(supervisor_error(
+            ErrorCode::Internal,
+            format!(
+                "supervised exec payload produced unsupported waitid code {code} status {status}"
+            ),
+        )),
     }
 }
 
@@ -340,10 +469,11 @@ fn supervisor_error(code: ErrorCode, message: impl Into<String>) -> Error {
 mod tests {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
 
     use super::{
-        decode_wait_status, read_supervised_outcome, report_supervised_outcome, ChildOutcome,
-        EXITED_OUTCOME_BYTE,
+        decode_wait_status, peek_child_outcome, read_supervised_outcome, report_supervised_outcome,
+        terminate_pid, wait_for_child, ChildOutcome, EXITED_OUTCOME_BYTE,
     };
 
     #[test]
@@ -388,6 +518,42 @@ mod tests {
         assert_eq!(
             decode_wait_status(libc::SIGKILL).expect("signal status"),
             ChildOutcome::Signaled(libc::SIGKILL)
+        );
+    }
+
+    #[test]
+    fn peeks_exec_child_outcome_without_reaping_or_releasing_its_pid() {
+        // SAFETY: the test child exits immediately without touching shared
+        // state; the parent retains and reaps the exact returned PID.
+        let pid = unsafe { libc::fork() };
+        assert!(
+            pid >= 0,
+            "fork test child: {}",
+            std::io::Error::last_os_error()
+        );
+        if pid == 0 {
+            // SAFETY: bypassing destructors is intentional in the fork child.
+            unsafe { libc::_exit(23) }
+        }
+
+        let started = Instant::now();
+        let outcome = loop {
+            match peek_child_outcome(pid).expect("peek child outcome") {
+                Some(outcome) => break outcome,
+                None if started.elapsed() < Duration::from_secs(2) => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                None => {
+                    terminate_pid(pid);
+                    let _ = wait_for_child(pid);
+                    panic!("test child did not become waitable");
+                }
+            }
+        };
+        assert_eq!(outcome, ChildOutcome::Exited(23));
+        assert_eq!(
+            wait_for_child(pid).expect("child must remain reapable after WNOWAIT"),
+            outcome
         );
     }
 }

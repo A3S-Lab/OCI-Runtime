@@ -1,4 +1,6 @@
 mod control;
+mod exec;
+mod exec_process;
 mod init;
 mod mount;
 #[cfg(test)]
@@ -16,12 +18,14 @@ mod rootfs;
 mod rootfs_tests;
 mod state;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_agent_protocol::{
-    AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, AgentWaitRequest, GuestAgentService,
+    AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
+    AgentProcess, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
@@ -39,12 +43,15 @@ use state::{
     ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
 };
 
-pub(crate) use init::run_container_init_if_requested;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const MAX_OPERATION_RECORDS: usize = 4_096;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
+    init::run_container_init_if_requested().or_else(exec_process::run_container_exec_if_requested)
+}
 
 /// Fail-closed Linux OCI executor shared by native and utility-VM drivers.
 #[derive(Debug)]
@@ -173,7 +180,7 @@ impl LinuxExecutor {
         let mut state = self.state.lock().await;
         let mut first_error = None;
         for record in state.containers.values_mut() {
-            if let Err(error) = record.process.force_stop().await {
+            if let Err(error) = record.force_stop_all().await {
                 first_error.get_or_insert(error);
             }
         }
@@ -273,6 +280,7 @@ impl LinuxExecutor {
                 config_digest: request.bundle.config_digest().to_string(),
                 status: ContainerState::Created,
                 process,
+                processes: BTreeMap::new(),
                 runtime_directory,
             },
         );
@@ -386,7 +394,7 @@ impl LinuxExecutor {
             // Even an already-stopped init may have an authenticated wrapper
             // that has not completed its final wait yet. Always reap that
             // wrapper before releasing the runtime directory.
-            record.process.force_stop().await?;
+            record.force_stop_all().await?;
             record.status = ContainerState::Stopped;
             record.runtime_directory.clone()
         };
@@ -507,7 +515,7 @@ impl GuestAgentService for LinuxExecutor {
         let operation = RecordedRequest::new(MutationKind::Delete, &request)?;
         let operation_id = request.context.operation_id.clone();
         let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_delete(&operation_id, &operation) {
+        if let Some(result) = state.replay_unit(&operation_id, &operation) {
             return result;
         }
         state.reserve_operation(&operation_id)?;
@@ -515,13 +523,25 @@ impl GuestAgentService for LinuxExecutor {
         state.record(
             operation_id,
             operation,
-            RecordedOutcome::Deleted(result.clone()),
+            RecordedOutcome::Unit(result.clone()),
         );
         result
     }
 
     async fn wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
         self.wait_new(&request).await
+    }
+
+    async fn exec(&self, request: AgentExecRequest) -> Result<AgentProcess> {
+        self.exec_recorded(request).await
+    }
+
+    async fn signal_process(&self, request: AgentSignalProcessRequest) -> Result<()> {
+        self.signal_process_recorded(request).await
+    }
+
+    async fn wait_process(&self, request: AgentWaitProcessRequest) -> Result<ExitStatus> {
+        self.wait_process_new(&request).await
     }
 }
 
@@ -579,6 +599,29 @@ async fn remove_container_directory(root: &Path, directory: &Path) -> Result<()>
             ErrorCode::Internal,
             format!(
                 "failed to remove guest container directory {}: {error}",
+                directory.display()
+            ),
+        )),
+    }
+}
+
+async fn remove_process_directory(container_directory: &Path, directory: &Path) -> Result<()> {
+    if directory.parent() != Some(container_directory) || directory == container_directory {
+        return Err(executor_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "refusing to remove guest process path outside its container directory: {}",
+                directory.display()
+            ),
+        ));
+    }
+    match tokio::fs::remove_dir_all(directory).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(executor_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to remove guest process directory {}: {error}",
                 directory.display()
             ),
         )),

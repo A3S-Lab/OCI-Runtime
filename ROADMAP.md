@@ -53,7 +53,7 @@ Completed:
   host-visible marker verification, bounded worker reap, and marker cleanup;
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
-  one-time token authentication, protocol-v3 negotiation, exact six-operation
+  one-time token authentication, protocol-v3 negotiation, exact nine-operation
   advertisement, process-group termination, exact endpoint removal,
   observed PID reap, and in-process descriptor-inventory restoration;
 - real macOS fixed-bundle create/state/start/kill/wait/delete evidence using
@@ -69,7 +69,9 @@ Completed:
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/wait/delete SDK evidence on x86_64
   and aarch64, including exact repeated SIGKILL status and bounded running
-  wait, repeated with `/dev/kvm` absent and present but unusable;
+  wait, plus direct shared-executor exec replay, duplicate process-ID
+  rejection, pidfd signal replay, stable per-process wait, and init-exit exec
+  cleanup, repeated with `/dev/kvm` absent and present but unusable;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
   and time namespaces, including retained rootfs execution after a mount join,
   three-pass user-namespace permission recovery, and shared native Linux/macOS
@@ -99,7 +101,9 @@ Completed:
   `pivot_root`, authenticated host-visible PID reporting, exact-generation
   state, a dedicated namespace PID 1 supervisor with adopted-child reaping,
   bounded typed init rejection reporting, session idempotency, retained
-  workload pidfd signaling, and cleanup;
+  workload pidfd signaling, exact-target exec registries with retained rootfs
+  and namespace descriptors, per-process pidfds and replay journals, stable
+  process wait, init-exit supervision, and complete session cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -122,7 +126,8 @@ Completed:
 - authenticated, version-negotiated, bounded host/guest lifecycle protocol
   with exact bundle and response correlation, protocol-v1 compatibility, and
   protocol-v2 stable init wait plus protocol-v3 exact-target exec, process
-  signal, and process wait messages;
+  signal, and process wait messages, all dispatched by the shared Linux
+  executor with version-filtered capability advertisement;
 - existing `features` CLI path routed through the Rust SDK;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
@@ -344,7 +349,13 @@ then may HVF become `experimental`.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
   all remaining namespace processes after the configured process exits, and
   preserve that process's exact exit code or terminating signal.
-- [ ] Container exec with per-process signaling, wait, and cleanup.
+- [x] Add exact-generation container exec with a reserved init process ID,
+  shared fail-closed OCI process planning, retained rootfs and all configured
+  namespace descriptors, authenticated helper/parent/PID/root/namespace
+  identities, per-process pidfds, replay-safe signal, stable repeated wait,
+  WNOWAIT process-group cleanup, and automatic exec termination when init or
+  the agent session exits. Prove the path through native Linux and the shared
+  utility-VM lifecycle harness.
 - [ ] Ordered hooks with OCI state on stdin.
 - [ ] Backpressured stdin/stdout/stderr, PTY, resize, signals, and output
   cursors.
@@ -362,8 +373,8 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Add the native Linux driver without linking or initializing libkrun.
 - [x] Reuse the R3 Linux executor directly.
 - [x] Prove runtime binary startup, feature inspection, Rust SDK loading, and
-  the rootful lifecycle including exact repeated init wait without KVM on
-  x86_64 and aarch64.
+  the rootful lifecycle including exact repeated init wait plus direct
+  executor exec/signal/wait without KVM on x86_64 and aarch64.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.

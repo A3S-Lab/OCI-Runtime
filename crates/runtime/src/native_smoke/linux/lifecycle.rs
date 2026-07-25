@@ -11,6 +11,7 @@ use a3s_oci_sdk::{
 use tokio::time::{sleep, timeout, Instant};
 
 use super::filesystem::{path_exists, read_marker, MARKER_CONTENTS};
+use super::process;
 use crate::{FaultInjectionEvidence, LifecycleFaultPoint, NativeLinuxSmokeReport};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -19,6 +20,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(super) async fn exercise(
     client: &RuntimeClient,
+    executor: &a3s_oci_agent::LinuxExecutor,
     bundle: &OciBundle,
     nonce: &str,
     marker: &Path,
@@ -88,6 +90,7 @@ pub(super) async fn exercise(
         return Err("native start did not leave the workload running".into());
     }
     wait_for_marker(client, &target, marker, report).await?;
+    let cleanup_process = process::exercise_before_init_exit(executor, &target, nonce).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, &target).await?;
     if !report.wait_timeout_enforced {
         return Err("native wait returned before the running init process exited".into());
@@ -136,6 +139,7 @@ pub(super) async fn exercise(
     if !report.wait_replayed {
         return Err("native repeated wait returned a different exit status".into());
     }
+    process::verify_after_init_exit(executor, &target, cleanup_process, &waited).await?;
     report.stopped_observed = wait_until_stopped(client, &target).await?;
 
     let delete = DeleteRequest {

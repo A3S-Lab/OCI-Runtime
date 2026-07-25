@@ -304,10 +304,7 @@ impl AgentCapabilities {
         )
     }
 
-    /// Construct the Linux executor capability report, including protocol-v2 wait.
-    ///
-    /// Process operations remain absent until the executor implements their
-    /// complete lifecycle and cleanup contract.
+    /// Construct the Linux executor capability report, including exact process control.
     pub fn linux_executor(
         agent_version: impl Into<String>,
         architecture: impl Into<String>,
@@ -322,6 +319,9 @@ impl AgentCapabilities {
                 AgentOperation::Kill,
                 AgentOperation::Delete,
                 AgentOperation::Wait,
+                AgentOperation::Exec,
+                AgentOperation::SignalProcess,
+                AgentOperation::WaitProcess,
             ],
         )
     }

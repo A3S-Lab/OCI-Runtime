@@ -381,6 +381,9 @@ mod tests {
             AgentOperation::Kill,
             AgentOperation::Delete,
             AgentOperation::Wait,
+            AgentOperation::Exec,
+            AgentOperation::SignalProcess,
+            AgentOperation::WaitProcess,
         ];
         report.shim_report_verified = true;
         report.shim_exit_code = Some(0);
