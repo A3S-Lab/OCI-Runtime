@@ -1,7 +1,17 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
-use std::{ffi::CString, io, os::unix::ffi::OsStrExt};
+use std::{
+    ffi::CString,
+    io,
+    os::{
+        fd::AsRawFd,
+        unix::{
+            ffi::OsStrExt,
+            fs::{MetadataExt, OpenOptionsExt},
+        },
+    },
+};
 
 use a3s_oci_sdk::OciBundle;
 use serde_json::{json, Map, Value};
@@ -90,6 +100,12 @@ impl RootfsEnforcementFixture {
             component,
             native_idmap_bind_expected,
         )?;
+        #[cfg(target_os = "linux")]
+        let native_root_ids = if native_idmap_bind_expected {
+            Some(EnforcementIdMappings::from_base(base, true)?.root_host_ids()?)
+        } else {
+            None
+        };
         tokio::fs::create_dir(&output_directory)
             .await
             .map_err(|error| {
@@ -98,12 +114,8 @@ impl RootfsEnforcementFixture {
                     output_directory.display()
                 )
             })?;
-        if let Err(error) = tokio::fs::write(
-            output_directory.join(BIND_SOURCE_FILE),
-            BIND_SOURCE_CONTENTS,
-        )
-        .await
-        {
+        let bind_source = output_directory.join(BIND_SOURCE_FILE);
+        if let Err(error) = tokio::fs::write(&bind_source, BIND_SOURCE_CONTENTS).await {
             let _ = tokio::fs::remove_dir_all(&output_directory).await;
             return Err(format!(
                 "failed to create rootfs enforcement bind source: {error}"
@@ -111,8 +123,21 @@ impl RootfsEnforcementFixture {
         }
 
         #[cfg(target_os = "linux")]
+        if let Some((uid, gid)) = native_root_ids {
+            if let Err(reason) = set_native_owner(&bind_source, uid, gid)
+                .and_then(|()| set_native_owner(&output_directory, uid, gid))
+            {
+                let _ = tokio::fs::remove_dir_all(&output_directory).await;
+                return Err(reason);
+            }
+        }
+
+        #[cfg(target_os = "linux")]
         let native_idmap_bind_source = if native_idmap_bind_expected {
-            match NativeIdmapBindSource::prepare(&output_directory) {
+            let (uid, gid) = native_root_ids.ok_or_else(|| {
+                "native rootfs fixture lost its qualified root ownership".to_string()
+            })?;
+            match NativeIdmapBindSource::prepare(&output_directory, uid, gid) {
                 Ok(source) => Some(source),
                 Err(reason) => {
                     let _ = tokio::fs::remove_dir_all(&output_directory).await;
@@ -252,6 +277,167 @@ impl RootfsEnforcementFixture {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FixtureIdMapping {
+    container_id: u32,
+    host_id: u32,
+    size: u32,
+}
+
+impl FixtureIdMapping {
+    fn as_json(self) -> Value {
+        json!({
+            "containerID": self.container_id,
+            "hostID": self.host_id,
+            "size": self.size
+        })
+    }
+
+    fn translate(self, container_id: u32) -> Option<u32> {
+        let offset = container_id.checked_sub(self.container_id)?;
+        if offset >= self.size {
+            return None;
+        }
+        self.host_id.checked_add(offset)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MountIdMappingPair {
+    uid: FixtureIdMapping,
+    gid: FixtureIdMapping,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnforcementIdMappings {
+    uids: Vec<FixtureIdMapping>,
+    gids: Vec<FixtureIdMapping>,
+    filesystem_1000: MountIdMappingPair,
+    filesystem_2000: MountIdMappingPair,
+    bind_1000: MountIdMappingPair,
+    bind_2000: MountIdMappingPair,
+}
+
+impl EnforcementIdMappings {
+    fn from_base(base: &OciBundle, preserve_user_mappings: bool) -> Result<Self, String> {
+        let (uids, gids) = if preserve_user_mappings {
+            let linux = base
+                .spec()
+                .linux()
+                .as_ref()
+                .ok_or_else(|| "native rootfs fixture requires linux mappings".to_string())?;
+            let uids = linux
+                .uid_mappings()
+                .as_deref()
+                .ok_or_else(|| "native rootfs fixture requires UID mappings".to_string())?
+                .iter()
+                .map(|mapping| FixtureIdMapping {
+                    container_id: mapping.container_id(),
+                    host_id: mapping.host_id(),
+                    size: mapping.size(),
+                })
+                .collect::<Vec<_>>();
+            let gids = linux
+                .gid_mappings()
+                .as_deref()
+                .ok_or_else(|| "native rootfs fixture requires GID mappings".to_string())?
+                .iter()
+                .map(|mapping| FixtureIdMapping {
+                    container_id: mapping.container_id(),
+                    host_id: mapping.host_id(),
+                    size: mapping.size(),
+                })
+                .collect::<Vec<_>>();
+            (uids, gids)
+        } else {
+            let identity = FixtureIdMapping {
+                container_id: 0,
+                host_id: 0,
+                size: IDMAP_VISIBLE_ID_RANGE,
+            };
+            (vec![identity], vec![identity])
+        };
+
+        let root_uid = translate_fixture_id(&uids, 0, "UID")?;
+        let root_gid = translate_fixture_id(&gids, 0, "GID")?;
+        // The workload observes both IDs through stat(2), so the container
+        // user mapping must make the complete qualification range visible.
+        translate_fixture_id(&uids, IDMAP_VISIBLE_ID_RANGE - 1, "UID")?;
+        translate_fixture_id(&gids, IDMAP_VISIBLE_ID_RANGE - 1, "GID")?;
+        let uid_1000 = translate_fixture_id(&uids, 1000, "UID")?;
+        let gid_1000 = translate_fixture_id(&gids, 1000, "GID")?;
+        let uid_2000 = translate_fixture_id(&uids, 2000, "UID")?;
+        let gid_2000 = translate_fixture_id(&gids, 2000, "GID")?;
+
+        Ok(Self {
+            uids,
+            gids,
+            // Detached filesystem mounts are created in the initial user
+            // namespace, where their root inode is owned by host ID zero.
+            filesystem_1000: MountIdMappingPair {
+                uid: single_mapping(0, uid_1000),
+                gid: single_mapping(0, gid_1000),
+            },
+            filesystem_2000: MountIdMappingPair {
+                uid: single_mapping(0, uid_2000),
+                gid: single_mapping(0, gid_2000),
+            },
+            // Native bind sources are owned by the host IDs representing
+            // container root. Shift those exact source IDs to the host IDs
+            // representing container 1000/2000.
+            bind_1000: MountIdMappingPair {
+                uid: single_mapping(root_uid, uid_1000),
+                gid: single_mapping(root_gid, gid_1000),
+            },
+            bind_2000: MountIdMappingPair {
+                uid: single_mapping(root_uid, uid_2000),
+                gid: single_mapping(root_gid, gid_2000),
+            },
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn root_host_ids(&self) -> Result<(u32, u32), String> {
+        Ok((
+            translate_fixture_id(&self.uids, 0, "UID")?,
+            translate_fixture_id(&self.gids, 0, "GID")?,
+        ))
+    }
+}
+
+const fn single_mapping(container_id: u32, host_id: u32) -> FixtureIdMapping {
+    FixtureIdMapping {
+        container_id,
+        host_id,
+        size: 1,
+    }
+}
+
+fn translate_fixture_id(
+    mappings: &[FixtureIdMapping],
+    container_id: u32,
+    kind: &str,
+) -> Result<u32, String> {
+    mappings
+        .iter()
+        .find_map(|mapping| mapping.translate(container_id))
+        .ok_or_else(|| {
+            format!(
+                "rootfs enforcement container {kind} {container_id} is outside the qualified mapping"
+            )
+        })
+}
+
+fn mapping_array(mappings: &[FixtureIdMapping]) -> Value {
+    Value::Array(
+        mappings
+            .iter()
+            .copied()
+            .map(FixtureIdMapping::as_json)
+            .collect(),
+    )
+}
+
 fn build_bundle(
     base: &OciBundle,
     output_name: &str,
@@ -259,6 +445,17 @@ fn build_bundle(
     nonce: &str,
     native_idmap_bind_expected: bool,
 ) -> Result<OciBundle, String> {
+    let id_mappings = EnforcementIdMappings::from_base(base, native_idmap_bind_expected)?;
+    let user_uid_mappings = mapping_array(&id_mappings.uids);
+    let user_gid_mappings = mapping_array(&id_mappings.gids);
+    let filesystem_uid_1000 = id_mappings.filesystem_1000.uid.as_json();
+    let filesystem_gid_1000 = id_mappings.filesystem_1000.gid.as_json();
+    let filesystem_uid_2000 = id_mappings.filesystem_2000.uid.as_json();
+    let filesystem_gid_2000 = id_mappings.filesystem_2000.gid.as_json();
+    let bind_uid_1000 = id_mappings.bind_1000.uid.as_json();
+    let bind_gid_1000 = id_mappings.bind_1000.gid.as_json();
+    let bind_uid_2000 = id_mappings.bind_2000.uid.as_json();
+    let bind_gid_2000 = id_mappings.bind_2000.gid.as_json();
     let mut config: Value = serde_json::from_str(base.config_json())
         .map_err(|error| format!("failed to decode rootfs enforcement base config: {error}"))?;
     let root = object_mut(&mut config, "config")?;
@@ -348,16 +545,16 @@ fn build_bundle(
             "type": "tmpfs",
             "source": "tmpfs",
             "options": ["rw", "nosuid", "nodev", "mode=0700", "size=64k", "idmap"],
-            "uidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}],
-            "gidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}]
+            "uidMappings": [filesystem_uid_1000],
+            "gidMappings": [filesystem_gid_1000]
         },
         {
             "destination": ridmap_target,
             "type": "tmpfs",
             "source": "tmpfs",
             "options": ["rw", "nosuid", "nodev", "mode=0700", "size=64k", "ridmap"],
-            "uidMappings": [{"containerID": 0, "hostID": 2000, "size": 1}],
-            "gidMappings": [{"containerID": 0, "hostID": 2000, "size": 1}]
+            "uidMappings": [filesystem_uid_2000],
+            "gidMappings": [filesystem_gid_2000]
         }
     ]);
     let Value::Array(mut mounts) = mounts else {
@@ -381,16 +578,16 @@ fn build_bundle(
                 "type": "none",
                 "source": source,
                 "options": ["rbind", "rw", "nosuid", "nodev", "idmap"],
-                "uidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}],
-                "gidMappings": [{"containerID": 0, "hostID": 1000, "size": 1}]
+                "uidMappings": [bind_uid_1000],
+                "gidMappings": [bind_gid_1000]
             }),
             json!({
                 "destination": ridmap_bind_target,
                 "type": "none",
                 "source": source,
                 "options": ["rbind", "rw", "nosuid", "nodev", "ridmap"],
-                "uidMappings": [{"containerID": 0, "hostID": 2000, "size": 1}],
-                "gidMappings": [{"containerID": 0, "hostID": 2000, "size": 1}]
+                "uidMappings": [bind_uid_2000],
+                "gidMappings": [bind_gid_2000]
             }),
         ]);
         native_idmap_bind_paths = Some((source_target, idmap_bind_target, ridmap_bind_target));
@@ -401,22 +598,8 @@ fn build_bundle(
         .get_mut("linux")
         .ok_or_else(|| "rootfs enforcement config.linux is required".to_string())?;
     let linux = object_mut(linux, "linux")?;
-    linux.insert(
-        "uidMappings".into(),
-        json!([{
-            "containerID": 0,
-            "hostID": 0,
-            "size": IDMAP_VISIBLE_ID_RANGE
-        }]),
-    );
-    linux.insert(
-        "gidMappings".into(),
-        json!([{
-            "containerID": 0,
-            "hostID": 0,
-            "size": IDMAP_VISIBLE_ID_RANGE
-        }]),
-    );
+    linux.insert("uidMappings".into(), user_uid_mappings);
+    linux.insert("gidMappings".into(), user_gid_mappings);
     linux.insert("rootfsPropagation".into(), Value::String("shared".into()));
     linux.insert("maskedPaths".into(), json!(["/proc/meminfo", "/proc/irq"]));
     linux.insert("readonlyPaths".into(), json!(["/proc/sys"]));
@@ -516,17 +699,28 @@ fn enforcement_command(
         "set -eu; \
          evidence='{evidence}'; \
          : > \"$evidence\"; \
+         failure_step=pid-self; \
+         failure_detail=none; \
+         trap 'status=$?; if test \"$status\" -ne 0; then \
+           printf \"failure-step=%s status=%s detail=%s\\n\" \
+             \"$failure_step\" \"$status\" \"$failure_detail\" >> \"$evidence\"; \
+           fi; exit \"$status\"' EXIT; \
          self_pid=$$; \
          test \"$self_pid\" -gt 1; \
+         failure_step=pid-parent; \
          test \"$(/bin/busybox awk '/^PPid:/ {{ print $2 }}' \
            \"/proc/$self_pid/status\")\" = '1'; \
+         failure_step=pid-init-nspid; \
          test \"$(/bin/busybox awk '/^NSpid:/ {{ print $NF }}' /proc/1/status)\" = '1'; \
+         failure_step=pid-init-parent; \
+         test \"$(/bin/busybox awk '/^PPid:/ {{ print $2 }}' /proc/1/status)\" = '0'; \
+         failure_step=pid-self-nspid; \
          test \"$(/bin/busybox awk '/^NSpid:/ {{ print $NF }}' \
            \"/proc/$self_pid/status\")\" = \
            \"$self_pid\"; \
-         test \"$(/bin/busybox readlink /proc/1/ns/pid)\" = \
-           \"$(/bin/busybox readlink /proc/self/ns/pid)\"; \
          printf 'pid1-supervision-enforced\\n' >> \"$evidence\"; \
+         failure_step=orphan-supervision; \
+         failure_detail=none; \
          orphan_pid_file=\"${{evidence}}.orphan-pid\"; \
          /bin/busybox rm -f \"$orphan_pid_file\"; \
          /bin/busybox setsid /bin/busybox setsid /bin/busybox sh -c \
@@ -632,7 +826,8 @@ fn enforcement_command(
          if /bin/busybox touch '{write_probe}' 2>/dev/null; then \
            /bin/busybox rm -f '{write_probe}'; exit 41; \
          fi; \
-         printf 'readonly-rootfs-enforced\\n' >> \"$evidence\""
+         printf 'readonly-rootfs-enforced\\n' >> \"$evidence\"; \
+         trap - EXIT"
     )
 }
 
@@ -678,6 +873,45 @@ fn safe_component(value: &str) -> Result<&str, String> {
 }
 
 #[cfg(target_os = "linux")]
+fn set_native_owner(path: &Path, uid: u32, gid: u32) -> Result<(), String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| {
+            format!(
+                "failed to open native rootfs fixture path {} for ownership: {error}",
+                path.display()
+            )
+        })?;
+    // SAFETY: `file` is a live descriptor opened without following a final
+    // symlink, and Linux uid_t/gid_t are the validated u32 OCI ID domain.
+    if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
+        return Err(format!(
+            "failed to assign native rootfs fixture ownership {uid}:{gid} to {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        ));
+    }
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to verify native rootfs fixture ownership for {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.uid() == uid && metadata.gid() == gid {
+        Ok(())
+    } else {
+        Err(format!(
+            "native rootfs fixture ownership for {} read back as {}:{}, expected {uid}:{gid}",
+            path.display(),
+            metadata.uid(),
+            metadata.gid()
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
 struct NativeIdmapBindSource {
     root: PathBuf,
     child: PathBuf,
@@ -685,7 +919,7 @@ struct NativeIdmapBindSource {
 
 #[cfg(target_os = "linux")]
 impl NativeIdmapBindSource {
-    fn prepare(output_directory: &Path) -> Result<Self, String> {
+    fn prepare(output_directory: &Path, uid: u32, gid: u32) -> Result<Self, String> {
         let root = output_directory.join(IDMAP_BIND_SOURCE_DIRECTORY);
         let child = root.join("child");
         std::fs::create_dir(&root).map_err(|error| {
@@ -699,6 +933,11 @@ impl NativeIdmapBindSource {
             let _ = std::fs::remove_dir(&source.root);
             return Err(reason);
         }
+        if let Err(reason) = set_native_owner(&source.root, uid, gid) {
+            source.detach();
+            let _ = std::fs::remove_dir_all(&source.root);
+            return Err(reason);
+        }
         if let Err(error) = std::fs::create_dir(&source.child) {
             source.detach();
             let _ = std::fs::remove_dir_all(&source.root);
@@ -708,6 +947,11 @@ impl NativeIdmapBindSource {
             ));
         }
         if let Err(reason) = mount_private_tmpfs(&source.child) {
+            source.detach();
+            let _ = std::fs::remove_dir_all(&source.root);
+            return Err(reason);
+        }
+        if let Err(reason) = set_native_owner(&source.child, uid, gid) {
             source.detach();
             let _ = std::fs::remove_dir_all(&source.root);
             return Err(reason);
@@ -866,6 +1110,7 @@ mod tests {
     use super::{build_bundle, RootfsEnforcementFixture};
 
     const CONFIG: &str = include_str!("../../../fixtures/utility-vm/config.json");
+    const NATIVE_CONFIG: &str = include_str!("../../../fixtures/native-linux/config.json");
 
     #[tokio::test]
     async fn derives_and_cleans_a_complete_rootfs_enforcement_fixture() {
@@ -995,7 +1240,8 @@ mod tests {
         let temporary = tempdir().expect("temporary native fixture");
         let bundle_directory = temporary.path().join("bundle");
         std::fs::create_dir_all(bundle_directory.join("rootfs")).expect("fixture rootfs");
-        let base = OciBundle::from_json(bundle_directory, CONFIG).expect("qualified base bundle");
+        let base = OciBundle::from_json(bundle_directory, NATIVE_CONFIG)
+            .expect("qualified native base bundle");
         let bundle = build_bundle(
             &base,
             ".a3s-oci-rootfs-output-native",
@@ -1008,9 +1254,36 @@ mod tests {
             serde_json::from_str(bundle.config_json()).expect("native enforcement JSON");
         let mounts = config["mounts"].as_array().expect("mount array");
 
-        for (destination, mode, mapped_id) in [
-            ("/idmap/bind/nonrecursive", "idmap", 1000),
-            ("/idmap/bind/recursive", "ridmap", 2000),
+        assert_eq!(
+            config["linux"]["uidMappings"],
+            serde_json::json!([{"containerID": 0, "hostID": 100_000, "size": 65_536}])
+        );
+        assert_eq!(
+            config["linux"]["gidMappings"],
+            serde_json::json!([{"containerID": 0, "hostID": 200_000, "size": 65_536}])
+        );
+
+        for (destination, mapped_uid, mapped_gid) in [
+            ("/idmap/filesystem/nonrecursive", 101_000, 201_000),
+            ("/idmap/filesystem/recursive", 102_000, 202_000),
+        ] {
+            let mount = mounts
+                .iter()
+                .find(|mount| {
+                    mount["destination"]
+                        .as_str()
+                        .is_some_and(|path| path.ends_with(destination))
+                })
+                .expect("native ID-mapped filesystem mount");
+            assert_eq!(mount["uidMappings"][0]["containerID"], 0);
+            assert_eq!(mount["uidMappings"][0]["hostID"], mapped_uid);
+            assert_eq!(mount["gidMappings"][0]["containerID"], 0);
+            assert_eq!(mount["gidMappings"][0]["hostID"], mapped_gid);
+        }
+
+        for (destination, mode, mapped_uid, mapped_gid) in [
+            ("/idmap/bind/nonrecursive", "idmap", 101_000, 201_000),
+            ("/idmap/bind/recursive", "ridmap", 102_000, 202_000),
         ] {
             let mount = mounts
                 .iter()
@@ -1023,9 +1296,10 @@ mod tests {
             assert!(mount["options"]
                 .as_array()
                 .is_some_and(|options| options.iter().any(|option| option == mode)));
-            assert_eq!(mount["uidMappings"][0]["containerID"], 0);
-            assert_eq!(mount["uidMappings"][0]["hostID"], mapped_id);
-            assert_eq!(mount["gidMappings"], mount["uidMappings"]);
+            assert_eq!(mount["uidMappings"][0]["containerID"], 100_000);
+            assert_eq!(mount["uidMappings"][0]["hostID"], mapped_uid);
+            assert_eq!(mount["gidMappings"][0]["containerID"], 200_000);
+            assert_eq!(mount["gidMappings"][0]["hostID"], mapped_gid);
         }
 
         let command = config["process"]["args"][2]

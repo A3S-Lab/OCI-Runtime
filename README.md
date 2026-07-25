@@ -166,7 +166,8 @@ mkdir -p "$bundle/rootfs/bin" "$bundle/rootfs/proc" "$work_parent"
 cp fixtures/native-linux/config.json "$bundle/config.json"
 cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
 ln -s busybox "$bundle/rootfs/bin/sh"
-sudo chown -R 0:0 "$bundle/rootfs"
+sudo chown -R 100000:200000 "$bundle/rootfs"
+chmod 0755 "$demo_root"
 
 sudo target/debug/a3s-oci native-linux-smoke \
   --agent "$PWD/target/debug/a3s-oci-agent" \
@@ -184,7 +185,8 @@ byte-accurate captured stdout/stderr pagination, EOF, piped stdin,
 idempotent stdin close, and rejected writes after close or process exit,
 controlling-terminal allocation, initial and resized dimensions, interactive
 input, merged terminal output, and terminal VEOF close,
-the exact SIGKILL terminal results, running and stopped observation,
+the Box production mapping of container root to host UID 100000 and GID
+200000, the exact SIGKILL terminal results, running and stopped observation,
 idempotent mutation replay, marker verification, post-delete `NotFound`, and
 scoped cleanup. See
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
@@ -201,7 +203,7 @@ jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
 mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
 cp "$(command -v busybox)" "$bundle_b/rootfs/bin/busybox"
 ln -s busybox "$bundle_b/rootfs/bin/sh"
-sudo chown -R 0:0 "$bundle_b/rootfs"
+sudo chown -R 100000:200000 "$bundle_b/rootfs"
 
 sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --agent "$PWD/target/debug/a3s-oci-agent" \
@@ -477,8 +479,9 @@ The current executor implements a reviewed bootstrap vertical slice:
 
 - new UTS, mount, IPC, network, cgroup, PID, user, and time namespaces;
 - parent-authenticated rootful UID/GID mappings plus read-back verification,
-  with normalized monotonic and boottime offsets applied before the first
-  time-namespace child;
+  including the A3S Box production mapping of container root to non-root host
+  UID 100000 and GID 200000, with normalized monotonic and boottime offsets
+  applied before the first time-namespace child;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
   and time namespaces, including retained rootfs access after a mount join;
 - hostname and domain name configuration;
@@ -575,7 +578,7 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact init and exec SIGKILL status, exec/signal/update replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping, exact init and exec SIGKILL status, exec/signal/update replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v7 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |

@@ -5,7 +5,7 @@ use a3s_oci_sdk::OciBundle;
 use tokio::io::AsyncReadExt;
 
 pub(super) const MARKER_NAME: &str = ".a3s-oci-native-smoke";
-pub(super) const MARKER_CONTENTS: &[u8] = b"a3s-oci-native-user-time-v1\n";
+pub(super) const MARKER_CONTENTS: &[u8] = b"a3s-oci-native-box-mapping-v1\n";
 const MAX_MARKER_BYTES: u64 = 1_024;
 
 pub(super) async fn canonical_directory(path: &Path, description: &str) -> Result<PathBuf, String> {

@@ -224,10 +224,12 @@ read-only paths, and read-only rootfs state. Requested IPC, network, cgroup,
 PID, and time namespace setup follows the authenticated user-namespace
 mapping barrier and is atomic with UTS and mount isolation. The parent accepts
 one mapping request only from the already verified wrapper PID, installs and
-reads back exact UID/GID maps, then acknowledges the child. The wrapper writes
-and verifies monotonic/boottime offsets, clears inherited supplementary groups,
-and switches to mapped namespace-root UID/GID credentials before rootfs
-mutation. For a new PID namespace, a dedicated namespace PID 1 completes
+reads back exact UID/GID maps, then acknowledges the child. Native Linux CI
+uses the A3S Box mapping of container root to host UID 100000 and GID 200000
+and requires the workload to verify both maps. The wrapper writes and verifies
+monotonic/boottime offsets, clears inherited supplementary groups, and switches
+to mapped namespace-root UID/GID credentials before rootfs mutation. For a new
+PID namespace, a dedicated namespace PID 1 completes
 create-time setup and then forks the configured process as PID 2+. The guest
 agent authenticates the launcher → PID 1 → configured-process chain and
 reports the configured process's host-visible PID. Before returning created
