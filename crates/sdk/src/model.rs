@@ -217,6 +217,21 @@ pub struct CreateRequest {
     pub io: ProcessIo,
 }
 
+/// Client-side composition of the complete foreground OCI lifecycle.
+///
+/// `run` is deliberately not a runtime service or wire operation. The SDK
+/// submits `create`, `start`, `wait`, and `delete` independently so every
+/// mutation retains its normal durable replay identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunRequest {
+    /// Complete request used for the OCI create operation.
+    pub create: CreateRequest,
+    /// Stable context used for the OCI start operation.
+    pub start_context: OperationContext,
+    /// Stable context used for both normal and error-path forced cleanup.
+    pub delete_context: OperationContext,
+}
+
 /// OCI query-state operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateRequest {

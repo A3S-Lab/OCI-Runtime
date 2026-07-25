@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, CreateRequest, DeleteRequest,
     Error, ErrorCode, EventsRequest, ExecRequest, IoMode, KillRequest, ListRequest, ProcessIo,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RunRequest,
     SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
     WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
@@ -25,6 +25,24 @@ impl ValidateRequest for CreateRequest {
     fn validate(&self) -> Result<()> {
         self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
         validate_process_io(&self.io, initial_process_uses_terminal(self))
+    }
+}
+
+impl ValidateRequest for RunRequest {
+    fn validate(&self) -> Result<()> {
+        self.create.validate()?;
+        self.create
+            .bundle
+            .validate_for_phase(OciSemanticPhase::Start)?;
+        let create = &self.create.context.operation_id;
+        let start = &self.start_context.operation_id;
+        let delete = &self.delete_context.operation_id;
+        if create == start || create == delete || start == delete {
+            return Err(invalid_request(
+                "run requires distinct create, start, and delete operation IDs",
+            ));
+        }
+        Ok(())
     }
 }
 
