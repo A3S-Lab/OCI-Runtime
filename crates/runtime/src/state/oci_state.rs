@@ -1,6 +1,6 @@
 use a3s_oci_core::LifecycleState;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, State, StateBuilder};
-use a3s_oci_sdk::{ContainerId, ErrorCode, OciBundle, Result};
+use a3s_oci_sdk::{ContainerId, ErrorCode, OciBundle, Result, PAUSED_STATE_ANNOTATION};
 
 use super::filesystem::state_error;
 
@@ -19,6 +19,13 @@ pub(super) fn build_state(
         builder = builder.pid(pid);
     }
     if let Some(annotations) = bundle.spec().annotations().clone() {
+        if annotations.contains_key(PAUSED_STATE_ANNOTATION) {
+            return Err(state_error(
+                ErrorCode::InvalidArgument,
+                "build-oci-state",
+                format!("OCI annotation {PAUSED_STATE_ANNOTATION} is reserved for runtime state"),
+            ));
+        }
         builder = builder.annotations(annotations);
     }
     builder.build().map_err(|error| {
@@ -43,7 +50,10 @@ pub(super) fn rebuild_state(
     if let Some(pid) = pid {
         builder = builder.pid(pid);
     }
-    if let Some(annotations) = state.annotations().clone() {
+    if let Some(mut annotations) = state.annotations().clone() {
+        if status == ContainerState::Stopped {
+            annotations.remove(PAUSED_STATE_ANNOTATION);
+        }
         builder = builder.annotations(annotations);
     }
     builder.build().map_err(|error| {
@@ -53,6 +63,53 @@ pub(super) fn rebuild_state(
             format!("failed to update OCI state for {}: {error}", state.id()),
         )
     })
+}
+
+pub(super) fn rebuild_paused_state(state: &State, paused: bool) -> Result<State> {
+    if state.status() != &ContainerState::Running {
+        return Err(state_error(
+            ErrorCode::FailedPrecondition,
+            "update-container-freezer-state",
+            format!(
+                "container {} cannot change freezer state while {}",
+                state.id(),
+                state.status()
+            ),
+        ));
+    }
+    let mut annotations = state.annotations().clone().unwrap_or_default();
+    if paused {
+        annotations.insert(PAUSED_STATE_ANNOTATION.to_string(), "true".to_string());
+    } else {
+        annotations.remove(PAUSED_STATE_ANNOTATION);
+    }
+    let mut builder = StateBuilder::default()
+        .version(state.version())
+        .id(state.id())
+        .status(*state.status())
+        .bundle(state.bundle().clone())
+        .annotations(annotations);
+    if let Some(pid) = state.pid() {
+        builder = builder.pid(*pid);
+    }
+    builder.build().map_err(|error| {
+        state_error(
+            ErrorCode::Internal,
+            "update-container-freezer-state",
+            format!(
+                "failed to update freezer state for container {}: {error}",
+                state.id()
+            ),
+        )
+    })
+}
+
+pub(super) fn is_paused(state: &State) -> bool {
+    state
+        .annotations()
+        .as_ref()
+        .and_then(|annotations| annotations.get(PAUSED_STATE_ANNOTATION))
+        .is_some_and(|value| value == "true")
 }
 
 pub(super) const fn container_state(state: LifecycleState) -> ContainerState {

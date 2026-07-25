@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use a3s_oci_agent_protocol::{AgentProcess, AgentState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ErrorCode, ExitStatus, OperationId, ProcessId, Result};
+use a3s_oci_sdk::{
+    ErrorCode, ExitStatus, OperationId, ProcessId, ProcessRecord, ProcessTarget, Result,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -125,6 +127,7 @@ pub(super) struct ContainerRecord {
     pub(super) target: a3s_oci_sdk::ContainerTarget,
     pub(super) config_digest: String,
     pub(super) status: ContainerState,
+    pub(super) paused: bool,
     pub(super) process: PreparedProcess,
     pub(super) processes: BTreeMap<ProcessId, ExecProcess>,
     pub(super) runtime_directory: PathBuf,
@@ -143,12 +146,13 @@ impl ContainerRecord {
         let status = self.process.try_wait()?;
         if status.is_some() {
             self.status = ContainerState::Stopped;
+            self.paused = false;
         }
         Ok(status)
     }
 
     pub(super) fn state(&self) -> Result<AgentState> {
-        AgentState::new(
+        AgentState::new_with_pause(
             self.target.clone(),
             self.status,
             if self.status == ContainerState::Stopped {
@@ -157,11 +161,62 @@ impl ContainerRecord {
                 Some(self.process.pid())
             },
             self.config_digest.clone(),
+            self.paused,
         )
+    }
+
+    pub(super) async fn set_frozen(&mut self, frozen: bool) -> Result<()> {
+        self.refresh()?;
+        if self.status != ContainerState::Running {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "container cannot change freezer state while {}",
+                    self.status
+                ),
+            ));
+        }
+        if self.paused == frozen {
+            return Ok(());
+        }
+        self.process.set_frozen(frozen).await?;
+        self.paused = frozen;
+        Ok(())
+    }
+
+    pub(super) fn live_processes(&mut self) -> Result<Vec<ProcessRecord>> {
+        self.refresh()?;
+        let mut records = Vec::new();
+        if self.status != ContainerState::Stopped {
+            records.push(process_record(
+                &self.target,
+                ProcessId::init(),
+                self.process.pid(),
+                false,
+            )?);
+        }
+        for (process_id, process) in &mut self.processes {
+            if process.try_wait()?.is_none() {
+                records.push(process_record(
+                    &self.target,
+                    process_id.clone(),
+                    process.pid(),
+                    process.terminal(),
+                )?);
+            }
+        }
+        Ok(records)
     }
 
     pub(super) async fn force_stop_all(&mut self) -> Result<()> {
         let mut first_error = None;
+        if self.paused {
+            if let Err(error) = self.process.set_frozen(false).await {
+                first_error.get_or_insert(error);
+            } else {
+                self.paused = false;
+            }
+        }
         for process in self.processes.values_mut() {
             if let Err(error) = process.force_stop().await {
                 first_error.get_or_insert(error);
@@ -185,6 +240,8 @@ pub(super) enum MutationKind {
     Delete,
     Exec,
     SignalProcess,
+    Pause,
+    Resume,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +296,34 @@ fn reused_operation(operation_id: &OperationId) -> a3s_oci_sdk::Error {
         ErrorCode::Conflict,
         format!("guest operation ID {operation_id} was reused across operation kinds"),
     )
+}
+
+fn process_record(
+    container: &a3s_oci_sdk::ContainerTarget,
+    process_id: ProcessId,
+    pid: i32,
+    terminal: bool,
+) -> Result<ProcessRecord> {
+    let pid = u32::try_from(pid).map_err(|error| {
+        executor_error(
+            ErrorCode::Internal,
+            format!("live process PID {pid} does not fit the SDK process model: {error}"),
+        )
+    })?;
+    if pid == 0 {
+        return Err(executor_error(
+            ErrorCode::Internal,
+            "live process inventory contained PID zero",
+        ));
+    }
+    Ok(ProcessRecord {
+        target: ProcessTarget {
+            container: container.clone(),
+            process_id,
+        },
+        pid: Some(pid),
+        terminal,
+    })
 }
 
 #[cfg(test)]

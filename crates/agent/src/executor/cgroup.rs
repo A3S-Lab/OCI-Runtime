@@ -3,11 +3,16 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
+const CGROUP_EVENTS: &str = "cgroup.events";
+const CGROUP_FREEZE: &str = "cgroup.freeze";
 const CGROUP_PROCS: &str = "cgroup.procs";
+const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CGROUP_PATH_BYTES: usize = 4_096;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -193,6 +198,7 @@ impl CgroupPlan {
 #[derive(Debug)]
 pub(super) struct CgroupHandle {
     created: Vec<PathBuf>,
+    leaf: PathBuf,
     procs: File,
 }
 
@@ -244,11 +250,66 @@ impl CgroupHandle {
                     ),
                 )
             })?;
-        Ok(Some(Self { created, procs }))
+        Ok(Some(Self {
+            created,
+            leaf: current,
+            procs,
+        }))
     }
 
     pub(super) fn procs_descriptor(&self) -> RawFd {
         self.procs.as_raw_fd()
+    }
+
+    pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {
+        let freeze_path = self.leaf.join(CGROUP_FREEZE);
+        tokio::fs::write(&freeze_path, if frozen { b"1" } else { b"0" })
+            .await
+            .map_err(|error| {
+                cgroup_error(
+                    if error.kind() == io::ErrorKind::NotFound {
+                        ErrorCode::Unsupported
+                    } else {
+                        ErrorCode::PermissionDenied
+                    },
+                    format!(
+                        "failed to {} container cgroup {}: {error}",
+                        if frozen { "freeze" } else { "thaw" },
+                        self.leaf.display()
+                    ),
+                )
+            })?;
+
+        let deadline = tokio::time::Instant::now() + FREEZE_TIMEOUT;
+        loop {
+            let events_path = self.leaf.join(CGROUP_EVENTS);
+            let events = tokio::fs::read_to_string(&events_path)
+                .await
+                .map_err(|error| {
+                    cgroup_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "failed to verify container freezer state at {}: {error}",
+                            events_path.display()
+                        ),
+                    )
+                })?;
+            if cgroup_event_value(&events, "frozen") == Some(u64::from(frozen)) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(cgroup_error(
+                    ErrorCode::DeadlineExceeded,
+                    format!(
+                        "timed out waiting for container cgroup {} to become {}",
+                        self.leaf.display(),
+                        if frozen { "frozen" } else { "thawed" }
+                    ),
+                )
+                .retryable(true));
+            }
+            tokio::time::sleep(FREEZE_POLL_INTERVAL).await;
+        }
     }
 }
 
@@ -485,6 +546,15 @@ fn normalize_cgroup_value(value: &str) -> String {
     value.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn cgroup_event_value(events: &str, key: &str) -> Option<u64> {
+    events.lines().find_map(|line| {
+        let mut fields = line.split_ascii_whitespace();
+        (fields.next()? == key)
+            .then(|| fields.next()?.parse().ok())
+            .flatten()
+    })
+}
+
 fn ensure_real_directory(path: &Path) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         cgroup_error(
@@ -524,7 +594,9 @@ fn cgroup_error(code: ErrorCode, message: impl Into<String>) -> Error {
 mod tests {
     use a3s_oci_sdk::oci_spec::runtime::Linux;
 
-    use super::{cgroup2_mountpoint, shares_to_weight, unified_membership, CgroupPlan};
+    use super::{
+        cgroup2_mountpoint, cgroup_event_value, shares_to_weight, unified_membership, CgroupPlan,
+    };
 
     fn fixture_linux() -> Linux {
         let config: serde_json::Value =
@@ -570,5 +642,15 @@ mod tests {
         assert_eq!(shares_to_weight(2), 1);
         assert_eq!(shares_to_weight(1_024), 39);
         assert_eq!(shares_to_weight(262_144), 10_000);
+    }
+
+    #[test]
+    fn parses_exact_cgroup_event_values() {
+        let events = "populated 1\nfrozen 0\n";
+        assert_eq!(cgroup_event_value(events, "populated"), Some(1));
+        assert_eq!(cgroup_event_value(events, "frozen"), Some(0));
+        assert_eq!(cgroup_event_value(events, "missing"), None);
+        assert_eq!(cgroup_event_value("frozen invalid\n", "frozen"), None);
+        assert_eq!(cgroup_event_value("frozen\n", "frozen"), None);
     }
 }

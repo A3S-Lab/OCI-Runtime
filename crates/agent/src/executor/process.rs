@@ -316,6 +316,19 @@ impl PreparedProcess {
         self.cgroup.as_ref().map(CgroupHandle::procs_descriptor)
     }
 
+    pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {
+        self.cgroup
+            .as_ref()
+            .ok_or_else(|| {
+                process_error(
+                    ErrorCode::Unsupported,
+                    "container pause requires an explicit cgroup v2 path",
+                )
+            })?
+            .set_frozen(frozen)
+            .await
+    }
+
     pub(super) async fn force_stop(&mut self) -> Result<()> {
         if self.try_wait()?.is_some() {
             return Ok(());

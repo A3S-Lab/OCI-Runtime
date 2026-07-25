@@ -83,14 +83,15 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 - **Strict Validation**: Validate OCI 1.0.0 through 1.3.0 schemas, semantic
   relationships, paths, payload bounds, and immutable SHA-256 digests before
   state mutation
-- **Durable Lifecycle**: Persist create, start, kill, delete, exec, and
-  per-process signal with monotonic generations, operation IDs, replay,
-  fencing, reconciliation, and quarantine; cache stable init and exec-process
-  exit status across host-service reopen
+- **Durable Lifecycle**: Persist create, start, kill, pause, resume, delete,
+  exec, and per-process signal with monotonic generations, operation IDs,
+  replay, fencing, reconciliation, and quarantine; cache stable init and
+  exec-process exit status across host-service reopen
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, pidfd
-  init/exec process-control, stable per-process exit-status, and cleanup
-  implementation directly on Linux and through the guest agent, with
-  independently fenced per-container generations
+  init/exec process-control, cgroup-v2 pause/resume, live process inventory,
+  stable per-process exit-status, and cleanup implementation directly on
+  Linux and through the guest agent, with independently fenced per-container
+  generations
 - **Cross-Platform Drivers**: Inspect native Linux, KVM, HVF, and WHPX
   prerequisites without silently weakening requested isolation
 - **Typed SDK and IPC**: Expose an async `Send + Sync` Rust contract with
@@ -142,8 +143,9 @@ prerequisite while remaining `probe-only`.
 ### Native Linux lifecycle
 
 The explicit rootful development driver proves the current OCI
-create/start/kill/wait/delete and exec/signal/wait-process vertical slice
-without opening `/dev/kvm` or initializing libkrun:
+create/start/pause/resume/processes/kill/wait/delete and
+exec/signal/wait-process vertical slice without opening `/dev/kvm` or
+initializing libkrun:
 
 ```sh
 sudo apt-get install busybox-static
@@ -166,9 +168,11 @@ sudo target/debug/a3s-oci native-linux-smoke \
 
 Success requires the exact create/start barrier, exact-target exec and
 duplicate process-ID rejection, replayed per-process signal, bounded and
-stable init and exec waits, the exact SIGKILL terminal results, running and
-stopped observation, idempotent mutation replay, marker verification,
-post-delete `NotFound`, and scoped cleanup. See
+stable init and exec waits, an exact live init/exec process inventory, a real
+progress-producing workload that stops under cgroup-v2 pause and advances
+again after resume, the exact SIGKILL terminal results, running and stopped
+observation, idempotent mutation replay, marker verification, post-delete
+`NotFound`, and scoped cleanup. See
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
 remaining production gates.
 
@@ -178,6 +182,9 @@ Create a second distinct bundle to run the multi-container gate:
 bundle_b="$demo_root/bundle-b"
 mkdir -p "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc"
 cp fixtures/native-linux/config.json "$bundle_b/config.json"
+jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
+  "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
+mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
 cp "$(command -v busybox)" "$bundle_b/rootfs/bin/busybox"
 ln -s busybox "$bundle_b/rootfs/bin/sh"
 sudo chown -R 0:0 "$bundle_b/rootfs"
@@ -304,14 +311,14 @@ target/debug/a3s-oci agent-vm-smoke \
   --console "$rootfs_dir/agent-console.log"
 ```
 
-An `a3s.oci.agent-vm-smoke.v4` success proves a private host socket, the
+An `a3s.oci.agent-vm-smoke.v5` success proves a private host socket, the
 expected shim and direct worker PID relationship, one-time token
-authentication, protocol version 3, the arm64 guest identity, and the exact
-nine guest operations (`create`, `state`, `start`, `kill`, `delete`, `wait`,
-`exec`, `signal-process`, and `wait-process`). It also requires the exact runtime-owned
-endpoint to be removed, the current process's complete descriptor inventory to
-return to its pre-session baseline, and both observed host process IDs to
-disappear.
+authentication, protocol version 4, the arm64 guest identity, and the exact
+twelve guest operations (`create`, `state`, `start`, `kill`, `delete`, `wait`,
+`exec`, `signal-process`, `wait-process`, `pause`, `resume`, and `processes`).
+It also requires the exact runtime-owned endpoint to be removed, the current
+process's complete descriptor inventory to return to its pre-session baseline,
+and both observed host process IDs to disappear.
 
 The fixed lifecycle gate then runs the same reviewed OCI bundle through HVF
 that the Windows qualification runs through WHPX:
@@ -330,14 +337,17 @@ target/debug/a3s-oci oci-vm-smoke \
   --console "$rootfs_dir/oci-console.log"
 ```
 
-Success proves distinct create and start, exact create/kill/delete replay, a
+An `a3s.oci.oci-vm-smoke.v5` success proves distinct create and start, exact
+create/kill/delete replay, a
 bounded wait while running, exact and replayed normal exit status after the
 SIGTERM trap, running and stopped observation, marker verification,
 post-delete `NotFound`, exact-target exec replay, duplicate process-ID
 rejection, bounded and stable per-process wait, replayed pidfd signal delivery,
-init-exit cleanup of a live exec process, and nominal endpoint, process,
-marker, and guest-runtime cleanup. This remains a fixed development profile
-rather than an arbitrary-workload driver.
+an exact init/exec process inventory, pause/resume replay, a real workload that
+stops advancing while frozen and continues after resume, init-exit cleanup of
+a live exec process, and nominal endpoint, process, marker, and guest-runtime
+cleanup. This remains a fixed development profile rather than an
+arbitrary-workload driver.
 
 The multi-container gate places two distinct bundles in the same guest and
 keeps both configured processes behind the create barrier:
@@ -346,6 +356,9 @@ keeps both configured processes behind the create barrier:
 bundle_b="$rootfs_dir/rootfs/var/lib/a3s-oci-smoke/bundle-b"
 mkdir -p "$bundle_b/rootfs"
 cp fixtures/utility-vm/config.json "$bundle_b/config.json"
+jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
+  "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
+mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
 tar -xzf "$rootfs_archive" -C "$bundle_b/rootfs"
 sudo chown -R 0:0 "$bundle_b/rootfs"
 
@@ -457,7 +470,8 @@ The current executor implements a reviewed bootstrap vertical slice:
 - OCI masked paths, read-only paths, and a read-only rootfs;
 - a bounded cgroup v2 profile covering memory limit/reservation/swap, CPU
   quota/period/shares/cpuset, and PID limits, with controller availability and
-  setting read-back checks;
+  setting read-back checks, plus `cgroup.freeze` transitions verified through
+  `cgroup.events`;
 - exact process bounding/effective/permitted/inheritable/ambient capability
   sets, including an init capability ceiling for later exec processes;
 - bounded OCI device profiles with default-deny policy-shape validation,
@@ -473,7 +487,8 @@ The current executor implements a reviewed bootstrap vertical slice:
 - exact-generation exec process registries with reserved init identity,
   retained root and namespace descriptors, parent/PID/root/namespace
   authentication, pidfd-backed per-process signaling, stable repeated wait,
-  process-group cleanup, and automatic exec termination when init exits.
+  live init/exec inventory, process-group cleanup, and automatic exec
+  termination when init exits.
 
 The supported user-namespace slice is rootful: it requires both UID and GID
 mappings, coverage for container ID 0 and every configured process ID, and an
@@ -500,15 +515,16 @@ gates.
 
 The durable host implements the five core lifecycle operations around an
 injected `RuntimeDriver` and conditionally exposes init wait, exact-target
-exec, per-process signal, and per-process wait only when that exact driver
-implements them. The native Linux driver maps all four optional operations to
-the protocol-v3 Linux guest executor. Exec and signal mutations use durable
-global operation journals and generation-scoped process records; init and
-exec waits cache their exact normal-exit or signal result across repeated
-calls and host-service reopen. The guest advertises its nine operations only
-after retaining the exact container generation, process ID, pidfd, rootfs,
-namespace identities, replay result, and cleanup ownership. Methods without
-enforcement remain explicitly unsupported and are not advertised early.
+exec, per-process signal/wait, pause/resume, and process inventory only when
+that exact driver implements them. The native Linux driver maps all seven
+optional control groups to the protocol-v4 Linux guest executor. Exec, signal,
+pause, and resume mutations use durable global operation journals and
+generation-scoped records; init and exec waits cache their exact normal-exit
+or signal result across repeated calls and host-service reopen. The guest
+advertises its twelve operations only after retaining the exact container
+generation, process ID, pidfd, cgroup, rootfs, namespace identities, replay
+result, and cleanup ownership. Methods without enforcement remain explicitly
+unsupported and are not advertised early.
 
 The OCI `Features` document validates against the pinned 1.3.0 schema. It
 reports the 61 recognized mount options in sorted order, all eight implemented
@@ -529,7 +545,7 @@ boundary.
 | --- | --- | --- | --- |
 | Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact init and exec SIGKILL status, exec/signal replay, stable per-process wait, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v3 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v4 arm64 guest agent, pidfd-backed fixed lifecycle with pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -580,7 +596,7 @@ flowchart TB
         shim --> hypervisor --> bridge --> agent
     end
 
-    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 supervision · pidfds · exec/signal/wait · scoped cleanup"]
+    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 supervision · pidfds<br/>exec/signal/wait · pause/resume/processes · scoped cleanup"]
 
     client --> service
     selection -->|"shared-host-kernel"| native_driver
@@ -694,7 +710,7 @@ cargo clippy \
 
 Platform CI covers:
 
-- the 356-point durable commit matrix and all 20 `RuntimeDriver` call
+- the 468-point durable commit matrix and all 26 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
   existing-namespace and rootfs/mount isolation, and three-phase no-delete

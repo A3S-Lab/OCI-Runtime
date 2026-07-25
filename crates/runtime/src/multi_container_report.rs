@@ -381,6 +381,9 @@ impl NativeLinuxMultiContainerSmokeReport {
                     RuntimeOperation::Delete,
                     RuntimeOperation::Exec,
                     RuntimeOperation::Wait,
+                    RuntimeOperation::Pause,
+                    RuntimeOperation::Resume,
+                    RuntimeOperation::Processes,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
                 ]

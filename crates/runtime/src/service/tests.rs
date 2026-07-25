@@ -9,19 +9,19 @@ use a3s_oci_sdk::oci_spec::runtime::{
     Arch, ContainerState, LinuxNamespaceType, LinuxSeccompAction, Process,
 };
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error,
-    ErrorCode, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest,
-    ListRequest, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
-    ProcessId, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal,
-    SignalProcessRequest, StartRequest, StateRequest, TrustDomainId, WaitProcessRequest,
-    WaitRequest,
+    async_trait, ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest,
+    DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, Generation, IoMode,
+    IsolationRequest, KillRequest, ListRequest, OciBundle, OciRuntimeService, OciSchemaValidator,
+    OperationContext, OperationId, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    ProcessesRequest, Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
+    StateRequest, TrustDomainId, WaitProcessRequest, WaitRequest,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
 use crate::{
-    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
-    DriverWaitRequest, RuntimeDriver,
+    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
+    DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 
 mod fault_matrix;
@@ -51,6 +51,9 @@ enum DriverCall {
     Exec(DriverExecRequest),
     SignalProcess(DriverSignalProcessRequest),
     WaitProcess(DriverWaitProcessRequest),
+    Pause(DriverContainerOperationRequest),
+    Resume(DriverContainerOperationRequest),
+    Processes(ContainerTarget),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -116,6 +119,16 @@ impl RecordingDriver {
             RuntimeOperation::Exec,
             RuntimeOperation::SignalProcess,
             RuntimeOperation::WaitProcess,
+        ]);
+        driver
+    }
+
+    fn with_control_operations() -> Self {
+        let mut driver = Self::with_process_operations();
+        driver.operations.extend([
+            RuntimeOperation::Pause,
+            RuntimeOperation::Resume,
+            RuntimeOperation::Processes,
         ]);
         driver
     }
@@ -519,6 +532,103 @@ impl RuntimeDriver for RecordingDriver {
                 .retryable(true)
             })
     }
+
+    async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Pause(request.clone()));
+        if let Some(error) = self.take_failure("pause") {
+            return Err(error);
+        }
+        self.set_paused(&request.target, true)
+    }
+
+    async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Resume(request.clone()));
+        if let Some(error) = self.take_failure("resume") {
+            return Err(error);
+        }
+        self.set_paused(&request.target, false)
+    }
+
+    async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Processes(target.clone()));
+        if let Some(error) = self.take_failure("processes") {
+            return Err(error);
+        }
+        let generation = Self::exact_generation(&target)?;
+        let states = self.states.lock().expect("driver states lock");
+        let (actual_generation, state) = states.get(&target.id).copied().ok_or_else(|| {
+            Error::new(ErrorCode::NotFound, "driver container does not exist")
+                .for_operation("driver-processes")
+        })?;
+        if generation != actual_generation {
+            return Err(
+                Error::new(ErrorCode::Conflict, "driver container generation mismatch")
+                    .for_operation("driver-processes"),
+            );
+        }
+        let mut records = Vec::new();
+        if state.status() != ContainerState::Stopped {
+            records.push(ProcessRecord {
+                target: ProcessTarget {
+                    container: target.clone(),
+                    process_id: ProcessId::init(),
+                },
+                pid: state.pid().and_then(|pid| u32::try_from(pid).ok()),
+                terminal: false,
+            });
+        }
+        drop(states);
+        for ((id, process_generation, process_id), (process, exit)) in
+            self.processes.lock().expect("driver processes lock").iter()
+        {
+            if id == &target.id && *process_generation == generation && exit.is_none() {
+                records.push(ProcessRecord {
+                    target: ProcessTarget {
+                        container: target.clone(),
+                        process_id: process_id.clone(),
+                    },
+                    pid: u32::try_from(process.pid()).ok(),
+                    terminal: process.terminal(),
+                });
+            }
+        }
+        Ok(records)
+    }
+}
+
+impl RecordingDriver {
+    fn set_paused(&self, target: &ContainerTarget, paused: bool) -> Result<DriverState> {
+        let generation = Self::exact_generation(target)?;
+        let mut states = self.states.lock().expect("driver states lock");
+        let (actual_generation, state) = states.get_mut(&target.id).ok_or_else(|| {
+            Error::new(ErrorCode::NotFound, "driver container does not exist")
+                .for_operation("driver-freezer")
+        })?;
+        if generation != *actual_generation {
+            return Err(
+                Error::new(ErrorCode::Conflict, "driver container generation mismatch")
+                    .for_operation("driver-freezer"),
+            );
+        }
+        if state.status() != ContainerState::Running {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "driver freezer requires a running container",
+            )
+            .for_operation("driver-freezer"));
+        }
+        *state = state.with_paused(paused)?;
+        Ok(*state)
+    }
 }
 
 fn identifier<T>(value: &str, constructor: impl FnOnce(String) -> a3s_oci_sdk::Result<T>) -> T {
@@ -857,6 +967,120 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
 }
 
 #[tokio::test]
+async fn control_plane_operations_are_durable_and_processes_are_exact() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::with_control_operations());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+
+    let info = service.features().await.expect("configured features");
+    for operation in [
+        RuntimeOperation::Exec,
+        RuntimeOperation::Pause,
+        RuntimeOperation::Resume,
+        RuntimeOperation::Processes,
+    ] {
+        assert!(
+            info.operations.contains(&operation),
+            "missing {operation:?}"
+        );
+    }
+
+    let create = create_request(&bundle_directory, "control-create");
+    let created = service.create(create.clone()).await.expect("create");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("control-start")),
+            target: target.clone(),
+        })
+        .await
+        .expect("start");
+    let worker = service
+        .exec(exec_request(
+            target.clone(),
+            "control-exec",
+            "control-worker",
+        ))
+        .await
+        .expect("exec worker");
+
+    let processes = service
+        .processes(ProcessesRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("list processes");
+    assert_eq!(processes.len(), 2);
+    assert!(processes
+        .iter()
+        .any(|process| process.target.process_id.is_init() && process.pid == Some(4_242)));
+    assert!(processes.iter().any(|process| process == &worker));
+
+    let pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("control-pause")),
+        target: target.clone(),
+    };
+    let paused = service.pause(pause.clone()).await.expect("pause");
+    assert!(paused.is_paused());
+    assert_eq!(
+        service.pause(pause).await.expect("replay pause"),
+        paused,
+        "pause replay must return the durable result"
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Pause(_)))
+            .count(),
+        1,
+        "pause replay must not repeat the driver call"
+    );
+
+    let error = service
+        .exec(exec_request(
+            target.clone(),
+            "control-exec-paused",
+            "blocked-worker",
+        ))
+        .await
+        .expect_err("exec while paused must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Exec(_)))
+            .count(),
+        1,
+        "rejected exec must not reach the driver"
+    );
+
+    let resume = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("control-resume")),
+        target: target.clone(),
+    };
+    let running = service.resume(resume.clone()).await.expect("resume");
+    assert!(!running.is_paused());
+    assert_eq!(
+        service.resume(resume).await.expect("replay resume"),
+        running,
+        "resume replay must return the durable result"
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Resume(_)))
+            .count(),
+        1,
+        "resume replay must not repeat the driver call"
+    );
+}
+
+#[tokio::test]
 async fn wait_is_exposed_only_when_the_driver_advertises_it() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let driver = Arc::new(RecordingDriver::without_wait());
@@ -989,6 +1213,149 @@ async fn retryable_driver_failure_keeps_the_same_operation_resumable() {
             .filter(|call| matches!(call, DriverCall::Create(_)))
             .count(),
         2
+    );
+}
+
+#[tokio::test]
+async fn freezer_driver_failures_replay_or_resume_according_to_retryability() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::with_control_operations());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+    let create = create_request(&bundle_directory, "freezer-failure-create");
+    let created = service.create(create.clone()).await.expect("create");
+    let target = ContainerTarget::exact(create.id, created.generation);
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("freezer-failure-start")),
+            target: target.clone(),
+        })
+        .await
+        .expect("start");
+
+    let terminal_pause =
+        Error::new(ErrorCode::Internal, "terminal pause failure").for_operation("pause");
+    driver.fail_next("pause", terminal_pause.clone());
+    let failed_pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("terminal-pause")),
+        target: target.clone(),
+    };
+    assert_eq!(
+        service
+            .pause(failed_pause.clone())
+            .await
+            .expect_err("pause must fail"),
+        terminal_pause
+    );
+    assert_eq!(
+        service
+            .pause(failed_pause)
+            .await
+            .expect_err("terminal pause must replay"),
+        terminal_pause
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Pause(_)))
+            .count(),
+        1
+    );
+
+    let retryable_pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("retryable-pause")),
+        target: target.clone(),
+    };
+    driver.fail_next(
+        "pause",
+        Error::new(ErrorCode::Unavailable, "freezer is busy")
+            .for_operation("pause")
+            .retryable(true),
+    );
+    assert!(
+        service
+            .pause(retryable_pause.clone())
+            .await
+            .expect_err("first pause attempt must be retryable")
+            .retryable
+    );
+    assert!(service
+        .pause(retryable_pause)
+        .await
+        .expect("same pause operation resumes")
+        .is_paused());
+
+    let terminal_resume =
+        Error::new(ErrorCode::Internal, "terminal resume failure").for_operation("resume");
+    driver.fail_next("resume", terminal_resume.clone());
+    let failed_resume = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("terminal-resume")),
+        target: target.clone(),
+    };
+    assert_eq!(
+        service
+            .resume(failed_resume.clone())
+            .await
+            .expect_err("resume must fail"),
+        terminal_resume
+    );
+    assert_eq!(
+        service
+            .resume(failed_resume)
+            .await
+            .expect_err("terminal resume must replay"),
+        terminal_resume
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Resume(_)))
+            .count(),
+        1
+    );
+
+    let retryable_resume = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("retryable-resume")),
+        target,
+    };
+    driver.fail_next(
+        "resume",
+        Error::new(ErrorCode::Unavailable, "thaw is busy")
+            .for_operation("resume")
+            .retryable(true),
+    );
+    assert!(
+        service
+            .resume(retryable_resume.clone())
+            .await
+            .expect_err("first resume attempt must be retryable")
+            .retryable
+    );
+    assert!(!service
+        .resume(retryable_resume)
+        .await
+        .expect("same resume operation resumes")
+        .is_paused());
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Pause(_)))
+            .count(),
+        3,
+        "terminal pause calls once and retryable pause calls twice"
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Resume(_)))
+            .count(),
+        3,
+        "terminal resume calls once and retryable resume calls twice"
     );
 }
 

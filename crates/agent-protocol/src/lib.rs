@@ -13,12 +13,13 @@ mod wire;
 
 pub use client::AgentClient;
 pub use model::{
-    AgentBundle, AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
-    AgentHello, AgentKillRequest, AgentOperation, AgentProcess, AgentProcessExit,
-    AgentProcessSignal, AgentRequest, AgentResponse, AgentSignalProcessRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
-    SessionToken, AGENT_MAX_FRAME_BYTES, AGENT_PROTOCOL_VERSION_MAX, AGENT_PROTOCOL_VERSION_MIN,
-    AGENT_SESSION_TOKEN_BYTES, AGENT_SESSION_TOKEN_ENV,
+    AgentBundle, AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest,
+    AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation,
+    AgentProcess, AgentProcessExit, AgentProcessSignal, AgentProcessesRequest, AgentRequest,
+    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, GuestPath, SessionToken, AGENT_MAX_FRAME_BYTES,
+    AGENT_PROTOCOL_VERSION_MAX, AGENT_PROTOCOL_VERSION_MIN, AGENT_SESSION_TOKEN_BYTES,
+    AGENT_SESSION_TOKEN_ENV,
 };
 pub use server::{serve_agent_connection, GuestAgentService};
 pub use transport::{AgentVsockEndpoint, AGENT_VSOCK_PORT};

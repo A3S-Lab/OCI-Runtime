@@ -3,9 +3,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
-    AgentKillRequest, AgentSignalProcessRequest, AgentStartRequest, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
+    AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
+    AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
+    AgentSignalProcessRequest, AgentStartRequest, AgentStateRequest, AgentWaitProcessRequest,
+    AgentWaitRequest, GuestPath,
 };
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
@@ -22,9 +23,11 @@ const GUEST_CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const FREEZER_OBSERVATION_DELAY: Duration = Duration::from_millis(1_250);
 const LINUX_SIGTERM: i32 = 15;
 const LINUX_SIGKILL: i32 = 9;
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
+const PROGRESS_PATH: &str = "/.a3s-oci-create-start-smoke";
 
 pub(super) trait AgentStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -88,6 +91,7 @@ pub(super) async fn exercise<T: AgentStream>(
 
     wait_for_running_marker(client, target, marker, report).await?;
     let cleanup_process = exercise_exec_processes(client, target, nonce).await?;
+    exercise_control_plane(client, target, &cleanup_process, nonce, marker, report).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, target).await?;
     if !report.wait_timeout_enforced {
         return Err("guest wait returned before the running init process exited".into());
@@ -186,12 +190,131 @@ pub(super) async fn exercise<T: AgentStream>(
     Ok(())
 }
 
+async fn exercise_control_plane<T: AgentStream>(
+    client: &AgentClient<T>,
+    target: &ContainerTarget,
+    worker: &ProcessTarget,
+    nonce: &str,
+    marker: &Path,
+    report: &mut OciVmSmokeReport,
+) -> Result<(), String> {
+    wait_for_marker_change(marker, MARKER_CONTENTS).await?;
+    let processes = guest_call(
+        "process inventory before pause",
+        client.processes(AgentProcessesRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    report.processes_verified = process_inventory_is_exact(&processes, target, worker);
+    if !report.processes_verified {
+        return Err(
+            "guest process inventory did not contain exactly the live init and exec".into(),
+        );
+    }
+
+    let pause = AgentContainerOperationRequest {
+        context: operation(nonce, "pause")?,
+        target: target.clone(),
+    };
+    let paused = guest_call("pause", client.pause(pause.clone())).await?;
+    if !paused.paused()
+        || guest_call("replayed pause", client.pause(pause)).await? != paused
+        || !guest_call(
+            "state while paused",
+            client.state(AgentStateRequest {
+                target: target.clone(),
+            }),
+        )
+        .await?
+        .paused()
+    {
+        return Err("guest pause did not expose an exact frozen state".into());
+    }
+    let paused_processes = guest_call(
+        "process inventory while paused",
+        client.processes(AgentProcessesRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    if !process_inventory_is_exact(&paused_processes, target, worker) {
+        return Err("guest pause changed the live process inventory".into());
+    }
+
+    let frozen_progress = read_marker(marker).await?;
+    sleep(FREEZER_OBSERVATION_DELAY).await;
+    report.pause_froze_workload = read_marker(marker).await? == frozen_progress;
+    if !report.pause_froze_workload {
+        return Err("guest workload advanced while its cgroup was frozen".into());
+    }
+
+    let resume = AgentContainerOperationRequest {
+        context: operation(nonce, "resume")?,
+        target: target.clone(),
+    };
+    let resumed = guest_call("resume", client.resume(resume.clone())).await?;
+    if resumed.paused()
+        || guest_call("replayed resume", client.resume(resume)).await? != resumed
+        || guest_call(
+            "state after resume",
+            client.state(AgentStateRequest {
+                target: target.clone(),
+            }),
+        )
+        .await?
+        .paused()
+    {
+        return Err("guest resume did not expose an exact running state".into());
+    }
+    wait_for_marker_change(marker, &frozen_progress).await?;
+    report.resume_advanced_workload = true;
+    Ok(())
+}
+
+fn process_inventory_is_exact(
+    processes: &[a3s_oci_sdk::ProcessRecord],
+    target: &ContainerTarget,
+    worker: &ProcessTarget,
+) -> bool {
+    processes.len() == 2
+        && processes.iter().all(|process| {
+            process.target.container == *target
+                && process.pid.is_some_and(|pid| pid > 0)
+                && !process.terminal
+        })
+        && processes
+            .iter()
+            .any(|process| process.target.process_id.is_init())
+        && processes.iter().any(|process| process.target == *worker)
+}
+
+async fn wait_for_marker_change(marker: &Path, previous: &[u8]) -> Result<Vec<u8>, String> {
+    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+    loop {
+        let current = read_marker(marker).await?;
+        if current != previous {
+            return Ok(current);
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out waiting for guest workload progress".into());
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
 async fn exercise_exec_processes<T: AgentStream>(
     client: &AgentClient<T>,
     target: &ContainerTarget,
     nonce: &str,
 ) -> Result<ProcessTarget, String> {
-    let controlled = exec_request(target, nonce, "controlled", "exec-controlled")?;
+    let controlled = exec_request(
+        target,
+        nonce,
+        "controlled",
+        "exec-controlled",
+        "while :; do :; done",
+    )?;
     let controlled_target = controlled.target.clone();
     let created = guest_call("exec controlled process", client.exec(controlled.clone())).await?;
     if created.target() != &controlled_target || created.pid() <= 0 || created.terminal() {
@@ -269,7 +392,11 @@ async fn exercise_exec_processes<T: AgentStream>(
         return Err("repeated exec wait returned a different result".into());
     }
 
-    let cleanup = exec_request(target, nonce, "cleanup", "exec-cleanup")?;
+    let progress_command = format!(
+        "n=0; while :; do n=$((n + 1)); printf '%s\\n' \"$n\" > {PROGRESS_PATH}; \
+         /bin/busybox sleep 1; done"
+    );
+    let cleanup = exec_request(target, nonce, "cleanup", "exec-cleanup", &progress_command)?;
     let cleanup_target = cleanup.target.clone();
     guest_call("exec cleanup process", client.exec(cleanup)).await?;
     Ok(cleanup_target)
@@ -280,11 +407,12 @@ fn exec_request(
     nonce: &str,
     process_suffix: &str,
     operation_suffix: &str,
+    command: &str,
 ) -> Result<AgentExecRequest, String> {
     let process: Process = serde_json::from_value(serde_json::json!({
         "terminal": false,
         "user": {"uid": 0, "gid": 0, "umask": 18},
-        "args": ["/bin/sh", "-c", "while :; do :; done"],
+        "args": ["/bin/sh", "-c", command],
         "env": ["PATH=/bin:/usr/bin"],
         "cwd": "/",
         "noNewPrivileges": true

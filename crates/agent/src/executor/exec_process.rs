@@ -27,6 +27,7 @@ pub(super) struct ExecProcess {
     child: Child,
     pid: i32,
     pidfd: PidFd,
+    terminal: bool,
     exit_status: Option<ExitStatus>,
 }
 
@@ -35,6 +36,7 @@ impl ExecProcess {
         snapshot: &Path,
         init_executable: &Path,
         init_process: &super::process::PreparedProcess,
+        terminal: bool,
     ) -> Result<Self> {
         let context = init_process.execution_context();
         let init_pidfd = init_process.pidfd_descriptor();
@@ -234,12 +236,17 @@ impl ExecProcess {
             child,
             pid: runtime_pid,
             pidfd,
+            terminal,
             exit_status: None,
         })
     }
 
     pub(super) const fn pid(&self) -> i32 {
         self.pid
+    }
+
+    pub(super) const fn terminal(&self) -> bool {
+        self.terminal
     }
 
     pub(super) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {

@@ -6,7 +6,7 @@ use crate::fault::DurableMutation;
 
 use super::filesystem::state_error;
 use super::model::{StoredOperation, StoredOperationKind, StoredOperationStatus};
-use super::oci_state::{container_state, rebuild_state};
+use super::oci_state::{container_state, is_paused, rebuild_paused_state, rebuild_state};
 use super::{generation_conflict, DurableStateStore};
 
 impl DurableStateStore {
@@ -16,7 +16,18 @@ impl DurableStateStore {
         status: ContainerState,
         pid: Option<i32>,
     ) -> Result<ContainerRecord> {
-        validate_observation(status, pid)?;
+        self.observe_state_with_pause(target, status, pid, false)
+            .await
+    }
+
+    pub(crate) async fn observe_state_with_pause(
+        &self,
+        target: &ContainerTarget,
+        status: ContainerState,
+        pid: Option<i32>,
+        paused: bool,
+    ) -> Result<ContainerRecord> {
+        validate_observation(status, pid, paused)?;
         let _guard = self.gate.lock().await;
         let mut stored = self.load_stored_container(&target.id).await?;
         if let Some(expected) = target.generation {
@@ -40,7 +51,7 @@ impl DurableStateStore {
         };
         let completes_active = active
             .as_ref()
-            .is_some_and(|operation| observation_completes(operation.kind, status));
+            .is_some_and(|operation| observation_completes(operation.kind, status, paused));
         let mut state_changed = false;
         match (current, status) {
             (ContainerState::Created, ContainerState::Created)
@@ -55,6 +66,11 @@ impl DurableStateStore {
                             stored.record.state.pid()
                         ),
                     ));
+                }
+                if is_paused(&stored.record.state) != paused {
+                    stored.record.state = rebuild_paused_state(&stored.record.state, paused)?;
+                    OciSchemaValidator::new()?.validate_state(&stored.record.state)?;
+                    state_changed = true;
                 }
             }
             (ContainerState::Created, ContainerState::Running)
@@ -73,6 +89,9 @@ impl DurableStateStore {
                     })?;
                 stored.record.state =
                     rebuild_state(&stored.record.state, container_state(running), pid)?;
+                if paused {
+                    stored.record.state = rebuild_paused_state(&stored.record.state, true)?;
+                }
                 OciSchemaValidator::new()?.validate_state(&stored.record.state)?;
                 state_changed = true;
             }
@@ -128,11 +147,12 @@ impl DurableStateStore {
             })?;
             operation.outcome = match operation.kind {
                 StoredOperationKind::SignalProcess => StoredOperationStatus::SucceededEmpty,
-                StoredOperationKind::Start | StoredOperationKind::Kill => {
-                    StoredOperationStatus::Succeeded {
-                        response: stored.record.clone(),
-                    }
-                }
+                StoredOperationKind::Start
+                | StoredOperationKind::Kill
+                | StoredOperationKind::Pause
+                | StoredOperationKind::Resume => StoredOperationStatus::Succeeded {
+                    response: stored.record.clone(),
+                },
                 StoredOperationKind::Create
                 | StoredOperationKind::Delete
                 | StoredOperationKind::Exec => {
@@ -177,7 +197,7 @@ fn validate_active_operation(
     Ok(())
 }
 
-const fn observation_completes(kind: StoredOperationKind, status: ContainerState) -> bool {
+fn observation_completes(kind: StoredOperationKind, status: ContainerState, paused: bool) -> bool {
     match kind {
         StoredOperationKind::Start => {
             matches!(status, ContainerState::Running | ContainerState::Stopped)
@@ -185,20 +205,25 @@ const fn observation_completes(kind: StoredOperationKind, status: ContainerState
         StoredOperationKind::Kill | StoredOperationKind::SignalProcess => {
             matches!(status, ContainerState::Stopped)
         }
+        StoredOperationKind::Pause => status == ContainerState::Running && paused,
+        StoredOperationKind::Resume => status == ContainerState::Running && !paused,
         StoredOperationKind::Create | StoredOperationKind::Delete | StoredOperationKind::Exec => {
             false
         }
     }
 }
 
-fn validate_observation(status: ContainerState, pid: Option<i32>) -> Result<()> {
-    match (status, pid) {
-        (ContainerState::Created | ContainerState::Running, Some(pid)) if pid > 0 => Ok(()),
-        (ContainerState::Stopped, None) => Ok(()),
+fn validate_observation(status: ContainerState, pid: Option<i32>, paused: bool) -> Result<()> {
+    match (status, pid, paused) {
+        (ContainerState::Created, Some(pid), false) if pid > 0 => Ok(()),
+        (ContainerState::Running, Some(pid), _) if pid > 0 => Ok(()),
+        (ContainerState::Stopped, None, false) => Ok(()),
         _ => Err(state_error(
             ErrorCode::InvalidArgument,
             "observe-state",
-            format!("driver returned invalid OCI state {status} with PID {pid:?}"),
+            format!(
+                "driver returned invalid OCI state {status} with PID {pid:?} and paused={paused}"
+            ),
         )),
     }
 }

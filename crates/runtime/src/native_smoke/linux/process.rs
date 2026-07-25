@@ -16,8 +16,15 @@ pub(super) async fn exercise_before_init_exit(
     client: &RuntimeClient,
     target: &ContainerTarget,
     nonce: &str,
+    progress_path: &str,
 ) -> Result<ProcessTarget, String> {
-    let controlled = exec_request(target, nonce, "controlled", "exec-controlled")?;
+    let controlled = exec_request(
+        target,
+        nonce,
+        "controlled",
+        "exec-controlled",
+        "while :; do :; done",
+    )?;
     let controlled_target = ProcessTarget {
         container: controlled.container.clone(),
         process_id: controlled.process_id.clone(),
@@ -94,7 +101,11 @@ pub(super) async fn exercise_before_init_exit(
         return Err("repeated native exec wait returned a different result".into());
     }
 
-    let cleanup = exec_request(target, nonce, "cleanup", "exec-cleanup")?;
+    let progress_command = format!(
+        "n=0; while :; do n=$((n + 1)); printf '%s\\n' \"$n\" > {progress_path}; \
+         /bin/busybox sleep 1; done"
+    );
+    let cleanup = exec_request(target, nonce, "cleanup", "exec-cleanup", &progress_command)?;
     let cleanup_target = ProcessTarget {
         container: cleanup.container.clone(),
         process_id: cleanup.process_id.clone(),
@@ -147,11 +158,12 @@ fn exec_request(
     nonce: &str,
     process_suffix: &str,
     operation_suffix: &str,
+    command: &str,
 ) -> Result<ExecRequest, String> {
     let process: Process = serde_json::from_value(serde_json::json!({
         "terminal": false,
         "user": {"uid": 0, "gid": 0, "umask": 18},
-        "args": ["/bin/sh", "-c", "while :; do :; done"],
+        "args": ["/bin/sh", "-c", command],
         "env": ["PATH=/bin:/usr/bin"],
         "cwd": "/",
         "noNewPrivileges": true

@@ -141,6 +141,16 @@ impl DurableStateStore {
                 ),
             ));
         }
+        if container.record.is_paused() {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "prepare-exec",
+                format!(
+                    "container {} generation {} cannot exec while paused",
+                    container.id, container.record.generation.0
+                ),
+            ));
+        }
         let target = exact_process_target(&container, request.process_id.clone());
         self.ensure_process_directory(&container.id).await?;
         if path_exists(&self.process_path(&target)).await? {

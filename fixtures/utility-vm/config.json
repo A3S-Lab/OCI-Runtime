@@ -36,6 +36,7 @@
     }
   ],
   "linux": {
+    "cgroupsPath": "a3s-oci-smoke-a",
     "namespaces": [
       {
         "type": "uts"

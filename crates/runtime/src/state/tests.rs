@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use a3s_oci_core::DriverKind;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest, OciBundle,
-    OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget, Signal,
-    SignalProcessRequest, StartRequest, WaitProcessRequest,
+    ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
+    DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest,
+    KillRequest, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget,
+    Signal, SignalProcessRequest, StartRequest, WaitProcessRequest,
 };
 use tempfile::TempDir;
 
@@ -377,6 +377,96 @@ async fn core_lifecycle_is_idempotent_and_generation_safe() {
         panic!("recreate must allocate a new generation");
     };
     assert_eq!(recreated.generation, Generation(2));
+}
+
+#[tokio::test]
+async fn freezer_state_is_durable_idempotent_and_generation_fenced() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let create = create_request(&bundle_directory, "freezer-container", "freezer-create");
+    let store = DurableStateStore::open(state_root(&temporary))
+        .await
+        .expect("initialize state root");
+    create_container(&store, &create).await;
+    let target = ContainerTarget::exact(create.id.clone(), Generation(1));
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("freezer-start")),
+        target: target.clone(),
+    };
+    store.prepare_start(&start).await.expect("prepare start");
+    store
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+        )
+        .await
+        .expect("complete start");
+
+    let pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("freezer-pause")),
+        target: target.clone(),
+    };
+    assert!(matches!(
+        store.prepare_pause(&pause).await.expect("prepare pause"),
+        RecordOperationPreparation::Prepared(_)
+    ));
+    let paused = store
+        .complete_pause(
+            &pause.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+            true,
+        )
+        .await
+        .expect("complete pause");
+    assert!(paused.is_paused());
+    assert_eq!(
+        store.prepare_pause(&pause).await.expect("replay pause"),
+        RecordOperationPreparation::Replayed(paused.clone())
+    );
+    assert!(store
+        .state(&target)
+        .await
+        .expect("load paused state")
+        .is_paused());
+
+    let resume = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("freezer-resume")),
+        target: target.clone(),
+    };
+    assert!(matches!(
+        store.prepare_resume(&resume).await.expect("prepare resume"),
+        RecordOperationPreparation::Prepared(_)
+    ));
+    let running = store
+        .complete_resume(
+            &resume.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+            false,
+        )
+        .await
+        .expect("complete resume");
+    assert!(!running.is_paused());
+    assert_eq!(
+        store.prepare_resume(&resume).await.expect("replay resume"),
+        RecordOperationPreparation::Replayed(running)
+    );
+
+    let stale = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("freezer-stale")),
+        target: ContainerTarget::exact(create.id, Generation(2)),
+    };
+    assert_eq!(
+        store
+            .prepare_pause(&stale)
+            .await
+            .expect_err("stale freezer generation must fail")
+            .code,
+        ErrorCode::Conflict
+    );
 }
 
 #[tokio::test]
