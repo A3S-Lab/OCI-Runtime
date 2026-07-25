@@ -3,25 +3,28 @@ use std::sync::Arc;
 
 use a3s_oci_agent::LinuxExecutor;
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
-    AgentExecRequest, AgentKillRequest, AgentProcessesRequest, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService, GuestPath,
+    AgentBundle, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
+    AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
+    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
+    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService, GuestPath,
+    AGENT_MAX_IO_PAYLOAD_BYTES,
 };
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, ProcessRecord,
-    Result, RuntimeOperation,
+    async_trait, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, OutputChunk,
+    ProcessRecord, Result, RuntimeOperation,
 };
 
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 
-const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 14] = [
+const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 17] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -36,6 +39,9 @@ const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 14] = [
     RuntimeOperation::Processes,
     RuntimeOperation::Update,
     RuntimeOperation::Stats,
+    RuntimeOperation::ReadOutput,
+    RuntimeOperation::WriteStdin,
+    RuntimeOperation::CloseStdin,
 ];
 
 /// Explicitly opted-in native Linux runtime driver.
@@ -298,6 +304,44 @@ impl RuntimeDriver for NativeLinuxDriver {
         }
         stats.validate()?;
         Ok(stats)
+    }
+
+    async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.executor
+            .read_output(AgentReadOutputRequest {
+                process: request.target,
+                after_sequence: request.after_sequence,
+                max_bytes: request.max_bytes.min(AGENT_MAX_IO_PAYLOAD_BYTES),
+                wait_timeout_ms: request.wait_timeout_ms,
+            })
+            .await
+    }
+
+    async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        if request.data.is_empty() {
+            return self
+                .executor
+                .write_stdin(AgentWriteStdinRequest {
+                    process: request.target,
+                    data: Vec::new(),
+                })
+                .await;
+        }
+        for data in request.data.chunks(AGENT_MAX_IO_PAYLOAD_BYTES as usize) {
+            self.executor
+                .write_stdin(AgentWriteStdinRequest {
+                    process: request.target.clone(),
+                    data: data.to_vec(),
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn close_stdin(&self, target: a3s_oci_sdk::ProcessTarget) -> Result<()> {
+        self.executor
+            .close_stdin(AgentCloseStdinRequest { process: target })
+            .await
     }
 }
 

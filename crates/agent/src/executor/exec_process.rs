@@ -1,16 +1,16 @@
 use std::io;
 use std::os::fd::RawFd;
 use std::path::Path;
-use std::process::Stdio;
 use std::time::Duration;
 
-use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, Result};
+use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, ProcessIo, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 use super::cgroup;
 use super::control::{read_outcome, InitOutcome, START_BYTE};
+use super::io::ProcessIoHandle;
 use super::namespace::RetainedNamespaceArgument;
 use super::pid;
 use super::pid_supervisor;
@@ -28,6 +28,7 @@ pub(super) struct ExecProcess {
     pid: i32,
     pidfd: PidFd,
     terminal: bool,
+    io: ProcessIoHandle,
     exit_status: Option<ExitStatus>,
 }
 
@@ -37,6 +38,7 @@ impl ExecProcess {
         init_executable: &Path,
         init_process: &super::process::PreparedProcess,
         terminal: bool,
+        io: &ProcessIo,
     ) -> Result<Self> {
         let context = init_process.execution_context();
         let init_pidfd = init_process.pidfd_descriptor();
@@ -54,12 +56,8 @@ impl ExecProcess {
             .arg(init_pidfd.to_string())
             .arg(std::process::id().to_string());
         append_namespace_arguments(&mut command, &namespace_arguments);
-        command
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
+        command.env_clear().kill_on_drop(true);
+        ProcessIoHandle::configure(&mut command, io)?;
         // SAFETY: the callback runs in the freshly forked command child and
         // moves the helper into the container cgroup and changes descriptor
         // flags only in the child-side descriptor table.
@@ -77,6 +75,13 @@ impl ExecProcess {
                 format!("failed to spawn container exec helper: {error}"),
             )
         })?;
+        let process_io = match ProcessIoHandle::attach(&mut child, io) {
+            Ok(process_io) => process_io,
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+        };
         let Some(raw_launcher_pid) = child.id() else {
             terminate(&mut child).await;
             return Err(exec_error(
@@ -237,6 +242,7 @@ impl ExecProcess {
             pid: runtime_pid,
             pidfd,
             terminal,
+            io: process_io,
             exit_status: None,
         })
     }
@@ -247,6 +253,10 @@ impl ExecProcess {
 
     pub(super) const fn terminal(&self) -> bool {
         self.terminal
+    }
+
+    pub(super) fn io_handle(&self) -> ProcessIoHandle {
+        self.io.clone()
     }
 
     pub(super) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {

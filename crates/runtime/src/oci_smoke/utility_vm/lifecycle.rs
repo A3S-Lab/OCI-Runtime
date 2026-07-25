@@ -3,15 +3,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
-    AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
+    AgentBundle, AgentClient, AgentCloseStdinRequest, AgentContainerOperationRequest,
+    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
+    AgentProcessesRequest, AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest,
+    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentWaitRequest, AgentWriteStdinRequest, GuestPath,
 };
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IoMode, OciBundle, OperationContext,
-    OperationId, ProcessId, ProcessIo, ProcessTarget, Signal,
+    OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget, Signal,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{sleep, timeout, Instant};
@@ -91,6 +92,8 @@ pub(super) async fn exercise<T: AgentStream>(
     }
 
     wait_for_running_marker(client, target, marker, report).await?;
+    exercise_process_io(client, target, nonce).await?;
+    report.process_io_verified = true;
     let cleanup_process = exercise_exec_processes(client, target, nonce).await?;
     exercise_control_plane(client, target, &cleanup_process, nonce, marker, report).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, target).await?;
@@ -189,6 +192,138 @@ pub(super) async fn exercise<T: AgentStream>(
         return Err("guest state remained visible after delete".into());
     }
     Ok(())
+}
+
+async fn exercise_process_io<T: AgentStream>(
+    client: &AgentClient<T>,
+    target: &ContainerTarget,
+    nonce: &str,
+) -> Result<(), String> {
+    let mut request = exec_request(
+        target,
+        nonce,
+        "io",
+        "exec-io",
+        "IFS= read -r line; printf 'stdout:%s\\n' \"$line\"; \
+         printf 'stderr:%s\\n' \"$line\" >&2",
+    )?;
+    request.io = ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
+        terminal_size: None,
+    };
+    let process = request.target.clone();
+    let created = guest_call("exec process I/O probe", client.exec(request)).await?;
+    if created.target() != &process || created.pid() <= 0 || created.terminal() {
+        return Err("guest process I/O probe returned an invalid identity".into());
+    }
+
+    guest_call(
+        "write process I/O probe stdin",
+        client.write_stdin(AgentWriteStdinRequest {
+            process: process.clone(),
+            data: b"a3s-io\n".to_vec(),
+        }),
+    )
+    .await?;
+    let close = AgentCloseStdinRequest {
+        process: process.clone(),
+    };
+    guest_call(
+        "close process I/O probe stdin",
+        client.close_stdin(close.clone()),
+    )
+    .await?;
+    guest_call(
+        "repeat process I/O probe stdin close",
+        client.close_stdin(close),
+    )
+    .await?;
+
+    let status = guest_call(
+        "wait process I/O probe",
+        client.wait_process(AgentWaitProcessRequest {
+            target: process.clone(),
+            timeout_ms: Some(
+                u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                    .map_err(|_| "process I/O timeout does not fit request".to_string())?,
+            ),
+        }),
+    )
+    .await?;
+    let expected = ExitStatus::exited(0)
+        .map_err(|error| format!("failed to construct process I/O exit status: {error}"))?;
+    if status != expected {
+        return Err(format!(
+            "guest process I/O probe returned {status:?}, expected {expected:?}"
+        ));
+    }
+
+    let (stdout, stderr) = collect_output(client, &process).await?;
+    if stdout != b"stdout:a3s-io\n" || stderr != b"stderr:a3s-io\n" {
+        return Err(format!(
+            "guest captured output mismatch: stdout={stdout:?}, stderr={stderr:?}"
+        ));
+    }
+    match timeout(
+        GUEST_CALL_TIMEOUT,
+        client.write_stdin(AgentWriteStdinRequest {
+            process,
+            data: b"late".to_vec(),
+        }),
+    )
+    .await
+    {
+        Ok(Err(error)) if error.code == ErrorCode::FailedPrecondition => Ok(()),
+        Ok(Err(error)) => Err(guest_error("write after process stdin close", &error)),
+        Ok(Ok(())) => Err("guest accepted stdin after close".into()),
+        Err(_) => Err("write after process stdin close timed out".into()),
+    }
+}
+
+async fn collect_output<T: AgentStream>(
+    client: &AgentClient<T>,
+    process: &ProcessTarget,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let deadline = Instant::now() + GUEST_CALL_TIMEOUT;
+    let mut cursor = 0;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut stdout_eof = false;
+    let mut stderr_eof = false;
+    while !stdout_eof || !stderr_eof {
+        let chunks = guest_call(
+            "read process I/O probe output",
+            client.read_output(AgentReadOutputRequest {
+                process: process.clone(),
+                after_sequence: cursor,
+                max_bytes: 4,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.sequence <= cursor {
+                return Err("guest captured output cursor did not advance".into());
+            }
+            cursor = chunk.sequence;
+            match chunk.stream {
+                OutputStream::Stdout => {
+                    stdout.extend(chunk.data);
+                    stdout_eof |= chunk.eof;
+                }
+                OutputStream::Stderr => {
+                    stderr.extend(chunk.data);
+                    stderr_eof |= chunk.eof;
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out draining guest captured process output".into());
+        }
+    }
+    Ok((stdout, stderr))
 }
 
 async fn exercise_control_plane<T: AgentStream>(

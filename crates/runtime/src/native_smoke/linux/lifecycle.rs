@@ -93,6 +93,8 @@ pub(super) async fn exercise(
         return Err("native start did not leave the workload running".into());
     }
     wait_for_marker(client, &target, marker, report).await?;
+    process::exercise_process_io(client, &target, nonce).await?;
+    report.process_io_verified = true;
     let cleanup_process =
         process::exercise_before_init_exit(client, &target, nonce, PROGRESS_PATH).await?;
     exercise_control_plane(client, &target, &cleanup_process, nonce, marker, report).await?;

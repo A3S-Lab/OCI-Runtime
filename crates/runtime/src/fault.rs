@@ -233,11 +233,14 @@ pub(crate) enum DriverOperation {
     Processes,
     Update,
     Stats,
+    ReadOutput,
+    WriteStdin,
+    CloseStdin,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 15] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::Capability,
         Self::Create,
         Self::State,
@@ -253,6 +256,9 @@ impl DriverOperation {
         Self::Processes,
         Self::Update,
         Self::Stats,
+        Self::ReadOutput,
+        Self::WriteStdin,
+        Self::CloseStdin,
     ];
 }
 

@@ -141,6 +141,7 @@ impl LinuxExecutor {
                 &self.init_executable,
                 &record.process,
                 request.process.terminal().unwrap_or(false),
+                &request.io,
             )
             .await
             {

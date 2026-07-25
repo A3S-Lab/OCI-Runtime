@@ -2,18 +2,21 @@ use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode, ExecRequest,
-    IsolationRequest, OciBundle, ProcessRecord, ProcessTarget, ProcessesRequest, Result,
-    SignalProcessRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest,
+    CloseStdinRequest, ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode,
+    ExecRequest, IsolationRequest, OciBundle, OutputChunk, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, Result, SignalProcessRequest, StatsRequest, UpdateRequest,
+    ValidateRequest, WaitProcessRequest,
 };
 
 use crate::model::{
-    protocol_error, AgentBundle, AgentContainerOperationRequest, AgentCreateRequest,
-    AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess,
-    AgentProcessExit, AgentProcessSignal, AgentProcessesRequest, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, ProtocolRange, RequestEnvelope,
-    ResponseEnvelope, ResponseOutcome, AGENT_MAX_FRAME_BYTES,
+    protocol_error, AgentBundle, AgentCloseStdinRequest, AgentContainerOperationRequest,
+    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
+    AgentProcess, AgentProcessExit, AgentProcessSignal, AgentProcessesRequest,
+    AgentReadOutputRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, ProtocolRange,
+    RequestEnvelope, ResponseEnvelope, ResponseOutcome, AGENT_MAX_FRAME_BYTES,
+    AGENT_MAX_IO_PAYLOAD_BYTES,
 };
 
 impl AgentBundle {
@@ -140,6 +143,56 @@ impl AgentStatsRequest {
     }
 }
 
+impl AgentReadOutputRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(&self.process)?;
+        if self.max_bytes > AGENT_MAX_IO_PAYLOAD_BYTES {
+            return Err(protocol_error(
+                ErrorCode::ResourceExhausted,
+                format!(
+                    "agent read-output maxBytes is {}; maximum is \
+                     {AGENT_MAX_IO_PAYLOAD_BYTES}",
+                    self.max_bytes
+                ),
+            ));
+        }
+        ReadOutputRequest {
+            process: self.process.clone(),
+            after_sequence: self.after_sequence,
+            max_bytes: self.max_bytes,
+            wait_timeout_ms: self.wait_timeout_ms,
+        }
+        .validate()
+    }
+}
+
+impl AgentWriteStdinRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(&self.process)?;
+        if self.data.len() > AGENT_MAX_IO_PAYLOAD_BYTES as usize {
+            return Err(protocol_error(
+                ErrorCode::ResourceExhausted,
+                format!(
+                    "agent write-stdin payload is {} bytes; maximum is \
+                     {AGENT_MAX_IO_PAYLOAD_BYTES}",
+                    self.data.len()
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl AgentCloseStdinRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(&self.process)?;
+        CloseStdinRequest {
+            process: self.process.clone(),
+        }
+        .validate()
+    }
+}
+
 impl AgentStartRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(&self.target)?;
@@ -175,6 +228,9 @@ impl AgentRequest {
             Self::Processes(request) => request.validate(),
             Self::Update(request) => request.validate(),
             Self::Stats(request) => request.validate(),
+            Self::ReadOutput(request) => request.validate(),
+            Self::WriteStdin(request) => request.validate(),
+            Self::CloseStdin(request) => request.validate(),
         }
     }
 
@@ -200,6 +256,7 @@ impl AgentRequest {
             Self::Exec(_) | Self::SignalProcess(_) | Self::WaitProcess(_) => 3,
             Self::Pause(_) | Self::Resume(_) | Self::Processes(_) => 4,
             Self::Update(_) | Self::Stats(_) => 5,
+            Self::ReadOutput(_) | Self::WriteStdin(_) | Self::CloseStdin(_) => 6,
         }
     }
 }
@@ -265,6 +322,10 @@ impl AgentResponse {
             Self::ProcessExit(exit) => exit.validate(),
             Self::Processes(processes) => validate_processes(processes),
             Self::Stats(stats) => stats.validate(),
+            Self::Output(chunks) => validate_output_chunks(chunks),
+            Self::StdinWritten(target) | Self::StdinClosed(target) => {
+                validate_exact_process_target(target)
+            }
         }
     }
 
@@ -275,6 +336,7 @@ impl AgentResponse {
             Self::Process(_) | Self::ProcessSignaled(_) | Self::ProcessExit(_) => 3,
             Self::Processes(_) => 4,
             Self::Stats(_) => 5,
+            Self::Output(_) | Self::StdinWritten(_) | Self::StdinClosed(_) => 6,
         };
         if selected_version < minimum_version {
             return Err(protocol_error(
@@ -287,6 +349,74 @@ impl AgentResponse {
         }
         self.validate()
     }
+}
+
+fn validate_output_chunks(chunks: &[OutputChunk]) -> Result<()> {
+    let mut previous: Option<u64> = None;
+    let mut total_bytes = 0_u64;
+    for chunk in chunks {
+        if chunk.sequence == 0 {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                "guest output chunks must have strictly increasing positive sequences",
+            ));
+        }
+        if !chunk.eof && chunk.data.is_empty() {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                "guest output data chunks must not be empty",
+            ));
+        }
+        if chunk.eof && !chunk.data.is_empty() {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                "guest output EOF chunks must not contain data",
+            ));
+        }
+        if let Some(previous) = previous {
+            let width = if chunk.eof {
+                1
+            } else {
+                u64::try_from(chunk.data.len()).map_err(|_| {
+                    protocol_error(
+                        ErrorCode::ResourceExhausted,
+                        "guest output chunk length does not fit its sequence cursor",
+                    )
+                })?
+            };
+            let expected = previous.checked_add(width).ok_or_else(|| {
+                protocol_error(
+                    ErrorCode::ResourceExhausted,
+                    "guest output sequence space is exhausted",
+                )
+            })?;
+            if chunk.sequence != expected {
+                return Err(protocol_error(
+                    ErrorCode::InvalidArgument,
+                    "guest output chunks are not byte-cursor contiguous",
+                ));
+            }
+        }
+        total_bytes = total_bytes
+            .checked_add(chunk.data.len() as u64)
+            .ok_or_else(|| {
+                protocol_error(
+                    ErrorCode::ResourceExhausted,
+                    "guest output response byte count overflowed",
+                )
+            })?;
+        previous = Some(chunk.sequence);
+    }
+    if total_bytes > u64::from(AGENT_MAX_IO_PAYLOAD_BYTES) {
+        return Err(protocol_error(
+            ErrorCode::ResourceExhausted,
+            format!(
+                "guest output response contains {total_bytes} bytes; maximum is \
+                 {AGENT_MAX_IO_PAYLOAD_BYTES}"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_processes(processes: &[ProcessRecord]) -> Result<()> {

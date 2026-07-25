@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        30,
+        36,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -54,6 +54,9 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 | DriverOperation::Processes
                 | DriverOperation::Update
                 | DriverOperation::Stats
+                | DriverOperation::ReadOutput
+                | DriverOperation::WriteStdin
+                | DriverOperation::CloseStdin
         ) {
             setup
                 .start(StartRequest {
@@ -187,6 +190,9 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::Processes
             | DriverOperation::Update
             | DriverOperation::Stats
+            | DriverOperation::ReadOutput
+            | DriverOperation::WriteStdin
+            | DriverOperation::CloseStdin
     )
 }
 
@@ -207,6 +213,9 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::Processes(_), DriverOperation::Processes)
             | (DriverCall::Update(_), DriverOperation::Update)
             | (DriverCall::Stats(_), DriverOperation::Stats)
+            | (DriverCall::ReadOutput(_), DriverOperation::ReadOutput)
+            | (DriverCall::WriteStdin(_), DriverOperation::WriteStdin)
+            | (DriverCall::CloseStdin(_), DriverOperation::CloseStdin)
     )
 }
 
@@ -344,6 +353,41 @@ async fn invoke_operation(
                 })
                 .await?;
             Ok(())
+        }
+        DriverOperation::ReadOutput => {
+            service
+                .read_output(ReadOutputRequest {
+                    process: ProcessTarget {
+                        container: target.expect("read-output target").clone(),
+                        process_id: ProcessId::init(),
+                    },
+                    after_sequence: 0,
+                    max_bytes: 1,
+                    wait_timeout_ms: None,
+                })
+                .await?;
+            Ok(())
+        }
+        DriverOperation::WriteStdin => {
+            service
+                .write_stdin(WriteStdinRequest {
+                    process: ProcessTarget {
+                        container: target.expect("write-stdin target").clone(),
+                        process_id: ProcessId::init(),
+                    },
+                    data: b"x".to_vec(),
+                })
+                .await
+        }
+        DriverOperation::CloseStdin => {
+            service
+                .close_stdin(CloseStdinRequest {
+                    process: ProcessTarget {
+                        container: target.expect("close-stdin target").clone(),
+                        process_id: ProcessId::init(),
+                    },
+                })
+                .await
         }
     }
 }

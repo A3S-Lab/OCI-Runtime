@@ -192,7 +192,7 @@ async fn protocol_v4_freezes_and_lists_one_exact_container_generation() {
 async fn protocol_v5_updates_resources_and_returns_typed_stats() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let server = spawn_server(guest, token(24));
-    let client = AgentClient::connect(host, token(24))
+    let client = AgentClient::connect_for_test(host, token(24), 5, 5)
         .await
         .expect("connect protocol-v5 client");
     assert_eq!(client.hello().selected_version(), 5);
@@ -247,6 +247,178 @@ async fn protocol_v5_updates_resources_and_returns_typed_stats() {
     assert_eq!(stats.metrics["memory.events.oom_kill"], 0);
 
     drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v5 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v6_captures_output_and_controls_stdin() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let agent = Arc::new(TestAgent::default());
+    let server = spawn_server_with_agent(guest, token(25), Arc::clone(&agent));
+    let client = AgentClient::connect(host, token(25))
+        .await
+        .expect("connect protocol-v6 client");
+    assert_eq!(client.hello().selected_version(), 6);
+    assert_eq!(
+        &client.hello().capabilities().operations()[14..],
+        &[
+            crate::AgentOperation::ReadOutput,
+            crate::AgentOperation::WriteStdin,
+            crate::AgentOperation::CloseStdin,
+        ]
+    );
+
+    let mut create = create_request_for("io-container", 9, "io-create");
+    create.io.stdin = IoMode::Pipe;
+    let target = create.target.clone();
+    let digest = create.bundle.config_digest().to_string();
+    client.create(create).await.expect("create I/O container");
+    client
+        .start(AgentStartRequest {
+            context: OperationContext::new(operation_id("io-start")),
+            target: target.clone(),
+            expected_config_digest: digest,
+        })
+        .await
+        .expect("start I/O container");
+    let process = ProcessTarget {
+        container: target.clone(),
+        process_id: ProcessId::init(),
+    };
+
+    client
+        .write_stdin(AgentWriteStdinRequest {
+            process: process.clone(),
+            data: b"input".to_vec(),
+        })
+        .await
+        .expect("write stdin");
+    let first = client
+        .read_output(AgentReadOutputRequest {
+            process: process.clone(),
+            after_sequence: 0,
+            max_bytes: 3,
+            wait_timeout_ms: None,
+        })
+        .await
+        .expect("first output poll");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].sequence, 3);
+    assert_eq!(first[0].data, b"rea");
+
+    let second = client
+        .read_output(AgentReadOutputRequest {
+            process: process.clone(),
+            after_sequence: first[0].sequence,
+            max_bytes: 3,
+            wait_timeout_ms: Some(100),
+        })
+        .await
+        .expect("second output poll");
+    assert_eq!(second.len(), 2);
+    assert_eq!(second[0].data, b"dy\n");
+    assert!(second[1].eof);
+
+    client
+        .close_stdin(AgentCloseStdinRequest {
+            process: process.clone(),
+        })
+        .await
+        .expect("close stdin");
+    client
+        .close_stdin(AgentCloseStdinRequest {
+            process: process.clone(),
+        })
+        .await
+        .expect("repeat stdin close");
+    let error = client
+        .write_stdin(AgentWriteStdinRequest {
+            process: process.clone(),
+            data: b"late".to_vec(),
+        })
+        .await
+        .expect_err("write after close must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+
+    let generation = target.generation.expect("exact target");
+    let key = (target.id, generation, ProcessId::init());
+    {
+        let state = agent.state.lock().expect("agent state lock");
+        assert_eq!(state.stdin[&key], b"input");
+        assert!(state.stdin_closed.contains(&key));
+    }
+
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v6 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v5_filters_and_rejects_forged_v6_process_io() {
+    let (mut host, guest) = tokio::io::duplex(1024 * 1024);
+    let expected_token = token(26);
+    let server = spawn_server(guest, expected_token.clone());
+
+    write_frame(
+        &mut host,
+        &HostHello {
+            protocols: ProtocolRange { min: 5, max: 5 },
+            token: expected_token,
+        },
+    )
+    .await
+    .expect("write protocol-v5 hello");
+    let hello: HelloOutcome = read_frame(&mut host)
+        .await
+        .expect("read protocol-v5 hello")
+        .expect("server returned protocol-v5 hello");
+    let HelloOutcome::Accepted { hello } = hello else {
+        panic!("protocol-v5 negotiation was rejected");
+    };
+    assert_eq!(hello.selected_version(), 5);
+    for operation in [
+        crate::AgentOperation::ReadOutput,
+        crate::AgentOperation::WriteStdin,
+        crate::AgentOperation::CloseStdin,
+    ] {
+        assert!(!hello.capabilities().operations().contains(&operation));
+    }
+
+    write_frame(
+        &mut host,
+        &RequestEnvelope {
+            version: 5,
+            request_id: 42,
+            request: AgentRequest::ReadOutput(AgentReadOutputRequest {
+                process: ProcessTarget {
+                    container: ContainerTarget::exact(container_id("forged-io"), Generation(1)),
+                    process_id: ProcessId::init(),
+                },
+                after_sequence: 0,
+                max_bytes: 1,
+                wait_timeout_ms: None,
+            }),
+        },
+    )
+    .await
+    .expect("write forged protocol-v5 process-I/O request");
+    let response: ResponseEnvelope = read_frame(&mut host)
+        .await
+        .expect("read forged process-I/O response")
+        .expect("server returned forged process-I/O response");
+    assert_eq!(response.version, 5);
+    assert_eq!(response.request_id, 42);
+    let ResponseOutcome::Failed { error } = response.outcome else {
+        panic!("forged protocol-v5 process-I/O request unexpectedly succeeded");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+
+    drop(host);
     server
         .await
         .expect("server task")

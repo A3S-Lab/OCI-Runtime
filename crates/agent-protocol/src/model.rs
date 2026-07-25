@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, OciBundle,
-    OperationContext, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
+    OperationContext, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -12,9 +12,15 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 5;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 6;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
+/// Maximum binary process-I/O payload carried by one agent request or response.
+///
+/// JSON byte arrays expand substantially on the wire, so this remains below
+/// the encoded frame limit. Host drivers may split larger SDK writes and reads
+/// across multiple agent calls.
+pub const AGENT_MAX_IO_PAYLOAD_BYTES: u32 = 4 * 1024 * 1024;
 /// Required session-token entropy supplied by the host.
 pub const AGENT_SESSION_TOKEN_BYTES: usize = 32;
 /// Environment key used only for the protected guest bootstrap.
@@ -265,6 +271,12 @@ pub enum AgentOperation {
     Update,
     /// Read normalized cgroup v2 counters. Available from protocol version 5.
     Stats,
+    /// Read captured stdout and stderr. Available from protocol version 6.
+    ReadOutput,
+    /// Write process stdin with backpressure. Available from protocol version 6.
+    WriteStdin,
+    /// Close process stdin. Available from protocol version 6.
+    CloseStdin,
 }
 
 impl AgentOperation {
@@ -275,6 +287,7 @@ impl AgentOperation {
             Self::Exec | Self::SignalProcess | Self::WaitProcess => 3,
             Self::Pause | Self::Resume | Self::Processes => 4,
             Self::Update | Self::Stats => 5,
+            Self::ReadOutput | Self::WriteStdin | Self::CloseStdin => 6,
         }
     }
 }
@@ -339,6 +352,9 @@ impl AgentCapabilities {
                 AgentOperation::Processes,
                 AgentOperation::Update,
                 AgentOperation::Stats,
+                AgentOperation::ReadOutput,
+                AgentOperation::WriteStdin,
+                AgentOperation::CloseStdin,
             ],
         )
     }
@@ -571,6 +587,39 @@ pub struct AgentStatsRequest {
     pub target: ContainerTarget,
 }
 
+/// Poll captured process output through a byte-accurate sequence cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentReadOutputRequest {
+    /// Exact container generation and process ID.
+    pub process: ProcessTarget,
+    /// Inclusive cursor returned by the previous output chunk.
+    pub after_sequence: u64,
+    /// Maximum binary payload returned by this poll.
+    pub max_bytes: u32,
+    /// Optional long-poll duration. Omitted means an immediate poll.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_timeout_ms: Option<u64>,
+}
+
+/// Write one bounded binary payload to process stdin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWriteStdinRequest {
+    /// Exact container generation and process ID.
+    pub process: ProcessTarget,
+    /// Bytes written in order with transport backpressure.
+    pub data: Vec<u8>,
+}
+
+/// Close one process stdin stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentCloseStdinRequest {
+    /// Exact container generation and process ID.
+    pub process: ProcessTarget,
+}
+
 /// OCI start input sent to the guest executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -627,6 +676,9 @@ pub enum AgentRequest {
     Processes(AgentProcessesRequest),
     Update(Box<AgentUpdateRequest>),
     Stats(AgentStatsRequest),
+    ReadOutput(AgentReadOutputRequest),
+    WriteStdin(AgentWriteStdinRequest),
+    CloseStdin(AgentCloseStdinRequest),
 }
 
 /// Guest-observed init-process state for one exact generation.
@@ -808,6 +860,9 @@ pub enum AgentResponse {
     ProcessExit(AgentProcessExit),
     Processes(Vec<ProcessRecord>),
     Stats(ContainerStats),
+    Output(Vec<OutputChunk>),
+    StdinWritten(ProcessTarget),
+    StdinClosed(ProcessTarget),
 }
 
 const fn is_false(value: &bool) -> bool {

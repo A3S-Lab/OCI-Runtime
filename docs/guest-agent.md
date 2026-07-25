@@ -28,9 +28,9 @@ exact libkrun shim PID before it sends the token.
 
 The current root-only bootstrap executor advertises `create`, `state`,
 `start`, `kill`, `delete`, `wait`, `exec`, `signal-process`, and
-`wait-process`, `pause`, `resume`, and `processes`. It is intentionally
-narrower than the final OCI executor and rejects every property it cannot
-enforce.
+`wait-process`, `pause`, `resume`, `processes`, `update`, `stats`,
+`read-output`, `write-stdin`, and `close-stdin`. It is intentionally narrower
+than the final OCI executor and rejects every property it cannot enforce.
 
 The accepted bootstrap profile requires:
 
@@ -38,7 +38,8 @@ The accepted bootstrap profile requires:
   `domainname`, optional `mounts`, and optional `linux` at the configuration
   root;
 - a writable normalized relative `root.path` equal to `rootfs`;
-- `terminal: false` and null stdin, stdout, and stderr;
+- `terminal: false`; null or piped stdin; null or captured stdout and stderr;
+  and no terminal size;
 - `noNewPrivileges: true`;
 - an absolute executable and working directory;
 - numeric UID, GID, optional supplementary groups, and optional umask;
@@ -167,9 +168,20 @@ independently queryable.
 Exec accepts one exact `(container ID, generation, process ID)` target while
 the configured process is running. `init` is reserved, duplicate process IDs
 fail, and exact mutation retries replay their original process or signal
-result. Init and exec share the same fail-closed OCI process planner; the
-current slice therefore requires null I/O and rejects terminal, capture, pipe,
-capability, rlimit, scheduler, and other unenforced process settings.
+result. Init and exec share the same fail-closed OCI process planner and I/O
+owner. The current slice accepts null or piped stdin and null or captured
+stdout/stderr, while rejecting terminal, inherited descriptors, capability,
+rlimit, scheduler, and other unenforced process settings.
+
+Piped stdin is written asynchronously with backpressure and can be closed
+idempotently. Dedicated tasks continuously drain captured stdout and stderr so
+the child cannot block on a full pipe. Both streams share one globally ordered
+8 MiB retained buffer. Output polls use an inclusive byte cursor, may split a
+buffered frame exactly at the requested byte bound, optionally long-poll, and
+emit one empty EOF frame per captured stream. A cursor older than retained
+data or ahead of produced output fails closed. Guest messages carry at most
+4 MiB of process-I/O payload; the native host driver splits larger SDK stdin
+writes at that boundary.
 
 Create retains descriptors for the configured process's root and every
 configured namespace. A fresh single-threaded exec helper inherits only those
@@ -218,9 +230,9 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless user-mapping policy, unsupported cgroup I/O, hugetlb,
-RDMA, and unified resources, hooks, terminals, non-null I/O, process-group
-signals, and every other unimplemented OCI property. These are release
-blockers, not silently accepted compatibility gaps.
+RDMA, and unified resources, hooks, terminals, inherited process I/O,
+process-group signals, and every other unimplemented OCI property. These are
+release blockers, not silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -233,15 +245,17 @@ cargo zigbuild -p a3s-oci-agent --release `
 
 `a3s-oci agent-vm-smoke` proves the authenticated
 guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact
-fourteen-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a
+seventeen-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a
 bundle below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, bounded running wait, exact
 repeated init status, exact-target exec replay, duplicate process-ID rejection,
 bounded and stable process wait, replayed process signal, exact live init/exec
 inventory, replay-safe live resource update, normalized cgroup-v2 statistics,
 replayed pause/resume, a progress-producing exec that stops while frozen and
-advances after resume, init-exit exec cleanup, signal-driven stop, post-delete
-NotFound, marker cleanup, and nominal guest runtime cleanup.
+advances after resume, piped stdin, bounded captured stdout/stderr cursor
+pagination and EOF, idempotent stdin close, rejected late writes, init-exit
+exec cleanup, signal-driven stop, post-delete NotFound, marker cleanup, and
+nominal guest runtime cleanup.
 
 `a3s-oci oci-vm-multi-container-smoke` keeps two distinct bundle rootfs and
 runtime slots live behind the create barrier, proves that A's start, kill,
@@ -250,7 +264,7 @@ or block B, then completes B independently. The macOS HVF gate sends both
 configured-process signals through distinct retained pidfds and retains both
 exact repeated exit
 statuses and per-container markers together with guest-runtime and
-host-process cleanup evidence. Schema v7 then retains a prepared donor and
+host-process cleanup evidence. Schema v8 then retains a prepared donor and
 qualifies wrong-type rejection plus UTS, mount, IPC, network, cgroup, PID,
 user, and time joins. Both joiner workloads must cross `exec`, remain running
 for a bounded observation window, stop cleanly, and leave the donor unchanged.
@@ -262,7 +276,7 @@ enforcement, exact `idmap` and `ridmap` ownership on detached filesystem
 mounts, normal exit, state removal, and removal of every host-side fixture
 artifact. The same workload proves that it is PID 2+ beneath a dedicated
 namespace PID 1 and that PID 1 reaps an adopted child. The native Linux
-schema-v8 report additionally requires bind-source ownership preservation and
+schema-v10 report additionally requires bind-source ownership preservation and
 non-recursive versus recursive bind evidence.
 
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
@@ -291,10 +305,11 @@ possible by that bind, and a relative-destination tmpfs. The workload verified
 both filesystem types and proved that its IPC, network, and cgroup namespace
 identities differed from guest PID 1 before producing its marker. A
 joined-network negative bundle retained its typed `Unsupported` error and left
-no guest runtime state. This proves the fixed bootstrap slice, not the
-immutable A3S system image, complete OCI enforcement, process I/O, configured
-networking, restart recovery, or exhaustive durable-write fault injection. The
-WHPX driver therefore remains `probe-only`.
+no guest runtime state. This historical run proves the then-current fixed
+bootstrap slice, not the immutable A3S system image, complete OCI enforcement,
+the current process-I/O gate, configured networking, restart recovery, or
+exhaustive durable-write fault injection. The WHPX driver therefore remains
+`probe-only`.
 
 The PID qualification used the 6,371,704-byte static agent with SHA-256
 `45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.

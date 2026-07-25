@@ -17,8 +17,9 @@ use a3s_oci_sdk::{
 
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverSignalProcessRequest, DriverStartRequest, DriverUpdateRequest,
-    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverKillRequest, DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
+    RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
@@ -223,7 +224,7 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 14] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 17] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
@@ -238,6 +239,9 @@ fn validate_driver_operations(
         RuntimeOperation::Processes,
         RuntimeOperation::Update,
         RuntimeOperation::Stats,
+        RuntimeOperation::ReadOutput,
+        RuntimeOperation::WriteStdin,
+        RuntimeOperation::CloseStdin,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {
@@ -754,16 +758,62 @@ impl OciRuntimeService for HostRuntimeService {
         Err(Error::unsupported("events"))
     }
 
-    async fn read_output(&self, _request: ReadOutputRequest) -> Result<Vec<OutputChunk>> {
-        Err(Error::unsupported("read-output"))
+    async fn read_output(&self, request: ReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        let lifecycle = self.lifecycle("read-output")?;
+        lifecycle.ensure_operation(RuntimeOperation::ReadOutput, "read-output")?;
+        request.validate()?;
+        let target = lifecycle
+            .store
+            .resolve_process_target(&request.process, "read-output")
+            .await?;
+        lifecycle.driver_boundary(DriverOperation::ReadOutput, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .read_output(DriverReadOutputRequest {
+                target,
+                after_sequence: request.after_sequence,
+                max_bytes: request.max_bytes,
+                wait_timeout_ms: request.wait_timeout_ms,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::ReadOutput, DriverBoundaryStage::AfterCall)?;
+        let chunks = result?;
+        validate_output_chunks(&chunks, request.after_sequence, request.max_bytes)?;
+        Ok(chunks)
     }
 
-    async fn write_stdin(&self, _request: WriteStdinRequest) -> Result<()> {
-        Err(Error::unsupported("write-stdin"))
+    async fn write_stdin(&self, request: WriteStdinRequest) -> Result<()> {
+        let lifecycle = self.lifecycle("write-stdin")?;
+        lifecycle.ensure_operation(RuntimeOperation::WriteStdin, "write-stdin")?;
+        request.validate()?;
+        let target = lifecycle
+            .store
+            .resolve_process_target(&request.process, "write-stdin")
+            .await?;
+        lifecycle.driver_boundary(DriverOperation::WriteStdin, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .write_stdin(DriverWriteStdinRequest {
+                target,
+                data: request.data,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::WriteStdin, DriverBoundaryStage::AfterCall)?;
+        result
     }
 
-    async fn close_stdin(&self, _request: CloseStdinRequest) -> Result<()> {
-        Err(Error::unsupported("close-stdin"))
+    async fn close_stdin(&self, request: CloseStdinRequest) -> Result<()> {
+        let lifecycle = self.lifecycle("close-stdin")?;
+        lifecycle.ensure_operation(RuntimeOperation::CloseStdin, "close-stdin")?;
+        request.validate()?;
+        let target = lifecycle
+            .store
+            .resolve_process_target(&request.process, "close-stdin")
+            .await?;
+        lifecycle.driver_boundary(DriverOperation::CloseStdin, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle.driver.close_stdin(target).await;
+        lifecycle.driver_boundary(DriverOperation::CloseStdin, DriverBoundaryStage::AfterCall)?;
+        result
     }
 
     async fn resize(&self, _request: ResizeRequest) -> Result<()> {
@@ -836,6 +886,72 @@ impl OciRuntimeService for HostRuntimeService {
     async fn restore(&self, _request: RestoreRequest) -> Result<ContainerRecord> {
         Err(Error::unsupported("restore"))
     }
+}
+
+fn validate_output_chunks(
+    chunks: &[OutputChunk],
+    after_sequence: u64,
+    max_bytes: u32,
+) -> Result<()> {
+    let mut previous = after_sequence;
+    let mut total = 0_u64;
+    for chunk in chunks {
+        if !chunk.eof && chunk.data.is_empty() {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "runtime driver returned an empty process output data chunk",
+            )
+            .for_operation("read-output"));
+        }
+        if chunk.eof && !chunk.data.is_empty() {
+            return Err(Error::new(
+                ErrorCode::Internal,
+                "runtime driver returned output data in an EOF chunk",
+            )
+            .for_operation("read-output"));
+        }
+        let width = if chunk.eof {
+            1
+        } else {
+            u64::try_from(chunk.data.len()).map_err(|_| {
+                Error::new(
+                    ErrorCode::ResourceExhausted,
+                    "runtime driver output chunk length does not fit its sequence cursor",
+                )
+                .for_operation("read-output")
+            })?
+        };
+        let expected = previous.checked_add(width).ok_or_else(|| {
+            Error::new(
+                ErrorCode::ResourceExhausted,
+                "runtime driver output sequence space is exhausted",
+            )
+            .for_operation("read-output")
+        })?;
+        if chunk.sequence != expected {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "runtime driver returned a non-contiguous process output byte cursor",
+            )
+            .for_operation("read-output"));
+        }
+        total = total.checked_add(chunk.data.len() as u64).ok_or_else(|| {
+            Error::new(
+                ErrorCode::ResourceExhausted,
+                "runtime driver output byte count overflowed",
+            )
+            .for_operation("read-output")
+        })?;
+        previous = chunk.sequence;
+    }
+    if total > u64::from(max_bytes) {
+        return Err(Error::new(
+            ErrorCode::ResourceExhausted,
+            format!("runtime driver returned {total} bytes for a {max_bytes}-byte output poll"),
+        )
+        .for_operation("read-output"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

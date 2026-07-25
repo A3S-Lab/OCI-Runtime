@@ -144,8 +144,12 @@ fn exec_process_planning_enforces_capabilities_and_rejects_unsupported_io() {
     .expect("decode fixed process");
     let mut io = null_io();
     io.stdout = IoMode::Capture;
-    let error = ProcessPlan::from_process(&process, &io)
-        .expect_err("capture must remain unsupported until streaming is implemented");
+    let plan = ProcessPlan::from_process(&process, &io).expect("captured stdout");
+    assert_eq!(plan.args[0], "/bin/sh");
+
+    io.stdout = IoMode::Pipe;
+    let error =
+        ProcessPlan::from_process(&process, &io).expect_err("streaming stdout remains unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
 }
 
@@ -197,11 +201,16 @@ fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
 }
 
 #[test]
-fn rejects_non_null_process_io() {
+fn accepts_capture_and_pipe_but_rejects_unimplemented_process_io() {
     let mut io = null_io();
+    io.stdin = IoMode::Pipe;
     io.stdout = IoMode::Capture;
+    io.stderr = IoMode::Capture;
+    InitPlan::from_bundle(&bundle(FIXED_CONFIG), &io).expect("captured process I/O");
+
+    io.stdout = IoMode::Inherit;
     let error = InitPlan::from_bundle(&bundle(FIXED_CONFIG), &io)
-        .expect_err("capture should remain unsupported");
+        .expect_err("inherited output remains unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
 }
 
