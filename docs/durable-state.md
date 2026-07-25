@@ -136,7 +136,12 @@ the intent resumable. Drivers receive the same `OperationContext` and must
 deduplicate a call that completed before the host committed its outcome.
 
 Queries may target the current container generation or provide an exact
-generation fence. A stale fence fails with `conflict`.
+generation fence. A stale fence fails with `conflict`. `list` takes the same
+store gate as lifecycle mutations, enumerates only live `containers/<id>`
+records, validates each complete record and configuration snapshot, applies an
+optional exact isolation-class filter, and sorts the result by container ID.
+It never dispatches the driver. A malformed or unexpected entry fails the
+whole snapshot instead of being hidden from recovery callers.
 
 ## Crash Boundary
 

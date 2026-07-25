@@ -151,18 +151,19 @@ run_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v7"
+    '.schema_version == "a3s.oci.native-linux-smoke.v8"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
      and .service_operations
          == ["features", "create", "state", "start", "kill", "delete",
-             "exec", "wait", "pause", "resume", "update", "processes",
+             "exec", "wait", "list", "pause", "resume", "update", "processes",
              "stats", "read-output", "write-stdin", "close-stdin", "resize",
              "signal-process", "wait-process"]
      and .dedicated_vm_rejected_before_create
      and .create_returned_created
      and .create_replayed
+     and .list_visible_after_create
      and (.created_pid > 0)
      and .marker_absent_after_create
      and .start_released
@@ -184,6 +185,7 @@ run_smoke() {
      and .delete_succeeded
      and .delete_replayed
      and .state_missing_after_delete
+     and .list_empty_after_delete
      and .marker_removed
      and .executor_runtime_clean
      and .session_root_clean
@@ -212,13 +214,13 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v11"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v12"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
      and .service_operations
          == ["features", "create", "state", "start", "kill", "delete",
-             "exec", "wait", "pause", "resume", "update", "processes",
+             "exec", "wait", "list", "pause", "resume", "update", "processes",
              "stats", "read-output", "write-stdin", "close-stdin", "resize",
              "signal-process", "wait-process"]
      and .lifecycle.distinct_bundle_directories
@@ -319,12 +321,12 @@ run_fault_cleanup() {
       return "$status"
     fi
     jq --exit-status --arg phase "$phase" \
-      '.schema_version == "a3s.oci.native-linux-fault-cleanup.v5"
+      '.schema_version == "a3s.oci.native-linux-fault-cleanup.v6"
        and .platform == "linux" and .status == "available"
        and .bundle_loaded
        and .service_operations
            == ["features", "create", "state", "start", "kill", "delete",
-               "exec", "wait", "pause", "resume", "update", "processes",
+               "exec", "wait", "list", "pause", "resume", "update", "processes",
                "stats", "read-output", "write-stdin", "close-stdin", "resize",
                "signal-process", "wait-process"]
        and .lifecycle.requested_fault == $phase

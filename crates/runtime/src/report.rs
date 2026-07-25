@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v8";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v7";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v8";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +363,8 @@ pub struct NativeLinuxSmokeReport {
     pub create_returned_created: bool,
     /// Whether retrying create replayed its exact original result.
     pub create_replayed: bool,
+    /// Whether unfiltered and isolation-filtered list returned the exact created record.
+    pub list_visible_after_create: bool,
     /// Host-visible init PID returned while the container was created.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_pid: Option<i32>,
@@ -407,6 +409,8 @@ pub struct NativeLinuxSmokeReport {
     pub delete_replayed: bool,
     /// Whether state returned `not-found` after delete.
     pub state_missing_after_delete: bool,
+    /// Whether durable list became empty after delete.
+    pub list_empty_after_delete: bool,
     /// Whether the host removed the known marker.
     pub marker_removed: bool,
     /// Whether executor shutdown removed its private transient root.
@@ -430,6 +434,7 @@ impl NativeLinuxSmokeReport {
             dedicated_vm_rejected_before_create: false,
             create_returned_created: false,
             create_replayed: false,
+            list_visible_after_create: false,
             created_pid: None,
             marker_absent_after_create: false,
             start_released: false,
@@ -451,6 +456,7 @@ impl NativeLinuxSmokeReport {
             delete_succeeded: false,
             delete_replayed: false,
             state_missing_after_delete: false,
+            list_empty_after_delete: false,
             marker_removed: false,
             executor_runtime_clean: false,
             session_root_clean: false,
@@ -484,6 +490,7 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Delete,
                     RuntimeOperation::Exec,
                     RuntimeOperation::Wait,
+                    RuntimeOperation::List,
                     RuntimeOperation::Pause,
                     RuntimeOperation::Resume,
                     RuntimeOperation::Update,
@@ -499,6 +506,7 @@ impl NativeLinuxSmokeReport {
             && self.dedicated_vm_rejected_before_create
             && self.create_returned_created
             && self.create_replayed
+            && self.list_visible_after_create
             && self.created_pid.is_some_and(|pid| pid > 0)
             && self.marker_absent_after_create
             && self.start_released
@@ -525,6 +533,7 @@ impl NativeLinuxSmokeReport {
             && self.delete_succeeded
             && self.delete_replayed
             && self.state_missing_after_delete
+            && self.list_empty_after_delete
             && self.marker_removed
             && self.executor_runtime_clean
             && self.session_root_clean

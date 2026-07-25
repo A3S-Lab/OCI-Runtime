@@ -1093,6 +1093,78 @@ async fn incomplete_lifecycle_fails_explicitly() {
 }
 
 #[tokio::test]
+async fn durable_list_is_sorted_filtered_driver_independent_and_reopen_safe() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let mut recording = RecordingDriver::supported();
+    recording
+        .capability
+        .isolation_classes
+        .push(IsolationClass::SharedGuestKernel);
+    let driver = Arc::new(recording);
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+
+    let mut zulu = create_request(&bundle_directory, "list-create-zulu");
+    zulu.id = container_id("list-zulu");
+    service.create(zulu).await.expect("create zulu");
+    let mut alpha = create_request(&bundle_directory, "list-create-alpha");
+    alpha.id = container_id("list-alpha");
+    alpha.isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: TrustDomainId::new("list-domain").expect("trust-domain ID"),
+    };
+    service.create(alpha).await.expect("create alpha");
+
+    let driver_calls = driver.calls().len();
+    let records = service
+        .list(ListRequest::default())
+        .await
+        .expect("list all containers");
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.state.id().as_str())
+            .collect::<Vec<_>>(),
+        ["list-alpha", "list-zulu"]
+    );
+    assert_eq!(driver.calls().len(), driver_calls, "list called the driver");
+
+    let shared = service
+        .list(ListRequest {
+            isolation: Some(IsolationClass::SharedGuestKernel),
+        })
+        .await
+        .expect("list shared-guest containers");
+    assert_eq!(shared.len(), 1);
+    assert_eq!(shared[0].state.id(), "list-alpha");
+    assert_eq!(shared[0].isolation, IsolationClass::SharedGuestKernel);
+
+    drop(service);
+    let reopened = open_service(&temporary, Arc::clone(&driver)).await;
+    let replayed = reopened
+        .list(ListRequest::default())
+        .await
+        .expect("list after service reopen");
+    assert_eq!(replayed, records);
+}
+
+#[tokio::test]
+async fn durable_list_fails_closed_on_an_invalid_container_entry() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, driver).await;
+    let invalid = temporary.path().join("state/containers/not-a-directory");
+    std::fs::write(&invalid, b"invalid").expect("write invalid container entry");
+
+    let error = service
+        .list(ListRequest::default())
+        .await
+        .expect_err("invalid state entry must fail list");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("not a plain directory"));
+}
+
+#[tokio::test]
 async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let bundle_directory = temporary.path().join("bundle");
@@ -1111,6 +1183,7 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
             RuntimeOperation::Kill,
             RuntimeOperation::Delete,
             RuntimeOperation::Wait,
+            RuntimeOperation::List,
         ]
     );
 

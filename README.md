@@ -88,7 +88,8 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 - **Durable Lifecycle**: Persist create, start, kill, pause, resume, delete,
   exec, and per-process signal with monotonic generations, operation IDs,
   replay, fencing, reconciliation, and quarantine; cache stable init and
-  exec-process exit status across host-service reopen
+  exec-process exit status across host-service reopen, and enumerate a
+  deterministic isolation-filtered snapshot without driver dispatch
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, pidfd
   init/exec process-control, cgroup-v2 pause/resume, live process inventory,
   stable per-process exit-status, and cleanup implementation directly on
@@ -234,7 +235,7 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-Each `a3s.oci.native-linux-fault-cleanup.v5` success identifies the exact
+Each `a3s.oci.native-linux-fault-cleanup.v6` success identifies the exact
 injected boundary, records that normal delete was not attempted, and proves
 that the configured-process PID, executor root, marker, and complete
 diagnostic session were removed.
@@ -543,7 +544,7 @@ I/O/hugetlb/RDMA/unified resources and cgroup v2 device-access filtering,
 broader device policies, multi-architecture seccomp and notification
 listeners, rlimits, schedulers, LSMs, hooks, inherited I/O, A3S
 Box listener/log descriptor handoff, real-driver reattachment after
-runtime-process restart, and the remaining SDK operations are still release
+runtime-process restart, events, checkpoint, and restore are still release
 gates.
 
 ### SDK and protocols
@@ -556,8 +557,9 @@ gates.
 - checkpoint and restore;
 - typed IDs, operation IDs, deadlines, generations, and isolation requests.
 
-The durable host implements the five core lifecycle operations around an
-injected `RuntimeDriver` and conditionally exposes init wait, exact-target
+The durable host implements the five core lifecycle operations plus sorted,
+isolation-filtered container enumeration around an injected `RuntimeDriver`.
+It conditionally exposes init wait, exact-target
 exec, per-process signal/wait, pause/resume, live resource update, process
 inventory, statistics, captured output, stdin write/close, and terminal resize
 only when that exact driver implements them. The native Linux driver maps all

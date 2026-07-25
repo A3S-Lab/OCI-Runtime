@@ -155,6 +155,9 @@ Completed:
 - existing `features` CLI path routed through the Rust SDK;
 - foreground `run` implemented only as a typed SDK composition of durable
   create, start, wait, and stable force-delete cleanup;
+- deterministic durable container enumeration with isolation filtering,
+  complete record validation, host-service reopen evidence, and no driver
+  dispatch;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
   idempotent create/start/kill/delete journals, active-operation claims,
@@ -188,8 +191,9 @@ Not yet complete:
 
 The built-in WHPX driver remains `probe-only`, and the default host service
 advertises only `features`. A host explicitly opened around a launch-ready
-`RuntimeDriver` advertises the five required core lifecycle operations plus
-only the optional operations that driver implements.
+`RuntimeDriver` advertises the five required core lifecycle operations,
+host-owned durable `list`, plus only the optional operations that driver
+implements.
 
 ## Delivery Sequence
 

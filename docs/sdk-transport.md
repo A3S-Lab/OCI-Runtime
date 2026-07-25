@@ -109,7 +109,11 @@ start/wait failure paths. This makes foreground ownership and error cleanup
 deterministic while preserving the durable replay contract of every
 constituent mutation.
 
-The host always requires the five core driver operations and advertises
+The configured host always implements `list` directly from its durable state,
+without requiring or dispatching a driver operation. Results are sorted by
+container ID, may be filtered by exact `IsolationClass`, and fail closed if
+any live record, identity, schema, OCI state, or configuration digest is
+invalid. The host also requires the five core driver operations and advertises
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
 `processes`, `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`,
 and `resize` only when the selected driver implements each one. `WaitRequest`
