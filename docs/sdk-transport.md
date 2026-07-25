@@ -71,6 +71,44 @@ durable bundle at both create and start. Its mutating methods are async,
 `Send + Sync`, and idempotent by `OperationId`. Platform resources and guest
 protocol types remain behind that boundary.
 
+### Foreground run composition
+
+`RuntimeClient::run` composes `create`, `start`, an unbounded init-process
+`wait`, and `delete`. It is deliberately absent from `OciRuntimeService` and
+the wire protocol, so there is only one lifecycle implementation:
+
+```rust,no_run
+use a3s_oci_sdk::{
+    ContainerId, CreateRequest, IsolationRequest, OperationContext,
+    OperationId, ProcessIo, RunRequest, RuntimeClient,
+};
+
+# async fn run(client: RuntimeClient, bundle: a3s_oci_sdk::OciBundle)
+#     -> a3s_oci_sdk::Result<()> {
+let status = client
+    .run(RunRequest {
+        create: CreateRequest {
+            context: OperationContext::new(OperationId::new("box-42-create")?),
+            id: ContainerId::new("box-42")?,
+            bundle,
+            isolation: IsolationRequest::SharedHostKernel,
+            io: ProcessIo::default(),
+        },
+        start_context: OperationContext::new(OperationId::new("box-42-start")?),
+        delete_context: OperationContext::new(OperationId::new("box-42-delete")?),
+    })
+    .await?;
+println!("{status:?}");
+# Ok(())
+# }
+```
+
+The three operation IDs must be distinct. After create succeeds, the SDK uses
+the supplied delete context with `DeleteMode::Force` on both success and
+start/wait failure paths. This makes foreground ownership and error cleanup
+deterministic while preserving the durable replay contract of every
+constituent mutation.
+
 The host always requires the five core driver operations and advertises
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
 `processes`, `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`,

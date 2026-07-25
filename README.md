@@ -103,7 +103,9 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 - **Cross-Platform Drivers**: Inspect native Linux, KVM, HVF, and WHPX
   prerequisites without silently weakening requested isolation
 - **Typed SDK and IPC**: Expose an async `Send + Sync` Rust contract with
-  bounded local IPC over Unix sockets or Windows named pipes
+  bounded local IPC over Unix sockets or Windows named pipes; foreground
+  `run` composes the durable create/start/wait/delete calls in the client
+  without adding a second lifecycle operation
 - **Authenticated Guest Protocol**: Bind exact bundles and generations to a
   version-negotiated host/guest session with one-time token authentication
 - **Retained Conformance Evidence**: Lock the OCI schemas and normative
@@ -466,6 +468,13 @@ The host lifecycle stores:
 Matching retries reproduce the original result. Stale generations, reused
 operation IDs with different payloads, invalid isolation, and unsupported
 configuration fail before driver mutation.
+
+`RuntimeClient::run` is a foreground convenience composition, not a service
+or transport method. Its `RunRequest` carries distinct operation contexts for
+create, start, and delete. Once create succeeds, the client always submits the
+same force-delete request before returning, including after a start or wait
+error, so partial lifecycle ownership remains explicit and cleanup retries use
+one stable request identity.
 
 The shared Linux executor independently indexes every live `(container ID,
 generation)` pair, retains a highest-generation fence after delete, and gives

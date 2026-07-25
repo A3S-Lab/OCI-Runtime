@@ -153,6 +153,8 @@ Completed:
   protocol-v6 bounded process I/O, protocol-v7 terminal resize, and
   protocol-v8 durable process-I/O mutation contexts with exact session replay;
 - existing `features` CLI path routed through the Rust SDK;
+- foreground `run` implemented only as a typed SDK composition of durable
+  create, start, wait, and stable force-delete cleanup;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
   idempotent create/start/kill/delete journals, active-operation claims,
@@ -245,7 +247,7 @@ enforce it. No property is silently ignored.
 - [x] Fault-inject every registered core-lifecycle durable commit stage and
   every `RuntimeDriver` method boundary, then reopen and replay.
 - [ ] Implement all OCI hook phases and error behavior.
-- [ ] Implement `run` as a client composition, not a second lifecycle.
+- [x] Implement `run` as a client composition, not a second lifecycle.
 
 Exit gate: lifecycle tests pass under fault injection at every durable write
 and host/agent transition. The durable-write and `RuntimeDriver` portions pass;

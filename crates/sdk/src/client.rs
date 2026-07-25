@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
+use crate::oci_spec::runtime::ContainerState;
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, CreateRequest, DeleteRequest, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, KillRequest, ListRequest, LocalIpcEndpoint, OciRuntimeService, OutputChunk,
-    ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
-    RuntimeInfo, RuntimeTransportClient, SignalProcessRequest, StartRequest, StateRequest,
-    StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest,
+    ContainerStats, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
+    EventBatch, EventsRequest, ExecRequest, ExitStatus, KillRequest, ListRequest, LocalIpcEndpoint,
+    OciRuntimeService, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest,
+    ResizeRequest, RestoreRequest, Result, RunRequest, RuntimeInfo, RuntimeTransportClient,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 /// Cloneable, transport-independent Rust SDK client.
@@ -43,6 +44,57 @@ impl RuntimeClient {
     pub async fn create(&self, request: CreateRequest) -> Result<ContainerRecord> {
         request.validate()?;
         self.service.create(request).await
+    }
+
+    /// Run one foreground container by composing the normal OCI lifecycle.
+    ///
+    /// Once create succeeds, the SDK always submits the same force-delete
+    /// request before returning, including when start or wait fails. This
+    /// prevents the convenience operation from creating a second lifecycle
+    /// or leaving ownership of partial cleanup ambiguous.
+    pub async fn run(&self, request: RunRequest) -> Result<ExitStatus> {
+        request.validate()?;
+        let RunRequest {
+            create,
+            start_context,
+            delete_context,
+        } = request;
+        let expected_id = create.id.clone();
+        let created = self.create(create).await?;
+        let target = ContainerTarget::exact(expected_id, created.generation);
+
+        let lifecycle = async {
+            validate_run_record(&created, &target, ContainerState::Created, "create")?;
+            let started = self
+                .start(StartRequest {
+                    context: start_context,
+                    target: target.clone(),
+                })
+                .await?;
+            validate_run_record(&started, &target, ContainerState::Running, "start")?;
+            let status = self
+                .wait(WaitRequest {
+                    target: target.clone(),
+                    timeout_ms: None,
+                })
+                .await?;
+            status.validate()?;
+            Ok(status)
+        }
+        .await;
+
+        let cleanup = self
+            .delete(DeleteRequest {
+                context: delete_context,
+                target,
+                mode: DeleteMode::Force,
+            })
+            .await;
+        match (lifecycle, cleanup) {
+            (Ok(status), Ok(())) => Ok(status),
+            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+            (Err(primary), Err(cleanup)) => Err(combine_run_errors(primary, cleanup)),
+        }
     }
 
     pub async fn state(&self, request: StateRequest) -> Result<ContainerRecord> {
@@ -149,6 +201,50 @@ impl RuntimeClient {
         request.validate()?;
         self.service.restore(request).await
     }
+}
+
+fn validate_run_record(
+    record: &ContainerRecord,
+    target: &ContainerTarget,
+    expected_status: ContainerState,
+    operation: &str,
+) -> Result<()> {
+    let generation = target.generation.ok_or_else(|| {
+        Error::new(
+            ErrorCode::Internal,
+            "run constructed a non-exact lifecycle target",
+        )
+        .for_operation("run")
+    })?;
+    if record.state.id() == target.id.as_str()
+        && record.generation == generation
+        && *record.state.status() == expected_status
+    {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorCode::Conflict,
+        format!(
+            "run {operation} returned container {} generation {} in state {}; expected {} generation {} in state {expected_status}",
+            record.state.id(),
+            record.generation.0,
+            record.state.status(),
+            target.id,
+            generation.0,
+        ),
+    )
+    .for_operation("run"))
+}
+
+fn combine_run_errors(mut primary: Error, cleanup: Error) -> Error {
+    primary.message = format!(
+        "{}; forced run cleanup also failed during {}: {}",
+        primary.message,
+        cleanup.operation.as_deref().unwrap_or("delete"),
+        cleanup.message,
+    );
+    primary.retryable |= cleanup.retryable;
+    primary
 }
 
 #[cfg(test)]
