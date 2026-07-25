@@ -504,11 +504,11 @@ hypervisor libraries stay behind explicit driver, shim, and guest boundaries:
 ```mermaid
 flowchart TB
     subgraph consumers["Consumers and SDK"]
-        box["A3S Box"]
+        box["A3S Box<br/>(planned migration)"]
         cli["a3s-oci CLI"]
         containerd["containerd shim<br/>(planned)"]
         client["RuntimeClient<br/>in-process service or bounded local IPC"]
-        box --> client
+        box -.-> client
         cli --> client
         containerd -.-> client
     end
@@ -539,7 +539,7 @@ flowchart TB
         shim --> hypervisor --> bridge --> agent
     end
 
-    executor["Shared LinuxExecutor<br/>new and joined namespaces · mounts · create/start barrier<br/>PID 1 · pidfds · wait · scoped cleanup"]
+    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 · pidfds · wait · scoped cleanup"]
 
     client --> service
     selection -->|"shared-host-kernel"| native_driver
@@ -550,10 +550,11 @@ flowchart TB
 
 The two paths compile and place the same `LinuxExecutor` differently: directly
 behind `NativeLinuxDriver` on Linux, or inside `a3s-oci-agent` in a utility VM.
-The utility-VM driver edge is dashed because it is a qualification path and is
-not yet wired into `HostRuntimeService`. Solid edges show implemented or
-directly exercised boundaries, not `supported` readiness; the
-[platform status](#platform-status) remains authoritative.
+Dashed edges identify planned integration: A3S Box has not completed its SDK
+migration, the containerd shim is not implemented, and the utility-VM driver
+qualification path is not yet wired into `HostRuntimeService`. Solid edges
+show implemented or directly exercised boundaries, not `supported` readiness;
+the [platform status](#platform-status) remains authoritative.
 
 | Boundary | Owns | Deliberately leaves outside |
 | --- | --- | --- |
