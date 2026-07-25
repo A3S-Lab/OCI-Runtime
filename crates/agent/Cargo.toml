@@ -18,9 +18,11 @@ zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+seccompiler = "0.5"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+syscalls = { version = "0.8", default-features = false, features = ["std", "aarch64", "x86_64"] }
 tokio = { workspace = true, features = ["process", "time"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

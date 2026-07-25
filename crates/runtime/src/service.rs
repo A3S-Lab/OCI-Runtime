@@ -96,6 +96,50 @@ const RECOGNIZED_LINUX_MOUNT_OPTIONS: &[&str] = &[
     "unbindable",
 ];
 
+const SUPPORTED_LINUX_CAPABILITIES: &[&str] = &[
+    "CAP_AUDIT_CONTROL",
+    "CAP_AUDIT_READ",
+    "CAP_AUDIT_WRITE",
+    "CAP_BLOCK_SUSPEND",
+    "CAP_BPF",
+    "CAP_CHECKPOINT_RESTORE",
+    "CAP_CHOWN",
+    "CAP_DAC_OVERRIDE",
+    "CAP_DAC_READ_SEARCH",
+    "CAP_FOWNER",
+    "CAP_FSETID",
+    "CAP_IPC_LOCK",
+    "CAP_IPC_OWNER",
+    "CAP_KILL",
+    "CAP_LEASE",
+    "CAP_LINUX_IMMUTABLE",
+    "CAP_MAC_ADMIN",
+    "CAP_MAC_OVERRIDE",
+    "CAP_MKNOD",
+    "CAP_NET_ADMIN",
+    "CAP_NET_BIND_SERVICE",
+    "CAP_NET_BROADCAST",
+    "CAP_NET_RAW",
+    "CAP_PERFMON",
+    "CAP_SETFCAP",
+    "CAP_SETGID",
+    "CAP_SETPCAP",
+    "CAP_SETUID",
+    "CAP_SYS_ADMIN",
+    "CAP_SYS_BOOT",
+    "CAP_SYS_CHROOT",
+    "CAP_SYS_MODULE",
+    "CAP_SYS_NICE",
+    "CAP_SYS_PACCT",
+    "CAP_SYS_PTRACE",
+    "CAP_SYS_RAWIO",
+    "CAP_SYS_RESOURCE",
+    "CAP_SYS_TIME",
+    "CAP_SYS_TTY_CONFIG",
+    "CAP_SYSLOG",
+    "CAP_WAKE_ALARM",
+];
+
 /// In-process host implementation used by the CLI and A3S Box adapter.
 #[derive(Clone, Default)]
 pub struct HostRuntimeService {
@@ -345,18 +389,48 @@ fn driver_state_error(
 fn compiled_linux_features() -> Result<LinuxFeature> {
     let cgroup = CgroupBuilder::default()
         .v1(false)
-        .v2(false)
+        .v2(true)
         .systemd(false)
         .systemd_user(false)
         .rdma(false)
         .build()
         .map_err(feature_build_error)?;
     let seccomp = SeccompBuilder::default()
-        .enabled(false)
-        .actions(Vec::<LinuxSeccompAction>::new())
-        .operators(Vec::<String>::new())
-        .archs(Vec::<Arch>::new())
-        .known_flags(Vec::<String>::new())
+        .enabled(true)
+        .actions(vec![
+            LinuxSeccompAction::ScmpActAllow,
+            LinuxSeccompAction::ScmpActErrno,
+            LinuxSeccompAction::ScmpActKill,
+            LinuxSeccompAction::ScmpActKillProcess,
+            LinuxSeccompAction::ScmpActKillThread,
+            LinuxSeccompAction::ScmpActLog,
+            LinuxSeccompAction::ScmpActTrace,
+            LinuxSeccompAction::ScmpActTrap,
+        ])
+        .operators(
+            [
+                "SCMP_CMP_EQ",
+                "SCMP_CMP_GE",
+                "SCMP_CMP_GT",
+                "SCMP_CMP_LE",
+                "SCMP_CMP_LT",
+                "SCMP_CMP_MASKED_EQ",
+                "SCMP_CMP_NE",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+        )
+        .archs(vec![Arch::ScmpArchAarch64, Arch::ScmpArchX86_64])
+        .known_flags(
+            [
+                "SECCOMP_FILTER_FLAG_LOG",
+                "SECCOMP_FILTER_FLAG_SPEC_ALLOW",
+                "SECCOMP_FILTER_FLAG_TSYNC",
+                "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+        )
         .supported_flags(Vec::<String>::new())
         .build()
         .map_err(feature_build_error)?;
@@ -397,7 +471,12 @@ fn compiled_linux_features() -> Result<LinuxFeature> {
             LinuxNamespaceType::User,
             LinuxNamespaceType::Uts,
         ])
-        .capabilities(Vec::<String>::new())
+        .capabilities(
+            SUPPORTED_LINUX_CAPABILITIES
+                .iter()
+                .map(|capability| (*capability).to_string())
+                .collect::<Vec<_>>(),
+        )
         .cgroup(cgroup)
         .seccomp(seccomp)
         .apparmor(apparmor)

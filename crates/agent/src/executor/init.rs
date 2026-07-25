@@ -252,9 +252,11 @@ fn prepare_create_environment(
     }
     verify_uts_names(plan)?;
     if plan.namespaces.new_mount() {
+        plan.devices.validate_rootfs(rootfs)?;
         rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
         mount::apply_all(&plan.mounts, bundle_directory, rootfs, idmapped_sources)?;
         rootfs::pivot_root(rootfs)?;
+        plan.devices.create_all()?;
         rootfs::finalize(
             plan.rootfs_propagation,
             &plan.readonly_paths,
@@ -382,6 +384,7 @@ fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &File) -> Result<()> {
         rootfs::chroot(rootfs)?;
     }
 
+    plan.capabilities.prepare_for_credentials(plan.uid)?;
     // SAFETY: every pointer below references a live, NUL-terminated buffer.
     // This internal init process is single-threaded and immediately replaces
     // its image after applying the validated bootstrap profile.
@@ -402,9 +405,17 @@ fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &File) -> Result<()> {
         if let Some(umask) = plan.umask {
             libc::umask(umask);
         }
-        if plan.no_new_privileges && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-            return Err(last_os_error("enable no_new_privileges"));
-        }
+    }
+    plan.capabilities.apply_after_credentials(plan.uid)?;
+    // SAFETY: `PR_SET_NO_NEW_PRIVS` consumes a boolean integer and zero
+    // padding arguments.
+    if plan.no_new_privileges && unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
+    {
+        return Err(last_os_error("enable no_new_privileges"));
+    }
+    plan.seccomp.install()?;
+    // SAFETY: every pointer below references a live, NUL-terminated buffer.
+    unsafe {
         libc::execve(
             executable.as_ptr(),
             arg_pointers.as_ptr(),

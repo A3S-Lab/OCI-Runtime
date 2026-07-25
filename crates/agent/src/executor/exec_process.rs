@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
+use super::cgroup;
 use super::control::{read_outcome, InitOutcome, START_BYTE};
 use super::namespace::RetainedNamespaceArgument;
 use super::pid;
@@ -37,6 +38,7 @@ impl ExecProcess {
     ) -> Result<Self> {
         let context = init_process.execution_context();
         let init_pidfd = init_process.pidfd_descriptor();
+        let cgroup_procs = init_process.cgroup_procs_descriptor();
         let inherited = context.inherited_descriptors(init_pidfd)?;
         let namespace_arguments = context.namespace_arguments();
         let (listener, control_name) = bind_control_listener()?;
@@ -57,10 +59,15 @@ impl ExecProcess {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         // SAFETY: the callback runs in the freshly forked command child and
-        // performs only `fcntl` calls before `execve`. It changes descriptor
+        // moves the helper into the container cgroup and changes descriptor
         // flags only in the child-side descriptor table.
         unsafe {
-            command.pre_exec(move || make_descriptors_inheritable(&inherited));
+            command.pre_exec(move || {
+                if let Some(descriptor) = cgroup_procs {
+                    cgroup::join_from_pre_exec(descriptor)?;
+                }
+                make_descriptors_inheritable(&inherited)
+            });
         }
         let mut child = command.spawn().map_err(|error| {
             exec_error(

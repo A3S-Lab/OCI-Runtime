@@ -75,7 +75,22 @@ impl LinuxExecutor {
             }
         }
 
-        let plan = ProcessPlan::from_process(&request.process, &request.io)?;
+        let mut plan = ProcessPlan::from_process(&request.process, &request.io)?;
+        let seccomp = state
+            .containers
+            .get(&key)
+            .ok_or_else(|| missing_locked_container(&key))?
+            .process
+            .seccomp();
+        plan.attach_seccomp(seccomp);
+        let container_capabilities = state
+            .containers
+            .get(&key)
+            .ok_or_else(|| missing_locked_container(&key))?
+            .process
+            .capabilities();
+        plan.capabilities
+            .validate_exec_ceiling(container_capabilities)?;
         state
             .containers
             .get(&key)

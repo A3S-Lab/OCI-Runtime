@@ -104,7 +104,7 @@ impl MountPlan {
                 "replacing the container root with an additional mount is not implemented",
             ));
         }
-        let source = mount
+        let mut source = mount
             .source()
             .as_ref()
             .map(|source| {
@@ -112,11 +112,12 @@ impl MountPlan {
                 Ok(source.clone())
             })
             .transpose()?;
-        let filesystem_type = mount
+        let mut filesystem_type = mount
             .typ()
             .as_deref()
             .map(|value| validate_string(index, "type", value))
             .transpose()?;
+        normalize_unified_cgroup_mount(index, &mut source, &mut filesystem_type)?;
 
         let mut flags = 0;
         let mut bind = false;
@@ -374,6 +375,29 @@ impl MountPlan {
         }
         Ok(())
     }
+}
+
+fn normalize_unified_cgroup_mount(
+    index: usize,
+    source: &mut Option<PathBuf>,
+    filesystem_type: &mut Option<String>,
+) -> Result<()> {
+    if filesystem_type.as_deref() != Some("cgroup") {
+        return Ok(());
+    }
+    if source
+        .as_deref()
+        .is_some_and(|source| source != Path::new("cgroup"))
+    {
+        return Err(unsupported(
+            index,
+            "source",
+            "legacy cgroup mounts must use source `cgroup` for cgroup v2 normalization",
+        ));
+    }
+    *source = Some(PathBuf::from("cgroup2"));
+    *filesystem_type = Some("cgroup2".to_string());
+    Ok(())
 }
 
 fn set_flag(

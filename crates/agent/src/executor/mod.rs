@@ -1,4 +1,7 @@
+mod capability;
+mod cgroup;
 mod control;
+mod device;
 mod exec;
 mod exec_process;
 mod init;
@@ -16,6 +19,9 @@ mod process;
 mod rootfs;
 #[cfg(test)]
 mod rootfs_tests;
+mod seccomp;
+#[cfg(test)]
+mod seccomp_tests;
 mod state;
 
 use std::collections::BTreeMap;

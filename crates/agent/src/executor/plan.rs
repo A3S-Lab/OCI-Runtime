@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::oci_spec::runtime::Process;
@@ -6,14 +6,19 @@ use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::capability::CapabilityPlan;
+use super::cgroup::CgroupPlan;
+use super::device::DevicePlan;
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
 use super::rootfs::RootfsPropagation;
+use super::seccomp::SeccompPlan;
 
 const MAX_ARGUMENTS: usize = 4_096;
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
 const MAX_EXEC_BYTES: usize = 1024 * 1024;
 const MAX_RESTRICTED_PATHS: usize = 4_096;
+const MAX_ANNOTATIONS: usize = 1_024;
 const LINUX_UTS_NAME_MAX: usize = 64;
 
 /// Validated process fields shared by configured init and exec launch.
@@ -28,6 +33,8 @@ pub(super) struct ProcessPlan {
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
+    pub(super) capabilities: CapabilityPlan,
+    pub(super) seccomp: SeccompPlan,
 }
 
 impl ProcessPlan {
@@ -73,6 +80,7 @@ impl ProcessPlan {
                 "process.user.umask must fit the POSIX permission mask",
             ));
         }
+        let capabilities = CapabilityPlan::from_oci(process.capabilities().as_ref())?;
 
         Ok(Self {
             args,
@@ -83,7 +91,13 @@ impl ProcessPlan {
             additional_gids,
             umask: user.umask(),
             no_new_privileges: true,
+            capabilities,
+            seccomp: SeccompPlan::default(),
         })
+    }
+
+    pub(super) fn attach_seccomp(&mut self, seccomp: &SeccompPlan) {
+        self.seccomp = seccomp.clone();
     }
 }
 
@@ -99,6 +113,10 @@ pub(super) struct InitPlan {
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
+    pub(super) capabilities: CapabilityPlan,
+    pub(super) seccomp: SeccompPlan,
+    pub(super) cgroup: CgroupPlan,
+    pub(super) devices: DevicePlan,
     pub(super) namespaces: NamespacePlan,
     pub(super) mounts: Vec<MountPlan>,
     pub(super) root_readonly: bool,
@@ -107,6 +125,7 @@ pub(super) struct InitPlan {
     pub(super) readonly_paths: Vec<PathBuf>,
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
+    pub(super) annotations: BTreeMap<String, String>,
 }
 
 impl InitPlan {
@@ -125,13 +144,7 @@ impl InitPlan {
         let root = spec.root().as_ref().ok_or_else(|| {
             invalid("OCI bootstrap executor requires a root filesystem configuration")
         })?;
-        let root_path = linux_path(root.path(), "root.path", false)?;
-        if root_path != "rootfs" {
-            return Err(unsupported(
-                "root.path",
-                "the bootstrap executor currently requires the normalized relative path `rootfs`",
-            ));
-        }
+        let root_path = resolve_rootfs_path(bundle.directory(), root.path())?;
         let root_readonly = root.readonly().unwrap_or(false);
 
         let process = spec
@@ -145,6 +158,8 @@ impl InitPlan {
             process_plan.gid,
             &process_plan.additional_gids,
         )?;
+        let cgroup = CgroupPlan::from_linux(spec.linux().as_ref())?;
+        let seccomp = SeccompPlan::from_linux(spec.linux().as_ref())?;
         let rootfs_propagation = spec
             .linux()
             .as_ref()
@@ -169,10 +184,23 @@ impl InitPlan {
             "linux.readonlyPaths",
         )?;
         let mounts = mount::plan_all(spec.mounts().as_deref(), &namespaces)?;
+        let devices = DevicePlan::from_linux(spec.linux().as_ref(), &mounts)?;
+        if devices.requires_setup() && process_plan.capabilities.permits_mknod() {
+            return Err(unsupported(
+                "process.capabilities.effective",
+                "the bounded device profile requires CAP_MKNOD to be absent",
+            ));
+        }
         if !mounts.is_empty() && !namespaces.new_mount() {
             return Err(unsupported(
                 "mounts",
                 "the bootstrap executor applies mounts only in a newly created mount namespace",
+            ));
+        }
+        if devices.requires_setup() && !namespaces.new_mount() {
+            return Err(unsupported(
+                "linux.devices",
+                "device creation requires a newly created mount namespace",
             ));
         }
         if (root_readonly
@@ -202,10 +230,11 @@ impl InitPlan {
                 "the bootstrap executor changes UTS names only in a configured UTS namespace",
             ));
         }
+        let annotations = plan_annotations(spec.annotations().as_ref())?;
 
         Ok(Self {
             bundle_directory: bundle.directory().to_path_buf(),
-            rootfs: bundle.directory().join(root_path),
+            rootfs: root_path,
             args: process_plan.args,
             environment: process_plan.environment,
             cwd: process_plan.cwd,
@@ -214,6 +243,10 @@ impl InitPlan {
             additional_gids: process_plan.additional_gids,
             umask: process_plan.umask,
             no_new_privileges: process_plan.no_new_privileges,
+            capabilities: process_plan.capabilities,
+            seccomp,
+            cgroup,
+            devices,
             namespaces,
             mounts,
             root_readonly,
@@ -222,6 +255,7 @@ impl InitPlan {
             readonly_paths,
             hostname,
             domainname,
+            annotations,
         })
     }
 }
@@ -238,7 +272,15 @@ fn validate_process_profile(process: &Process) -> Result<()> {
     reject_unimplemented_keys(
         process,
         "process",
-        &["terminal", "user", "args", "env", "cwd", "noNewPrivileges"],
+        &[
+            "terminal",
+            "user",
+            "args",
+            "env",
+            "cwd",
+            "capabilities",
+            "noNewPrivileges",
+        ],
     )?;
     let user = object(
         process
@@ -265,6 +307,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "mounts",
             "hostname",
             "domainname",
+            "annotations",
             "linux",
         ],
     )?;
@@ -284,7 +327,15 @@ fn validate_profile(raw: &Value) -> Result<()> {
     reject_unimplemented_keys(
         process,
         "process",
-        &["terminal", "user", "args", "env", "cwd", "noNewPrivileges"],
+        &[
+            "terminal",
+            "user",
+            "args",
+            "env",
+            "cwd",
+            "capabilities",
+            "noNewPrivileges",
+        ],
     )?;
 
     let user = object(
@@ -337,11 +388,56 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "uidMappings",
             "gidMappings",
             "timeOffsets",
+            "cgroupsPath",
+            "resources",
+            "devices",
+            "seccomp",
             "rootfsPropagation",
             "maskedPaths",
             "readonlyPaths",
         ],
     )
+}
+
+fn resolve_rootfs_path(bundle_directory: &Path, path: &Path) -> Result<PathBuf> {
+    let path = linux_path(path, "root.path", path.is_absolute())?;
+    if path.starts_with('/') {
+        Ok(PathBuf::from(path))
+    } else {
+        Ok(bundle_directory.join(path))
+    }
+}
+
+fn plan_annotations(
+    annotations: Option<&std::collections::HashMap<String, String>>,
+) -> Result<BTreeMap<String, String>> {
+    let annotations = annotations.cloned().unwrap_or_default();
+    if annotations.len() > MAX_ANNOTATIONS {
+        return Err(invalid(format!(
+            "annotations contains {} entries; maximum is {MAX_ANNOTATIONS}",
+            annotations.len()
+        )));
+    }
+    let mut total_bytes = 0_usize;
+    let mut planned = BTreeMap::new();
+    for (key, value) in annotations {
+        if key.is_empty() || key.as_bytes().contains(&0) || value.as_bytes().contains(&0) {
+            return Err(invalid(
+                "annotations keys must be non-empty and annotations must not contain NUL bytes",
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(key.len())
+            .and_then(|bytes| bytes.checked_add(value.len()))
+            .ok_or_else(|| invalid("annotations size overflow"))?;
+        if total_bytes > MAX_EXEC_BYTES {
+            return Err(invalid(format!(
+                "annotations exceeds the {MAX_EXEC_BYTES}-byte bootstrap limit"
+            )));
+        }
+        planned.insert(key, value);
+    }
+    Ok(planned)
 }
 
 fn plan_restricted_paths(paths: Option<&[String]>, field: &str) -> Result<Vec<PathBuf>> {

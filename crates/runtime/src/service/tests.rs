@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
 };
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxNamespaceType, Process};
+use a3s_oci_sdk::oci_spec::runtime::{
+    Arch, ContainerState, LinuxNamespaceType, LinuxSeccompAction, Process,
+};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error,
     ErrorCode, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest,
@@ -15,7 +17,7 @@ use a3s_oci_sdk::{
     WaitRequest,
 };
 
-use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS};
+use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
 use crate::{
     DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
     DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
@@ -613,6 +615,36 @@ async fn reports_only_operations_that_are_currently_implemented() {
             .as_slice()
         )
     );
+    assert_eq!(
+        linux.capabilities().as_deref(),
+        Some(
+            SUPPORTED_LINUX_CAPABILITIES
+                .iter()
+                .map(|capability| (*capability).to_string())
+                .collect::<Vec<_>>()
+                .as_slice()
+        )
+    );
+    let cgroup = linux.cgroup().as_ref().expect("cgroup feature report");
+    assert_eq!(*cgroup.v1(), Some(false));
+    assert_eq!(*cgroup.v2(), Some(true));
+    let seccomp = linux.seccomp().as_ref().expect("seccomp feature report");
+    assert_eq!(*seccomp.enabled(), Some(true));
+    assert_eq!(
+        seccomp.archs().as_deref(),
+        Some([Arch::ScmpArchAarch64, Arch::ScmpArchX86_64].as_slice())
+    );
+    assert!(seccomp
+        .actions()
+        .as_deref()
+        .expect("seccomp actions")
+        .contains(&LinuxSeccompAction::ScmpActKillProcess));
+    assert!(!seccomp
+        .actions()
+        .as_deref()
+        .expect("seccomp actions")
+        .contains(&LinuxSeccompAction::ScmpActNotify));
+    assert_eq!(seccomp.supported_flags().as_deref(), Some([].as_slice()));
     assert_eq!(
         *linux
             .mount_extensions()

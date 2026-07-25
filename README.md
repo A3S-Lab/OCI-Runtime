@@ -38,9 +38,10 @@ profile.
 The runtime has two execution paths:
 
 - **Native Linux** runs the reviewed namespace and mount profile with
-  PID-reuse-safe init and exec process control without requiring KVM. Complete
-  cgroup, seccomp, capability, hook, and process-I/O enforcement remains a
-  release gate.
+  PID-reuse-safe init and exec process control without requiring KVM. The
+  bootstrap slice now enforces its bounded cgroup v2, seccomp, capability, and
+  device profile; broader OCI controls, hooks, and process I/O remain release
+  gates.
 - **Utility VM** hosts the same Linux executor behind an authenticated guest
   agent, using KVM on Linux, HVF on macOS, or WHPX on Windows.
 
@@ -454,6 +455,17 @@ The current executor implements a reviewed bootstrap vertical slice:
   common VFS options, recursive `mount_setattr` attributes, detached
   ID-mapped filesystem and bind mounts, and symlink-escape rejection;
 - OCI masked paths, read-only paths, and a read-only rootfs;
+- a bounded cgroup v2 profile covering memory limit/reservation/swap, CPU
+  quota/period/shares/cpuset, and PID limits, with controller availability and
+  setting read-back checks;
+- exact process bounding/effective/permitted/inheritable/ambient capability
+  sets, including an init capability ceiling for later exec processes;
+- bounded OCI device profiles with default-deny policy-shape validation,
+  exact device-node creation and read-back, rootfs scans, `nodev` bind
+  enforcement, and CAP_MKNOD exclusion;
+- architecture-bound seccomp BPF for x86_64 and AArch64, including OCI
+  argument comparisons, distinct errno actions, and the same retained policy
+  on init and exec;
 - PID- and namespace-authenticated create/start barrier;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
   signaling, exact normal-or-signal exit status, repeated wait, observation,
@@ -469,9 +481,12 @@ mappings, coverage for container ID 0 and every configured process ID, and an
 credentials before rootfs mutation. Mount entries and rootfs mutation remain
 unsupported when joining or inheriting a mount namespace. Other unimplemented
 OCI fields are rejected instead of ignored. Rootless mapping policy, cgroup
-resources, capabilities, hooks, seccomp, full I/O and PTY handling,
-real-driver reattachment after runtime-process restart, and the remaining SDK
-operations are still release gates.
+I/O/hugetlb/RDMA/unified resources and cgroup v2 device-access filtering,
+broader device policies, multi-architecture seccomp and notification
+listeners, rlimits, schedulers, LSMs, hooks, full I/O and PTY handling, A3S
+Box listener/log descriptor handoff, real-driver reattachment after
+runtime-process restart, and the remaining SDK operations are still release
+gates.
 
 ### SDK and protocols
 
@@ -497,10 +512,12 @@ enforcement remain explicitly unsupported and are not advertised early.
 
 The OCI `Features` document validates against the pinned 1.3.0 schema. It
 reports the 61 recognized mount options in sorted order, all eight implemented
-Linux namespace types, and `linux.mountExtensions.idmap.enabled=true`.
-Capabilities, cgroup controllers, seccomp, LSMs, Intel RDT, and network-device
-configuration remain explicitly empty or disabled, and no potentially unsafe
-configuration annotation is advertised.
+Linux namespace types, all 41 recognized capabilities, cgroup v2, the
+implemented x86_64/AArch64 seccomp actions and operators, and
+`linux.mountExtensions.idmap.enabled=true`. Unsupported seccomp flags, cgroup
+v1/systemd/RDMA, LSMs, Intel RDT, and network-device configuration remain
+explicitly empty or disabled, and no potentially unsafe configuration
+annotation is advertised.
 
 The local IPC and guest-agent protocols are versioned, length-delimited, and
 64 MiB bounded. Every untrusted request is revalidated at the receiving

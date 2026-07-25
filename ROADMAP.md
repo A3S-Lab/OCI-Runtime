@@ -104,6 +104,15 @@ Completed:
   workload pidfd signaling, exact-target exec registries with retained rootfs
   and namespace descriptors, per-process pidfds and replay journals, stable
   process wait, init-exit supervision, and complete session cleanup;
+- direct A3S Box compiler compatibility fixture pinned to Box commit
+  `d24c951989c8ee8dbc772ccd0021713855613656`, with schema/semantic loading and
+  fail-closed executor planning for its absolute rootfs, annotations,
+  capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
+  mount normalization, and AArch64 seccomp policy;
+- Linux executor enforcement for exact capability sets and exec bounding
+  ceilings, memory/CPU/cpuset/PID cgroup v2 settings with read-back, exact
+  static device nodes within a bounded default-deny profile, and pure-Rust
+  x86_64/AArch64 seccomp BPF retained across init and exec;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -119,6 +128,9 @@ Completed:
 - rejection of unknown configuration properties;
 - immutable SHA-256 binding of the loaded `config.json`;
 - exact `config.json` retention and fail-closed SDK wire deserialization;
+- OCI feature reporting for all eight Linux namespaces, 41 capability names,
+  cgroup v2, x86_64/AArch64 seccomp actions and operators, and ID-mapped
+  mounts, with unsupported managers, flags, and security modules disabled;
 - phase-aware, bounded common, Linux, and VM semantic validation boundary;
 - exhaustive SDK request validation on in-process and transport boundaries;
 - version-negotiated, length-delimited transport for every SDK operation;
@@ -349,10 +361,23 @@ then may HVF become `experimental`.
   namespace, distinguish non-recursive `idmap` from recursive `ridmap`, and
   prove filesystem ownership through native Linux and the macOS utility VM
   plus unchanged bind sources and exact recursion through native Linux.
-- [ ] Rootless ID-mapping policy, remaining credentials, capabilities, rlimits,
-  scheduler, I/O priority, affinity, LSMs, and seccomp.
-- [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified
-  resource enforcement.
+- [x] Apply and verify OCI capability bounding, effective, permitted,
+  inheritable, and ambient sets, and prevent exec from exceeding the
+  configured init bounding ceiling.
+- [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
+  argument comparisons, stacked default/specific actions, and retained exec
+  policy.
+- [x] Apply and read back cgroup v2 memory limit/reservation/swap, CPU
+  shares/quota/period/cpuset, and PID limits; join init and exec to the same
+  owned leaf.
+- [x] Enforce the bounded A3S Box static device-node profile with
+  default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
+  CAP_MKNOD exclusion, and verified device-node creation.
+- [ ] Rootless ID-mapping policy, remaining credentials, rlimits, scheduler,
+  I/O priority, affinity, LSMs, multi-architecture/notification seccomp, and
+  broader device policies.
+- [ ] cgroup v2 I/O, hugepage, RDMA, unified resources, device-access BPF,
+  delegation breadth, and full lifecycle evidence.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
   all remaining namespace processes after the configured process exits, and
   preserve that process's exact exit code or terminating signal.

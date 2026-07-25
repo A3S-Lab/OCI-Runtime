@@ -29,6 +29,7 @@ const UTS_CONFIG: &str = r#"{
   "domainname": "runtime.test",
   "linux": {"namespaces": [{"type": "uts"}]}
 }"#;
+const A3S_BOX_CONFIG: &str = include_str!("../../../../fixtures/a3s-box/config.json");
 
 fn bundle(config: &str) -> OciBundle {
     OciBundle::from_json(
@@ -57,6 +58,7 @@ fn accepts_the_exact_bootstrap_profile() {
     assert_eq!(plan.args[0], "/bin/sh");
     assert_eq!(plan.umask, Some(0o22));
     assert!(plan.no_new_privileges);
+    assert_eq!(plan.capabilities.bounding_count(), 0);
     assert!(!plan.namespaces.new_uts());
     assert!(!plan.namespaces.new_mount());
     assert!(!plan.namespaces.new_ipc());
@@ -65,6 +67,36 @@ fn accepts_the_exact_bootstrap_profile() {
     assert!(!plan.namespaces.new_pid());
     assert!(!plan.namespaces.new_user());
     assert!(!plan.namespaces.new_time());
+}
+
+#[test]
+fn plans_the_exact_a3s_box_compiler_output() {
+    let bundle = OciBundle::from_json(
+        std::path::PathBuf::from("/var/lib/a3s/boxes/box-123"),
+        A3S_BOX_CONFIG,
+    )
+    .expect("schema-valid A3S Box bundle");
+    let plan = InitPlan::from_bundle(&bundle, &null_io())
+        .expect("A3S Box compiler output must be executable without translation");
+
+    assert_eq!(
+        plan.rootfs,
+        std::path::PathBuf::from("/var/lib/a3s/boxes/box-123/rootfs")
+    );
+    assert_eq!(plan.args, ["/sbin/init"]);
+    assert_eq!(plan.mounts.len(), 10);
+    assert_eq!(plan.mounts[6].filesystem_type.as_deref(), Some("cgroup2"));
+    assert!(plan.namespaces.new_user());
+    assert!(plan.namespaces.new_mount());
+    assert!(plan.namespaces.new_pid());
+    assert!(plan.namespaces.new_ipc());
+    assert!(plan.namespaces.new_network());
+    assert!(plan.namespaces.new_cgroup());
+    assert_eq!(plan.capabilities.bounding_count(), 11);
+    assert_eq!(plan.annotations.len(), 4);
+    assert_eq!(plan.devices.len(), 6);
+    assert!(plan.seccomp.is_enabled());
+    assert_eq!(plan.seccomp.filter_count(), 2);
 }
 
 #[test]
@@ -89,7 +121,7 @@ fn builds_the_same_fail_closed_plan_for_an_exec_process() {
 }
 
 #[test]
-fn exec_process_planning_rejects_unenforced_security_and_io() {
+fn exec_process_planning_enforces_capabilities_and_rejects_unsupported_io() {
     let mut value = serde_json::from_str::<serde_json::Value>(FIXED_CONFIG)
         .expect("decode fixed config")["process"]
         .clone();
@@ -101,10 +133,8 @@ fn exec_process_planning_rejects_unenforced_security_and_io() {
         "ambient": []
     });
     let process: Process = serde_json::from_value(value).expect("decode process");
-    let error = ProcessPlan::from_process(&process, &null_io())
-        .expect_err("capabilities must not be silently ignored");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("process.capabilities"));
+    let plan = ProcessPlan::from_process(&process, &null_io()).expect("empty capability profile");
+    assert_eq!(plan.capabilities.bounding_count(), 0);
 
     let process: Process = serde_json::from_value(
         serde_json::from_str::<serde_json::Value>(FIXED_CONFIG).expect("decode fixed config")
@@ -120,27 +150,50 @@ fn exec_process_planning_rejects_unenforced_security_and_io() {
 }
 
 #[test]
-fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
-    let config = FIXED_CONFIG.replace(
-        r#""ociVersion": "1.3.0","#,
-        r#""ociVersion": "1.3.0",
-           "annotations": {"dev.a3s.unsupported": "true"},"#,
-    );
-    let error =
-        InitPlan::from_bundle(&bundle(&config), &null_io()).expect_err("annotations unsupported");
+fn bounded_device_profiles_reject_cap_mknod() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["process"]["capabilities"] = serde_json::json!({
+        "bounding": ["CAP_MKNOD"],
+        "effective": ["CAP_MKNOD"],
+        "inheritable": [],
+        "permitted": ["CAP_MKNOD"],
+        "ambient": []
+    });
+    config["linux"] = serde_json::json!({
+        "namespaces": [{"type": "mount"}],
+        "resources": {
+            "devices": [{"allow": false, "access": "rwm"}]
+        }
+    });
+    let config = serde_json::to_string(&config).expect("encode device configuration");
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("CAP_MKNOD would bypass the bounded device profile");
     assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("config.annotations"));
+    assert!(error.message.contains("CAP_MKNOD"));
+}
 
+#[test]
+fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
     let config = FIXED_CONFIG.replace(
         r#""noNewPrivileges": true"#,
         r#""noNewPrivileges": true,
-           "capabilities": {"bounding": [], "effective": [], "inheritable": [],
-                            "permitted": [], "ambient": []}"#,
+           "apparmorProfile": "a3s-test""#,
     );
     let error = InitPlan::from_bundle(&bundle(&config), &null_io())
-        .expect_err("capability enforcement unsupported");
+        .expect_err("AppArmor profile remains unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("process.capabilities"));
+    assert!(error.message.contains("process.apparmorProfile"));
+
+    let config = FIXED_CONFIG.replace(
+        r#""ociVersion": "1.3.0","#,
+        r#""ociVersion": "1.3.0",
+           "linux": {"mountLabel": "system_u:object_r:container_file_t:s0"},"#,
+    );
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("mount label enforcement remains unsupported");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("linux.mountLabel"));
 }
 
 #[test]

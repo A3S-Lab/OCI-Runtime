@@ -268,7 +268,8 @@ The default driver must remain `probe-only` until at least the following pass:
   `setgroups=deny` flow;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
-- complete mount, credential, capability, seccomp, LSM, and cgroup v2
+- remaining mount and credential controls, broader cgroup v2 policies and
+  device-access BPF, multi-architecture/notification seccomp, and LSM
   enforcement;
 - real-driver reattachment after runtime-process restart, plus complete
   process I/O and PTY handling;

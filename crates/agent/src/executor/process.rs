@@ -14,11 +14,14 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
+use super::capability::CapabilityPlan;
+use super::cgroup::{self, CgroupHandle};
 use super::control::{acknowledge_user_mapping, read_outcome, InitOutcome, START_BYTE};
 use super::namespace::{self, RetainedExecutionContext};
 use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
+use super::seccomp::SeccompPlan;
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -29,6 +32,9 @@ pub(super) struct PreparedProcess {
     pid: i32,
     pidfd: PidFd,
     execution_context: RetainedExecutionContext,
+    capabilities: CapabilityPlan,
+    seccomp: SeccompPlan,
+    cgroup: Option<CgroupHandle>,
     exit_status: Option<ExitStatus>,
 }
 
@@ -39,6 +45,8 @@ impl PreparedProcess {
         init_executable: &Path,
     ) -> Result<Self> {
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
+        let cgroup = CgroupHandle::create(&plan.cgroup)?;
+        let cgroup_procs = cgroup.as_ref().map(CgroupHandle::procs_descriptor);
         let (listener, control_name) = bind_control_listener()?;
         let mut command = Command::new(init_executable);
         command
@@ -51,6 +59,14 @@ impl PreparedProcess {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        // SAFETY: the callback runs in the freshly forked command child and
+        // performs one bounded write to the already-open cgroup.procs file.
+        unsafe {
+            command.pre_exec(move || match cgroup_procs {
+                Some(descriptor) => cgroup::join_from_pre_exec(descriptor),
+                None => Ok(()),
+            });
+        }
         let mut child = command.spawn().map_err(|error| {
             process_error(
                 ErrorCode::Internal,
@@ -232,6 +248,9 @@ impl PreparedProcess {
             pid: runtime_pid,
             pidfd,
             execution_context,
+            capabilities: plan.capabilities,
+            seccomp: plan.seccomp.clone(),
+            cgroup,
             exit_status: None,
         })
     }
@@ -281,8 +300,20 @@ impl PreparedProcess {
         &self.execution_context
     }
 
+    pub(super) const fn seccomp(&self) -> &SeccompPlan {
+        &self.seccomp
+    }
+
+    pub(super) const fn capabilities(&self) -> CapabilityPlan {
+        self.capabilities
+    }
+
     pub(super) fn pidfd_descriptor(&self) -> std::os::fd::RawFd {
         self.pidfd.raw_descriptor()
+    }
+
+    pub(super) fn cgroup_procs_descriptor(&self) -> Option<std::os::fd::RawFd> {
+        self.cgroup.as_ref().map(CgroupHandle::procs_descriptor)
     }
 
     pub(super) async fn force_stop(&mut self) -> Result<()> {
