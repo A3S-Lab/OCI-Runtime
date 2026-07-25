@@ -74,7 +74,7 @@ does not make it a native Windows container.
 | Area | Represented | Validated | Enforced | Conformant |
 | --- | --- | --- | --- | --- |
 | Complete `Spec` object | Yes | Official schema, version range, unknown fields, initial semantics | No | No |
-| Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | Bootstrap slice applies ordered mounts with missing target creation, four rootfs propagation modes, recursive VFS attributes, masked/read-only paths, read-only rootfs, hostname/domainname, credentials, and process launch; idmapped mounts remain rejected | No |
+| Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | Bootstrap slice applies ordered mounts with missing target creation, four rootfs propagation modes, recursive VFS attributes, detached ID-mapped filesystem and bind mounts, masked/read-only paths, read-only rootfs, hostname/domainname, credentials, and process launch | No |
 | POSIX hooks | Yes | Initial path and environment rules | No | No |
 | Linux namespaces and ID mappings | Yes | Initial relationship and range rules | Bootstrap slice creates or type-checks and joins UTS, mount, IPC, network, cgroup, PID, user, and time namespaces, installs verified rootful UID/GID maps, switches to mapped namespace-root credentials before rootfs mutation, and preserves retained-rootfs execution after mount joins; rootless mapping policy and broader join hardening remain incomplete | No |
 | Linux devices, seccomp, capabilities, LSM, sysctl | Yes | Initial path, seccomp, and namespaced-sysctl rules; capability/LSM rules pending | No | No |
@@ -82,7 +82,7 @@ does not make it a native Windows container.
 | Linux Intel RDT, memory policy, time offsets, net devices | Yes | Initial cross-field and path rules | Bootstrap slice applies and reads back normalized monotonic/boottime offsets; other fields remain unenforced | No |
 | VM hypervisor, kernel, initrd, image, and parameters | Yes | Initial absolute-path and NUL rules; driver policy pending | No | No |
 | OCI `State` | Yes | Official schema, typed transitions, and generation fences | Durable core `creating`/`created`/`running`/`stopped` records | No |
-| OCI `Features` | Yes | Official schema, version and operation separation | Default service is feature-only; configured service reports only its implemented operations | No |
+| OCI `Features` | Yes | Official schema, version and operation separation; the generated runtime document is validated against the pinned 1.3.0 schema | Default service is feature-only; configured service reports only its implemented operations; Linux reports 61 sorted recognized mount options, all eight implemented namespace types, and the enabled ID-map extension while unsupported controls remain empty or disabled | No |
 | `create/state/start/kill/delete` plus init `wait` | SDK contract | Exhaustive request boundary, durable lifecycle tests, protocol-v2 compatibility tests, and native/utility-VM lifecycle gates | Driver-independent core orchestration plus driver-advertised stable init wait and a fail-closed guest bootstrap slice; no built-in launch-ready driver | No |
 | Hooks and rollback ordering | SDK contract | Pending | No | No |
 | Exec, I/O, PTY, per-process wait, pause/resume, update | SDK contract | Typed requests | No | No |

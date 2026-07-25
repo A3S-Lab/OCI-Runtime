@@ -459,7 +459,7 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$asset_dir/oci-multi-container.log"
 ```
 
-The `a3s.oci.oci-vm-multi-container-smoke.v5` report also requires exact
+The `a3s.oci.oci-vm-multi-container-smoke.v6` report also requires exact
 mutation replay, exact repeated normal-exit results for A and B, independent
 wait/state progress, and an existing-namespace phase. That phase rejects a
 wrong-type descriptor before state, joins donor UTS, IPC, network, cgroup, PID,
@@ -470,8 +470,9 @@ expected status, leave the donor created record unchanged, and remove all
 state. A third workload must create missing directory and file mount targets
 before start and then prove shared rootfs propagation, a distinct read-only
 path, empty read-only masked file and directory replacements, recursive VFS
-attributes across an rbind submount, read-only rootfs behavior, an exact normal
-exit, state removal, and host-side fixture cleanup.
+attributes across an rbind submount, explicit `idmap` and `ridmap` ownership
+on detached filesystem mounts, read-only rootfs behavior, an exact normal exit,
+state removal, and host-side fixture cleanup.
 
 The complete report also requires both marker removals, no new guest runtime
 root, exact host endpoint removal, shim and direct VM-worker reap, and full
@@ -497,8 +498,8 @@ UID/GID maps and monotonic/boottime offsets.
 The recursive mount-attribute requalification used the 8,670,088-byte static
 arm64 agent with SHA-256
 `bbb1852f95cf59967816804807e831ef5c92a18d0a4fbaeee76101f0c81ff4b9`.
-The schema-v5 report retained all lifecycle and eight-namespace join evidence,
-then created missing directory and file mount targets before start and proved
+That report retained all lifecycle and eight-namespace join evidence, then
+created missing directory and file mount targets before start and proved
 shared rootfs propagation, `/proc/sys` read-only enforcement, private empty
 read-only replacements for `/proc/meminfo` and `/proc/irq`, recursive
 read-only, `nosuid`, `nodev`, `noexec`, `noatime`, `nodiratime`, and
@@ -506,6 +507,16 @@ read-only, `nosuid`, `nodev`, `noexec`, `noatime`, `nodiratime`, and
 exact workload exited zero; all container state and fixture artifacts were
 removed. The host descriptor inventory returned from 10 to 10, the shim and
 VM worker were reaped, and the endpoint and guest runtime root were removed.
+
+The ID-mapped mount requalification used the 8,734,336-byte static arm64 agent
+with SHA-256
+`f3e9eb482381b988deed1440383c772546558e39570921b100a071187e22e727`.
+The schema-v6 workload additionally created detached non-recursive `idmap` and
+recursive `ridmap` tmpfs mounts from exact dedicated UID/GID mappings and
+observed ownership `1000:1000` and `2000:2000`, respectively. The complete
+two-container, namespace-join, rootfs-enforcement, container-state, endpoint,
+descriptor, shim, VM-worker, and guest-runtime cleanup gate passed on Apple
+Silicon HVF.
 
 ## Fault-injected shutdown cleanup
 
