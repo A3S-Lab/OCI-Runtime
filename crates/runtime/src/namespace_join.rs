@@ -141,8 +141,6 @@ fn bundle_from_value(directory: &Path, config: Value) -> Result<OciBundle, Strin
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use a3s_oci_sdk::OciBundle;
     use serde_json::Value;
 
@@ -152,8 +150,10 @@ mod tests {
 
     #[test]
     fn derives_positive_and_negative_join_profiles_from_the_qualified_bundle() {
-        let base = OciBundle::from_json(PathBuf::from("/run/a3s/bundle-b"), CONFIG)
-            .expect("qualified base bundle");
+        let bundle_directory = std::env::current_dir()
+            .expect("current test directory")
+            .join("namespace-join-bundle");
+        let base = OciBundle::from_json(bundle_directory, CONFIG).expect("qualified base bundle");
         let bundles = build_bundles(&base, 4242).expect("namespace join bundles");
 
         let non_mount: Value =
