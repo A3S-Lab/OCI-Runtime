@@ -5,14 +5,14 @@ use std::time::Duration;
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentCloseStdinRequest, AgentContainerOperationRequest,
     AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
-    AgentProcessesRequest, AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest,
-    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
-    AgentWaitRequest, AgentWriteStdinRequest, GuestPath,
+    AgentProcessesRequest, AgentReadOutputRequest, AgentResizeRequest, AgentSignalProcessRequest,
+    AgentStartRequest, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, GuestPath,
 };
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IoMode, OciBundle, OperationContext,
-    OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget, Signal,
+    OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget, Signal, TerminalSize,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{sleep, timeout, Instant};
@@ -94,6 +94,8 @@ pub(super) async fn exercise<T: AgentStream>(
     wait_for_running_marker(client, target, marker, report).await?;
     exercise_process_io(client, target, nonce).await?;
     report.process_io_verified = true;
+    exercise_terminal_io(client, target, nonce).await?;
+    report.terminal_io_verified = true;
     let cleanup_process = exercise_exec_processes(client, target, nonce).await?;
     exercise_control_plane(client, target, &cleanup_process, nonce, marker, report).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, target).await?;
@@ -279,6 +281,222 @@ async fn exercise_process_io<T: AgentStream>(
         Ok(Err(error)) => Err(guest_error("write after process stdin close", &error)),
         Ok(Ok(())) => Err("guest accepted stdin after close".into()),
         Err(_) => Err("write after process stdin close timed out".into()),
+    }
+}
+
+async fn exercise_terminal_io<T: AgentStream>(
+    client: &AgentClient<T>,
+    target: &ContainerTarget,
+    nonce: &str,
+) -> Result<(), String> {
+    let process = terminal_exec_request(
+        target,
+        nonce,
+        "terminal",
+        "exec-terminal",
+        "/bin/busybox stty size; IFS= read -r line; /bin/busybox stty size; \
+         printf 'pty:%s\n' \"$line\"",
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+    )?;
+    let process_target = process.target.clone();
+    let created = guest_call("exec terminal probe", client.exec(process)).await?;
+    if created.target() != &process_target || created.pid() <= 0 || !created.terminal() {
+        return Err("guest terminal probe returned an invalid identity".into());
+    }
+
+    let (cursor, mut output) =
+        read_terminal_until(client, &process_target, 0, Vec::new(), b"24 80").await?;
+    guest_call(
+        "resize terminal probe",
+        client.resize(AgentResizeRequest {
+            process: process_target.clone(),
+            size: TerminalSize {
+                width: 120,
+                height: 40,
+            },
+        }),
+    )
+    .await?;
+    guest_call(
+        "write terminal probe stdin",
+        client.write_stdin(AgentWriteStdinRequest {
+            process: process_target.clone(),
+            data: b"hello\n".to_vec(),
+        }),
+    )
+    .await?;
+
+    let status = guest_call(
+        "wait terminal probe",
+        client.wait_process(AgentWaitProcessRequest {
+            target: process_target.clone(),
+            timeout_ms: Some(
+                u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                    .map_err(|_| "terminal probe timeout does not fit request".to_string())?,
+            ),
+        }),
+    )
+    .await?;
+    let expected = ExitStatus::exited(0)
+        .map_err(|error| format!("failed to construct terminal probe exit status: {error}"))?;
+    if status != expected {
+        return Err(format!(
+            "guest terminal probe returned {status:?}, expected {expected:?}"
+        ));
+    }
+    let (final_cursor, remaining) = drain_terminal_output(client, &process_target, cursor).await?;
+    output.extend(remaining);
+    if final_cursor == 0 {
+        return Err("guest terminal output cursor did not advance".into());
+    }
+    let normalized = output
+        .into_iter()
+        .filter(|byte| *byte != b'\r')
+        .collect::<Vec<_>>();
+    let text = String::from_utf8(normalized)
+        .map_err(|error| format!("guest terminal output was not UTF-8: {error}"))?;
+    for expected_line in ["24 80\n", "40 120\n", "pty:hello\n"] {
+        if !text.contains(expected_line) {
+            return Err(format!(
+                "guest terminal output did not contain {expected_line:?}: {text:?}"
+            ));
+        }
+    }
+
+    let cat = terminal_exec_request(
+        target,
+        nonce,
+        "terminal-eof",
+        "exec-terminal-eof",
+        "/bin/busybox cat",
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+    )?;
+    let cat_target = cat.target.clone();
+    let cat_created = guest_call("exec terminal EOF probe", client.exec(cat)).await?;
+    if cat_created.target() != &cat_target || cat_created.pid() <= 0 || !cat_created.terminal() {
+        return Err("guest terminal EOF probe returned an invalid identity".into());
+    }
+    let close = AgentCloseStdinRequest {
+        process: cat_target.clone(),
+    };
+    guest_call(
+        "close terminal EOF probe stdin",
+        client.close_stdin(close.clone()),
+    )
+    .await?;
+    guest_call(
+        "repeat terminal EOF probe stdin close",
+        client.close_stdin(close),
+    )
+    .await?;
+    let cat_status = guest_call(
+        "wait terminal EOF probe",
+        client.wait_process(AgentWaitProcessRequest {
+            target: cat_target.clone(),
+            timeout_ms: Some(
+                u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                    .map_err(|_| "terminal EOF timeout does not fit request".to_string())?,
+            ),
+        }),
+    )
+    .await?;
+    if cat_status != expected {
+        return Err(format!(
+            "guest terminal EOF probe returned {cat_status:?}, expected {expected:?}"
+        ));
+    }
+    let (_, cat_output) = drain_terminal_output(client, &cat_target, 0).await?;
+    if !cat_output.is_empty() {
+        return Err(format!(
+            "guest terminal EOF probe produced unexpected output: {cat_output:?}"
+        ));
+    }
+    Ok(())
+}
+
+async fn read_terminal_until<T: AgentStream>(
+    client: &AgentClient<T>,
+    process: &ProcessTarget,
+    mut cursor: u64,
+    mut output: Vec<u8>,
+    expected: &[u8],
+) -> Result<(u64, Vec<u8>), String> {
+    let deadline = Instant::now() + GUEST_CALL_TIMEOUT;
+    loop {
+        let chunks = guest_call(
+            "read terminal probe output",
+            client.read_output(AgentReadOutputRequest {
+                process: process.clone(),
+                after_sequence: cursor,
+                max_bytes: 64,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.sequence <= cursor || chunk.stream != OutputStream::Stdout {
+                return Err("guest terminal output violated its merged cursor contract".into());
+            }
+            cursor = chunk.sequence;
+            if chunk.eof {
+                return Err("guest terminal reached EOF before expected output".into());
+            }
+            output.extend(chunk.data);
+        }
+        if output
+            .windows(expected.len())
+            .any(|window| window == expected)
+        {
+            return Ok((cursor, output));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for guest terminal output {expected:?}"
+            ));
+        }
+    }
+}
+
+async fn drain_terminal_output<T: AgentStream>(
+    client: &AgentClient<T>,
+    process: &ProcessTarget,
+    mut cursor: u64,
+) -> Result<(u64, Vec<u8>), String> {
+    let deadline = Instant::now() + GUEST_CALL_TIMEOUT;
+    let mut output = Vec::new();
+    loop {
+        let chunks = guest_call(
+            "drain terminal probe output",
+            client.read_output(AgentReadOutputRequest {
+                process: process.clone(),
+                after_sequence: cursor,
+                max_bytes: 64,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.sequence <= cursor || chunk.stream != OutputStream::Stdout {
+                return Err("guest terminal output violated its merged cursor contract".into());
+            }
+            cursor = chunk.sequence;
+            if chunk.eof {
+                if !chunk.data.is_empty() {
+                    return Err("guest terminal EOF carried output data".into());
+                }
+                return Ok((cursor, output));
+            }
+            output.extend(chunk.data);
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out draining guest terminal output".into());
+        }
     }
 }
 
@@ -638,6 +856,33 @@ fn exec_request(
         process,
         io: null_io(),
     })
+}
+
+fn terminal_exec_request(
+    target: &ContainerTarget,
+    nonce: &str,
+    process_suffix: &str,
+    operation_suffix: &str,
+    command: &str,
+    size: TerminalSize,
+) -> Result<AgentExecRequest, String> {
+    let mut request = exec_request(target, nonce, process_suffix, operation_suffix, command)?;
+    request.process = serde_json::from_value(serde_json::json!({
+        "terminal": true,
+        "user": {"uid": 0, "gid": 0, "umask": 18},
+        "args": ["/bin/sh", "-c", command],
+        "env": ["PATH=/bin:/usr/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    }))
+    .map_err(|error| format!("failed to construct terminal smoke process: {error}"))?;
+    request.io = ProcessIo {
+        stdin: IoMode::Terminal,
+        stdout: IoMode::Terminal,
+        stderr: IoMode::Terminal,
+        terminal_size: Some(size),
+    };
+    Ok(request)
 }
 
 async fn wait_times_out_while_running<T: AgentStream>(

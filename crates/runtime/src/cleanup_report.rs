@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::report::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux fault-cleanup diagnostic.
-pub const NATIVE_LINUX_FAULT_CLEANUP_SCHEMA_VERSION: &str = "a3s.oci.native-linux-fault-cleanup.v4";
+pub const NATIVE_LINUX_FAULT_CLEANUP_SCHEMA_VERSION: &str = "a3s.oci.native-linux-fault-cleanup.v5";
 /// Schema emitted by the utility-VM fault-cleanup diagnostic.
-pub const OCI_VM_FAULT_CLEANUP_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-fault-cleanup.v3";
+pub const OCI_VM_FAULT_CLEANUP_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-fault-cleanup.v4";
 
 /// Lifecycle boundary after which the cleanup diagnostic interrupts normal flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +182,7 @@ impl NativeLinuxFaultCleanupReport {
                     RuntimeOperation::ReadOutput,
                     RuntimeOperation::WriteStdin,
                     RuntimeOperation::CloseStdin,
+                    RuntimeOperation::Resize,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
                 ]
@@ -352,6 +353,7 @@ mod tests {
             RuntimeOperation::ReadOutput,
             RuntimeOperation::WriteStdin,
             RuntimeOperation::CloseStdin,
+            RuntimeOperation::Resize,
             RuntimeOperation::SignalProcess,
             RuntimeOperation::WaitProcess,
         ];
@@ -414,6 +416,7 @@ mod tests {
             AgentOperation::ReadOutput,
             AgentOperation::WriteStdin,
             AgentOperation::CloseStdin,
+            AgentOperation::Resize,
         ];
         report.shim_report_verified = true;
         report.shim_exit_code = Some(0);

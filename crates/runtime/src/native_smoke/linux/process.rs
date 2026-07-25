@@ -5,8 +5,8 @@ use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
     CloseStdinRequest, ContainerTarget, Error, ErrorCode, ExecRequest, ExitStatus, IoMode,
     OperationContext, OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget,
-    ReadOutputRequest, RuntimeClient, Signal, SignalProcessRequest, WaitProcessRequest,
-    WriteStdinRequest,
+    ReadOutputRequest, ResizeRequest, RuntimeClient, Signal, SignalProcessRequest, TerminalSize,
+    WaitProcessRequest, WriteStdinRequest,
 };
 use tokio::time::{timeout, Instant};
 
@@ -98,6 +98,222 @@ pub(super) async fn exercise_process_io(
         Ok(Err(error)) => Err(call_error("write after process stdin close", &error)),
         Ok(Ok(())) => Err("native runtime accepted stdin after close".into()),
         Err(_) => Err("write after process stdin close timed out".into()),
+    }
+}
+
+pub(super) async fn exercise_terminal_io(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    nonce: &str,
+) -> Result<(), String> {
+    let process = terminal_exec_request(
+        target,
+        nonce,
+        "terminal",
+        "exec-terminal",
+        "/bin/busybox stty size; IFS= read -r line; /bin/busybox stty size; \
+         printf 'pty:%s\n' \"$line\"",
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+    )?;
+    let process_target = ProcessTarget {
+        container: process.container.clone(),
+        process_id: process.process_id.clone(),
+    };
+    let created = call("exec terminal probe", client.exec(process)).await?;
+    if created.target != process_target || created.pid.is_none() || !created.terminal {
+        return Err("native terminal probe returned an invalid identity".into());
+    }
+
+    let (cursor, mut output) =
+        read_terminal_until(client, &process_target, 0, Vec::new(), b"24 80").await?;
+    call(
+        "resize terminal probe",
+        client.resize(ResizeRequest {
+            process: process_target.clone(),
+            size: TerminalSize {
+                width: 120,
+                height: 40,
+            },
+        }),
+    )
+    .await?;
+    call(
+        "write terminal probe stdin",
+        client.write_stdin(WriteStdinRequest {
+            process: process_target.clone(),
+            data: b"hello\n".to_vec(),
+        }),
+    )
+    .await?;
+
+    let status = call(
+        "wait terminal probe",
+        client.wait_process(WaitProcessRequest {
+            process: process_target.clone(),
+            timeout_ms: Some(LIFECYCLE_TIMEOUT_MS),
+        }),
+    )
+    .await?;
+    let expected = ExitStatus::exited(0)
+        .map_err(|error| format!("failed to construct terminal probe exit status: {error}"))?;
+    if status != expected {
+        return Err(format!(
+            "native terminal probe returned {status:?}, expected {expected:?}"
+        ));
+    }
+    let (final_cursor, remaining) = drain_terminal_output(client, &process_target, cursor).await?;
+    output.extend(remaining);
+    if final_cursor == 0 {
+        return Err("native terminal output cursor did not advance".into());
+    }
+    let normalized = output
+        .into_iter()
+        .filter(|byte| *byte != b'\r')
+        .collect::<Vec<_>>();
+    let text = String::from_utf8(normalized)
+        .map_err(|error| format!("native terminal output was not UTF-8: {error}"))?;
+    for expected_line in ["24 80\n", "40 120\n", "pty:hello\n"] {
+        if !text.contains(expected_line) {
+            return Err(format!(
+                "native terminal output did not contain {expected_line:?}: {text:?}"
+            ));
+        }
+    }
+
+    let cat = terminal_exec_request(
+        target,
+        nonce,
+        "terminal-eof",
+        "exec-terminal-eof",
+        "/bin/busybox cat",
+        TerminalSize {
+            width: 80,
+            height: 24,
+        },
+    )?;
+    let cat_target = ProcessTarget {
+        container: cat.container.clone(),
+        process_id: cat.process_id.clone(),
+    };
+    let cat_created = call("exec terminal EOF probe", client.exec(cat)).await?;
+    if cat_created.target != cat_target || cat_created.pid.is_none() || !cat_created.terminal {
+        return Err("native terminal EOF probe returned an invalid identity".into());
+    }
+    let close = CloseStdinRequest {
+        process: cat_target.clone(),
+    };
+    call(
+        "close terminal EOF probe stdin",
+        client.close_stdin(close.clone()),
+    )
+    .await?;
+    call(
+        "repeat terminal EOF probe stdin close",
+        client.close_stdin(close),
+    )
+    .await?;
+    let cat_status = call(
+        "wait terminal EOF probe",
+        client.wait_process(WaitProcessRequest {
+            process: cat_target.clone(),
+            timeout_ms: Some(LIFECYCLE_TIMEOUT_MS),
+        }),
+    )
+    .await?;
+    if cat_status != expected {
+        return Err(format!(
+            "native terminal EOF probe returned {cat_status:?}, expected {expected:?}"
+        ));
+    }
+    let (_, cat_output) = drain_terminal_output(client, &cat_target, 0).await?;
+    if !cat_output.is_empty() {
+        return Err(format!(
+            "native terminal EOF probe produced unexpected output: {cat_output:?}"
+        ));
+    }
+    Ok(())
+}
+
+async fn read_terminal_until(
+    client: &RuntimeClient,
+    process: &ProcessTarget,
+    mut cursor: u64,
+    mut output: Vec<u8>,
+    expected: &[u8],
+) -> Result<(u64, Vec<u8>), String> {
+    let deadline = Instant::now() + CALL_TIMEOUT;
+    loop {
+        let chunks = call(
+            "read terminal probe output",
+            client.read_output(ReadOutputRequest {
+                process: process.clone(),
+                after_sequence: cursor,
+                max_bytes: 64,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.sequence <= cursor || chunk.stream != OutputStream::Stdout {
+                return Err("native terminal output violated its merged cursor contract".into());
+            }
+            cursor = chunk.sequence;
+            if chunk.eof {
+                return Err("native terminal reached EOF before expected output".into());
+            }
+            output.extend(chunk.data);
+        }
+        if output
+            .windows(expected.len())
+            .any(|window| window == expected)
+        {
+            return Ok((cursor, output));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for native terminal output {expected:?}"
+            ));
+        }
+    }
+}
+
+async fn drain_terminal_output(
+    client: &RuntimeClient,
+    process: &ProcessTarget,
+    mut cursor: u64,
+) -> Result<(u64, Vec<u8>), String> {
+    let deadline = Instant::now() + CALL_TIMEOUT;
+    let mut output = Vec::new();
+    loop {
+        let chunks = call(
+            "drain terminal probe output",
+            client.read_output(ReadOutputRequest {
+                process: process.clone(),
+                after_sequence: cursor,
+                max_bytes: 64,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.sequence <= cursor || chunk.stream != OutputStream::Stdout {
+                return Err("native terminal output violated its merged cursor contract".into());
+            }
+            cursor = chunk.sequence;
+            if chunk.eof {
+                if !chunk.data.is_empty() {
+                    return Err("native terminal EOF carried output data".into());
+                }
+                return Ok((cursor, output));
+            }
+            output.extend(chunk.data);
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out draining native terminal output".into());
+        }
     }
 }
 
@@ -315,6 +531,33 @@ fn exec_request(
             terminal_size: None,
         },
     })
+}
+
+fn terminal_exec_request(
+    target: &ContainerTarget,
+    nonce: &str,
+    process_suffix: &str,
+    operation_suffix: &str,
+    command: &str,
+    size: TerminalSize,
+) -> Result<ExecRequest, String> {
+    let mut request = exec_request(target, nonce, process_suffix, operation_suffix, command)?;
+    request.process = serde_json::from_value(serde_json::json!({
+        "terminal": true,
+        "user": {"uid": 0, "gid": 0, "umask": 18},
+        "args": ["/bin/sh", "-c", command],
+        "env": ["PATH=/bin:/usr/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    }))
+    .map_err(|error| format!("failed to construct native terminal process: {error}"))?;
+    request.io = ProcessIo {
+        stdin: IoMode::Terminal,
+        stdout: IoMode::Terminal,
+        stderr: IoMode::Terminal,
+        terminal_size: Some(size),
+    };
+    Ok(request)
 }
 
 fn operation(nonce: &str, suffix: &str) -> Result<OperationContext, String> {

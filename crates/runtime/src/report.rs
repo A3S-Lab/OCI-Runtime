@@ -10,11 +10,11 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v7";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v8";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
-pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v7";
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v6";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v7";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +332,7 @@ impl AgentVmSmokeReport {
                     AgentOperation::ReadOutput,
                     AgentOperation::WriteStdin,
                     AgentOperation::CloseStdin,
+                    AgentOperation::Resize,
                 ]
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)
@@ -375,6 +376,8 @@ pub struct NativeLinuxSmokeReport {
     pub processes_verified: bool,
     /// Whether captured stdout/stderr and piped stdin passed end-to-end.
     pub process_io_verified: bool,
+    /// Whether PTY allocation, resize, interactive I/O, and EOF passed end-to-end.
+    pub terminal_io_verified: bool,
     /// Whether live OCI Linux resources were applied and exactly replayed.
     pub resources_updated: bool,
     /// Whether normalized cgroup counters were exact and generation-fenced.
@@ -433,6 +436,7 @@ impl NativeLinuxSmokeReport {
             running_observed: false,
             processes_verified: false,
             process_io_verified: false,
+            terminal_io_verified: false,
             resources_updated: false,
             stats_verified: false,
             pause_froze_workload: false,
@@ -488,6 +492,7 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::ReadOutput,
                     RuntimeOperation::WriteStdin,
                     RuntimeOperation::CloseStdin,
+                    RuntimeOperation::Resize,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
                 ]
@@ -500,6 +505,7 @@ impl NativeLinuxSmokeReport {
             && self.running_observed
             && self.processes_verified
             && self.process_io_verified
+            && self.terminal_io_verified
             && self.resources_updated
             && self.stats_verified
             && self.pause_froze_workload
@@ -553,6 +559,8 @@ pub struct OciVmSmokeReport {
     pub processes_verified: bool,
     /// Whether captured stdout/stderr and piped stdin passed in the guest.
     pub process_io_verified: bool,
+    /// Whether guest PTY allocation, resize, interactive I/O, and EOF passed.
+    pub terminal_io_verified: bool,
     /// Whether live OCI Linux resources were applied and exactly replayed.
     pub resources_updated: bool,
     /// Whether normalized cgroup counters were exact and generation-fenced.
@@ -608,6 +616,7 @@ impl OciVmSmokeReport {
             running_observed: false,
             processes_verified: false,
             process_io_verified: false,
+            terminal_io_verified: false,
             resources_updated: false,
             stats_verified: false,
             pause_froze_workload: false,
@@ -659,6 +668,7 @@ impl OciVmSmokeReport {
             && self.running_observed
             && self.processes_verified
             && self.process_io_verified
+            && self.terminal_io_verified
             && self.resources_updated
             && self.stats_verified
             && self.pause_froze_workload

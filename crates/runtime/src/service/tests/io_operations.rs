@@ -77,6 +77,16 @@ async fn process_io_resolves_current_targets_to_the_exact_generation() {
         .close_stdin(CloseStdinRequest { process: current })
         .await
         .expect("repeat close stdin");
+    service
+        .resize(ResizeRequest {
+            process: init_process(ContainerTarget::current(target.id.clone())),
+            size: TerminalSize {
+                width: 120,
+                height: 40,
+            },
+        })
+        .await
+        .expect("resize terminal");
 
     let exact = init_process(target);
     let io_calls = driver
@@ -85,7 +95,10 @@ async fn process_io_resolves_current_targets_to_the_exact_generation() {
         .filter(|call| {
             matches!(
                 call,
-                DriverCall::ReadOutput(_) | DriverCall::WriteStdin(_) | DriverCall::CloseStdin(_)
+                DriverCall::ReadOutput(_)
+                    | DriverCall::WriteStdin(_)
+                    | DriverCall::CloseStdin(_)
+                    | DriverCall::Resize(_)
             )
         })
         .collect::<Vec<_>>();
@@ -103,7 +116,14 @@ async fn process_io_resolves_current_targets_to_the_exact_generation() {
                 data: b"input".to_vec(),
             }),
             DriverCall::CloseStdin(exact.clone()),
-            DriverCall::CloseStdin(exact),
+            DriverCall::CloseStdin(exact.clone()),
+            DriverCall::Resize(DriverResizeRequest {
+                target: exact,
+                size: TerminalSize {
+                    width: 120,
+                    height: 40,
+                },
+            }),
         ]
     );
 }
@@ -139,6 +159,17 @@ async fn process_io_rejects_generation_mismatches_and_missing_processes_before_d
         .await
         .expect_err("generation-mismatched stdin close must fail");
     assert_eq!(close_error.code, ErrorCode::Conflict);
+    let resize_error = service
+        .resize(ResizeRequest {
+            process: init_process(ContainerTarget::exact(target.id.clone(), wrong_generation)),
+            size: TerminalSize {
+                width: 120,
+                height: 40,
+            },
+        })
+        .await
+        .expect_err("generation-mismatched terminal resize must fail");
+    assert_eq!(resize_error.code, ErrorCode::Conflict);
 
     let missing = ProcessTarget {
         container: ContainerTarget::current(target.id),
@@ -157,7 +188,10 @@ async fn process_io_rejects_generation_mismatches_and_missing_processes_before_d
     assert!(!driver.calls().iter().any(|call| {
         matches!(
             call,
-            DriverCall::ReadOutput(_) | DriverCall::WriteStdin(_) | DriverCall::CloseStdin(_)
+            DriverCall::ReadOutput(_)
+                | DriverCall::WriteStdin(_)
+                | DriverCall::CloseStdin(_)
+                | DriverCall::Resize(_)
         )
     }));
 }

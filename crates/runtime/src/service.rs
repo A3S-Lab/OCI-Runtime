@@ -17,9 +17,9 @@ use a3s_oci_sdk::{
 
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
-    RuntimeDriver,
+    DriverKillRequest, DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverWriteStdinRequest, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
@@ -224,7 +224,7 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 17] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 18] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
@@ -242,6 +242,7 @@ fn validate_driver_operations(
         RuntimeOperation::ReadOutput,
         RuntimeOperation::WriteStdin,
         RuntimeOperation::CloseStdin,
+        RuntimeOperation::Resize,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {
@@ -816,8 +817,24 @@ impl OciRuntimeService for HostRuntimeService {
         result
     }
 
-    async fn resize(&self, _request: ResizeRequest) -> Result<()> {
-        Err(Error::unsupported("resize"))
+    async fn resize(&self, request: ResizeRequest) -> Result<()> {
+        let lifecycle = self.lifecycle("resize")?;
+        lifecycle.ensure_operation(RuntimeOperation::Resize, "resize")?;
+        request.validate()?;
+        let target = lifecycle
+            .store
+            .resolve_process_target(&request.process, "resize")
+            .await?;
+        lifecycle.driver_boundary(DriverOperation::Resize, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .resize(DriverResizeRequest {
+                target,
+                size: request.size,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Resize, DriverBoundaryStage::AfterCall)?;
+        result
     }
 
     async fn signal_process(&self, request: SignalProcessRequest) -> Result<()> {

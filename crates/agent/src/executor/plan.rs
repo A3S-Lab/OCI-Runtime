@@ -33,20 +33,16 @@ pub(super) struct ProcessPlan {
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
+    pub(super) terminal: bool,
     pub(super) capabilities: CapabilityPlan,
     pub(super) seccomp: SeccompPlan,
 }
 
 impl ProcessPlan {
     pub(super) fn from_process(process: &Process, io: &ProcessIo) -> Result<Self> {
-        validate_process_io(io)?;
+        let terminal = process.terminal().unwrap_or(false);
+        validate_process_io(io, terminal)?;
         validate_process_profile(process)?;
-        if process.terminal().unwrap_or(false) {
-            return Err(unsupported(
-                "process.terminal",
-                "terminal allocation is not implemented",
-            ));
-        }
         if process.no_new_privileges() != Some(true) {
             return Err(unsupported(
                 "process.noNewPrivileges",
@@ -91,6 +87,7 @@ impl ProcessPlan {
             additional_gids,
             umask: user.umask(),
             no_new_privileges: true,
+            terminal,
             capabilities,
             seccomp: SeccompPlan::default(),
         })
@@ -113,6 +110,7 @@ pub(super) struct InitPlan {
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
+    pub(super) terminal: bool,
     pub(super) capabilities: CapabilityPlan,
     pub(super) seccomp: SeccompPlan,
     pub(super) cgroup: CgroupPlan,
@@ -130,7 +128,6 @@ pub(super) struct InitPlan {
 
 impl InitPlan {
     pub(super) fn from_bundle(bundle: &OciBundle, io: &ProcessIo) -> Result<Self> {
-        validate_process_io(io)?;
         let raw: Value = serde_json::from_str(bundle.config_json()).map_err(|error| {
             Error::new(
                 ErrorCode::Internal,
@@ -243,6 +240,7 @@ impl InitPlan {
             additional_gids: process_plan.additional_gids,
             umask: process_plan.umask,
             no_new_privileges: process_plan.no_new_privileges,
+            terminal: process_plan.terminal,
             capabilities: process_plan.capabilities,
             seccomp,
             cgroup,
@@ -521,7 +519,33 @@ fn reject_unimplemented_keys(
     }
 }
 
-fn validate_process_io(io: &ProcessIo) -> Result<()> {
+fn validate_process_io(io: &ProcessIo, process_uses_terminal: bool) -> Result<()> {
+    let terminal_modes = [
+        io.stdin == IoMode::Terminal,
+        io.stdout == IoMode::Terminal,
+        io.stderr == IoMode::Terminal,
+    ];
+    if process_uses_terminal {
+        if terminal_modes != [true, true, true] {
+            return Err(invalid(
+                "process.terminal requires terminal stdin, stdout, and stderr",
+            ));
+        }
+        let size = io.terminal_size.ok_or_else(|| {
+            invalid("process.terminal requires an initial process I/O terminal size")
+        })?;
+        if size.width == 0 || size.height == 0 {
+            return Err(invalid(
+                "process I/O terminal width and height must both be positive",
+            ));
+        }
+        return Ok(());
+    }
+    if terminal_modes.iter().any(|terminal| *terminal) {
+        return Err(invalid(
+            "terminal process I/O requires process.terminal=true",
+        ));
+    }
     if !matches!(io.stdin, IoMode::Null | IoMode::Pipe) {
         return Err(unsupported(
             "process I/O stdin",
@@ -541,9 +565,8 @@ fn validate_process_io(io: &ProcessIo) -> Result<()> {
         ));
     }
     if io.terminal_size.is_some() {
-        return Err(unsupported(
-            "process I/O terminal size",
-            "terminal allocation is not implemented",
+        return Err(invalid(
+            "process I/O terminal size requires process.terminal=true",
         ));
     }
     Ok(())

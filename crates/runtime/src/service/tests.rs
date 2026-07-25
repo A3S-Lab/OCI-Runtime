@@ -14,17 +14,17 @@ use a3s_oci_sdk::{
     ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest, ListRequest,
     MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
     OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, Result, RuntimeOperation, Signal, SignalProcessRequest,
-    StartRequest, StateRequest, StatsRequest, TrustDomainId, UpdateRequest, WaitProcessRequest,
-    WaitRequest, WriteStdinRequest,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeOperation, Signal,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize, TrustDomainId,
+    UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
 use crate::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverResizeRequest,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
+    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 
 mod fault_matrix;
@@ -64,6 +64,7 @@ enum DriverCall {
     ReadOutput(DriverReadOutputRequest),
     WriteStdin(DriverWriteStdinRequest),
     CloseStdin(ProcessTarget),
+    Resize(DriverResizeRequest),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -148,6 +149,7 @@ impl RecordingDriver {
             RuntimeOperation::ReadOutput,
             RuntimeOperation::WriteStdin,
             RuntimeOperation::CloseStdin,
+            RuntimeOperation::Resize,
         ]);
         driver
     }
@@ -767,6 +769,17 @@ impl RuntimeDriver for RecordingDriver {
             .expect("driver calls lock")
             .push(DriverCall::CloseStdin(target));
         if let Some(error) = self.take_failure("close-stdin") {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Resize(request));
+        if let Some(error) = self.take_failure("resize") {
             return Err(error);
         }
         Ok(())

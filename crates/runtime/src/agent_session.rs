@@ -454,6 +454,7 @@ fn expected_operations() -> Vec<AgentOperation> {
         AgentOperation::ReadOutput,
         AgentOperation::WriteStdin,
         AgentOperation::CloseStdin,
+        AgentOperation::Resize,
     ]
 }
 

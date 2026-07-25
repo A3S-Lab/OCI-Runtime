@@ -265,6 +265,15 @@ fn run_exec_payload(
     if unsafe { libc::setpgid(0, 0) } != 0 {
         return reject_exec(control, last_exec_os_error("create exec process group"));
     }
+    if let Err(error) = crate::executor::terminal::make_foreground_process_group(plan.terminal) {
+        return reject_exec(
+            control,
+            exec_error(
+                ErrorCode::Internal,
+                format!("make exec process group terminal foreground failed: {error}"),
+            ),
+        );
+    }
     if let Err(error) = prepare_exec_root(plan, rootfs) {
         return reject_exec(control, error);
     }

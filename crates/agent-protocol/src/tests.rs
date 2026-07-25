@@ -7,17 +7,17 @@ use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerStats, ContainerTarget, CpuStats, DeleteMode, Error,
     ErrorCode, ExitStatus, Generation, IoMode, MemoryStats, OciBundle, OperationContext,
     OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    Result, Signal,
+    Result, Signal, TerminalSize,
 };
 use tokio::io::{AsyncWriteExt, DuplexStream};
 
 use crate::model::{
     AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
     AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, HelloOutcome, HostHello,
-    ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    AgentReadOutputRequest, AgentRequest, AgentResizeRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
+    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
 };
 use crate::wire::{read_frame, read_frame_for_test, write_frame};
 use crate::{
@@ -56,6 +56,7 @@ struct TestAgentState {
     process_exits: HashMap<(ContainerId, Generation, ProcessId), ExitStatus>,
     stdin: HashMap<(ContainerId, Generation, ProcessId), Vec<u8>>,
     stdin_closed: HashSet<(ContainerId, Generation, ProcessId)>,
+    terminal_sizes: HashMap<(ContainerId, Generation, ProcessId), TerminalSize>,
     next_pid: i32,
 }
 
@@ -83,6 +84,7 @@ impl GuestAgentService for TestAgent {
                 crate::AgentOperation::ReadOutput,
                 crate::AgentOperation::WriteStdin,
                 crate::AgentOperation::CloseStdin,
+                crate::AgentOperation::Resize,
             ],
         )
         .expect("valid test capabilities")
@@ -453,6 +455,14 @@ impl GuestAgentService for TestAgent {
         let mut agent = self.state.lock().expect("agent state lock");
         ensure_test_process(&agent, &request.process)?;
         agent.stdin_closed.insert(key);
+        Ok(())
+    }
+
+    async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
+        let key = process_key(&request.process)?;
+        let mut agent = self.state.lock().expect("agent state lock");
+        ensure_test_process(&agent, &request.process)?;
+        agent.terminal_sizes.insert(key, request.size);
         Ok(())
     }
 
@@ -955,7 +965,7 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 7, 7)
+    let error = AgentClient::connect_for_test(host, token(9), 8, 8)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);

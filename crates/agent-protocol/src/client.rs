@@ -12,11 +12,11 @@ use tokio::sync::Mutex;
 use crate::model::{
     protocol_error, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation,
-    AgentProcess, AgentProcessesRequest, AgentReadOutputRequest, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
-    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
-    SessionToken,
+    AgentProcess, AgentProcessesRequest, AgentReadOutputRequest, AgentRequest, AgentResizeRequest,
+    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest,
+    AgentWriteStdinRequest, HelloOutcome, HostHello, ProtocolRange, RequestEnvelope,
+    ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::wire::{read_frame, write_frame};
 
@@ -179,6 +179,17 @@ where
             _ => Err(protocol_error(
                 ErrorCode::Internal,
                 "guest returned the wrong response for a process stdin close",
+            )),
+        }
+    }
+
+    /// Resize a process terminal.
+    pub async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
+        match self.call(AgentRequest::Resize(request)).await? {
+            AgentResponse::TerminalResized(_) => Ok(()),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a process terminal resize",
             )),
         }
     }
@@ -392,6 +403,7 @@ fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> R
         AgentRequest::ReadOutput(_) => AgentOperation::ReadOutput,
         AgentRequest::WriteStdin(_) => AgentOperation::WriteStdin,
         AgentRequest::CloseStdin(_) => AgentOperation::CloseStdin,
+        AgentRequest::Resize(_) => AgentOperation::Resize,
     };
     if operations.contains(&required) {
         Ok(())
@@ -562,6 +574,9 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
         (AgentRequest::CloseStdin(request), AgentResponse::StdinClosed(target)) => {
             validate_process_target(&request.process, target)
         }
+        (AgentRequest::Resize(request), AgentResponse::TerminalResized(target)) => {
+            validate_process_target(&request.process, target)
+        }
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
             format!(
@@ -646,6 +661,7 @@ const fn request_name(request: &AgentRequest) -> &'static str {
         AgentRequest::ReadOutput(_) => "read-output",
         AgentRequest::WriteStdin(_) => "write-stdin",
         AgentRequest::CloseStdin(_) => "close-stdin",
+        AgentRequest::Resize(_) => "resize",
     }
 }
 

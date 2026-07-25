@@ -57,7 +57,8 @@ impl ExecProcess {
             .arg(std::process::id().to_string());
         append_namespace_arguments(&mut command, &namespace_arguments);
         command.env_clear().kill_on_drop(true);
-        ProcessIoHandle::configure(&mut command, io)?;
+        let io_setup = ProcessIoHandle::configure(&mut command, io)?;
+        let terminal_io = io_setup.uses_terminal();
         // SAFETY: the callback runs in the freshly forked command child and
         // moves the helper into the container cgroup and changes descriptor
         // flags only in the child-side descriptor table.
@@ -66,7 +67,8 @@ impl ExecProcess {
                 if let Some(descriptor) = cgroup_procs {
                     cgroup::join_from_pre_exec(descriptor)?;
                 }
-                make_descriptors_inheritable(&inherited)
+                make_descriptors_inheritable(&inherited)?;
+                super::terminal::prepare_child_terminal(terminal_io)
             });
         }
         let mut child = command.spawn().map_err(|error| {
@@ -75,7 +77,7 @@ impl ExecProcess {
                 format!("failed to spawn container exec helper: {error}"),
             )
         })?;
-        let process_io = match ProcessIoHandle::attach(&mut child, io) {
+        let process_io = match ProcessIoHandle::attach(io_setup, &mut child, io) {
             Ok(process_io) => process_io,
             Err(error) => {
                 terminate(&mut child).await;
