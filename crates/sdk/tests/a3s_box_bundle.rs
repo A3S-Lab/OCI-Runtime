@@ -3,11 +3,14 @@ use std::path::PathBuf;
 use a3s_oci_sdk::{OciBundle, OciSemanticPhase};
 
 const A3S_BOX_CONFIG: &str = include_str!("../../../fixtures/a3s-box/config.json");
-const A3S_BOX_DIRECTORY: &str = "/var/lib/a3s/boxes/box-123";
+const A3S_BOX_ROOTFS: &str = "/var/lib/a3s/boxes/box-123/rootfs";
 
 #[test]
 fn loads_the_exact_a3s_box_compiler_output() {
-    let bundle = OciBundle::from_json(PathBuf::from(A3S_BOX_DIRECTORY), A3S_BOX_CONFIG)
+    let bundle_directory = std::env::current_dir()
+        .expect("current directory")
+        .join("a3s-box-fixture");
+    let bundle = OciBundle::from_json(bundle_directory, A3S_BOX_CONFIG)
         .expect("A3S Box compiler output must remain a valid OCI bundle");
     bundle
         .validate_for_phase(OciSemanticPhase::Start)
@@ -15,7 +18,7 @@ fn loads_the_exact_a3s_box_compiler_output() {
 
     assert_eq!(
         bundle.spec().root().as_ref().expect("root").path(),
-        &PathBuf::from(A3S_BOX_DIRECTORY).join("rootfs")
+        &PathBuf::from(A3S_BOX_ROOTFS)
     );
     let process = bundle.spec().process().as_ref().expect("process");
     assert_eq!(
