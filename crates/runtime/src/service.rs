@@ -16,17 +16,17 @@ use a3s_oci_sdk::{
 };
 
 use crate::driver::{
-    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    DriverWriteStdinRequest, RuntimeDriver,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverReadOutputRequest,
+    DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest, DriverUpdateRequest,
+    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
 };
 use crate::state::{
-    DeletePreparation, DurableStateStore, ProcessOperationPreparation, ProcessWaitPreparation,
-    RecordOperationPreparation, SignalProcessPreparation,
+    DeletePreparation, DurableStateStore, ProcessIoPreparation, ProcessOperationPreparation,
+    ProcessWaitPreparation, RecordOperationPreparation, SignalProcessPreparation,
 };
 
 mod feature_report;
@@ -786,55 +786,84 @@ impl OciRuntimeService for HostRuntimeService {
     async fn write_stdin(&self, request: WriteStdinRequest) -> Result<()> {
         let lifecycle = self.lifecycle("write-stdin")?;
         lifecycle.ensure_operation(RuntimeOperation::WriteStdin, "write-stdin")?;
-        request.validate()?;
-        let target = lifecycle
-            .store
-            .resolve_process_target(&request.process, "write-stdin")
-            .await?;
+        let target = match lifecycle.store.prepare_write_stdin(&request).await? {
+            ProcessIoPreparation::Replayed => return Ok(()),
+            ProcessIoPreparation::Prepared(target) | ProcessIoPreparation::Resume(target) => target,
+        };
         lifecycle.driver_boundary(DriverOperation::WriteStdin, DriverBoundaryStage::BeforeCall)?;
         let result = lifecycle
             .driver
             .write_stdin(DriverWriteStdinRequest {
+                context: request.context.clone(),
                 target,
                 data: request.data,
             })
             .await;
         lifecycle.driver_boundary(DriverOperation::WriteStdin, DriverBoundaryStage::AfterCall)?;
-        result
+        if let Err(error) = result {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
+        lifecycle
+            .store
+            .complete_write_stdin(&request.context.operation_id)
+            .await
     }
 
     async fn close_stdin(&self, request: CloseStdinRequest) -> Result<()> {
         let lifecycle = self.lifecycle("close-stdin")?;
         lifecycle.ensure_operation(RuntimeOperation::CloseStdin, "close-stdin")?;
-        request.validate()?;
-        let target = lifecycle
-            .store
-            .resolve_process_target(&request.process, "close-stdin")
-            .await?;
+        let target = match lifecycle.store.prepare_close_stdin(&request).await? {
+            ProcessIoPreparation::Replayed => return Ok(()),
+            ProcessIoPreparation::Prepared(target) | ProcessIoPreparation::Resume(target) => target,
+        };
         lifecycle.driver_boundary(DriverOperation::CloseStdin, DriverBoundaryStage::BeforeCall)?;
-        let result = lifecycle.driver.close_stdin(target).await;
+        let result = lifecycle
+            .driver
+            .close_stdin(DriverCloseStdinRequest {
+                context: request.context.clone(),
+                target,
+            })
+            .await;
         lifecycle.driver_boundary(DriverOperation::CloseStdin, DriverBoundaryStage::AfterCall)?;
-        result
+        if let Err(error) = result {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
+        lifecycle
+            .store
+            .complete_close_stdin(&request.context.operation_id)
+            .await
     }
 
     async fn resize(&self, request: ResizeRequest) -> Result<()> {
         let lifecycle = self.lifecycle("resize")?;
         lifecycle.ensure_operation(RuntimeOperation::Resize, "resize")?;
-        request.validate()?;
-        let target = lifecycle
-            .store
-            .resolve_process_target(&request.process, "resize")
-            .await?;
+        let target = match lifecycle.store.prepare_resize(&request).await? {
+            ProcessIoPreparation::Replayed => return Ok(()),
+            ProcessIoPreparation::Prepared(target) | ProcessIoPreparation::Resume(target) => target,
+        };
         lifecycle.driver_boundary(DriverOperation::Resize, DriverBoundaryStage::BeforeCall)?;
         let result = lifecycle
             .driver
             .resize(DriverResizeRequest {
+                context: request.context.clone(),
                 target,
                 size: request.size,
             })
             .await;
         lifecycle.driver_boundary(DriverOperation::Resize, DriverBoundaryStage::AfterCall)?;
-        result
+        if let Err(error) = result {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
+        lifecycle
+            .store
+            .complete_resize(&request.context.operation_id)
+            .await
     }
 
     async fn signal_process(&self, request: SignalProcessRequest) -> Result<()> {

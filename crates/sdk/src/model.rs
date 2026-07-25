@@ -339,6 +339,7 @@ pub struct ReadOutputRequest {
 /// Write bytes to a process's standard input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WriteStdinRequest {
+    pub context: OperationContext,
     pub process: ProcessTarget,
     pub data: Vec<u8>,
 }
@@ -346,12 +347,14 @@ pub struct WriteStdinRequest {
 /// Close a process's standard input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CloseStdinRequest {
+    pub context: OperationContext,
     pub process: ProcessTarget,
 }
 
 /// Resize a process terminal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResizeRequest {
+    pub context: OperationContext,
     pub process: ProcessTarget,
     pub size: TerminalSize,
 }

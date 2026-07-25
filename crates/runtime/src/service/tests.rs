@@ -21,13 +21,15 @@ use a3s_oci_sdk::{
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
 use crate::{
-    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverResizeRequest,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
-    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverWriteStdinRequest, RuntimeDriver,
 };
 
 mod fault_matrix;
+mod io_durability;
 mod io_operations;
 mod process_operations;
 mod resource_operations;
@@ -63,7 +65,7 @@ enum DriverCall {
     Stats(ContainerTarget),
     ReadOutput(DriverReadOutputRequest),
     WriteStdin(DriverWriteStdinRequest),
-    CloseStdin(ProcessTarget),
+    CloseStdin(DriverCloseStdinRequest),
     Resize(DriverResizeRequest),
 }
 
@@ -81,6 +83,9 @@ struct RecordingDriver {
     exec_replays: Mutex<HashMap<OperationId, (DriverExecRequest, DriverProcess)>>,
     signal_process_replays: Mutex<HashMap<OperationId, DriverSignalProcessRequest>>,
     update_replays: Mutex<HashMap<OperationId, DriverUpdateRequest>>,
+    write_stdin_replays: Mutex<HashMap<OperationId, DriverWriteStdinRequest>>,
+    close_stdin_replays: Mutex<HashMap<OperationId, DriverCloseStdinRequest>>,
+    resize_replays: Mutex<HashMap<OperationId, DriverResizeRequest>>,
     output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
 }
@@ -111,6 +116,9 @@ impl RecordingDriver {
             exec_replays: Mutex::new(HashMap::new()),
             signal_process_replays: Mutex::new(HashMap::new()),
             update_replays: Mutex::new(HashMap::new()),
+            write_stdin_replays: Mutex::new(HashMap::new()),
+            close_stdin_replays: Mutex::new(HashMap::new()),
+            resize_replays: Mutex::new(HashMap::new()),
             output_responses: Mutex::new(VecDeque::new()),
             failures: Mutex::new(HashMap::new()),
         }
@@ -756,21 +764,59 @@ impl RuntimeDriver for RecordingDriver {
         self.calls
             .lock()
             .expect("driver calls lock")
-            .push(DriverCall::WriteStdin(request));
+            .push(DriverCall::WriteStdin(request.clone()));
+        if let Some(recorded) = self
+            .write_stdin_replays
+            .lock()
+            .expect("driver write-stdin replay lock")
+            .get(&request.context.operation_id)
+        {
+            if recorded != &request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver write-stdin operation ID was reused for a different request",
+                )
+                .for_operation("driver-write-stdin"));
+            }
+            return Ok(());
+        }
         if let Some(error) = self.take_failure("write-stdin") {
             return Err(error);
         }
+        self.write_stdin_replays
+            .lock()
+            .expect("driver write-stdin replay lock")
+            .insert(request.context.operation_id.clone(), request);
         Ok(())
     }
 
-    async fn close_stdin(&self, target: ProcessTarget) -> Result<()> {
+    async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
         self.calls
             .lock()
             .expect("driver calls lock")
-            .push(DriverCall::CloseStdin(target));
+            .push(DriverCall::CloseStdin(request.clone()));
+        if let Some(recorded) = self
+            .close_stdin_replays
+            .lock()
+            .expect("driver close-stdin replay lock")
+            .get(&request.context.operation_id)
+        {
+            if recorded != &request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver close-stdin operation ID was reused for a different request",
+                )
+                .for_operation("driver-close-stdin"));
+            }
+            return Ok(());
+        }
         if let Some(error) = self.take_failure("close-stdin") {
             return Err(error);
         }
+        self.close_stdin_replays
+            .lock()
+            .expect("driver close-stdin replay lock")
+            .insert(request.context.operation_id.clone(), request);
         Ok(())
     }
 
@@ -778,10 +824,29 @@ impl RuntimeDriver for RecordingDriver {
         self.calls
             .lock()
             .expect("driver calls lock")
-            .push(DriverCall::Resize(request));
+            .push(DriverCall::Resize(request.clone()));
+        if let Some(recorded) = self
+            .resize_replays
+            .lock()
+            .expect("driver resize replay lock")
+            .get(&request.context.operation_id)
+        {
+            if recorded != &request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver resize operation ID was reused for a different request",
+                )
+                .for_operation("driver-resize"));
+            }
+            return Ok(());
+        }
         if let Some(error) = self.take_failure("resize") {
             return Err(error);
         }
+        self.resize_replays
+            .lock()
+            .expect("driver resize replay lock")
+            .insert(request.context.operation_id.clone(), request);
         Ok(())
     }
 }

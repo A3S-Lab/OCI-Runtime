@@ -12,9 +12,9 @@ pub use local::LocalIpcEndpoint;
 pub use server::serve_transport_connection;
 
 /// Oldest SDK wire protocol implemented by this release.
-pub const SDK_PROTOCOL_VERSION_MIN: u16 = 1;
+pub const SDK_PROTOCOL_VERSION_MIN: u16 = 2;
 /// Newest SDK wire protocol implemented by this release.
-pub const SDK_PROTOCOL_VERSION_MAX: u16 = 1;
+pub const SDK_PROTOCOL_VERSION_MAX: u16 = 2;
 
 pub(super) fn transport_error(operation: &'static str, message: impl Into<String>) -> Error {
     Error::new(ErrorCode::Unavailable, message)

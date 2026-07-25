@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    CloseStdinRequest, ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode,
-    ExecRequest, IsolationRequest, OciBundle, OutputChunk, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, SignalProcessRequest, StatsRequest,
-    UpdateRequest, ValidateRequest, WaitProcessRequest,
+    ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode, ExecRequest,
+    IsolationRequest, OciBundle, OutputChunk, ProcessRecord, ProcessTarget, ProcessesRequest,
+    ReadOutputRequest, Result, SignalProcessRequest, StatsRequest, UpdateRequest, ValidateRequest,
+    WaitProcessRequest,
 };
 
 use crate::model::{
@@ -185,22 +185,20 @@ impl AgentWriteStdinRequest {
 
 impl AgentCloseStdinRequest {
     pub(crate) fn validate(&self) -> Result<()> {
-        validate_exact_process_target(&self.process)?;
-        CloseStdinRequest {
-            process: self.process.clone(),
-        }
-        .validate()
+        validate_exact_process_target(&self.process)
     }
 }
 
 impl AgentResizeRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_process_target(&self.process)?;
-        ResizeRequest {
-            process: self.process.clone(),
-            size: self.size,
+        if self.size.width == 0 || self.size.height == 0 {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                "agent resize width and height must both be positive",
+            ));
         }
-        .validate()
+        Ok(())
     }
 }
 
@@ -256,6 +254,18 @@ impl AgentRequest {
                 ),
             ));
         }
+        match self {
+            Self::WriteStdin(request) => {
+                validate_process_io_context(selected_version, request.context.as_ref())?
+            }
+            Self::CloseStdin(request) => {
+                validate_process_io_context(selected_version, request.context.as_ref())?
+            }
+            Self::Resize(request) => {
+                validate_process_io_context(selected_version, request.context.as_ref())?
+            }
+            _ => {}
+        }
         self.validate()
     }
 
@@ -271,6 +281,23 @@ impl AgentRequest {
             Self::ReadOutput(_) | Self::WriteStdin(_) | Self::CloseStdin(_) => 6,
             Self::Resize(_) => 7,
         }
+    }
+}
+
+fn validate_process_io_context(
+    selected_version: u16,
+    context: Option<&a3s_oci_sdk::OperationContext>,
+) -> Result<()> {
+    match (selected_version >= 8, context.is_some()) {
+        (true, true) | (false, false) => Ok(()),
+        (true, false) => Err(protocol_error(
+            ErrorCode::InvalidArgument,
+            "agent protocol version 8 process-I/O mutations require operation context",
+        )),
+        (false, true) => Err(protocol_error(
+            ErrorCode::Unsupported,
+            "process-I/O operation context requires agent protocol version 8",
+        )),
     }
 }
 

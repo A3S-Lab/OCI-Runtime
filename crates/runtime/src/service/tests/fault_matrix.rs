@@ -374,6 +374,7 @@ async fn invoke_operation(
         DriverOperation::WriteStdin => {
             service
                 .write_stdin(WriteStdinRequest {
+                    context: OperationContext::new(operation_id("boundary-write-stdin")),
                     process: ProcessTarget {
                         container: target.expect("write-stdin target").clone(),
                         process_id: ProcessId::init(),
@@ -385,6 +386,7 @@ async fn invoke_operation(
         DriverOperation::CloseStdin => {
             service
                 .close_stdin(CloseStdinRequest {
+                    context: OperationContext::new(operation_id("boundary-close-stdin")),
                     process: ProcessTarget {
                         container: target.expect("close-stdin target").clone(),
                         process_id: ProcessId::init(),
@@ -395,6 +397,7 @@ async fn invoke_operation(
         DriverOperation::Resize => {
             service
                 .resize(ResizeRequest {
+                    context: OperationContext::new(operation_id("boundary-resize")),
                     process: ProcessTarget {
                         container: target.expect("resize target").clone(),
                         process_id: ProcessId::init(),

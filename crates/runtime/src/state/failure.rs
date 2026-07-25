@@ -64,7 +64,11 @@ impl DurableStateStore {
 
         if matches!(
             operation.kind,
-            StoredOperationKind::Exec | StoredOperationKind::SignalProcess
+            StoredOperationKind::Exec
+                | StoredOperationKind::SignalProcess
+                | StoredOperationKind::WriteStdin
+                | StoredOperationKind::CloseStdin
+                | StoredOperationKind::Resize
         ) {
             let (release_mutation, failure_mutation) = process_failure_mutations(operation.kind)
                 .ok_or_else(|| {
@@ -194,6 +198,18 @@ const fn process_failure_mutations(
             DurableMutation::ReleaseFailedSignalProcessClaim,
             DurableMutation::RecordSignalProcessFailure,
         )),
+        StoredOperationKind::WriteStdin => Some((
+            DurableMutation::ReleaseFailedWriteStdinClaim,
+            DurableMutation::RecordWriteStdinFailure,
+        )),
+        StoredOperationKind::CloseStdin => Some((
+            DurableMutation::ReleaseFailedCloseStdinClaim,
+            DurableMutation::RecordCloseStdinFailure,
+        )),
+        StoredOperationKind::Resize => Some((
+            DurableMutation::ReleaseFailedResizeClaim,
+            DurableMutation::RecordResizeFailure,
+        )),
         StoredOperationKind::Create
         | StoredOperationKind::Start
         | StoredOperationKind::Kill
@@ -233,6 +249,10 @@ const fn failure_mutations(
             DurableMutation::ReleaseFailedDeleteClaim,
             DurableMutation::RecordDeleteFailure,
         )),
-        StoredOperationKind::Exec | StoredOperationKind::SignalProcess => None,
+        StoredOperationKind::Exec
+        | StoredOperationKind::SignalProcess
+        | StoredOperationKind::WriteStdin
+        | StoredOperationKind::CloseStdin
+        | StoredOperationKind::Resize => None,
     }
 }

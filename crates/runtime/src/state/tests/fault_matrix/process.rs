@@ -313,7 +313,10 @@ async fn drive_failed_signal_process(
     expect_failure(store.prepare_signal_process(request).await, failure)
 }
 
-async fn prepare_running_for_process(root: &Path, create: &CreateRequest) -> ContainerTarget {
+pub(super) async fn prepare_running_for_process(
+    root: &Path,
+    create: &CreateRequest,
+) -> ContainerTarget {
     let (target, start) = prepare_created_for_start(root, create).await;
     let store = DurableStateStore::open(root)
         .await

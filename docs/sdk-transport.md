@@ -7,7 +7,10 @@
 runtime calls. The transport maps every trait method; it does not invoke the
 CLI or expose WHPX, libkrun, or native Linux driver internals.
 
-The current wire contract is protocol version 1:
+The current wire contract is protocol version 2. Version 2 makes
+`OperationContext` mandatory for write-stdin, close-stdin, and resize, so the
+transport rejects version-1 peers rather than silently accepting mutations
+without durable replay identity:
 
 1. the client sends its inclusive supported protocol range;
 2. the server selects the highest common version or rejects the connection;
@@ -75,11 +78,11 @@ and `resize` only when the selected driver implements each one. `WaitRequest`
 targets one exact generation, accepts an optional
 millisecond timeout, and returns an `ExitStatus` containing either an exit
 code in `0..=255` or a positive signal. Repeated waits must return the same
-terminal result. The native Linux driver and the protocol-v7 utility-VM guest
-path implement this contract while retaining protocol-v1 through protocol-v6
+terminal result. The native Linux driver and the protocol-v8 utility-VM guest
+path implement this contract while retaining agent protocol-v1 through protocol-v7
 compatibility; unsupported drivers fail before dispatch.
 
-The protocol-v7 shared Linux executor implements exact-target exec,
+The protocol-v8 shared Linux executor implements exact-target exec,
 pidfd-backed per-process signal, stable per-process wait, cgroup-v2
 pause/resume, exact live process inventory, partial live CPU/memory/cpuset/PID
 updates, normalized resource statistics, piped stdin, and bounded captured
@@ -93,7 +96,10 @@ driver frame without loss or duplication. The public host path resolves every
 I/O target to the exact durable generation and rejects malformed, oversized,
 or non-contiguous driver output. It also reserves process IDs before driver
 dispatch, persists generation-scoped process records, journals exec, signal,
-pause, resume, and update mutations, and caches terminal results. Native Linux
+pause, resume, update, write-stdin, close-stdin, and resize mutations, and
+caches terminal results. SDK stdin writes larger than the guest's 4 MiB bound
+are split into chunks with stable derived operation IDs, so a retried driver
+call replays completed chunks without duplicating their bytes. Native Linux
 exposes that complete path through `RuntimeClient`. Utility-VM host drivers
 still need to opt into these process, control, resource, and I/O operations
 before their host services may advertise them.

@@ -265,6 +265,9 @@ pub(super) enum MutationKind {
     Pause,
     Resume,
     Update,
+    WriteStdin,
+    CloseStdin,
+    Resize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,23 +361,47 @@ mod tests {
 
     #[test]
     fn guest_operation_journal_replays_only_the_exact_request() {
-        let operation_id = OperationId::new("guest-create-1").expect("valid operation ID");
-        let request = RecordedRequest::new(MutationKind::Delete, &json!({"target": "one"}))
-            .expect("fingerprint request");
-        let mut state = ExecutorState::default();
-        state.record(
-            operation_id.clone(),
-            request.clone(),
-            RecordedOutcome::Unit(Ok(())),
-        );
+        for (index, kind) in [
+            MutationKind::Delete,
+            MutationKind::WriteStdin,
+            MutationKind::CloseStdin,
+            MutationKind::Resize,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let operation_id =
+                OperationId::new(format!("guest-mutation-{index}")).expect("valid operation ID");
+            let request =
+                RecordedRequest::new(kind, &json!({"target": "one"})).expect("fingerprint request");
+            let mut state = ExecutorState::default();
+            state.record(
+                operation_id.clone(),
+                request.clone(),
+                RecordedOutcome::Unit(Ok(())),
+            );
 
-        assert_eq!(state.replay_unit(&operation_id, &request), Some(Ok(())));
-        let changed = RecordedRequest::new(MutationKind::Delete, &json!({"target": "two"}))
-            .expect("fingerprint changed request");
+            assert_eq!(state.replay_unit(&operation_id, &request), Some(Ok(())));
+            let changed = RecordedRequest::new(kind, &json!({"target": "two"}))
+                .expect("fingerprint changed request");
+            let error = state
+                .replay_unit(&operation_id, &changed)
+                .expect("operation exists")
+                .expect_err("changed request must fail");
+            assert_eq!(error.code, ErrorCode::Conflict);
+        }
+
+        let operation_id = OperationId::new("guest-cross-kind").expect("valid operation ID");
+        let write = RecordedRequest::new(MutationKind::WriteStdin, &json!({"target": "one"}))
+            .expect("fingerprint stdin write");
+        let close = RecordedRequest::new(MutationKind::CloseStdin, &json!({"target": "one"}))
+            .expect("fingerprint stdin close");
+        let mut state = ExecutorState::default();
+        state.record(operation_id.clone(), write, RecordedOutcome::Unit(Ok(())));
         let error = state
-            .replay_unit(&operation_id, &changed)
+            .replay_unit(&operation_id, &close)
             .expect("operation exists")
-            .expect_err("changed request must fail");
+            .expect_err("cross-kind reuse must fail");
         assert_eq!(error.code, ErrorCode::Conflict);
     }
 }

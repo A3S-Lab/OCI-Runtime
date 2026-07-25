@@ -1,0 +1,320 @@
+use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::{
+    CloseStdinRequest, OperationContext, OperationId, ProcessTarget, ResizeRequest, Result,
+    TerminalSize, ValidateRequest, WriteStdinRequest,
+};
+use serde::Serialize;
+
+use crate::fault::DurableMutation;
+
+use super::filesystem::state_error;
+use super::model::{
+    StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
+};
+use super::operation::{request_digest, validate_deadline};
+use super::process::{
+    claim_active_process_operation, ensure_container_unclaimed, exact_process_target,
+    required_operation_process_id, validate_process_retry, validate_requested_generation,
+};
+use super::{claim_active_operation, DurableStateStore, ErrorCode, ProcessIoPreparation};
+
+#[derive(Serialize)]
+struct WriteStdinFingerprint<'a> {
+    process: &'a ProcessTarget,
+    data: &'a [u8],
+}
+
+#[derive(Serialize)]
+struct ProcessTargetFingerprint<'a> {
+    process: &'a ProcessTarget,
+}
+
+#[derive(Serialize)]
+struct ResizeFingerprint<'a> {
+    process: &'a ProcessTarget,
+    size: TerminalSize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProcessIoOperation {
+    kind: StoredOperationKind,
+    name: &'static str,
+    prepare: DurableMutation,
+    claim: DurableMutation,
+    complete_record: DurableMutation,
+    complete_operation: DurableMutation,
+}
+
+const WRITE_STDIN: ProcessIoOperation = ProcessIoOperation {
+    kind: StoredOperationKind::WriteStdin,
+    name: "write-stdin",
+    prepare: DurableMutation::PrepareWriteStdinOperation,
+    claim: DurableMutation::ClaimWriteStdinOperation,
+    complete_record: DurableMutation::CompleteWriteStdinRecord,
+    complete_operation: DurableMutation::CompleteWriteStdinOperation,
+};
+
+const CLOSE_STDIN: ProcessIoOperation = ProcessIoOperation {
+    kind: StoredOperationKind::CloseStdin,
+    name: "close-stdin",
+    prepare: DurableMutation::PrepareCloseStdinOperation,
+    claim: DurableMutation::ClaimCloseStdinOperation,
+    complete_record: DurableMutation::CompleteCloseStdinRecord,
+    complete_operation: DurableMutation::CompleteCloseStdinOperation,
+};
+
+const RESIZE: ProcessIoOperation = ProcessIoOperation {
+    kind: StoredOperationKind::Resize,
+    name: "resize",
+    prepare: DurableMutation::PrepareResizeOperation,
+    claim: DurableMutation::ClaimResizeOperation,
+    complete_record: DurableMutation::CompleteResizeRecord,
+    complete_operation: DurableMutation::CompleteResizeOperation,
+};
+
+impl DurableStateStore {
+    pub(crate) async fn prepare_write_stdin(
+        &self,
+        request: &WriteStdinRequest,
+    ) -> Result<ProcessIoPreparation> {
+        request.validate()?;
+        let digest = request_digest(
+            &WriteStdinFingerprint {
+                process: &request.process,
+                data: &request.data,
+            },
+            "digest-write-stdin-request",
+        )?;
+        self.prepare_process_io_operation(&request.context, &request.process, digest, WRITE_STDIN)
+            .await
+    }
+
+    pub(crate) async fn prepare_close_stdin(
+        &self,
+        request: &CloseStdinRequest,
+    ) -> Result<ProcessIoPreparation> {
+        request.validate()?;
+        let digest = request_digest(
+            &ProcessTargetFingerprint {
+                process: &request.process,
+            },
+            "digest-close-stdin-request",
+        )?;
+        self.prepare_process_io_operation(&request.context, &request.process, digest, CLOSE_STDIN)
+            .await
+    }
+
+    pub(crate) async fn prepare_resize(
+        &self,
+        request: &ResizeRequest,
+    ) -> Result<ProcessIoPreparation> {
+        request.validate()?;
+        let digest = request_digest(
+            &ResizeFingerprint {
+                process: &request.process,
+                size: request.size,
+            },
+            "digest-resize-request",
+        )?;
+        self.prepare_process_io_operation(&request.context, &request.process, digest, RESIZE)
+            .await
+    }
+
+    pub(crate) async fn complete_write_stdin(&self, operation_id: &OperationId) -> Result<()> {
+        self.complete_process_io_operation(operation_id, WRITE_STDIN)
+            .await
+    }
+
+    pub(crate) async fn complete_close_stdin(&self, operation_id: &OperationId) -> Result<()> {
+        self.complete_process_io_operation(operation_id, CLOSE_STDIN)
+            .await
+    }
+
+    pub(crate) async fn complete_resize(&self, operation_id: &OperationId) -> Result<()> {
+        self.complete_process_io_operation(operation_id, RESIZE)
+            .await
+    }
+
+    async fn prepare_process_io_operation(
+        &self,
+        context: &OperationContext,
+        requested: &ProcessTarget,
+        digest: String,
+        profile: ProcessIoOperation,
+    ) -> Result<ProcessIoPreparation> {
+        let operation_name = profile.name;
+        let _guard = self.gate.lock().await;
+        if let Some(operation) = self
+            .load_operation_if_present(&context.operation_id)
+            .await?
+        {
+            validate_process_retry(
+                &operation,
+                &context.operation_id,
+                profile.kind,
+                &requested.container.id,
+                &requested.process_id,
+                &digest,
+                operation_name,
+            )?;
+            return match &operation.outcome {
+                StoredOperationStatus::Prepared => {
+                    let target = self.claim_process_io_operation(&operation, profile).await?;
+                    Ok(ProcessIoPreparation::Resume(target))
+                }
+                StoredOperationStatus::SucceededEmpty => Ok(ProcessIoPreparation::Replayed),
+                StoredOperationStatus::Failed { error } => Err(error.clone()),
+                StoredOperationStatus::Succeeded { .. }
+                | StoredOperationStatus::SucceededProcess { .. } => Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    operation_name,
+                    format!(
+                        "{} operation {} has an invalid outcome",
+                        profile.name, context.operation_id
+                    ),
+                )),
+            };
+        }
+
+        validate_deadline(context, operation_name)?;
+        let container = self.load_stored_container(&requested.container.id).await?;
+        validate_requested_generation(&container, &requested.container, operation_name)?;
+        ensure_container_unclaimed(&container, operation_name)?;
+        let target = exact_process_target(&container, requested.process_id.clone());
+        self.validate_process_io_target(&container, &target, operation_name)
+            .await?;
+
+        let operation = StoredOperation {
+            schema_version: OPERATION_SCHEMA_VERSION.to_string(),
+            operation_id: context.operation_id.clone(),
+            kind: profile.kind,
+            container_id: container.id.clone(),
+            generation: container.record.generation,
+            process_id: Some(target.process_id.clone()),
+            request_digest: digest,
+            outcome: StoredOperationStatus::Prepared,
+        };
+        self.write_json(
+            profile.prepare,
+            &self.operation_path(&context.operation_id),
+            &operation,
+        )
+        .await?;
+        let target = self.claim_process_io_operation(&operation, profile).await?;
+        Ok(ProcessIoPreparation::Prepared(target))
+    }
+
+    async fn validate_process_io_target(
+        &self,
+        container: &super::model::StoredContainer,
+        target: &ProcessTarget,
+        operation: &'static str,
+    ) -> Result<()> {
+        if target.process_id.is_init() {
+            if *container.record.state.status() == ContainerState::Creating {
+                return Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    operation,
+                    format!(
+                        "container {} generation {} has no prepared init process",
+                        container.id, container.record.generation.0
+                    ),
+                ));
+            }
+            return Ok(());
+        }
+        let process = self.load_stored_process(target).await?;
+        if process.record.pid.is_none() {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                operation,
+                format!("process {} has not completed exec", target.process_id),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn claim_process_io_operation(
+        &self,
+        operation: &StoredOperation,
+        profile: ProcessIoOperation,
+    ) -> Result<ProcessTarget> {
+        let mut container = self
+            .load_stored_exact(&operation.container_id, operation.generation)
+            .await?;
+        let process_id = required_operation_process_id(operation, profile.name)?.clone();
+        let target = exact_process_target(&container, process_id);
+        if target.process_id.is_init() {
+            claim_active_operation(
+                self,
+                &mut container,
+                &operation.operation_id,
+                profile.claim,
+                profile.name,
+            )
+            .await?;
+        } else {
+            ensure_container_unclaimed(&container, profile.name)?;
+            let mut process = self.load_stored_process(&target).await?;
+            claim_active_process_operation(
+                self,
+                &mut process,
+                &operation.operation_id,
+                profile.claim,
+                profile.name,
+            )
+            .await?;
+        }
+        Ok(target)
+    }
+
+    async fn complete_process_io_operation(
+        &self,
+        operation_id: &OperationId,
+        profile: ProcessIoOperation,
+    ) -> Result<()> {
+        let _guard = self.gate.lock().await;
+        let mut operation = self.load_operation(operation_id).await?;
+        if operation.kind != profile.kind {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                profile.name,
+                format!(
+                    "operation {operation_id} is not a {} operation",
+                    profile.name
+                ),
+            ));
+        }
+        match &operation.outcome {
+            StoredOperationStatus::Prepared => {}
+            StoredOperationStatus::SucceededEmpty => return Ok(()),
+            StoredOperationStatus::Failed { error } => return Err(error.clone()),
+            StoredOperationStatus::Succeeded { .. }
+            | StoredOperationStatus::SucceededProcess { .. } => {
+                return Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    profile.name,
+                    format!(
+                        "{} operation {operation_id} has an invalid outcome",
+                        profile.name
+                    ),
+                ));
+            }
+        }
+
+        self.release_process_operation_claim(
+            &operation,
+            operation_id,
+            profile.complete_record,
+            profile.name,
+        )
+        .await?;
+        operation.outcome = StoredOperationStatus::SucceededEmpty;
+        self.write_json(
+            profile.complete_operation,
+            &self.operation_path(operation_id),
+            &operation,
+        )
+        .await
+    }
+}

@@ -83,11 +83,11 @@ create a VM.
 
 The `native-linux-smoke` command opens the native driver beneath isolated
 runtime-owned directories. It exercises the durable init and process
-lifecycle through `RuntimeClient`; `HostRuntimeService` journals exec and
-per-process signal plus pause/resume/update, caches init and process terminal
-results, and dispatches the exact generation through `NativeLinuxDriver` to
-the shared `LinuxExecutor`. The submitted bundle is strictly loaded before the
-lifecycle begins.
+lifecycle through `RuntimeClient`; `HostRuntimeService` journals exec,
+per-process signal, pause/resume/update, and write-stdin/close-stdin/resize,
+caches init and process terminal results, and dispatches the exact generation
+through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
+is strictly loaded before the lifecycle begins.
 
 The versioned `a3s.oci.native-linux-smoke.v7` report requires all of the
 following:
