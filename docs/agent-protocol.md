@@ -177,14 +177,23 @@ and that VM shutdown leaves no new guest-agent runtime directory. Native Linux
 and macOS HVF retain this user/time, PID-supervision, and rootfs enforcement
 evidence; the historical WHPX qualification predates it.
 
+The same create plan now retains the configured capability and seccomp
+security ceiling plus its owned cgroup v2 leaf. Init and every later exec
+process apply exact capability sets, join that leaf, and install the same
+architecture-bound seccomp policy immediately before `execve`. The bounded
+A3S Box profile additionally creates and verifies its exact device nodes after
+the `/dev` mount. These controls have focused Linux tests; complete
+native/utility-VM lifecycle evidence remains a promotion gate.
+
 Exec uses the same fail-closed process planner as init. The agent snapshots the
 accepted OCI `Process`, preserves descriptors for the exact configured
 process's root and all configured namespaces, and starts a fresh
 single-threaded helper. The helper authenticates its launcher, enters retained
 user/cgroup/IPC/UTS/network/mount/PID/time namespaces in a fixed order, forks
 for PID/time next-child semantics, creates a dedicated process group, chroots,
-applies cwd, groups, GID, UID, umask, and `no_new_privileges`, then blocks on a
-start barrier. Before release, the agent validates the helper peer PID,
+applies cwd, groups, GID, UID, umask, capabilities, `no_new_privileges`, and
+the retained seccomp policy, then blocks on a start barrier. Before release,
+the agent validates the helper peer PID,
 payload parent, host-visible PID, pidfd, root identity, every namespace
 identity, and that init is still alive. The helper monitors init's pidfd and
 uses the same non-destructive `waitid(WNOWAIT)` ownership pattern as the A3S

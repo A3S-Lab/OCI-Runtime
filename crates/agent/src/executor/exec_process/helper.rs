@@ -305,6 +305,7 @@ fn prepare_exec_root(plan: &ProcessPlan, rootfs: &File) -> Result<()> {
 }
 
 fn apply_exec_credentials(plan: &ProcessPlan) -> Result<()> {
+    plan.capabilities.prepare_for_credentials(plan.uid)?;
     // SAFETY: the plan was validated and this is a dedicated single-threaded
     // payload before untrusted code runs.
     unsafe {
@@ -324,10 +325,15 @@ fn apply_exec_credentials(plan: &ProcessPlan) -> Result<()> {
         if let Some(umask) = plan.umask {
             libc::umask(umask);
         }
-        if plan.no_new_privileges && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-            return Err(last_exec_os_error("enable exec no_new_privileges"));
-        }
     }
+    plan.capabilities.apply_after_credentials(plan.uid)?;
+    // SAFETY: `PR_SET_NO_NEW_PRIVS` consumes a boolean integer and zero
+    // padding arguments.
+    if plan.no_new_privileges && unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
+    {
+        return Err(last_exec_os_error("enable exec no_new_privileges"));
+    }
+    plan.seccomp.install()?;
     Ok(())
 }
 

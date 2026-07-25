@@ -266,6 +266,19 @@ fn build_bundle(
         .get_mut("root")
         .ok_or_else(|| "rootfs enforcement config.root is required".to_string())?;
     object_mut(root_config, "root")?.insert("readonly".into(), Value::Bool(true));
+    let process = root
+        .get_mut("process")
+        .ok_or_else(|| "rootfs enforcement config.process is required".to_string())?;
+    object_mut(process, "process")?.insert(
+        "capabilities".into(),
+        json!({
+            "bounding": ["CAP_SYS_PTRACE"],
+            "effective": ["CAP_SYS_PTRACE"],
+            "inheritable": [],
+            "permitted": ["CAP_SYS_PTRACE"],
+            "ambient": []
+        }),
+    );
 
     let target_root = format!("/{target_name}");
     let output_target = format!("{target_root}/output");
@@ -887,6 +900,16 @@ mod tests {
         assert_eq!(
             config["linux"]["gidMappings"],
             serde_json::json!([{"containerID": 0, "hostID": 0, "size": 65_536}])
+        );
+        assert_eq!(
+            config["process"]["capabilities"],
+            serde_json::json!({
+                "bounding": ["CAP_SYS_PTRACE"],
+                "effective": ["CAP_SYS_PTRACE"],
+                "inheritable": [],
+                "permitted": ["CAP_SYS_PTRACE"],
+                "ambient": []
+            })
         );
         assert_eq!(
             config["mounts"][1]["source"],
