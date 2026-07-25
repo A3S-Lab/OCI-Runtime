@@ -43,7 +43,33 @@ run_smoke() {
   printf '%s\n' "$output"
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.status == "available" and .kvm_device_present == $expected' \
+    '.schema_version == "a3s.oci.native-linux-smoke.v2"
+     and .platform == "linux" and .status == "available"
+     and .kvm_device_present == $expected
+     and .bundle_loaded
+     and .service_operations
+         == ["features", "create", "state", "start", "kill", "delete", "wait"]
+     and .dedicated_vm_rejected_before_create
+     and .create_returned_created
+     and .create_replayed
+     and (.created_pid > 0)
+     and .marker_absent_after_create
+     and .start_released
+     and .running_observed
+     and .kill_delivered
+     and .kill_replayed
+     and .wait_timeout_enforced
+     and .wait_exit_status == {"signal": 9, "oom_killed": false}
+     and .wait_replayed
+     and .stopped_observed
+     and .marker_verified
+     and .delete_succeeded
+     and .delete_replayed
+     and .state_missing_after_delete
+     and .marker_removed
+     and .executor_runtime_clean
+     and .session_root_clean
+     and (.reason == null)' \
     <<<"$output" >/dev/null
 }
 
@@ -59,12 +85,12 @@ run_multi_container_smoke() {
   printf '%s\n' "$output"
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v1"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v2"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
      and .service_operations
-         == ["features", "create", "state", "start", "kill", "delete"]
+         == ["features", "create", "state", "start", "kill", "delete", "wait"]
      and .lifecycle.distinct_bundle_directories
      and .lifecycle.distinct_rootfs_directories
      and .lifecycle.both_created_before_start
@@ -80,8 +106,11 @@ run_multi_container_smoke() {
      and .lifecycle.marker_a_verified
      and .lifecycle.b_unchanged_after_a_start
      and .lifecycle.marker_b_absent_after_a_start
+     and .lifecycle.wait_a_did_not_block_b
      and .lifecycle.kill_a_replayed
      and .lifecycle.a_stopped
+     and .lifecycle.wait_status_a == {"signal": 9, "oom_killed": false}
+     and .lifecycle.wait_a_replayed
      and .lifecycle.b_unchanged_after_a_kill
      and .lifecycle.marker_b_absent_after_a_kill
      and .lifecycle.delete_a_replayed
@@ -98,6 +127,8 @@ run_multi_container_smoke() {
      and .lifecycle.marker_b_verified
      and .lifecycle.kill_b_replayed
      and .lifecycle.b_stopped
+     and .lifecycle.wait_status_b == {"signal": 9, "oom_killed": false}
+     and .lifecycle.wait_b_replayed
      and .lifecycle.delete_b_replayed
      and .lifecycle.b_missing_after_delete
      and .markers_removed
@@ -121,11 +152,11 @@ run_fault_cleanup() {
       --fault-after "$phase")"
     printf '%s\n' "$output"
     jq --exit-status --arg phase "$phase" \
-      '.schema_version == "a3s.oci.native-linux-fault-cleanup.v1"
+      '.schema_version == "a3s.oci.native-linux-fault-cleanup.v2"
        and .platform == "linux" and .status == "available"
        and .bundle_loaded
        and .service_operations
-           == ["features", "create", "state", "start", "kill", "delete"]
+           == ["features", "create", "state", "start", "kill", "delete", "wait"]
        and .lifecycle.requested_fault == $phase
        and .lifecycle.injected_fault == $phase
        and .lifecycle.create_completed

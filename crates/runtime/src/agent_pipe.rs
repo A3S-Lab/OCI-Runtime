@@ -141,7 +141,7 @@ mod tests {
     use a3s_oci_agent_protocol::{
         serve_agent_connection, AgentCapabilities, AgentClient, AgentCreateRequest,
         AgentDeleteRequest, AgentKillRequest, AgentStartRequest, AgentState, AgentStateRequest,
-        AgentVsockEndpoint, GuestAgentService, SessionToken,
+        AgentVsockEndpoint, GuestAgentService, SessionToken, AGENT_PROTOCOL_VERSION_MAX,
     };
     use a3s_oci_sdk::{async_trait, Error, ErrorCode, Result};
     use tokio::net::windows::named_pipe::ClientOptions;
@@ -213,7 +213,10 @@ mod tests {
         let client = AgentClient::connect(stream, token)
             .await
             .expect("negotiate authenticated agent protocol");
-        assert_eq!(client.hello().selected_version(), 1);
+        assert_eq!(
+            client.hello().selected_version(),
+            AGENT_PROTOCOL_VERSION_MAX
+        );
         assert!(client.hello().capabilities().operations().is_empty());
         drop(client);
         guest_task

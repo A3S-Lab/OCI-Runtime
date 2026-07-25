@@ -409,13 +409,74 @@ pub struct ProcessRecord {
 }
 
 /// Terminal process result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExitStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<i32>,
     pub oom_killed: bool,
+}
+
+impl<'de> Deserialize<'de> for ExitStatus {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Fields {
+            exit_code: Option<i32>,
+            signal: Option<i32>,
+            oom_killed: bool,
+        }
+
+        let fields = Fields::deserialize(deserializer)?;
+        let status = Self {
+            exit_code: fields.exit_code,
+            signal: fields.signal,
+            oom_killed: fields.oom_killed,
+        };
+        status.validate().map_err(de::Error::custom)?;
+        Ok(status)
+    }
+}
+
+impl ExitStatus {
+    /// Construct a normal Linux process exit result.
+    pub fn exited(exit_code: i32) -> Result<Self> {
+        let status = Self {
+            exit_code: Some(exit_code),
+            signal: None,
+            oom_killed: false,
+        };
+        status.validate()?;
+        Ok(status)
+    }
+
+    /// Construct a Linux signal-termination result.
+    pub fn signaled(signal: i32, oom_killed: bool) -> Result<Self> {
+        let status = Self {
+            exit_code: None,
+            signal: Some(signal),
+            oom_killed,
+        };
+        status.validate()?;
+        Ok(status)
+    }
+
+    /// Validate the mutually exclusive terminal-result representation.
+    pub fn validate(&self) -> Result<()> {
+        match (self.exit_code, self.signal, self.oom_killed) {
+            (Some(exit_code), None, false) if (0..=255).contains(&exit_code) => Ok(()),
+            (None, Some(signal), _) if signal > 0 => Ok(()),
+            _ => Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "exit status must contain either an exit code in 0..=255 or a positive signal; \
+                 oomKilled requires signal termination",
+            )
+            .for_operation("validate-exit-status")),
+        }
+    }
 }
 
 /// Captured process output stream.
@@ -507,7 +568,7 @@ pub struct EventBatch {
 
 #[cfg(test)]
 mod tests {
-    use super::Signal;
+    use super::{ExitStatus, Signal};
 
     #[test]
     fn signal_deserialization_cannot_bypass_validation() {
@@ -519,5 +580,53 @@ mod tests {
         );
         assert!(serde_json::from_str::<Signal>("0").is_err());
         assert!(serde_json::from_str::<Signal>("-9").is_err());
+    }
+
+    #[test]
+    fn exit_status_requires_one_valid_terminal_outcome() {
+        assert_eq!(
+            ExitStatus::exited(42).expect("normal exit"),
+            ExitStatus {
+                exit_code: Some(42),
+                signal: None,
+                oom_killed: false,
+            }
+        );
+        assert_eq!(
+            ExitStatus::signaled(9, true).expect("signal exit"),
+            ExitStatus {
+                exit_code: None,
+                signal: Some(9),
+                oom_killed: true,
+            }
+        );
+        for status in [
+            ExitStatus {
+                exit_code: None,
+                signal: None,
+                oom_killed: false,
+            },
+            ExitStatus {
+                exit_code: Some(0),
+                signal: Some(9),
+                oom_killed: false,
+            },
+            ExitStatus {
+                exit_code: Some(256),
+                signal: None,
+                oom_killed: false,
+            },
+            ExitStatus {
+                exit_code: Some(1),
+                signal: None,
+                oom_killed: true,
+            },
+        ] {
+            assert!(status.validate().is_err(), "{status:?} must be rejected");
+        }
+        assert!(serde_json::from_str::<ExitStatus>(
+            r#"{"exit_code":0,"signal":9,"oom_killed":false}"#
+        )
+        .is_err());
     }
 }

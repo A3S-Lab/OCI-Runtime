@@ -5,7 +5,7 @@ Linux guest executor. Windows WHPX, Linux KVM, and macOS HVF use the same
 messages. The crate does not expose libkrun, hypervisor, or guest details to
 A3S Box.
 
-## Version 1 Contract
+## Versioned Contract
 
 Before connection, the host calls `SessionToken::generate` to obtain a
 nonzero 256-bit token from the operating system's preferred random source and
@@ -34,10 +34,20 @@ After negotiation:
 - cloned clients serialize requests on one connection.
 
 Protocol version 1 carries `create`, `state`, `start`, `kill`, and `delete`.
-Every target includes a positive exact generation. Mutating guest operations
-must be idempotent by `OperationId`. Production promotion also requires
-recovery after an agent or host restart; the current bootstrap executor keeps
-only session-local replay state.
+Protocol version 2 preserves that contract and adds `wait`. Every target
+includes a positive exact generation. A wait accepts an optional millisecond
+timeout and returns exactly one terminal result: an exit code in `0..=255` or
+a positive Linux signal, plus an OOM flag that is valid only for signal
+termination. Repeated waits return the same cached result.
+
+The client breaks a long wait into bounded 25-millisecond guest requests. The
+single correlated connection therefore remains available to query or control
+another container between polls. A protocol-v1 peer neither advertises nor
+accepts `wait`.
+
+Mutating guest operations must be idempotent by `OperationId`. Production
+promotion also requires recovery after an agent or host restart; the current
+bootstrap executor keeps only session-local replay state.
 
 ## Bundle Preservation
 
@@ -63,7 +73,9 @@ bundle path.
 
 In-memory duplex tests cover:
 
-- successful negotiation and the full core lifecycle;
+- protocol-v1 negotiation and the unchanged five-operation core lifecycle;
+- protocol-v2 wait with exact repeated signal status;
+- rejection of a forged protocol-v1 wait before service dispatch;
 - two simultaneously registered container IDs with distinct PIDs, independent
   lifecycle transitions, stale-generation fencing, and generation-2 reuse;
 - wrong-token and incompatible-version rejection;
@@ -89,15 +101,15 @@ step.
 
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 1, and retains
-bounded host and shim evidence. The current guest must advertise the exact
-five core operations.
+pipe, authenticates the token, negotiates protocol version 2, and retains
+bounded host and shim evidence. The current guest must advertise the exact six
+operations: `create`, `state`, `start`, `kill`, `delete`, and `wait`.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in `a3s.oci.agent-vm-smoke.v3`. The signed path must negotiate protocol version
-1 and the exact five operations. The missing-entitlement path must exit with
+in `a3s.oci.agent-vm-smoke.v4`. The signed path must negotiate protocol version
+2 and the exact six operations. The missing-entitlement path must exit with
 status `2`, report no negotiation, terminate the shim process group, and leave
 no private endpoint residue. Both paths also retain in-process evidence that
 the exact runtime-owned endpoint was removed, the complete current-process
@@ -107,9 +119,10 @@ VM-worker PID disappeared.
 The real Windows and macOS `oci-vm-smoke` paths keep the same authenticated
 connection open and prove a fixed bundle through create, state, exact create
 replay, start, running observation, marker verification, signal delivery,
-exact kill replay, stopped observation, stopped-only delete, exact delete
-replay, and a final NotFound state query. The marker proves that the workload
-did not run before start and did run afterward. The init wrapper reads both
+exact kill replay, a bounded wait while running, exact repeated terminal
+status, stopped observation, stopped-only delete, exact delete replay, and a
+final NotFound state query. The marker proves that the workload did not run
+before start and did run afterward. The init wrapper reads both
 configured UTS names back before create returns, and the workload independently
 checks its hostname. When requested, the same create barrier also covers a new
 mount namespace, recursively private propagation, a self-bound rootfs, and
@@ -127,9 +140,11 @@ runtime directory.
 The macOS `oci-vm-multi-container-smoke` path keeps two exact targets live on
 the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
-exact operation replay, rejection of cross-container operation-ID reuse, and
-independent pidfd-backed cleanup. Native Linux runs the equivalent sequence
-through the durable SDK service around the same executor.
+exact operation replay, rejection of cross-container operation-ID reuse, a
+bounded wait on A that does not block B state, exact repeated terminal results
+for both containers, and independent pidfd-backed cleanup. Native Linux runs
+the equivalent sequence through the durable SDK service around the same
+executor.
 
 The `oci-vm-fault-cleanup` companion stops after a successful create, start, or
 kill request and never sends delete. Session EOF must still make the agent call

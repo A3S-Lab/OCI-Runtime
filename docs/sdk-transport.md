@@ -68,6 +68,14 @@ durable bundle at both create and start. Its mutating methods are async,
 `Send + Sync`, and idempotent by `OperationId`. Platform resources and guest
 protocol types remain behind that boundary.
 
+The host always requires the five core driver operations and advertises
+`wait` only when the selected driver implements it. `WaitRequest` targets one
+exact generation, accepts an optional millisecond timeout, and returns an
+`ExitStatus` containing either an exit code in `0..=255` or a positive signal.
+Repeated waits must return the same terminal result. The native Linux driver
+and the protocol-v2 utility-VM guest path implement this contract; unsupported
+drivers fail before dispatch.
+
 ## Runtime Server
 
 Listener creation and access control belong to the runtime process because

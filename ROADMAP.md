@@ -53,21 +53,23 @@ Completed:
   host-visible marker verification, bounded worker reap, and marker cleanup;
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
-  one-time token authentication, protocol-v1 negotiation, exact core
-  operation advertisement, process-group termination, exact endpoint removal,
+  one-time token authentication, protocol-v2 negotiation, exact six-operation
+  advertisement, process-group termination, exact endpoint removal,
   observed PID reap, and in-process descriptor-inventory restoration;
-- real macOS fixed-bundle create/state/start/kill/delete evidence using the
-  shared Windows lifecycle harness, including exact mutation retries,
-  create/start separation, running and stopped observation, post-delete
-  NotFound, and nominal process, endpoint, marker, and runtime-root cleanup;
+- real macOS fixed-bundle create/state/start/kill/wait/delete evidence using
+  the shared Windows lifecycle harness, including exact mutation retries,
+  create/start separation, bounded running wait, exact repeated normal exit
+  status, running and stopped observation, post-delete NotFound, and nominal
+  process, endpoint, marker, and runtime-root cleanup;
 - real macOS no-delete cleanup after successful create, start, and kill
   boundaries, with exact fault identity, guest executor shutdown, endpoint and
   marker removal, shim/worker reap, descriptor-inventory restoration, and no
   new guest runtime root;
 - explicit rootful native Linux driver integration that reuses the shared
   executor without linking or initializing libkrun;
-- real native Linux create/state/start/kill/delete SDK evidence on x86_64 and
-  aarch64, repeated with `/dev/kvm` absent and present but unusable;
+- real native Linux create/state/start/kill/wait/delete SDK evidence on x86_64
+  and aarch64, including exact repeated SIGKILL status and bounded running
+  wait, repeated with `/dev/kvm` absent and present but unusable;
 - real native Linux no-delete cleanup after create, start, and kill on x86_64
   and aarch64, including init-PID reap and executor, durable-state, marker, and
   session-root removal;
@@ -107,16 +109,17 @@ Completed:
 - version-negotiated, length-delimited transport for every SDK operation;
 - tested Windows named-pipe and Unix-domain-socket client connectors;
 - authenticated, version-negotiated, bounded host/guest lifecycle protocol
-  with exact bundle and response correlation;
+  with exact bundle and response correlation, protocol-v1 compatibility, and
+  protocol-v2 stable init wait;
 - existing `features` CLI path routed through the Rust SDK;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
   idempotent create/start/kill/delete journals, active-operation claims,
   terminal failure replay, crash reconciliation, and quarantine;
 - async `RuntimeDriver` integration plus a tested host implementation of
-  `create`, `state`, `start`, `kill`, and `delete`;
+  `create`, `state`, `start`, `kill`, `delete`, and driver-advertised `wait`;
 - typed, exhaustive recovery injection at all 237 registered durable commit
-  stages and all 12 before/after `RuntimeDriver` method boundaries;
+  stages and all 14 before/after `RuntimeDriver` method boundaries;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -136,7 +139,8 @@ Not yet complete:
 
 The built-in WHPX driver remains `probe-only`, and the default host service
 advertises only `features`. A host explicitly opened around a launch-ready
-`RuntimeDriver` advertises the five durable core lifecycle operations.
+`RuntimeDriver` advertises the five required core lifecycle operations plus
+only the optional operations that driver implements.
 
 ## Delivery Sequence
 
@@ -251,9 +255,9 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
-  authenticate protocol-v1 negotiation with a one-time token.
-- [x] Run the same fixed create/state/start/kill/delete OCI lifecycle used by
-  WHPX.
+  authenticate protocol-v2 negotiation with a one-time token.
+- [x] Run the same fixed create/state/start/kill/wait/delete OCI lifecycle used
+  by WHPX, including bounded running wait and exact repeated exit status.
 - [x] Prove deterministic VM, process, descriptor, and filesystem cleanup
   without normal delete after successful create, start, and kill boundaries.
   Each phase requires exact endpoint removal, observed-PID reap, complete
@@ -272,9 +276,9 @@ then may HVF become `experimental`.
 
 - [x] Multi-container guest registry with per-container generations, proven
   with two distinct bundles, simultaneous create barriers, independent
-  start/kill/delete, exact replay isolation, generation-1 fencing after
-  generation-2 recreation, and complete cleanup through native Linux and the
-  macOS utility VM.
+  start/kill/wait/delete, nonblocking wait/state progress, exact replay
+  isolation, generation-1 fencing after generation-2 recreation, and complete
+  cleanup through native Linux and the macOS utility VM.
 - [x] Create a new UTS namespace and apply the configured hostname and
   domainname before the created barrier.
 - [x] Create a new mount namespace, make the inherited mount tree recursively
@@ -293,6 +297,9 @@ then may HVF become `experimental`.
   kernels without `pidfd_open` and `pidfd_send_signal`, and deliver lifecycle
   and cleanup signals without a numeric-PID reuse race. Prove the path through
   native Linux and the macOS utility VM.
+- [x] Retain exact normal-or-signal init termination, return the same result
+  from repeated waits, enforce bounded wait timeouts, and prove one container's
+  wait does not block another container's state request.
 - [ ] Namespace creation for user and time namespaces, plus joining existing
   namespaces.
 - [ ] Mount-target creation, rootfs propagation overrides, idmapped and
@@ -302,7 +309,7 @@ then may HVF become `experimental`.
   priority, affinity, `no_new_privileges`, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified
   resource enforcement.
-- [ ] Init supervision, zombie reaping, exec, and wait.
+- [ ] Namespace-internal init supervision, orphan/zombie reaping, and exec.
 - [ ] Ordered hooks with OCI state on stdin.
 - [ ] Backpressured stdin/stdout/stderr, PTY, resize, signals, and output
   cursors.
@@ -320,7 +327,8 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Add the native Linux driver without linking or initializing libkrun.
 - [x] Reuse the R3 Linux executor directly.
 - [x] Prove runtime binary startup, feature inspection, Rust SDK loading, and
-  the rootful core lifecycle without KVM on x86_64 and aarch64.
+  the rootful lifecycle including exact repeated init wait without KVM on
+  x86_64 and aarch64.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.

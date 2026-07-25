@@ -104,7 +104,8 @@ fn run_pid_namespace_init(
     match pid::fork_namespace_init() {
         Ok(ForkRole::Supervisor { child_pid }) => {
             drop(control);
-            pid::wait_for_child(child_pid)
+            let outcome = pid::wait_for_child(child_pid)?;
+            pid::mirror_child_outcome(outcome)
         }
         Ok(ForkRole::Init { runtime_pid }) => {
             if let Err(error) = prepare_create_environment(plan, bundle_directory, rootfs) {

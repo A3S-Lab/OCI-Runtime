@@ -5,8 +5,8 @@ use std::time::Duration;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerId, ContainerRecord, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error,
-    ErrorCode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessIo,
-    RuntimeClient, Signal, StartRequest, StateRequest,
+    ErrorCode, ExitStatus, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId,
+    ProcessIo, RuntimeClient, Signal, StartRequest, StateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -94,6 +94,12 @@ pub(super) async fn exercise(
             && report.lifecycle.marker_b_absent_after_a_start,
         "starting container A changed container B",
     )?;
+    report.lifecycle.wait_a_did_not_block_b =
+        wait_does_not_block_state(client, &target_a1, &target_b, &created_b).await?;
+    require(
+        report.lifecycle.wait_a_did_not_block_b,
+        "waiting on running container A blocked container B state",
+    )?;
 
     let kill_a = kill_request(nonce, "a-kill-1", target_a1.clone())?;
     let killed_a = native_call("kill container A", client.kill(kill_a.clone())).await?;
@@ -103,6 +109,28 @@ pub(super) async fn exercise(
     require(
         report.lifecycle.kill_a_replayed,
         "container A kill replay changed its result",
+    )?;
+    let waited_a = native_call(
+        "wait for container A",
+        client.wait(wait_request(target_a1.clone())),
+    )
+    .await?;
+    let expected_exit = ExitStatus::signaled(libc::SIGKILL, false)
+        .map_err(|error| format!("failed to construct expected native exit status: {error}"))?;
+    require(
+        waited_a == expected_exit,
+        format!("container A wait returned {waited_a:?}, expected {expected_exit:?}"),
+    )?;
+    report.lifecycle.wait_status_a = Some(waited_a.clone());
+    report.lifecycle.wait_a_replayed = native_call(
+        "repeat wait for container A",
+        client.wait(wait_request(target_a1.clone())),
+    )
+    .await?
+        == waited_a;
+    require(
+        report.lifecycle.wait_a_replayed,
+        "container A repeated wait changed its result",
     )?;
     report.lifecycle.a_stopped = wait_until_stopped(client, &target_a1).await?;
     report.lifecycle.b_unchanged_after_a_kill =
@@ -229,6 +257,26 @@ pub(super) async fn exercise(
         report.lifecycle.kill_b_replayed,
         "container B kill replay changed its result",
     )?;
+    let waited_b = native_call(
+        "wait for container B",
+        client.wait(wait_request(target_b.clone())),
+    )
+    .await?;
+    require(
+        waited_b == expected_exit,
+        format!("container B wait returned {waited_b:?}, expected {expected_exit:?}"),
+    )?;
+    report.lifecycle.wait_status_b = Some(waited_b.clone());
+    report.lifecycle.wait_b_replayed = native_call(
+        "repeat wait for container B",
+        client.wait(wait_request(target_b.clone())),
+    )
+    .await?
+        == waited_b;
+    require(
+        report.lifecycle.wait_b_replayed,
+        "container B repeated wait changed its result",
+    )?;
     report.lifecycle.b_stopped = wait_until_stopped(client, &target_b).await?;
 
     let delete_b = DeleteRequest {
@@ -246,6 +294,49 @@ pub(super) async fn exercise(
         "container B remained visible after delete",
     )?;
     Ok(())
+}
+
+fn wait_request(target: ContainerTarget) -> WaitRequest {
+    WaitRequest {
+        target,
+        timeout_ms: Some(15_000),
+    }
+}
+
+async fn wait_does_not_block_state(
+    client: &RuntimeClient,
+    waiting: &ContainerTarget,
+    observed: &ContainerTarget,
+    expected: &ContainerRecord,
+) -> Result<bool, String> {
+    let wait = client.wait(WaitRequest {
+        target: waiting.clone(),
+        timeout_ms: Some(300),
+    });
+    let state = async {
+        sleep(Duration::from_millis(50)).await;
+        timeout(
+            Duration::from_millis(200),
+            client.state(StateRequest {
+                target: observed.clone(),
+            }),
+        )
+        .await
+    };
+    let (wait_result, state_result) = tokio::join!(wait, state);
+    let wait_timed_out =
+        matches!(wait_result, Err(error) if error.code == ErrorCode::DeadlineExceeded);
+    let state_unchanged = match state_result {
+        Ok(Ok(record)) => &record == expected,
+        Ok(Err(error)) => {
+            return Err(native_error(
+                "container B state during container A wait",
+                &error,
+            ));
+        }
+        Err(_) => false,
+    };
+    Ok(wait_timed_out && state_unchanged)
 }
 
 pub(super) async fn best_effort_delete(client: &RuntimeClient, nonce: &str) {

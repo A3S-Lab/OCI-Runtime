@@ -1,12 +1,13 @@
 use std::io;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener as StdUnixListener};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{ExitStatus, Stdio};
+use std::process::{ExitStatus as ProcessExitStatus, Stdio};
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::AgentVsockEndpoint;
-use a3s_oci_sdk::{Error, ErrorCode, Result};
+use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -25,6 +26,7 @@ pub(super) struct PreparedProcess {
     control: Option<UnixStream>,
     pid: i32,
     pidfd: PidFd,
+    exit_status: Option<ExitStatus>,
 }
 
 impl PreparedProcess {
@@ -71,7 +73,7 @@ impl PreparedProcess {
 
         enum ReadyOutcome {
             Connected(io::Result<(UnixStream, tokio::net::unix::SocketAddr)>),
-            Exited(io::Result<ExitStatus>),
+            Exited(io::Result<ProcessExitStatus>),
         }
         let ready = timeout(INIT_READY_TIMEOUT, async {
             tokio::select! {
@@ -167,6 +169,7 @@ impl PreparedProcess {
             control: Some(control),
             pid: runtime_pid,
             pidfd,
+            exit_status: None,
         })
     }
 
@@ -193,12 +196,18 @@ impl PreparedProcess {
     }
 
     pub(super) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-        self.child.try_wait().map_err(|error| {
+        if let Some(status) = &self.exit_status {
+            return Ok(Some(status.clone()));
+        }
+        let status = self.child.try_wait().map_err(|error| {
             process_error(
                 ErrorCode::Internal,
                 format!("failed to inspect container init state: {error}"),
             )
-        })
+        })?;
+        status
+            .map(|status| self.cache_exit_status(status))
+            .transpose()
     }
 
     pub(super) fn signal(&self, signal: i32) -> Result<SignalOutcome> {
@@ -206,15 +215,8 @@ impl PreparedProcess {
     }
 
     pub(super) async fn force_stop(&mut self) -> Result<()> {
-        match self.child.try_wait() {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {}
-            Err(error) => {
-                return Err(process_error(
-                    ErrorCode::Internal,
-                    format!("failed to inspect container init before cleanup: {error}"),
-                ));
-            }
+        if self.try_wait()?.is_some() {
+            return Ok(());
         }
         match self.pidfd.send_signal(libc::SIGKILL) {
             Ok(SignalOutcome::Delivered | SignalOutcome::Exited) => {}
@@ -232,7 +234,9 @@ impl PreparedProcess {
             }
         }
         match timeout(INIT_READY_TIMEOUT, self.child.wait()).await {
-            Ok(Ok(_)) => {}
+            Ok(Ok(status)) => {
+                self.cache_exit_status(status)?;
+            }
             Ok(Err(error)) => {
                 return Err(process_error(
                     ErrorCode::Internal,
@@ -248,6 +252,12 @@ impl PreparedProcess {
             }
         }
         Ok(())
+    }
+
+    fn cache_exit_status(&mut self, status: ProcessExitStatus) -> Result<ExitStatus> {
+        let status = convert_exit_status(status)?;
+        self.exit_status = Some(status.clone());
+        Ok(status)
     }
 }
 
@@ -290,6 +300,19 @@ fn process_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("run-container-init")
 }
 
+fn convert_exit_status(status: ProcessExitStatus) -> Result<ExitStatus> {
+    if let Some(exit_code) = status.code() {
+        return ExitStatus::exited(exit_code);
+    }
+    if let Some(signal) = status.signal() {
+        return ExitStatus::signaled(signal, false);
+    }
+    Err(process_error(
+        ErrorCode::Internal,
+        format!("container init returned an unsupported process status {status}"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -298,7 +321,10 @@ mod tests {
 
     use tokio::io::AsyncReadExt;
 
-    use super::bind_control_listener;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus as ProcessExitStatus;
+
+    use super::{bind_control_listener, convert_exit_status};
     use crate::executor::control::READY_BYTE;
 
     #[tokio::test(flavor = "current_thread")]
@@ -324,5 +350,17 @@ mod tests {
             .await
             .expect("read ready byte");
         assert_eq!(ready[0], READY_BYTE);
+    }
+
+    #[test]
+    fn converts_normal_and_signal_process_results() {
+        assert_eq!(
+            convert_exit_status(ProcessExitStatus::from_raw(42 << 8)).expect("normal result"),
+            a3s_oci_sdk::ExitStatus::exited(42).expect("normal SDK result")
+        );
+        assert_eq!(
+            convert_exit_status(ProcessExitStatus::from_raw(libc::SIGKILL)).expect("signal result"),
+            a3s_oci_sdk::ExitStatus::signaled(libc::SIGKILL, false).expect("signal SDK result")
+        );
     }
 }

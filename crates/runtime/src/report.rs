@@ -1,7 +1,7 @@
 use a3s_oci_agent_protocol::{AgentOperation, AGENT_PROTOCOL_VERSION_MAX};
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
-use a3s_oci_sdk::RuntimeOperation;
+use a3s_oci_sdk::{ExitStatus, RuntimeOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,11 +10,11 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v3";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v4";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
-pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v3";
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v4";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v1";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v2";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +320,7 @@ impl AgentVmSmokeReport {
                     AgentOperation::Start,
                     AgentOperation::Kill,
                     AgentOperation::Delete,
+                    AgentOperation::Wait,
                 ]
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)
@@ -363,6 +364,13 @@ pub struct NativeLinuxSmokeReport {
     pub kill_delivered: bool,
     /// Whether retrying kill replayed its exact original result.
     pub kill_replayed: bool,
+    /// Whether a bounded wait while running returned `deadline-exceeded`.
+    pub wait_timeout_enforced: bool,
+    /// Exact terminal result returned after SIGKILL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_exit_status: Option<ExitStatus>,
+    /// Whether repeated wait returned the exact same terminal result.
+    pub wait_replayed: bool,
     /// Whether state eventually reported the workload stopped.
     pub stopped_observed: bool,
     /// Whether the workload produced the exact expected marker.
@@ -402,6 +410,9 @@ impl NativeLinuxSmokeReport {
             running_observed: false,
             kill_delivered: false,
             kill_replayed: false,
+            wait_timeout_enforced: false,
+            wait_exit_status: None,
+            wait_replayed: false,
             stopped_observed: false,
             marker_verified: false,
             delete_succeeded: false,
@@ -438,6 +449,7 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Start,
                     RuntimeOperation::Kill,
                     RuntimeOperation::Delete,
+                    RuntimeOperation::Wait,
                 ]
             && self.dedicated_vm_rejected_before_create
             && self.create_returned_created
@@ -448,6 +460,14 @@ impl NativeLinuxSmokeReport {
             && self.running_observed
             && self.kill_delivered
             && self.kill_replayed
+            && self.wait_timeout_enforced
+            && self.wait_exit_status
+                == Some(ExitStatus {
+                    exit_code: None,
+                    signal: Some(9),
+                    oom_killed: false,
+                })
+            && self.wait_replayed
             && self.stopped_observed
             && self.marker_verified
             && self.delete_succeeded
@@ -487,6 +507,13 @@ pub struct OciVmSmokeReport {
     pub kill_delivered: bool,
     /// Whether retrying kill replayed its exact original result.
     pub kill_replayed: bool,
+    /// Whether a bounded wait while running returned `deadline-exceeded`.
+    pub wait_timeout_enforced: bool,
+    /// Exact terminal result returned after the configured SIGTERM trap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_exit_status: Option<ExitStatus>,
+    /// Whether repeated wait returned the exact same terminal result.
+    pub wait_replayed: bool,
     /// Whether state eventually reported the workload stopped.
     pub stopped_observed: bool,
     /// Whether the workload produced the exact expected marker.
@@ -523,6 +550,9 @@ impl OciVmSmokeReport {
             running_observed: false,
             kill_delivered: false,
             kill_replayed: false,
+            wait_timeout_enforced: false,
+            wait_exit_status: None,
+            wait_replayed: false,
             stopped_observed: false,
             marker_verified: false,
             delete_succeeded: false,
@@ -565,6 +595,14 @@ impl OciVmSmokeReport {
             && self.running_observed
             && self.kill_delivered
             && self.kill_replayed
+            && self.wait_timeout_enforced
+            && self.wait_exit_status
+                == Some(ExitStatus {
+                    exit_code: Some(0),
+                    signal: None,
+                    oom_killed: false,
+                })
+            && self.wait_replayed
             && self.stopped_observed
             && self.marker_verified
             && self.delete_succeeded

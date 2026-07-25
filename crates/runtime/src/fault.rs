@@ -146,17 +146,19 @@ pub(crate) enum DriverOperation {
     Start,
     Kill,
     Delete,
+    Wait,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::Capability,
         Self::Create,
         Self::State,
         Self::Start,
         Self::Kill,
         Self::Delete,
+        Self::Wait,
     ];
 }
 

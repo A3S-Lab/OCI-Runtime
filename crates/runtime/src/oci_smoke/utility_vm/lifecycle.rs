@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest,
-    AgentStartRequest, AgentStateRequest, GuestPath,
+    AgentStartRequest, AgentStateRequest, AgentWaitRequest, GuestPath,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerTarget, DeleteMode, Error, ErrorCode, IoMode, OciBundle, OperationContext,
+    ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IoMode, OciBundle, OperationContext,
     OperationId, ProcessIo, Signal,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -85,6 +85,10 @@ pub(super) async fn exercise<T: AgentStream>(
     }
 
     wait_for_running_marker(client, target, marker, report).await?;
+    report.wait_timeout_enforced = wait_times_out_while_running(client, target).await?;
+    if !report.wait_timeout_enforced {
+        return Err("guest wait returned before the running init process exited".into());
+    }
 
     let kill = AgentKillRequest {
         context: operation(nonce, "kill")?,
@@ -106,6 +110,26 @@ pub(super) async fn exercise<T: AgentStream>(
     if !report.kill_replayed {
         return Err("guest did not exactly replay the kill result".into());
     }
+    let wait = AgentWaitRequest {
+        target: target.clone(),
+        timeout_ms: Some(
+            u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                .map_err(|_| "guest lifecycle timeout does not fit wait request".to_string())?,
+        ),
+    };
+    let waited = guest_call("wait", client.wait(wait.clone())).await?;
+    let expected_exit = ExitStatus::exited(0)
+        .map_err(|error| format!("failed to construct expected guest exit status: {error}"))?;
+    report.wait_exit_status = Some(waited.clone());
+    if waited != expected_exit {
+        return Err(format!(
+            "guest wait returned {waited:?}, expected {expected_exit:?}"
+        ));
+    }
+    report.wait_replayed = guest_call("repeated wait", client.wait(wait)).await? == waited;
+    if !report.wait_replayed {
+        return Err("guest repeated wait returned a different exit status".into());
+    }
     report.stopped_observed = wait_until_stopped(client, target).await?;
 
     let delete = AgentDeleteRequest {
@@ -122,6 +146,28 @@ pub(super) async fn exercise<T: AgentStream>(
         return Err("guest state remained visible after delete".into());
     }
     Ok(())
+}
+
+async fn wait_times_out_while_running<T: AgentStream>(
+    client: &AgentClient<T>,
+    target: &ContainerTarget,
+) -> Result<bool, String> {
+    match timeout(
+        GUEST_CALL_TIMEOUT,
+        client.wait(AgentWaitRequest {
+            target: target.clone(),
+            timeout_ms: Some(50),
+        }),
+    )
+    .await
+    {
+        Ok(Err(error)) if error.code == ErrorCode::DeadlineExceeded => Ok(true),
+        Ok(Err(error)) => Err(guest_error("bounded wait while running", &error)),
+        Ok(Ok(status)) => Err(format!(
+            "bounded wait returned {status:?} while the guest workload was running"
+        )),
+        Err(_) => Err("bounded guest wait exceeded its outer call timeout".into()),
+    }
 }
 
 pub(super) async fn exercise_until_fault<T: AgentStream>(

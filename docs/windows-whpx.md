@@ -29,10 +29,10 @@ The runtime:
    Linux rootfs, and verifies a guest-written marker through virtiofs;
 9. boots `/usr/bin/a3s-oci-agent`, carries its host-CID port 4093 connection
    through libkrun to the protected pipe, authenticates the exact shim PID and
-   one-time token, negotiates protocol version 1, and waits for zero
+   one-time token, negotiates protocol version 2, and waits for zero
    guest/shim exit;
-10. runs a fixed OCI bundle through distinct create, start, signal, and delete
-    calls, verifies lifecycle replay and cleanup, and keeps the built-in
+10. runs a fixed OCI bundle through distinct create, start, signal, wait, and
+    delete calls, verifies lifecycle replay and cleanup, and keeps the built-in
     driver disabled;
 11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
@@ -93,9 +93,9 @@ A successful end-to-end agent VM smoke additionally proves that:
 - guest AF_VSOCK reaches the protected Windows named pipe through libkrun;
 - only the exact spawned shim PID is accepted before the token is sent;
 - the real guest authenticates the one-time token and negotiates protocol
-  version 1;
+  version 2;
 - the agent version and `x86_64` guest architecture are reported;
-- the guest advertises exactly create, state, start, kill, and delete;
+- the guest advertises exactly create, state, start, kill, delete, and wait;
 - the shim reports every VM configuration stage and a zero guest exit;
 - the host rejects an existing console destination rather than overwriting
   it.
@@ -122,8 +122,9 @@ A successful fixed OCI VM smoke additionally proves that:
 - the wrapper applies the accepted rootfs, credentials, umask, and
   `no_new_privileges`, then calls `execve`;
 - the host observes `running` and the exact workload marker;
-- kill delivers `SIGTERM`, its exact retry replays the original result, and
-  state then observes `stopped`;
+- a bounded wait returns `DeadlineExceeded` while the workload is running;
+- kill delivers `SIGTERM`, its exact retry replays the original result, wait
+  returns and replays exit code zero, and state then observes `stopped`;
 - stopped-only delete and its exact retry succeed;
 - state returns NotFound after delete;
 - the marker is removed and VM shutdown leaves no new agent runtime directory
@@ -139,8 +140,10 @@ The fixed OCI lifecycle qualification used the 6,328,408-byte static musl agent
 with SHA-256
 `4b21a230d4183abe053823a63893f5ab0663c118811c81229bdfba0816fc9b81`.
 Its report selected protocol version 1, identified the guest as `x86_64`,
-verified every fixed lifecycle field, retained the complete successful shim
-report, and returned exit status zero.
+verified every then-current fixed lifecycle field, retained the complete
+successful shim report, and returned exit status zero. This historical run
+predates the protocol-v2 wait gate and does not qualify the current report
+schemas.
 
 The UTS qualification configured hostname `a3s-smoke` and domainname
 `runtime.test`, checked the hostname from the workload, and crossed the create
@@ -199,7 +202,7 @@ The next vertical slice must:
 2. mount one protected runtime-owned root through virtio-fs;
 3. add user/time namespaces, namespace joins, advanced mount, capability,
    resource, seccomp, and hook enforcement;
-4. return stdout, stderr, and the natural exit code;
+4. return stdout, stderr, and arbitrary natural exit codes;
 5. reconcile stopped state after host runtime restart;
 6. add concurrent-container and negative isolation evidence;
 7. prove cleanup under fault injection and repeated soak runs.

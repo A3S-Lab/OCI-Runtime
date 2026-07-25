@@ -80,13 +80,13 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 - **Strict Validation**: Validate OCI 1.0.0 through 1.3.0 schemas, semantic
   relationships, paths, payload bounds, and immutable SHA-256 digests before
   state mutation
-- **Durable Lifecycle**: Persist create, state, start, kill, and delete with
-  monotonic generations, operation IDs, replay, fencing, reconciliation, and
-  quarantine, backed by exhaustive durable-write and driver-boundary fault
-  matrices
+- **Durable Lifecycle**: Persist create, start, kill, and delete with monotonic
+  generations, operation IDs, replay, fencing, reconciliation, and quarantine;
+  expose driver-backed state and stable init-process exit status
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, pidfd
-  process-control, and cleanup implementation directly on Linux and through
-  the guest agent, with independently fenced per-container generations
+  process-control, exit-status, and cleanup implementation directly on Linux
+  and through the guest agent, with independently fenced per-container
+  generations
 - **Cross-Platform Drivers**: Inspect native Linux, KVM, HVF, and WHPX
   prerequisites without silently weakening requested isolation
 - **Typed SDK and IPC**: Expose an async `Send + Sync` Rust contract with
@@ -138,7 +138,7 @@ prerequisite while remaining `probe-only`.
 ### Native Linux lifecycle
 
 The explicit rootful development driver proves the current OCI
-create/start/kill/delete vertical slice without opening `/dev/kvm` or
+create/start/kill/wait/delete vertical slice without opening `/dev/kvm` or
 initializing libkrun:
 
 ```sh
@@ -159,7 +159,8 @@ sudo target/debug/a3s-oci native-linux-smoke \
   --work-parent "$work_parent"
 ```
 
-Success requires the exact create/start barrier, running and stopped
+Success requires the exact create/start barrier, a bounded wait while running,
+the exact SIGKILL terminal result and repeated wait, running and stopped
 observation, idempotent mutation replay, marker verification, post-delete
 `NotFound`, and scoped cleanup. See
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
@@ -183,8 +184,10 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 
 The versioned report retains two simultaneous create barriers, distinct
 positive PIDs, operation replay isolation, A/B lifecycle independence,
-generation-1 rejection after A is recreated as generation 2, and complete
-process, marker, executor-root, and durable-session cleanup.
+nonblocking observation of B while A is being waited on, exact repeated exit
+status for both containers, generation-1 rejection after A is recreated as
+generation 2, and complete process, marker, executor-root, and durable-session
+cleanup.
 
 The separate fault-cleanup diagnostic deliberately stops before OCI delete and
 requires executor shutdown to reclaim the live process and all scoped state:
@@ -199,7 +202,7 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-Each `a3s.oci.native-linux-fault-cleanup.v1` success identifies the exact
+Each `a3s.oci.native-linux-fault-cleanup.v2` success identifies the exact
 injected boundary, records that normal delete was not attempted, and proves
 that the init PID, executor root, marker, and complete diagnostic session were
 removed.
@@ -294,10 +297,11 @@ target/debug/a3s-oci agent-vm-smoke \
   --console "$rootfs_dir/agent-console.log"
 ```
 
-An `a3s.oci.agent-vm-smoke.v3` success proves a private host socket, the
+An `a3s.oci.agent-vm-smoke.v4` success proves a private host socket, the
 expected shim and direct worker PID relationship, one-time token
-authentication, protocol version 1, the arm64 guest identity, and the exact
-five core lifecycle operations. It also requires the exact runtime-owned
+authentication, protocol version 2, the arm64 guest identity, and the exact
+six guest operations (`create`, `state`, `start`, `kill`, `delete`, and
+`wait`). It also requires the exact runtime-owned
 endpoint to be removed, the current process's complete descriptor inventory to
 return to its pre-session baseline, and both observed host process IDs to
 disappear.
@@ -318,10 +322,12 @@ target/debug/a3s-oci oci-vm-smoke \
   --console "$rootfs_dir/oci-console.log"
 ```
 
-Success proves distinct create and start, exact create/kill/delete replay,
-running and stopped observation, marker verification, post-delete `NotFound`,
-and nominal endpoint, process, marker, and guest-runtime cleanup. This remains
-a fixed development profile rather than an arbitrary-workload driver.
+Success proves distinct create and start, exact create/kill/delete replay, a
+bounded wait while running, exact and replayed normal exit status after the
+SIGTERM trap, running and stopped observation, marker verification,
+post-delete `NotFound`, and nominal endpoint, process, marker, and
+guest-runtime cleanup. This remains a fixed development profile rather than an
+arbitrary-workload driver.
 
 The multi-container gate places two distinct bundles in the same guest and
 keeps both init processes behind the create barrier:
@@ -340,11 +346,12 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$rootfs_dir/oci-multi-container.log"
 ```
 
-`a3s.oci.oci-vm-multi-container-smoke.v1` requires that starting, killing, and
-deleting A never changes B; recreating A advances generation 1 to 2; stale and
-cross-container replay requests fail; B then completes independently; and VM
-shutdown restores guest-runtime, endpoint, descriptor, shim, and worker
-inventories.
+`a3s.oci.oci-vm-multi-container-smoke.v2` requires that starting, killing,
+waiting for, and deleting A never changes or blocks B; both waits return and
+replay the exact normal exit status; recreating A advances generation 1 to 2;
+stale and cross-container replay requests fail; B then completes
+independently; and VM shutdown restores guest-runtime, endpoint, descriptor,
+shim, and worker inventories.
 
 Fault cleanup reuses the same signed shim and bundle but stops after each
 successful lifecycle boundary:
@@ -361,7 +368,7 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-An `a3s.oci.oci-vm-fault-cleanup.v1` success requires no normal delete call,
+An `a3s.oci.oci-vm-fault-cleanup.v2` success requires no normal delete call,
 guest executor shutdown, marker and runtime-root removal, exact endpoint
 removal, shim and VM-worker reap, and restoration of the complete host
 descriptor inventory.
@@ -424,7 +431,8 @@ The current executor implements a reviewed bootstrap vertical slice:
 - ordered existing-target OCI mounts with bind/rbind and common VFS options;
 - PID-authenticated create/start barrier;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
-  signaling, observation, and scoped cleanup.
+  signaling, exact normal-or-signal exit status, repeated wait, observation,
+  and scoped cleanup.
 
 Unimplemented OCI fields are rejected instead of ignored. User and time
 namespaces, namespace joins, complete mount semantics, cgroup resources,
@@ -441,9 +449,12 @@ operations are still release gates.
 - checkpoint and restore;
 - typed IDs, operation IDs, deadlines, generations, and isolation requests.
 
-The durable host currently implements the five core lifecycle mutations around
-an injected `RuntimeDriver`. Methods without enforcement remain explicitly
-unsupported and are not advertised early.
+The durable host implements the five core lifecycle operations around an
+injected `RuntimeDriver` and exposes `wait` only when that exact driver
+implements it. The native Linux driver and protocol-v2 Linux guest executor
+return a stable normal-exit or signal result across repeated waits. Methods
+without enforcement remain explicitly unsupported and are not advertised
+early.
 
 The local IPC and guest-agent protocols are versioned, length-delimited, and
 64 MiB bounded. Every untrusted request is revalidated at the receiving
@@ -453,9 +464,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful core lifecycle, two-container generation and mutation isolation, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container wait and mutation isolation, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated static arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles with exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -580,7 +591,7 @@ cargo clippy \
 
 Platform CI covers:
 
-- the 237-point durable commit matrix and all 12 `RuntimeDriver` call
+- the 237-point durable commit matrix and all 14 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container isolation, and
   three-phase no-delete cleanup without KVM;

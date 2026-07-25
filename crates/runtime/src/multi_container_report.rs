@@ -1,14 +1,14 @@
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
-use a3s_oci_sdk::RuntimeOperation;
+use a3s_oci_sdk::{ExitStatus, RuntimeOperation};
 use serde::{Deserialize, Serialize};
 
 use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v1";
+    "a3s.oci.native-linux-multi-container-smoke.v2";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v1";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v2";
 
 /// Exact multi-container lifecycle and isolation evidence shared by both paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,10 +48,17 @@ pub struct MultiContainerLifecycleEvidence {
     pub b_unchanged_after_a_start: bool,
     /// Whether container B's marker remained absent after A started.
     pub marker_b_absent_after_a_start: bool,
+    /// Whether waiting on running container A left container B independently queryable.
+    pub wait_a_did_not_block_b: bool,
     /// Whether killing container A replayed exactly.
     pub kill_a_replayed: bool,
     /// Whether container A was observed stopped.
     pub a_stopped: bool,
+    /// Exact terminal result returned for container A.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_status_a: Option<ExitStatus>,
+    /// Whether repeated wait for container A returned the same result.
+    pub wait_a_replayed: bool,
     /// Whether container B remained at the same created barrier after A was killed.
     pub b_unchanged_after_a_kill: bool,
     /// Whether container B's marker remained absent after A was killed.
@@ -84,6 +91,11 @@ pub struct MultiContainerLifecycleEvidence {
     pub kill_b_replayed: bool,
     /// Whether container B was observed stopped.
     pub b_stopped: bool,
+    /// Exact terminal result returned for container B.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_status_b: Option<ExitStatus>,
+    /// Whether repeated wait for container B returned the same result.
+    pub wait_b_replayed: bool,
     /// Whether deleting container B replayed exactly.
     pub delete_b_replayed: bool,
     /// Whether container B became unobservable after delete.
@@ -109,8 +121,14 @@ impl MultiContainerLifecycleEvidence {
             && self.marker_a_verified
             && self.b_unchanged_after_a_start
             && self.marker_b_absent_after_a_start
+            && self.wait_a_did_not_block_b
             && self.kill_a_replayed
             && self.a_stopped
+            && self
+                .wait_status_a
+                .as_ref()
+                .is_some_and(|status| status.validate().is_ok())
+            && self.wait_a_replayed
             && self.b_unchanged_after_a_kill
             && self.marker_b_absent_after_a_kill
             && self.delete_a_replayed
@@ -127,6 +145,12 @@ impl MultiContainerLifecycleEvidence {
             && self.marker_b_verified
             && self.kill_b_replayed
             && self.b_stopped
+            && self
+                .wait_status_b
+                .as_ref()
+                .is_some_and(|status| status.validate().is_ok())
+            && self.wait_status_a == self.wait_status_b
+            && self.wait_b_replayed
             && self.delete_b_replayed
             && self.b_missing_after_delete
     }
@@ -203,8 +227,16 @@ impl NativeLinuxMultiContainerSmokeReport {
                     RuntimeOperation::Start,
                     RuntimeOperation::Kill,
                     RuntimeOperation::Delete,
+                    RuntimeOperation::Wait,
                 ]
             && self.lifecycle.is_success()
+            && self.lifecycle.wait_status_a
+                == Some(ExitStatus {
+                    exit_code: None,
+                    signal: Some(9),
+                    oom_killed: false,
+                })
+            && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
             && self.markers_removed
             && self.executor_runtime_clean
             && self.session_root_clean
@@ -278,6 +310,13 @@ impl OciVmMultiContainerSmokeReport {
     pub(crate) fn evidence_succeeded(&self) -> bool {
         self.bundles_loaded
             && self.lifecycle.is_success()
+            && self.lifecycle.wait_status_a
+                == Some(ExitStatus {
+                    exit_code: Some(0),
+                    signal: None,
+                    oom_killed: false,
+                })
+            && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
             && self.markers_removed
             && self.guest_runtime_clean
             && self.bridge.is_success()
@@ -286,6 +325,8 @@ impl OciVmMultiContainerSmokeReport {
 
 #[cfg(test)]
 mod tests {
+    use a3s_oci_sdk::ExitStatus;
+
     use super::MultiContainerLifecycleEvidence;
 
     #[test]
@@ -315,8 +356,11 @@ mod tests {
             marker_a_verified: true,
             b_unchanged_after_a_start: true,
             marker_b_absent_after_a_start: true,
+            wait_a_did_not_block_b: true,
             kill_a_replayed: true,
             a_stopped: true,
+            wait_status_a: Some(ExitStatus::signaled(9, false).expect("exit status")),
+            wait_a_replayed: true,
             b_unchanged_after_a_kill: true,
             marker_b_absent_after_a_kill: true,
             delete_a_replayed: true,
@@ -333,6 +377,8 @@ mod tests {
             marker_b_verified: true,
             kill_b_replayed: true,
             b_stopped: true,
+            wait_status_b: Some(ExitStatus::signaled(9, false).expect("exit status")),
+            wait_b_replayed: true,
             delete_b_replayed: true,
             b_missing_after_delete: true,
         }
