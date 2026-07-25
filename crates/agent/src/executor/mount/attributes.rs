@@ -22,11 +22,11 @@ pub(crate) struct RecursiveMountAttributes {
 }
 
 #[repr(C)]
-struct MountAttr {
-    attr_set: u64,
-    attr_clr: u64,
-    propagation: u64,
-    userns_fd: u64,
+pub(super) struct MountAttr {
+    pub(super) attr_set: u64,
+    pub(super) attr_clr: u64,
+    pub(super) propagation: u64,
+    pub(super) userns_fd: u64,
 }
 
 pub(super) fn record_option(

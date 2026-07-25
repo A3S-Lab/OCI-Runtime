@@ -9,15 +9,17 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 use super::control;
 
 mod join;
+mod mount_idmap;
 mod time;
 mod user;
 
+pub(super) use mount_idmap::{IdmapNamespaceHandles, IdmapPlan};
 pub(super) use user::install_user_mappings;
 
 const MAX_ID_MAPPINGS: usize = 340;
 const NANOSECONDS_PER_SECOND: u32 = 1_000_000_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct IdMapping {
     pub(super) container_id: u32,
     pub(super) host_id: u32,
@@ -375,7 +377,10 @@ fn unshare(flags: libc::c_int, operation: &str) -> Result<()> {
     }
 }
 
-fn collect_mappings(field: &str, mappings: Option<&[LinuxIdMapping]>) -> Result<Vec<IdMapping>> {
+pub(super) fn collect_mappings(
+    field: &str,
+    mappings: Option<&[LinuxIdMapping]>,
+) -> Result<Vec<IdMapping>> {
     let mappings = mappings.unwrap_or_default();
     if mappings.len() > MAX_ID_MAPPINGS {
         return Err(Error::new(
@@ -387,7 +392,7 @@ fn collect_mappings(field: &str, mappings: Option<&[LinuxIdMapping]>) -> Result<
         )
         .for_operation("plan-guest-init"));
     }
-    let mappings = mappings
+    let mut mappings = mappings
         .iter()
         .enumerate()
         .map(|(index, mapping)| {
@@ -403,7 +408,38 @@ fn collect_mappings(field: &str, mappings: Option<&[LinuxIdMapping]>) -> Result<
             Ok(IdMapping::from(mapping))
         })
         .collect::<Result<Vec<_>>>()?;
+    validate_non_overlapping_mappings(field, &mappings)?;
+    mappings.sort_unstable();
     Ok(mappings)
+}
+
+fn validate_non_overlapping_mappings(field: &str, mappings: &[IdMapping]) -> Result<()> {
+    for (index, mapping) in mappings.iter().enumerate() {
+        for (prior_index, prior) in mappings[..index].iter().enumerate() {
+            if mapping_ranges_overlap(
+                mapping.container_id,
+                mapping.size,
+                prior.container_id,
+                prior.size,
+            ) {
+                return Err(invalid(format!(
+                    "{field}[{index}].containerID overlaps {field}[{prior_index}]"
+                )));
+            }
+            if mapping_ranges_overlap(mapping.host_id, mapping.size, prior.host_id, prior.size) {
+                return Err(invalid(format!(
+                    "{field}[{index}].hostID overlaps {field}[{prior_index}]"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn mapping_ranges_overlap(left: u32, left_size: u32, right: u32, right_size: u32) -> bool {
+    let left = u64::from(left)..u64::from(left) + u64::from(left_size);
+    let right = u64::from(right)..u64::from(right) + u64::from(right_size);
+    left.start < right.end && right.start < left.end
 }
 
 fn ensure_id_mapped(field: &str, id: u32, mappings: &[IdMapping]) -> Result<()> {

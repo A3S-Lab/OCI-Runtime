@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
 use super::control::{write_ready, write_rejection, START_BYTE};
-use super::mount;
-use super::namespace;
+use super::mount::{self, IdmappedMountSources};
+use super::namespace::{self, IdmapNamespaceHandles};
 use super::pid::{self, ForkRole};
 use super::plan::InitPlan;
 use super::rootfs;
@@ -63,13 +63,34 @@ fn run_container_init(
             Ok(prepared) => prepared,
             Err(error) => return reject_before_ready(&mut control, error),
         };
+    let idmap_namespaces = match IdmapNamespaceHandles::prepare(
+        plan.mounts.iter().filter_map(|mount| mount.idmap.as_ref()),
+    ) {
+        Ok(namespaces) => namespaces,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
+    let mut idmapped_sources =
+        match IdmappedMountSources::prepare(&plan.mounts, &canonical_bundle, &idmap_namespaces) {
+            Ok(sources) => sources,
+            Err(error) => return reject_before_ready(&mut control, error),
+        };
+    drop(idmap_namespaces);
     if let Err(error) = namespace::enter_new_namespaces(&plan.namespaces, &mut control) {
         return reject_before_ready(&mut control, error);
     }
     if plan.namespaces.requires_child_process() {
-        return run_namespaced_init(&plan, &canonical_bundle, &rootfs, &rootfs_file, control);
+        return run_namespaced_init(
+            &plan,
+            &canonical_bundle,
+            &rootfs,
+            &rootfs_file,
+            idmapped_sources,
+            control,
+        );
     }
-    if let Err(error) = prepare_create_environment(&plan, &canonical_bundle, &rootfs) {
+    if let Err(error) =
+        prepare_create_environment(&plan, &canonical_bundle, &rootfs, &mut idmapped_sources)
+    {
         return reject_before_ready(&mut control, error);
     }
     // SAFETY: `getpid` has no preconditions and this wrapper has not entered a
@@ -102,16 +123,20 @@ fn run_namespaced_init(
     bundle_directory: &Path,
     rootfs: &Path,
     rootfs_file: &File,
+    mut idmapped_sources: IdmappedMountSources,
     mut control: UnixStream,
 ) -> Result<()> {
     match pid::fork_namespaced_init() {
         Ok(ForkRole::Supervisor { child_pid }) => {
             drop(control);
+            drop(idmapped_sources);
             let outcome = pid::wait_for_child(child_pid)?;
             pid::mirror_child_outcome(outcome)
         }
         Ok(ForkRole::Init { runtime_pid }) => {
-            if let Err(error) = prepare_create_environment(plan, bundle_directory, rootfs) {
+            if let Err(error) =
+                prepare_create_environment(plan, bundle_directory, rootfs, &mut idmapped_sources)
+            {
                 return reject_before_ready(&mut control, error);
             }
             write_ready(&mut control, runtime_pid)?;
@@ -200,6 +225,7 @@ fn prepare_create_environment(
     plan: &InitPlan,
     bundle_directory: &Path,
     rootfs: &Path,
+    idmapped_sources: &mut IdmappedMountSources,
 ) -> Result<()> {
     if let Some(hostname) = &plan.hostname {
         if !plan.namespaces.has_uts() {
@@ -232,7 +258,7 @@ fn prepare_create_environment(
     verify_uts_names(plan)?;
     if plan.namespaces.new_mount() {
         rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
-        mount::apply_all(&plan.mounts, bundle_directory, rootfs)?;
+        mount::apply_all(&plan.mounts, bundle_directory, rootfs, idmapped_sources)?;
         rootfs::pivot_root(rootfs)?;
         rootfs::finalize(
             plan.rootfs_propagation,

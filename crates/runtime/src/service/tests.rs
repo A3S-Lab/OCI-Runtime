@@ -5,15 +5,15 @@ use std::sync::{Arc, Mutex};
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
 };
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxNamespaceType};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error,
     ErrorCode, ExitStatus, Generation, IsolationRequest, KillRequest, ListRequest, OciBundle,
-    OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, RuntimeOperation, Signal,
-    StartRequest, StateRequest, TrustDomainId, WaitRequest,
+    OciRuntimeService, OciSchemaValidator, OperationContext, OperationId, ProcessIo, Result,
+    RuntimeOperation, Signal, StartRequest, StateRequest, TrustDomainId, WaitRequest,
 };
 
-use super::HostRuntimeService;
+use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS};
 use crate::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
     DriverWaitRequest, RuntimeDriver,
@@ -317,6 +317,49 @@ async fn reports_only_operations_that_are_currently_implemented() {
     assert_eq!(info.operations, vec![RuntimeOperation::Features]);
     assert_eq!(info.oci.oci_version_min(), "1.0.0");
     assert_eq!(info.oci.oci_version_max(), "1.3.0");
+    assert_eq!(info.oci.hooks().as_deref(), Some([].as_slice()));
+    assert_eq!(
+        info.oci.mount_options().as_deref(),
+        Some(
+            RECOGNIZED_LINUX_MOUNT_OPTIONS
+                .iter()
+                .map(|option| (*option).to_string())
+                .collect::<Vec<_>>()
+                .as_slice()
+        )
+    );
+    let linux = info.oci.linux().as_ref().expect("Linux feature report");
+    assert_eq!(
+        linux.namespaces().as_deref(),
+        Some(
+            [
+                LinuxNamespaceType::Cgroup,
+                LinuxNamespaceType::Ipc,
+                LinuxNamespaceType::Mount,
+                LinuxNamespaceType::Network,
+                LinuxNamespaceType::Pid,
+                LinuxNamespaceType::Time,
+                LinuxNamespaceType::User,
+                LinuxNamespaceType::Uts,
+            ]
+            .as_slice()
+        )
+    );
+    assert_eq!(
+        *linux
+            .mount_extensions()
+            .as_ref()
+            .expect("mount extensions")
+            .idmap()
+            .as_ref()
+            .expect("ID-map feature")
+            .enabled(),
+        Some(true)
+    );
+    OciSchemaValidator::new()
+        .expect("compile pinned schemas")
+        .validate_features(&info.oci)
+        .expect("runtime feature report must match the pinned OCI schema");
 }
 
 #[tokio::test]
