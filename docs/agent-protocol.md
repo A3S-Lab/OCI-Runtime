@@ -151,15 +151,16 @@ the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
 exact operation replay, rejection of cross-container operation-ID reuse, a
 bounded wait on A that does not block B state, exact repeated terminal results
-for both containers, and independent pidfd-backed cleanup. Its schema-v4
+for both containers, and independent pidfd-backed cleanup. Its schema-v5
 namespace phase retains a prepared donor, rejects a wrong-type namespace
 descriptor before state, joins all eight Linux namespace types across two
 workloads, proves retained-rootfs execution after the mount join, and removes
 all state without changing the donor's created record. A third workload proves
 missing mount-target creation at the create barrier, shared rootfs propagation,
-read-only and masked path enforcement, read-only rootfs behavior, exact normal
-exit, state removal, and fixture cleanup. Native Linux runs the equivalent
-sequence through the durable SDK service around the same executor.
+read-only and masked path enforcement, recursive VFS attributes across a nested
+submount, read-only rootfs behavior, exact normal exit, state removal, and
+fixture cleanup. Native Linux runs the equivalent sequence through the durable
+SDK service around the same executor.
 
 The `oci-vm-fault-cleanup` companion stops after a successful create, start, or
 kill request and never sends delete. Session EOF must still make the agent call

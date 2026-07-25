@@ -351,14 +351,15 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$rootfs_dir/oci-multi-container.log"
 ```
 
-`a3s.oci.oci-vm-multi-container-smoke.v4` requires that starting, killing,
+`a3s.oci.oci-vm-multi-container-smoke.v5` requires that starting, killing,
 waiting for, and deleting A never changes or blocks B; both waits return and
 replay the exact normal exit status; recreating A advances generation 1 to 2;
 stale and cross-container replay requests fail; B then completes
 independently; existing namespace descriptors are type-checked and joined
 across the shared executor; a third workload proves missing mount-target
 creation, shared rootfs propagation, a read-only path, an empty masked file,
-and a read-only rootfs before exact cleanup; and VM shutdown restores
+recursive read-only/noexec/nosymfollow attributes across a nested submount, and
+a read-only rootfs before exact cleanup; and VM shutdown restores
 guest-runtime, endpoint, descriptor, shim, and worker inventories.
 
 Fault cleanup reuses the same signed shim and bundle but stops after each
@@ -443,7 +444,8 @@ The current executor implements a reviewed bootstrap vertical slice:
 - isolated mount propagation and `pivot_root`, including all four OCI
   `rootfsPropagation` modes;
 - ordered OCI mounts with missing directory/file target creation, bind/rbind,
-  common VFS options, and symlink-escape rejection;
+  common VFS options, recursive `mount_setattr` attributes, and symlink-escape
+  rejection;
 - OCI masked paths, read-only paths, and a read-only rootfs;
 - PID- and namespace-authenticated create/start barrier;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
@@ -456,9 +458,8 @@ mappings, coverage for container ID 0 and every configured process ID, and an
 credentials before rootfs mutation. Mount entries and rootfs mutation remain
 unsupported when joining or inheriting a mount namespace. Other unimplemented
 OCI fields are rejected instead of ignored. Rootless mapping policy, idmapped
-and recursive-attribute mounts, cgroup resources, capabilities, hooks,
-seccomp, full I/O, recovery, and the remaining SDK operations are still
-release gates.
+mounts, cgroup resources, capabilities, hooks, seccomp, full I/O, recovery,
+and the remaining SDK operations are still release gates.
 
 ### SDK and protocols
 
@@ -485,9 +486,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container isolation, type-checked existing-namespace joins, rootfs/mount enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container isolation, type-checked existing-namespace joins, rootfs and recursive-mount enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, rootfs/mount enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, rootfs and recursive-mount enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when

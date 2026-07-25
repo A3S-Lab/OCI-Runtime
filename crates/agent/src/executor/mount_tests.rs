@@ -98,6 +98,79 @@ fn parses_bind_remount_and_propagation_options_without_silent_loss() {
 }
 
 #[test]
+fn parses_recursive_mount_attributes_in_listed_order() {
+    let config = MOUNT_CONFIG.replace(
+        r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+        r#""options": [
+        "rro",
+        "rnosuid",
+        "rnodev",
+        "rnoexec",
+        "rnoatime",
+        "rnodiratime",
+        "rnosymfollow",
+        "rrw",
+        "rsuid"
+      ]"#,
+    );
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("supported recursive mount attributes");
+    let attributes = plan.mounts[1]
+        .recursive_attributes
+        .expect("recursive attributes");
+
+    assert_eq!(
+        attributes.attr_set,
+        super::mount::MOUNT_ATTR_NODEV
+            | super::mount::MOUNT_ATTR_NOEXEC
+            | super::mount::MOUNT_ATTR_NOATIME
+            | super::mount::MOUNT_ATTR_NODIRATIME
+            | super::mount::MOUNT_ATTR_NOSYMFOLLOW
+    );
+    assert_eq!(
+        attributes.attr_clr,
+        super::mount::MOUNT_ATTR_RDONLY
+            | super::mount::MOUNT_ATTR_NOSUID
+            | super::mount::MOUNT_ATTR_ATIME
+    );
+}
+
+#[test]
+fn recursive_mount_attribute_inverse_options_clear_prior_values() {
+    let config = MOUNT_CONFIG.replace(
+        r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+        r#""options": [
+        "rro", "rrw",
+        "rnosuid", "rsuid",
+        "rnodev", "rdev",
+        "rnoexec", "rexec",
+        "rnoatime", "ratime",
+        "rnodiratime", "rdiratime",
+        "rstrictatime", "rnostrictatime",
+        "rnosymfollow", "rsymfollow",
+        "rrelatime"
+      ]"#,
+    );
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("supported recursive inverse attributes");
+    let attributes = plan.mounts[1]
+        .recursive_attributes
+        .expect("recursive attributes");
+
+    assert_eq!(attributes.attr_set, 0);
+    assert_eq!(
+        attributes.attr_clr,
+        super::mount::MOUNT_ATTR_RDONLY
+            | super::mount::MOUNT_ATTR_NOSUID
+            | super::mount::MOUNT_ATTR_NODEV
+            | super::mount::MOUNT_ATTR_NOEXEC
+            | super::mount::MOUNT_ATTR_ATIME
+            | super::mount::MOUNT_ATTR_NODIRATIME
+            | super::mount::MOUNT_ATTR_NOSYMFOLLOW
+    );
+}
+
+#[test]
 fn rejects_mounts_without_isolating_the_runtime_mount_namespace() {
     let config = MOUNT_CONFIG.replace(
         r#",
@@ -113,7 +186,6 @@ fn rejects_mounts_without_isolating_the_runtime_mount_namespace() {
 #[test]
 fn rejects_unimplemented_or_ambiguous_mount_semantics() {
     for (replacement, expected) in [
-        (r#""options": ["nosuid", "nodev", "rro"]"#, "mount_setattr"),
         (r#""options": ["private", "slave"]"#, "multiple propagation"),
         (r#""options": ["mode=1777,size=16m"]"#, "comma separators"),
     ] {

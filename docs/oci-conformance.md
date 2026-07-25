@@ -74,7 +74,7 @@ does not make it a native Windows container.
 | Area | Represented | Validated | Enforced | Conformant |
 | --- | --- | --- | --- | --- |
 | Complete `Spec` object | Yes | Official schema, version range, unknown fields, initial semantics | No | No |
-| Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | Bootstrap slice applies ordered mounts with missing target creation, four rootfs propagation modes, masked/read-only paths, read-only rootfs, hostname/domainname, credentials, and process launch; idmapped and recursive-attribute mounts remain rejected | No |
+| Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | Bootstrap slice applies ordered mounts with missing target creation, four rootfs propagation modes, recursive VFS attributes, masked/read-only paths, read-only rootfs, hostname/domainname, credentials, and process launch; idmapped mounts remain rejected | No |
 | POSIX hooks | Yes | Initial path and environment rules | No | No |
 | Linux namespaces and ID mappings | Yes | Initial relationship and range rules | Bootstrap slice creates or type-checks and joins UTS, mount, IPC, network, cgroup, PID, user, and time namespaces, installs verified rootful UID/GID maps, switches to mapped namespace-root credentials before rootfs mutation, and preserves retained-rootfs execution after mount joins; rootless mapping policy and broader join hardening remain incomplete | No |
 | Linux devices, seccomp, capabilities, LSM, sysctl | Yes | Initial path, seccomp, and namespaced-sysctl rules; capability/LSM rules pending | No | No |

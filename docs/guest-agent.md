@@ -102,13 +102,16 @@ The current mount slice:
   bounded filesystem-specific option data;
 - remounts bind attributes explicitly and fails the complete create operation
   on any syscall error;
+- applies recursive read-only, suid, device, execute, access-time, directory
+  access-time, and symbolic-link-follow policies with `mount_setattr` against
+  a descriptor-pinned destination;
 - rejects target creation through an escaping symlink before mutation;
 - supports private, shared, slave, and unbindable `rootfsPropagation`, masked
   files and directories, read-only paths, and a read-only rootfs when the
   container creates its own mount namespace;
 - rejects root replacement, missing bind sources, multiple mount-entry
-  propagation modes, comma-packed options, idmapped mounts, recursive mount
-  attributes, `tmpcopyup`, and mount moves instead of silently ignoring them.
+  propagation modes, comma-packed options, idmapped mounts, `tmpcopyup`, and
+  mount moves instead of silently ignoring them.
 
 Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
@@ -154,10 +157,10 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
-namespaces, idmapped and recursive-attribute mounts, rootless user-mapping
-policy, cgroup resources, capabilities, seccomp, hooks, terminals, non-null
-I/O, process-group signals, and every other unimplemented OCI property. These
-are release blockers, not silently accepted compatibility gaps.
+namespaces, idmapped mounts, rootless user-mapping policy, cgroup resources,
+capabilities, seccomp, hooks, terminals, non-null I/O, process-group signals,
+and every other unimplemented OCI property. These are release blockers, not
+silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -182,15 +185,16 @@ wait, delete, recreation, stale generation, and replay conflicts do not alter
 or block B, then completes B independently. The macOS HVF gate sends both init
 signals through distinct retained pidfds and retains both exact repeated exit
 statuses and per-container markers together with guest-runtime and
-host-process cleanup evidence. Schema v4 then retains a prepared donor and
+host-process cleanup evidence. Schema v5 then retains a prepared donor and
 qualifies wrong-type rejection plus UTS, mount, IPC, network, cgroup, PID,
 user, and time joins. Both joiner workloads must cross `exec`, remain running
 for a bounded observation window, stop cleanly, and leave the donor unchanged.
 A separate workload must create every missing directory and file mount
 destination before start, then prove shared rootfs propagation, a distinct
 read-only mount, empty read-only masked file and directory replacements,
-read-only rootfs enforcement, normal exit, state removal, and removal of every
-host-side fixture artifact.
+recursive attributes on a bind mount and nested submount, read-only rootfs
+enforcement, normal exit, state removal, and removal of every host-side fixture
+artifact.
 
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
 records that delete was not attempted, and requires guest executor shutdown to
