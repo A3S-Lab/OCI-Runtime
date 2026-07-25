@@ -90,7 +90,8 @@ Completed:
   profile, with a PID-authenticated abstract Unix create/start barrier,
   create-time UTS, mount, IPC, network, cgroup, PID, user, and time namespaces,
   parent-installed UID/GID maps, verified time offsets, hostname and domainname,
-  recursively private mount propagation, ordered existing-target OCI mounts,
+  isolated rootfs propagation, ordered OCI mounts with missing target
+  creation, masked and read-only paths, read-only rootfs enforcement,
   `pivot_root`, authenticated host-visible PID reporting, exact-generation
   state, bounded typed init rejection reporting, session idempotency, retained
   pidfd signaling, and cleanup;
@@ -289,9 +290,9 @@ then may HVF become `experimental`.
 - [x] Create a new mount namespace, make the inherited mount tree recursively
   private, self-bind the rootfs, and complete `pivot_root` before the created
   barrier.
-- [x] Apply existing-target OCI mount entries in listed order, including
-  bind/rbind, common VFS flags, propagation modes, and filesystem-specific
-  data.
+- [x] Apply OCI mount entries in listed order, including safe missing
+  directory/file target creation, bind/rbind, common VFS flags, propagation
+  modes, and filesystem-specific data.
 - [x] Create new IPC, network, and cgroup namespaces atomically before the
   created barrier.
 - [x] Create a new PID namespace, run the container init as namespace PID 1,
@@ -307,16 +308,19 @@ then may HVF become `experimental`.
   wait does not block another container's state request.
 - [x] Create new rootful user and time namespaces, install and read back exact
   UID/GID mappings through the authenticated parent, apply and verify
-  monotonic/boottime offsets before the first child, and prove the path through
-  native Linux and the macOS utility VM.
+  monotonic/boottime offsets, switch to mapped namespace-root credentials
+  before rootfs mutation, and prove the path through native Linux and the
+  macOS utility VM.
 - [x] Open and type-check all existing namespace descriptors before mutation,
   join non-user namespaces around the user-namespace capability transition,
   preserve PID/time next-child semantics, and prove UTS, mount, IPC, network,
   cgroup, PID, user, and time joins through native Linux and the macOS
   utility-VM path.
-- [ ] Mount-target creation, rootfs propagation overrides, idmapped and
-  recursive-attribute mounts, masked paths, read-only paths, and read-only
-  rootfs.
+- [x] Apply private, shared, slave, and unbindable rootfs propagation,
+  masked paths, read-only paths, and read-only rootfs enforcement; prove the
+  same create/start barrier and exact cleanup through native Linux and the
+  macOS utility VM.
+- [ ] ID-mapped and recursive-attribute mounts.
 - [ ] Rootless ID-mapping policy, remaining credentials, capabilities, rlimits,
   scheduler, I/O priority, affinity, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified

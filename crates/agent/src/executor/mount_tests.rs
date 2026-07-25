@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo};
+use tempfile::tempdir;
 
 use super::plan::InitPlan;
 
@@ -32,13 +33,16 @@ const MOUNT_CONFIG: &str = r#"{
 }"#;
 
 fn bundle(config: &str) -> OciBundle {
-    OciBundle::from_json(
+    bundle_at(
         std::env::current_dir()
             .expect("current directory")
             .join("mount-test-bundle"),
         config,
     )
-    .expect("schema-valid mount test bundle")
+}
+
+fn bundle_at(directory: PathBuf, config: &str) -> OciBundle {
+    OciBundle::from_json(directory, config).expect("schema-valid mount test bundle")
 }
 
 fn null_io() -> ProcessIo {
@@ -151,4 +155,82 @@ fn rejects_bind_without_source_and_additional_root_replacement() {
         InitPlan::from_bundle(&bundle(&root), &null_io()).expect_err("additional root mount");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("replacing the container root"));
+}
+
+#[test]
+fn creates_missing_directory_and_file_mount_targets_inside_the_rootfs() {
+    let temporary = tempdir().expect("temporary mount bundle");
+    let bundle_directory = temporary.path();
+    let rootfs = bundle_directory.join("rootfs");
+    std::fs::create_dir(&rootfs).expect("rootfs");
+
+    let directory_source = bundle_directory.join("source-directory");
+    std::fs::create_dir(&directory_source).expect("bind directory source");
+    let file_source = bundle_directory.join("source-file");
+    std::fs::write(&file_source, b"source").expect("bind file source");
+
+    let config = MOUNT_CONFIG.replace(
+        r#"{
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc",
+      "options": ["nosuid", "noexec", "nodev"]
+    },
+    {
+      "destination": "tmp",
+      "type": "tmpfs",
+      "source": "tmpfs",
+      "options": ["nosuid", "nodev", "mode=1777", "size=16m"]
+    }"#,
+        r#"{
+      "destination": "/created/filesystem",
+      "type": "tmpfs",
+      "source": "tmpfs"
+    },
+    {
+      "destination": "/created/directory-target",
+      "type": "none",
+      "source": "source-directory",
+      "options": ["bind"]
+    },
+    {
+      "destination": "/created/file-target",
+      "type": "none",
+      "source": "source-file",
+      "options": ["bind"]
+    }"#,
+    );
+    let bundle = bundle_at(bundle_directory.to_path_buf(), &config);
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("mount target creation plan");
+
+    for mount in &plan.mounts {
+        mount
+            .prepare_target(bundle_directory, &rootfs)
+            .expect("create the requested mount target");
+    }
+
+    assert!(rootfs.join("created/filesystem").is_dir());
+    assert!(rootfs.join("created/directory-target").is_dir());
+    assert!(rootfs.join("created/file-target").is_file());
+}
+
+#[test]
+fn refuses_to_create_a_mount_target_through_an_escaping_symlink() {
+    let temporary = tempdir().expect("temporary mount bundle");
+    let bundle_directory = temporary.path();
+    let rootfs = bundle_directory.join("rootfs");
+    let outside = bundle_directory.join("outside");
+    std::fs::create_dir(&rootfs).expect("rootfs");
+    std::fs::create_dir(&outside).expect("outside directory");
+    std::os::unix::fs::symlink(&outside, rootfs.join("escape")).expect("escaping symlink");
+
+    let config = MOUNT_CONFIG.replace("/proc", "/escape/created");
+    let bundle = bundle_at(bundle_directory.to_path_buf(), &config);
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("mount target creation plan");
+    let error = plan.mounts[0]
+        .prepare_target(bundle_directory, &rootfs)
+        .expect_err("escaping target must fail");
+
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert!(!outside.join("created").exists());
 }

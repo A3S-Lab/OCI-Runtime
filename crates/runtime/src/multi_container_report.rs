@@ -6,9 +6,63 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v3";
+    "a3s.oci.native-linux-multi-container-smoke.v4";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v3";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v4";
+
+/// Rootfs and mount enforcement evidence shared by native and utility-VM paths.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootfsMountEvidence {
+    /// Whether create returned only after rootfs and mount setup completed.
+    pub created_before_start: bool,
+    /// Whether every missing directory and file destination existed before start.
+    pub mount_targets_created_before_start: bool,
+    /// Whether no workload evidence existed before the start barrier.
+    pub evidence_absent_before_start: bool,
+    /// Whether start released the prepared enforcement workload.
+    pub start_released: bool,
+    /// Whether the workload observed the root mount in a new shared peer group.
+    pub rootfs_propagation_shared: bool,
+    /// Whether the configured path had a distinct read-only mount.
+    pub readonly_path_enforced: bool,
+    /// Whether the configured file was backed by a private empty source.
+    pub masked_path_enforced: bool,
+    /// Whether the root mount was read-only and rejected a write.
+    pub readonly_rootfs_enforced: bool,
+    /// Whether the workload emitted the exact ordered enforcement evidence.
+    pub exact_evidence: bool,
+    /// Exact terminal result returned by the enforcement workload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_status: Option<ExitStatus>,
+    /// Whether deletion made the enforcement container unobservable.
+    pub state_removed: bool,
+    /// Whether host cleanup removed the temporary source and target paths.
+    pub artifacts_removed: bool,
+}
+
+impl RootfsMountEvidence {
+    /// Return whether every rootfs and mount invariant was proven.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.created_before_start
+            && self.mount_targets_created_before_start
+            && self.evidence_absent_before_start
+            && self.start_released
+            && self.rootfs_propagation_shared
+            && self.readonly_path_enforced
+            && self.masked_path_enforced
+            && self.readonly_rootfs_enforced
+            && self.exact_evidence
+            && self.wait_status
+                == Some(ExitStatus {
+                    exit_code: Some(0),
+                    signal: None,
+                    oom_killed: false,
+                })
+            && self.state_removed
+            && self.artifacts_removed
+    }
+}
 
 /// Existing-namespace join evidence shared by native and utility-VM paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +271,8 @@ pub struct NativeLinuxMultiContainerSmokeReport {
     pub lifecycle: MultiContainerLifecycleEvidence,
     /// Existing-namespace type validation, joins, and lifecycle evidence.
     pub namespace_join: NamespaceJoinEvidence,
+    /// Mount-target, propagation, masking, and read-only enforcement evidence.
+    pub rootfs_mount: RootfsMountEvidence,
     /// Whether both workload markers were removed.
     pub markers_removed: bool,
     /// Whether executor shutdown removed its private transient root.
@@ -239,6 +295,7 @@ impl NativeLinuxMultiContainerSmokeReport {
             service_operations: Vec::new(),
             lifecycle: MultiContainerLifecycleEvidence::default(),
             namespace_join: NamespaceJoinEvidence::default(),
+            rootfs_mount: RootfsMountEvidence::default(),
             markers_removed: false,
             executor_runtime_clean: false,
             session_root_clean: false,
@@ -283,6 +340,7 @@ impl NativeLinuxMultiContainerSmokeReport {
                 })
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
             && self.namespace_join.is_success()
+            && self.rootfs_mount.is_success()
             && self.markers_removed
             && self.executor_runtime_clean
             && self.session_root_clean
@@ -304,6 +362,8 @@ pub struct OciVmMultiContainerSmokeReport {
     pub lifecycle: MultiContainerLifecycleEvidence,
     /// Existing-namespace type validation, joins, and lifecycle evidence.
     pub namespace_join: NamespaceJoinEvidence,
+    /// Mount-target, propagation, masking, and read-only enforcement evidence.
+    pub rootfs_mount: RootfsMountEvidence,
     /// Whether both workload markers were removed.
     pub markers_removed: bool,
     /// Whether VM shutdown left no new guest-agent runtime directory.
@@ -324,6 +384,7 @@ impl OciVmMultiContainerSmokeReport {
             bundles_loaded: false,
             lifecycle: MultiContainerLifecycleEvidence::default(),
             namespace_join: NamespaceJoinEvidence::default(),
+            rootfs_mount: RootfsMountEvidence::default(),
             markers_removed: false,
             guest_runtime_clean: false,
             bridge: AgentVmSmokeReport::initial(platform),
@@ -367,6 +428,7 @@ impl OciVmMultiContainerSmokeReport {
                 })
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
             && self.namespace_join.is_success()
+            && self.rootfs_mount.is_success()
             && self.markers_removed
             && self.guest_runtime_clean
             && self.bridge.is_success()
@@ -377,7 +439,7 @@ impl OciVmMultiContainerSmokeReport {
 mod tests {
     use a3s_oci_sdk::ExitStatus;
 
-    use super::{MultiContainerLifecycleEvidence, NamespaceJoinEvidence};
+    use super::{MultiContainerLifecycleEvidence, NamespaceJoinEvidence, RootfsMountEvidence};
 
     #[test]
     fn multi_container_success_requires_every_isolation_invariant() {
@@ -405,6 +467,29 @@ mod tests {
 
         let mut incomplete = complete;
         incomplete.wrong_type_rejected_before_state = false;
+        assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn rootfs_mount_success_requires_enforcement_and_cleanup_evidence() {
+        let complete = RootfsMountEvidence {
+            created_before_start: true,
+            mount_targets_created_before_start: true,
+            evidence_absent_before_start: true,
+            start_released: true,
+            rootfs_propagation_shared: true,
+            readonly_path_enforced: true,
+            masked_path_enforced: true,
+            readonly_rootfs_enforced: true,
+            exact_evidence: true,
+            wait_status: Some(ExitStatus::exited(0).expect("zero exit")),
+            state_removed: true,
+            artifacts_removed: true,
+        };
+        assert!(complete.is_success());
+
+        let mut incomplete = complete;
+        incomplete.readonly_rootfs_enforced = false;
         assert!(!incomplete.is_success());
     }
 

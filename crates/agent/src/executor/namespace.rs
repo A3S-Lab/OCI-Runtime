@@ -126,6 +126,8 @@ impl NamespacePlan {
                     "the bootstrap executor requires both UID and GID mappings for a new user namespace",
                 ));
             }
+            ensure_id_mapped("container root UID", 0, &plan.uid_mappings)?;
+            ensure_id_mapped("container root GID", 0, &plan.gid_mappings)?;
             ensure_id_mapped("process.user.uid", process_uid, &plan.uid_mappings)?;
             ensure_id_mapped("process.user.gid", process_gid, &plan.gid_mappings)?;
             for (index, gid) in additional_gids.iter().copied().enumerate() {
@@ -208,6 +210,10 @@ impl NamespacePlan {
 
     pub(super) const fn has_time(&self) -> bool {
         self.time.is_configured()
+    }
+
+    pub(super) const fn has_user(&self) -> bool {
+        self.user.is_configured()
     }
 
     pub(super) fn joined_uts(&self) -> Option<&Path> {
@@ -299,7 +305,50 @@ pub(super) fn enter_new_namespaces(plan: &NamespacePlan, control: &mut UnixStrea
     if plan.new_time() {
         time::apply_offsets(plan)?;
     }
+    if plan.has_user() {
+        // Switching mapped credentials resets Linux dumpability. Keep the
+        // original credentials until after `/proc/self/timens_offsets` has
+        // been opened, written, and read back, then become namespace root
+        // before any rootfs or mount mutation.
+        become_user_namespace_root(if plan.new_user() { "new" } else { "joined" })?;
+    }
     Ok(())
+}
+
+fn become_user_namespace_root(kind: &str) -> Result<()> {
+    // SAFETY: the dedicated init wrapper is single-threaded. A successful new
+    // or joined user-namespace transition grants the capabilities required to
+    // clear supplementary groups and select mapped namespace-root IDs.
+    unsafe {
+        if libc::setgroups(0, std::ptr::null()) != 0 {
+            return Err(namespace_credential_error(
+                format!("clear supplementary groups in the {kind} user namespace"),
+                io::Error::last_os_error(),
+            ));
+        }
+        if libc::setresgid(0, 0, 0) != 0 {
+            return Err(namespace_credential_error(
+                format!("become root GID in the {kind} user namespace"),
+                io::Error::last_os_error(),
+            ));
+        }
+        if libc::setresuid(0, 0, 0) != 0 {
+            return Err(namespace_credential_error(
+                format!("become root UID in the {kind} user namespace"),
+                io::Error::last_os_error(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn namespace_credential_error(operation: String, error: io::Error) -> Error {
+    let code = if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EPERM)) {
+        ErrorCode::PermissionDenied
+    } else {
+        ErrorCode::FailedPrecondition
+    };
+    namespace_error(code, format!("failed to {operation}: {error}"))
 }
 
 fn validate_join_path(index: usize, path: &Path) -> Result<PathBuf> {

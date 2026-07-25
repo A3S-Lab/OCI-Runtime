@@ -245,9 +245,11 @@ fn accepts_the_last_uint32_id_in_user_namespace_mappings() {
     config["linux"] = serde_json::json!({
         "namespaces": [{"type": "user"}],
         "uidMappings": [
+            {"containerID": 0, "hostID": 0, "size": 1},
             {"containerID": u32::MAX, "hostID": u32::MAX, "size": 1}
         ],
         "gidMappings": [
+            {"containerID": 0, "hostID": 0, "size": 1},
             {"containerID": u32::MAX, "hostID": u32::MAX, "size": 1}
         ]
     });
@@ -257,8 +259,8 @@ fn accepts_the_last_uint32_id_in_user_namespace_mappings() {
         .expect("the final uint32 ID is a one-element valid range");
     assert!(plan.namespaces.new_user());
     assert!(!plan.namespaces.requires_child_process());
-    assert_eq!(plan.namespaces.uid_mappings()[0].container_id, u32::MAX);
-    assert_eq!(plan.namespaces.uid_mappings()[0].host_id, u32::MAX);
+    assert_eq!(plan.namespaces.uid_mappings()[1].container_id, u32::MAX);
+    assert_eq!(plan.namespaces.uid_mappings()[1].host_id, u32::MAX);
 }
 
 #[test]
@@ -277,6 +279,45 @@ fn rejects_incomplete_or_unusable_user_namespace_mappings() {
         .expect_err("executor requires both mapping classes");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("both UID and GID mappings"));
+
+    let mut unmapped_root: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    unmapped_root["process"]["user"]["uid"] = serde_json::json!(7);
+    unmapped_root["process"]["user"]["gid"] = serde_json::json!(7);
+    unmapped_root["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": [
+            {"containerID": 7, "hostID": 1000, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": 7, "hostID": 1000, "size": 1}
+        ]
+    });
+    let unmapped_root =
+        serde_json::to_string(&unmapped_root).expect("encode rootless mapping configuration");
+    let error = InitPlan::from_bundle(&bundle(&unmapped_root), &null_io())
+        .expect_err("rootful executor requires container root mappings");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("container root UID value 0"));
+
+    let mut unmapped_root_gid: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    unmapped_root_gid["process"]["user"]["gid"] = serde_json::json!(7);
+    unmapped_root_gid["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": 7, "hostID": 1000, "size": 1}
+        ]
+    });
+    let unmapped_root_gid = serde_json::to_string(&unmapped_root_gid)
+        .expect("encode rootless GID mapping configuration");
+    let error = InitPlan::from_bundle(&bundle(&unmapped_root_gid), &null_io())
+        .expect_err("rootful executor requires a container root GID mapping");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("container root GID value 0"));
 
     let mut unmapped_uid: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");

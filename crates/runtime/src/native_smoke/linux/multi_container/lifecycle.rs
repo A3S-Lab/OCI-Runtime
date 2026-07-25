@@ -347,6 +347,7 @@ pub(super) async fn best_effort_delete(client: &RuntimeClient, nonce: &str) {
         "namespace-wrong-type",
         "namespace-non-mount",
         "namespace-mount",
+        "rootfs-enforcement",
     ] {
         let (Ok(id), Ok(context)) = (
             container_id(nonce, label),

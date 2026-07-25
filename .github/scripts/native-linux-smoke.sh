@@ -189,7 +189,7 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v3"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v4"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -243,6 +243,19 @@ run_multi_container_smoke() {
      and .namespace_join.retained_rootfs_verified
      and .namespace_join.donor_unchanged_after_joins
      and .namespace_join.all_state_removed
+     and .rootfs_mount.created_before_start
+     and .rootfs_mount.mount_targets_created_before_start
+     and .rootfs_mount.evidence_absent_before_start
+     and .rootfs_mount.start_released
+     and .rootfs_mount.rootfs_propagation_shared
+     and .rootfs_mount.readonly_path_enforced
+     and .rootfs_mount.masked_path_enforced
+     and .rootfs_mount.readonly_rootfs_enforced
+     and .rootfs_mount.exact_evidence
+     and .rootfs_mount.wait_status
+         == {"exit_code": 0, "oom_killed": false}
+     and .rootfs_mount.state_removed
+     and .rootfs_mount.artifacts_removed
      and .markers_removed
      and .executor_runtime_clean
      and .session_root_clean

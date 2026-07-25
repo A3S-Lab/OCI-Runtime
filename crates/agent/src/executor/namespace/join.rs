@@ -127,9 +127,6 @@ fn join_pass(
                 ),
             ));
         }
-        if namespace.namespace_type == libc::CLONE_NEWUSER {
-            become_user_namespace_root()?;
-        }
         if !same_namespace(&namespace.file, current_namespaces, namespace.current_name)? {
             return Err(join_error(
                 ErrorCode::PermissionDenied,
@@ -226,21 +223,6 @@ fn same_namespace(target: &File, current_namespaces: &File, current_name: &str) 
         use std::os::linux::fs::MetadataExt;
 
         Ok(target.st_dev() == current.st_dev() && target.st_ino() == current.st_ino())
-    }
-}
-
-fn become_user_namespace_root() -> Result<()> {
-    // SAFETY: setresuid receives plain integer IDs. A successful user
-    // namespace transition grants capabilities in the target namespace, and
-    // switching all UID slots to namespace root matches the OCI setup model.
-    if unsafe { libc::setresuid(0, 0, 0) } == 0 {
-        Ok(())
-    } else {
-        let error = io::Error::last_os_error();
-        Err(join_error(
-            error_code(&error),
-            format!("failed to become root in the joined user namespace: {error}"),
-        ))
     }
 }
 

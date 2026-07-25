@@ -366,6 +366,7 @@ pub(super) async fn best_effort_delete<T: AgentStream>(client: &AgentClient<T>, 
         "namespace-wrong-type",
         "namespace-non-mount",
         "namespace-mount",
+        "rootfs-enforcement",
     ] {
         for generation in [2, 1] {
             let (Ok(target), Ok(context)) = (

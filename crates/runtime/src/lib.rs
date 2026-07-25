@@ -28,6 +28,7 @@ mod native_smoke;
 mod oci_smoke;
 mod platform;
 mod report;
+mod rootfs_enforcement;
 mod service;
 mod state;
 #[cfg(windows)]
@@ -48,7 +49,7 @@ pub use driver::{
 };
 pub use multi_container_report::{
     MultiContainerLifecycleEvidence, NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport,
-    OciVmMultiContainerSmokeReport,
+    OciVmMultiContainerSmokeReport, RootfsMountEvidence,
 };
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;

@@ -52,19 +52,25 @@ or joined UTS namespace.
 
 The user-namespace profile is deliberately rootful. A new user namespace
 requires both `uidMappings` and `gidMappings`, each list is bounded to the
-kernel's 340-entry limit, and the process UID, GID, and every supplementary GID
-must be covered. The wrapper creates the user namespace first, then blocks on
-the authenticated control channel while the parent verifies the distinct
-namespace, writes each `/proc/<pid>/{uid,gid}_map` exactly once, reads both
-maps back, and requires `/proc/<pid>/setgroups` to remain `allow`. Rootless
-`setgroups=deny` and subordinate-ID helper flows are not implemented.
+kernel's 340-entry limit, and container ID 0 plus the process UID, GID, and
+every supplementary GID must be covered. The wrapper creates the user
+namespace first, then blocks on the authenticated control channel while the
+parent verifies the distinct namespace, writes each
+`/proc/<pid>/{uid,gid}_map` exactly once, reads both maps back, and requires
+`/proc/<pid>/setgroups` to remain `allow`. After creating the remaining
+namespaces and verifying any time offsets, the wrapper clears inherited
+supplementary groups and switches all UID/GID slots to mapped namespace root
+before any rootfs or mount mutation. Rootless `setgroups=deny` and
+subordinate-ID helper flows are not implemented.
 
 Before any namespace transition, the wrapper opens every join target and
 verifies its type with `NS_GET_NSTYPE`. It joins non-user namespaces, then the
-user namespace, switches all UID slots to root in that namespace, and retries
-non-user joins that initially lacked permission. A retained `/proc/self/ns`
-directory descriptor lets it verify each resulting namespace identity even
-after a joined mount namespace hides the original proc path.
+user namespace, gains the target namespace's capabilities, and retries
+non-user joins that initially lacked permission. After join and time-offset
+setup it clears inherited supplementary groups and switches all UID/GID slots
+to namespace root. A retained `/proc/self/ns` directory descriptor lets it
+verify each resulting namespace identity even after a joined mount namespace
+hides the original proc path.
 
 The wrapper then requests newly created UTS, mount, IPC, network, cgroup, PID,
 and time namespaces in one `unshare` call. Time offsets accept only normalized
@@ -88,16 +94,21 @@ namespace.
 
 The current mount slice:
 
-- requires each destination to exist and resolve strictly inside the rootfs;
+- resolves each destination strictly inside the rootfs and creates a missing
+  directory or file target according to the filesystem or bind-source type;
 - interprets relative destinations from `/` and relative bind sources from the
   bundle directory;
 - supports bind/rbind, common mount flags, all required propagation modes, and
   bounded filesystem-specific option data;
 - remounts bind attributes explicitly and fails the complete create operation
   on any syscall error;
-- rejects root replacement, missing bind sources, multiple propagation modes,
-  comma-packed options, idmapped mounts, recursive mount attributes,
-  `tmpcopyup`, and mount moves instead of silently ignoring them.
+- rejects target creation through an escaping symlink before mutation;
+- supports private, shared, slave, and unbindable `rootfsPropagation`, masked
+  files and directories, read-only paths, and a read-only rootfs when the
+  container creates its own mount namespace;
+- rejects root replacement, missing bind sources, multiple mount-entry
+  propagation modes, comma-packed options, idmapped mounts, recursive mount
+  attributes, `tmpcopyup`, and mount moves instead of silently ignoring them.
 
 Create snapshots the exact digest-bound configuration, starts an internal init
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
@@ -142,12 +153,11 @@ closed host connection force-stops remaining init processes and removes the
 agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
-rejects mount entries in inherited or joined mount namespaces, mount-target
-creation, rootfs propagation overrides, idmapped and recursive-attribute
-mounts, rootless user-mapping policy, cgroup resources, capabilities, seccomp,
-hooks, read-only rootfs, terminals, non-null I/O, process-group signals, and
-every other unimplemented OCI property. These are release blockers, not
-silently accepted compatibility gaps.
+rejects mount entries and rootfs mutation in inherited or joined mount
+namespaces, idmapped and recursive-attribute mounts, rootless user-mapping
+policy, cgroup resources, capabilities, seccomp, hooks, terminals, non-null
+I/O, process-group signals, and every other unimplemented OCI property. These
+are release blockers, not silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -172,10 +182,15 @@ wait, delete, recreation, stale generation, and replay conflicts do not alter
 or block B, then completes B independently. The macOS HVF gate sends both init
 signals through distinct retained pidfds and retains both exact repeated exit
 statuses and per-container markers together with guest-runtime and
-host-process cleanup evidence. Schema v3 then retains a prepared donor and
+host-process cleanup evidence. Schema v4 then retains a prepared donor and
 qualifies wrong-type rejection plus UTS, mount, IPC, network, cgroup, PID,
 user, and time joins. Both joiner workloads must cross `exec`, remain running
 for a bounded observation window, stop cleanly, and leave the donor unchanged.
+A separate workload must create every missing directory and file mount
+destination before start, then prove shared rootfs propagation, a distinct
+read-only mount, empty read-only masked file and directory replacements,
+read-only rootfs enforcement, normal exit, state removal, and removal of every
+host-side fixture artifact.
 
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
 records that delete was not attempted, and requires guest executor shutdown to

@@ -351,13 +351,15 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$rootfs_dir/oci-multi-container.log"
 ```
 
-`a3s.oci.oci-vm-multi-container-smoke.v3` requires that starting, killing,
+`a3s.oci.oci-vm-multi-container-smoke.v4` requires that starting, killing,
 waiting for, and deleting A never changes or blocks B; both waits return and
 replay the exact normal exit status; recreating A advances generation 1 to 2;
 stale and cross-container replay requests fail; B then completes
 independently; existing namespace descriptors are type-checked and joined
-across the shared executor; and VM shutdown restores guest-runtime, endpoint,
-descriptor, shim, and worker inventories.
+across the shared executor; a third workload proves missing mount-target
+creation, shared rootfs propagation, a read-only path, an empty masked file,
+and a read-only rootfs before exact cleanup; and VM shutdown restores
+guest-runtime, endpoint, descriptor, shim, and worker inventories.
 
 Fault cleanup reuses the same signed shim and bundle but stops after each
 successful lifecycle boundary:
@@ -438,20 +440,25 @@ The current executor implements a reviewed bootstrap vertical slice:
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
   and time namespaces, including retained rootfs access after a mount join;
 - hostname and domain name configuration;
-- recursively private mount propagation and `pivot_root`;
-- ordered existing-target OCI mounts with bind/rbind and common VFS options;
+- isolated mount propagation and `pivot_root`, including all four OCI
+  `rootfsPropagation` modes;
+- ordered OCI mounts with missing directory/file target creation, bind/rbind,
+  common VFS options, and symlink-escape rejection;
+- OCI masked paths, read-only paths, and a read-only rootfs;
 - PID- and namespace-authenticated create/start barrier;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
   signaling, exact normal-or-signal exit status, repeated wait, observation,
   and scoped cleanup.
 
 The supported user-namespace slice is rootful: it requires both UID and GID
-mappings, coverage for every configured process ID, and an `allow` setgroups
-policy. Mount entries remain unsupported when joining an existing mount
-namespace. Other unimplemented OCI fields are rejected instead of ignored.
-Rootless mapping policy, complete mount semantics, cgroup resources,
-capabilities, hooks, seccomp, full I/O, recovery, and the remaining SDK
-operations are still release gates.
+mappings, coverage for container ID 0 and every configured process ID, and an
+`allow` setgroups policy. The wrapper switches to mapped namespace-root
+credentials before rootfs mutation. Mount entries and rootfs mutation remain
+unsupported when joining or inheriting a mount namespace. Other unimplemented
+OCI fields are rejected instead of ignored. Rootless mapping policy, idmapped
+and recursive-attribute mounts, cgroup resources, capabilities, hooks,
+seccomp, full I/O, recovery, and the remaining SDK operations are still
+release gates.
 
 ### SDK and protocols
 
@@ -478,9 +485,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container isolation, type-checked existing-namespace joins, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container isolation, type-checked existing-namespace joins, rootfs/mount enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, rootfs/mount enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -643,13 +650,16 @@ Platform CI covers:
 
 - the 237-point durable commit matrix and all 14 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
-- Ubuntu x86_64 native pidfd probe, lifecycle, multi-container and
-  existing-namespace isolation, and three-phase no-delete cleanup without KVM;
-- Ubuntu aarch64 native pidfd probe, lifecycle, multi-container and
-  existing-namespace isolation, and three-phase no-delete cleanup without KVM;
+- Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
+  existing-namespace and rootfs/mount isolation, and three-phase no-delete
+  cleanup without KVM;
+- Ubuntu aarch64 native pidfd probe, lifecycle, multi-container,
+  existing-namespace and rootfs/mount isolation, and three-phase no-delete
+  cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,
-  pidfd-backed fixed, multi-container, and existing-namespace OCI lifecycles,
-  three-phase no-delete cleanup, and missing-entitlement fail-closed gates;
+  pidfd-backed fixed, multi-container, existing-namespace, and rootfs/mount OCI
+  lifecycles, three-phase no-delete cleanup, and missing-entitlement
+  fail-closed gates;
 - Windows WHPX and libkrun context gates;
 - static x86_64 and aarch64 musl guest-agent output.
 

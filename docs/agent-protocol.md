@@ -126,33 +126,40 @@ before start and did run afterward. The init wrapper reads both
 configured UTS names back before create returns, and the workload independently
 checks its hostname. When requested, the same create barrier also covers a new
 mount namespace, recursively private propagation, a self-bound rootfs, and
-`pivot_root`. Ordered existing-target mount entries run before that pivot,
-including relative bundle bind sources, common VFS flags, propagation, and
-bounded filesystem-specific data. Requested IPC, network, cgroup, PID, and
-time namespace setup follows the authenticated user-namespace mapping barrier
-and is atomic with UTS and mount isolation. The parent accepts one mapping
-request only from the already verified wrapper PID, installs and reads back
-exact UID/GID maps, then acknowledges the child. The wrapper writes and
-verifies monotonic/boottime offsets before its first child. For a new PID
-namespace, the container init runs as namespace PID 1 while the guest agent
-authenticates and reports its host-visible PID. Before returning created state,
-the guest opens a pidfd for that exact process; lifecycle and cleanup signals
-use the retained descriptor rather than resolving the numeric PID again. The
-host verifies marker removal and that VM shutdown leaves no new guest-agent
-runtime directory. Native Linux and macOS HVF retain this user/time evidence;
-the historical WHPX qualification predates it.
+`pivot_root`. Ordered mount entries run before that pivot, including safe
+missing directory/file target creation, relative bundle bind sources, common
+VFS flags, propagation, and bounded filesystem-specific data. After the
+pivot, the same barrier applies configured rootfs propagation, masked paths,
+read-only paths, and read-only rootfs state. Requested IPC, network, cgroup,
+PID, and time namespace setup follows the authenticated user-namespace
+mapping barrier and is atomic with UTS and mount isolation. The parent accepts
+one mapping request only from the already verified wrapper PID, installs and
+reads back exact UID/GID maps, then acknowledges the child. The wrapper writes
+and verifies monotonic/boottime offsets, clears inherited supplementary groups,
+and switches to mapped namespace-root UID/GID credentials before rootfs
+mutation. For a new PID namespace, the container init runs as namespace PID 1
+while the guest agent authenticates and reports its host-visible PID. Before
+returning created state, the guest opens a pidfd for that exact process;
+lifecycle and cleanup signals use the retained descriptor rather than
+resolving the numeric PID again. The host verifies marker removal and that VM
+shutdown leaves no new guest-agent runtime directory. Native Linux and macOS
+HVF retain this user/time and rootfs enforcement evidence; the historical
+WHPX qualification predates it.
 
 The macOS `oci-vm-multi-container-smoke` path keeps two exact targets live on
 the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
 exact operation replay, rejection of cross-container operation-ID reuse, a
 bounded wait on A that does not block B state, exact repeated terminal results
-for both containers, and independent pidfd-backed cleanup. Its schema-v3
+for both containers, and independent pidfd-backed cleanup. Its schema-v4
 namespace phase retains a prepared donor, rejects a wrong-type namespace
 descriptor before state, joins all eight Linux namespace types across two
 workloads, proves retained-rootfs execution after the mount join, and removes
-all state without changing the donor's created record. Native Linux runs the
-equivalent sequence through the durable SDK service around the same executor.
+all state without changing the donor's created record. A third workload proves
+missing mount-target creation at the create barrier, shared rootfs propagation,
+read-only and masked path enforcement, read-only rootfs behavior, exact normal
+exit, state removal, and fixture cleanup. Native Linux runs the equivalent
+sequence through the durable SDK service around the same executor.
 
 The `oci-vm-fault-cleanup` companion stops after a successful create, start, or
 kill request and never sends delete. Session EOF must still make the agent call
