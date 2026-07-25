@@ -18,6 +18,7 @@ readonly-path-enforced\n\
 masked-file-empty-readonly\n\
 masked-directory-empty-readonly\n\
 masked-path-enforced\n\
+recursive-mount-attributes-enforced\n\
 readonly-rootfs-enforced\n";
 
 pub(crate) struct RootfsEnforcementFixture {
@@ -67,9 +68,13 @@ impl RootfsEnforcementFixture {
         let output_target = self.target_directory.join("output");
         let tmpfs_target = self.target_directory.join("tmpfs/nested");
         let file_target = self.target_directory.join("bound-file");
+        let recursive_source = self.target_directory.join("recursive/source");
+        let recursive_target = self.target_directory.join("recursive/readonly");
         Ok(real_directory(&output_target).await?
             && real_directory(&tmpfs_target).await?
-            && real_file(&file_target).await?)
+            && real_file(&file_target).await?
+            && real_directory(&recursive_source).await?
+            && real_directory(&recursive_target).await?)
     }
 
     pub(crate) async fn evidence_absent(&self) -> Result<bool, String> {
@@ -123,6 +128,8 @@ impl RootfsEnforcementFixture {
         report.rootfs_propagation_shared = lines.contains(&"rootfs-propagation-shared");
         report.readonly_path_enforced = lines.contains(&"readonly-path-enforced");
         report.masked_path_enforced = lines.contains(&"masked-path-enforced");
+        report.recursive_mount_attributes_enforced =
+            lines.contains(&"recursive-mount-attributes-enforced");
         report.readonly_rootfs_enforced = lines.contains(&"readonly-rootfs-enforced");
         report.exact_evidence = evidence == EXPECTED_EVIDENCE;
         Ok(evidence_text.to_string())
@@ -155,6 +162,10 @@ fn build_bundle(
     let tmpfs_target = format!("{target_root}/tmpfs/nested");
     let file_target = format!("{target_root}/bound-file");
     let file_source = format!("{output_name}/{BIND_SOURCE_FILE}");
+    let recursive_source = format!("{target_root}/recursive/source");
+    let recursive_source_child = format!("{recursive_source}/child");
+    let recursive_target = format!("{target_root}/recursive/readonly");
+    let recursive_source_in_bundle = format!("rootfs{recursive_source}");
     root.insert(
         "mounts".into(),
         json!([
@@ -181,6 +192,33 @@ fn build_bundle(
                 "type": "none",
                 "source": file_source,
                 "options": ["bind", "ro", "nosuid", "nodev"]
+            },
+            {
+                "destination": recursive_source,
+                "type": "tmpfs",
+                "source": "tmpfs",
+                "options": ["rw", "nosuid", "nodev", "mode=0700", "size=64k"]
+            },
+            {
+                "destination": recursive_source_child,
+                "type": "tmpfs",
+                "source": "tmpfs",
+                "options": ["rw", "nosuid", "nodev", "mode=0700", "size=64k"]
+            },
+            {
+                "destination": recursive_target,
+                "type": "none",
+                "source": recursive_source_in_bundle,
+                "options": [
+                    "rbind",
+                    "rro",
+                    "rnosuid",
+                    "rnodev",
+                    "rnoexec",
+                    "rnoatime",
+                    "rnodiratime",
+                    "rnosymfollow"
+                ]
             }
         ]),
     );
@@ -195,7 +233,14 @@ fn build_bundle(
 
     let evidence_path = format!("{target_root}/output/{EVIDENCE_FILE}");
     let write_probe = format!("/.a3s-oci-readonly-probe-{nonce}");
-    let command = enforcement_command(&evidence_path, &tmpfs_target, &file_target, &write_probe);
+    let command = enforcement_command(
+        &evidence_path,
+        &tmpfs_target,
+        &file_target,
+        &recursive_source,
+        &recursive_target,
+        &write_probe,
+    );
     *process_command_mut(root)? = command;
 
     let config = serde_json::to_string(&config)
@@ -208,8 +253,12 @@ fn enforcement_command(
     evidence: &str,
     tmpfs_target: &str,
     file_target: &str,
+    recursive_source: &str,
+    recursive_target: &str,
     write_probe: &str,
 ) -> String {
+    let recursive_source_child = format!("{recursive_source}/child");
+    let recursive_target_child = format!("{recursive_target}/child");
     format!(
         "set -eu; \
          evidence='{evidence}'; \
@@ -239,6 +288,29 @@ fn enforcement_command(
          test -d /proc/irq; test -z \"$(/bin/busybox ls -A /proc/irq)\"; \
          printf 'masked-directory-empty-readonly\\n' >> \"$evidence\"; \
          printf 'masked-path-enforced\\n' >> \"$evidence\"; \
+         for path in '{recursive_target}' '{recursive_target_child}'; do \
+           /bin/busybox awk -v path=\"$path\" '$5 == path && \
+             $6 ~ /(^|,)ro(,|$)/ && $6 ~ /(^|,)nosuid(,|$)/ && \
+             $6 ~ /(^|,)nodev(,|$)/ && $6 ~ /(^|,)noexec(,|$)/ && \
+             $6 ~ /(^|,)noatime(,|$)/ && $6 ~ /(^|,)nodiratime(,|$)/ && \
+             $6 ~ /(^|,)nosymfollow(,|$)/ {{ ok = 1 }} END {{ exit !ok }}' \
+             /proc/self/mountinfo; \
+         done; \
+         for path in '{recursive_source}' '{recursive_source_child}'; do \
+           /bin/busybox touch \"$path/write-probe\"; \
+           /bin/busybox rm \"$path/write-probe\"; \
+           printf '#!/bin/sh\\nexit 0\\n' > \"$path/exec-probe\"; \
+           /bin/busybox chmod 0700 \"$path/exec-probe\"; \
+           \"$path/exec-probe\"; \
+           printf 'symlink-source\\n' > \"$path/symlink-source\"; \
+           /bin/busybox ln -s symlink-source \"$path/symlink-probe\"; \
+         done; \
+         for path in '{recursive_target}' '{recursive_target_child}'; do \
+           if /bin/busybox touch \"$path/write-probe\" 2>/dev/null; then exit 42; fi; \
+           if \"$path/exec-probe\" 2>/dev/null; then exit 43; fi; \
+           if /bin/busybox cat \"$path/symlink-probe\" >/dev/null 2>&1; then exit 44; fi; \
+         done; \
+         printf 'recursive-mount-attributes-enforced\\n' >> \"$evidence\"; \
          /bin/busybox awk '$5 == \"/\" && $6 ~ /(^|,)ro(,|$)/ {{ ok = 1 }} \
            END {{ exit !ok }}' /proc/self/mountinfo; \
          if /bin/busybox touch '{write_probe}' 2>/dev/null; then \
@@ -381,6 +453,29 @@ mod tests {
             config["mounts"][3]["source"],
             Value::String(".a3s-oci-rootfs-output-fixture-123/bind-source".into())
         );
+        let recursive_mount = config["mounts"]
+            .as_array()
+            .expect("mount array")
+            .iter()
+            .find(|mount| {
+                mount["destination"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("/recursive/readonly"))
+            })
+            .expect("recursive-attribute mount");
+        assert_eq!(
+            recursive_mount["options"],
+            serde_json::json!([
+                "rbind",
+                "rro",
+                "rnosuid",
+                "rnodev",
+                "rnoexec",
+                "rnoatime",
+                "rnodiratime",
+                "rnosymfollow"
+            ])
+        );
         let command = config["process"]["args"][2]
             .as_str()
             .expect("enforcement command");
@@ -391,6 +486,7 @@ mod tests {
             "readonly-path-enforced",
             "masked-directory-empty-readonly",
             "masked-path-enforced",
+            "recursive-mount-attributes-enforced",
             "readonly-rootfs-enforced",
         ] {
             assert!(command.contains(assertion), "missing {assertion}");

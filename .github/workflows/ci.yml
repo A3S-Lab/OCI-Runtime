@@ -496,7 +496,7 @@ jobs:
           if [[ "$support" == "1" ]]; then
             test "$status" -eq 0
             jq --exit-status \
-              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v4"
+              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v5"
                and .platform == "macos" and .status == "available"
                and .bundles_loaded
                and .lifecycle.distinct_bundle_directories
@@ -556,6 +556,7 @@ jobs:
                and .rootfs_mount.rootfs_propagation_shared
                and .rootfs_mount.readonly_path_enforced
                and .rootfs_mount.masked_path_enforced
+               and .rootfs_mount.recursive_mount_attributes_enforced
                and .rootfs_mount.readonly_rootfs_enforced
                and .rootfs_mount.exact_evidence
                and .rootfs_mount.wait_status
@@ -584,7 +585,7 @@ jobs:
           else
             test "$status" -eq 2
             jq --exit-status \
-              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v4"
+              '.schema_version == "a3s.oci.oci-vm-multi-container-smoke.v5"
                and .platform == "macos" and .status == "unavailable"
                and .bundles_loaded
                and .bridge.platform == "macos"

@@ -170,7 +170,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
-The `a3s.oci.native-linux-multi-container-smoke.v4` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v5` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -197,8 +197,11 @@ requires:
 4. `/proc/sys` to be a distinct read-only mount, `/proc/meminfo` to be replaced
    by a private empty read-only file, and `/proc/irq` by an empty read-only
    directory;
-5. the rootfs to be read-only and reject a write;
-6. exact ordered evidence, a normal zero exit, deleted state, and removal of
+5. recursive read-only, nosuid, nodev, noexec, noatime, nodiratime, and
+   nosymfollow attributes to hold on both an rbind target and its nested
+   submount while the source mounts remain writable and executable;
+6. the rootfs to be read-only and reject a write;
+7. exact ordered evidence, a normal zero exit, deleted state, and removal of
    all host-side fixture paths.
 
 GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and

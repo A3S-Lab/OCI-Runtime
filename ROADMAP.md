@@ -320,7 +320,10 @@ then may HVF become `experimental`.
   masked paths, read-only paths, and read-only rootfs enforcement; prove the
   same create/start barrier and exact cleanup through native Linux and the
   macOS utility VM.
-- [ ] ID-mapped and recursive-attribute mounts.
+- [x] Apply all OCI recursive VFS mount attributes with `mount_setattr`,
+  descriptor-pin each destination, and prove top-level and nested submount
+  enforcement through native Linux and the macOS utility VM.
+- [ ] ID-mapped mounts.
 - [ ] Rootless ID-mapping policy, remaining credentials, capabilities, rlimits,
   scheduler, I/O priority, affinity, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified

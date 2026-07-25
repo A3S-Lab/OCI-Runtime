@@ -6,9 +6,9 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v4";
+    "a3s.oci.native-linux-multi-container-smoke.v5";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v4";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v5";
 
 /// Rootfs and mount enforcement evidence shared by native and utility-VM paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +27,8 @@ pub struct RootfsMountEvidence {
     pub readonly_path_enforced: bool,
     /// Whether the configured file was backed by a private empty source.
     pub masked_path_enforced: bool,
+    /// Whether recursive VFS attributes reached a bind mount and its submount.
+    pub recursive_mount_attributes_enforced: bool,
     /// Whether the root mount was read-only and rejected a write.
     pub readonly_rootfs_enforced: bool,
     /// Whether the workload emitted the exact ordered enforcement evidence.
@@ -51,6 +53,7 @@ impl RootfsMountEvidence {
             && self.rootfs_propagation_shared
             && self.readonly_path_enforced
             && self.masked_path_enforced
+            && self.recursive_mount_attributes_enforced
             && self.readonly_rootfs_enforced
             && self.exact_evidence
             && self.wait_status
@@ -480,6 +483,7 @@ mod tests {
             rootfs_propagation_shared: true,
             readonly_path_enforced: true,
             masked_path_enforced: true,
+            recursive_mount_attributes_enforced: true,
             readonly_rootfs_enforced: true,
             exact_evidence: true,
             wait_status: Some(ExitStatus::exited(0).expect("zero exit")),
@@ -489,7 +493,7 @@ mod tests {
         assert!(complete.is_success());
 
         let mut incomplete = complete;
-        incomplete.readonly_rootfs_enforced = false;
+        incomplete.recursive_mount_attributes_enforced = false;
         assert!(!incomplete.is_success());
     }
 

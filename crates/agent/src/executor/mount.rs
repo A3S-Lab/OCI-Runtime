@@ -1,3 +1,4 @@
+mod attributes;
 mod target;
 
 use std::ffi::CString;
@@ -12,6 +13,12 @@ const MAX_MOUNTS: usize = 1_024;
 const MAX_MOUNT_STRING_BYTES: usize = 64 * 1_024;
 const MAX_MOUNT_OPTIONS: usize = 4_096;
 
+#[cfg(test)]
+pub(super) use attributes::{
+    MOUNT_ATTR_ATIME, MOUNT_ATTR_NOATIME, MOUNT_ATTR_NODEV, MOUNT_ATTR_NODIRATIME,
+    MOUNT_ATTR_NOEXEC, MOUNT_ATTR_NOSUID, MOUNT_ATTR_NOSYMFOLLOW, MOUNT_ATTR_RDONLY,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MountPlan {
     pub(super) index: usize,
@@ -22,6 +29,7 @@ pub(super) struct MountPlan {
     pub(super) bind: bool,
     pub(super) remount_bind: bool,
     pub(super) propagation: Option<libc::c_ulong>,
+    pub(super) recursive_attributes: Option<attributes::RecursiveMountAttributes>,
     pub(super) data: Vec<String>,
 }
 
@@ -82,6 +90,7 @@ impl MountPlan {
         let mut bind = false;
         let mut remount_bind = false;
         let mut propagation = None;
+        let mut recursive_attributes = None;
         let mut data = Vec::new();
         let options = mount.options().as_deref().unwrap_or_default();
         if options.len() > MAX_MOUNT_OPTIONS {
@@ -183,15 +192,7 @@ impl MountPlan {
                         "tmpfs copy-up is not implemented",
                     ));
                 }
-                "ratime" | "rdev" | "rdiratime" | "rexec" | "rnoatime" | "rnodiratime"
-                | "rnoexec" | "rnorelatime" | "rnostrictatime" | "rnosuid" | "rnosymfollow"
-                | "rrelatime" | "rro" | "rrw" | "rstrictatime" | "rsuid" | "rsymfollow" => {
-                    return Err(unsupported(
-                        index,
-                        "options",
-                        "recursive mount attributes require mount_setattr support",
-                    ));
-                }
+                option if attributes::record_option(&mut recursive_attributes, option) => {}
                 "move" => {
                     return Err(unsupported(
                         index,
@@ -232,6 +233,7 @@ impl MountPlan {
             bind,
             remount_bind,
             propagation,
+            recursive_attributes,
             data,
         })
     }
@@ -291,6 +293,9 @@ impl MountPlan {
                 None,
                 "remount bind attributes for",
             )?;
+        }
+        if let Some(attributes) = self.recursive_attributes {
+            attributes::apply(self.index, &target, attributes)?;
         }
         if let Some(propagation) = self.propagation {
             mount_call(
