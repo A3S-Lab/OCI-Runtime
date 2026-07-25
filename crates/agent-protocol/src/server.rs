@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, ProcessRecord, Result,
+    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::model::{
-    protocol_error, AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest,
-    AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess,
-    AgentProcessExit, AgentProcessSignal, AgentProcessesRequest, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello,
+    protocol_error, AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest,
+    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
+    AgentProcess, AgentProcessExit, AgentProcessSignal, AgentProcessesRequest,
+    AgentReadOutputRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, HelloOutcome, HostHello,
     RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::validation::negotiate_protocol;
@@ -84,6 +85,21 @@ pub trait GuestAgentService: Send + Sync {
     /// Read normalized cgroup v2 resource counters.
     async fn stats(&self, _request: AgentStatsRequest) -> Result<ContainerStats> {
         Err(Error::unsupported("agent-stats"))
+    }
+
+    /// Poll captured stdout and stderr through one byte-accurate cursor.
+    async fn read_output(&self, _request: AgentReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        Err(Error::unsupported("agent-read-output"))
+    }
+
+    /// Write one bounded payload to process stdin with backpressure.
+    async fn write_stdin(&self, _request: AgentWriteStdinRequest) -> Result<()> {
+        Err(Error::unsupported("agent-write-stdin"))
+    }
+
+    /// Close process stdin. Repeated closes should remain idempotent.
+    async fn close_stdin(&self, _request: AgentCloseStdinRequest) -> Result<()> {
+        Err(Error::unsupported("agent-close-stdin"))
     }
 }
 
@@ -222,6 +238,20 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             .map(AgentResponse::Processes),
         AgentRequest::Update(request) => service.update(*request).await.map(AgentResponse::State),
         AgentRequest::Stats(request) => service.stats(request).await.map(AgentResponse::Stats),
+        AgentRequest::ReadOutput(request) => service
+            .read_output(request)
+            .await
+            .map(AgentResponse::Output),
+        AgentRequest::WriteStdin(request) => {
+            let target = request.process.clone();
+            service.write_stdin(request).await?;
+            Ok(AgentResponse::StdinWritten(target))
+        }
+        AgentRequest::CloseStdin(request) => {
+            let target = request.process.clone();
+            service.close_stdin(request).await?;
+            Ok(AgentResponse::StdinClosed(target))
+        }
     }
 }
 

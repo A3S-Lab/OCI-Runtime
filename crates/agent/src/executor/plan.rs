@@ -39,7 +39,7 @@ pub(super) struct ProcessPlan {
 
 impl ProcessPlan {
     pub(super) fn from_process(process: &Process, io: &ProcessIo) -> Result<Self> {
-        validate_null_io(io)?;
+        validate_process_io(io)?;
         validate_process_profile(process)?;
         if process.terminal().unwrap_or(false) {
             return Err(unsupported(
@@ -130,7 +130,7 @@ pub(super) struct InitPlan {
 
 impl InitPlan {
     pub(super) fn from_bundle(bundle: &OciBundle, io: &ProcessIo) -> Result<Self> {
-        validate_null_io(io)?;
+        validate_process_io(io)?;
         let raw: Value = serde_json::from_str(bundle.config_json()).map_err(|error| {
             Error::new(
                 ErrorCode::Internal,
@@ -521,19 +521,32 @@ fn reject_unimplemented_keys(
     }
 }
 
-fn validate_null_io(io: &ProcessIo) -> Result<()> {
-    if !matches!(io.stdin, IoMode::Null)
-        || !matches!(io.stdout, IoMode::Null)
-        || !matches!(io.stderr, IoMode::Null)
-        || io.terminal_size.is_some()
-    {
-        Err(unsupported(
-            "process I/O",
-            "the bootstrap executor currently accepts only null stdin/stdout/stderr",
-        ))
-    } else {
-        Ok(())
+fn validate_process_io(io: &ProcessIo) -> Result<()> {
+    if !matches!(io.stdin, IoMode::Null | IoMode::Pipe) {
+        return Err(unsupported(
+            "process I/O stdin",
+            "the bootstrap executor accepts null or pipe stdin",
+        ));
     }
+    if !matches!(io.stdout, IoMode::Null | IoMode::Capture) {
+        return Err(unsupported(
+            "process I/O stdout",
+            "the bootstrap executor accepts null or captured stdout",
+        ));
+    }
+    if !matches!(io.stderr, IoMode::Null | IoMode::Capture) {
+        return Err(unsupported(
+            "process I/O stderr",
+            "the bootstrap executor accepts null or captured stderr",
+        ));
+    }
+    if io.terminal_size.is_some() {
+        return Err(unsupported(
+            "process I/O terminal size",
+            "terminal allocation is not implemented",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_environment(environment: &[String]) -> Result<()> {

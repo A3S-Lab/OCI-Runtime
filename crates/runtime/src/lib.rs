@@ -45,8 +45,9 @@ pub use cleanup_report::{
 };
 pub use driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 pub use multi_container_report::{
     MultiContainerLifecycleEvidence, NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport,

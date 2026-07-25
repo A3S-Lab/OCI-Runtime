@@ -38,6 +38,43 @@ struct SignalProcessFingerprint<'a> {
 }
 
 impl DurableStateStore {
+    /// Resolve a caller target to the exact current generation and verify that
+    /// the durable process was fully created.
+    pub(crate) async fn resolve_process_target(
+        &self,
+        requested: &ProcessTarget,
+        operation: &'static str,
+    ) -> Result<ProcessTarget> {
+        let _guard = self.gate.lock().await;
+        let container = self.load_stored_container(&requested.container.id).await?;
+        validate_requested_generation(&container, &requested.container, operation)?;
+        ensure_container_unclaimed(&container, operation)?;
+        let target = exact_process_target(&container, requested.process_id.clone());
+        if target.process_id.is_init() {
+            if *container.record.state.status() == ContainerState::Creating {
+                return Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    operation,
+                    format!(
+                        "container {} generation {} has no prepared init process",
+                        container.id, container.record.generation.0
+                    ),
+                ));
+            }
+            return Ok(target);
+        }
+
+        let process = self.load_stored_process(&target).await?;
+        if process.record.pid.is_none() {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                operation,
+                format!("process {} has not completed exec", target.process_id),
+            ));
+        }
+        Ok(target)
+    }
+
     pub(crate) async fn prepare_exec(
         &self,
         request: &ExecRequest,

@@ -3,14 +3,147 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
-    ContainerTarget, Error, ErrorCode, ExecRequest, ExitStatus, IoMode, OperationContext,
-    OperationId, ProcessId, ProcessIo, ProcessTarget, RuntimeClient, Signal, SignalProcessRequest,
-    WaitProcessRequest,
+    CloseStdinRequest, ContainerTarget, Error, ErrorCode, ExecRequest, ExitStatus, IoMode,
+    OperationContext, OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget,
+    ReadOutputRequest, RuntimeClient, Signal, SignalProcessRequest, WaitProcessRequest,
+    WriteStdinRequest,
 };
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT_MS: u64 = 15_000;
+
+pub(super) async fn exercise_process_io(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    nonce: &str,
+) -> Result<(), String> {
+    let mut request = exec_request(
+        target,
+        nonce,
+        "io",
+        "exec-io",
+        "IFS= read -r line; printf 'stdout:%s\\n' \"$line\"; \
+         printf 'stderr:%s\\n' \"$line\" >&2",
+    )?;
+    request.io = ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
+        terminal_size: None,
+    };
+    let process = ProcessTarget {
+        container: request.container.clone(),
+        process_id: request.process_id.clone(),
+    };
+    let created = call("exec process I/O probe", client.exec(request)).await?;
+    if created.target != process || created.pid.is_none() || created.terminal {
+        return Err("native process I/O probe returned an invalid identity".into());
+    }
+
+    call(
+        "write process I/O probe stdin",
+        client.write_stdin(WriteStdinRequest {
+            process: process.clone(),
+            data: b"a3s-io\n".to_vec(),
+        }),
+    )
+    .await?;
+    let close = CloseStdinRequest {
+        process: process.clone(),
+    };
+    call(
+        "close process I/O probe stdin",
+        client.close_stdin(close.clone()),
+    )
+    .await?;
+    call(
+        "repeat process I/O probe stdin close",
+        client.close_stdin(close),
+    )
+    .await?;
+
+    let status = call(
+        "wait process I/O probe",
+        client.wait_process(WaitProcessRequest {
+            process: process.clone(),
+            timeout_ms: Some(LIFECYCLE_TIMEOUT_MS),
+        }),
+    )
+    .await?;
+    let expected = ExitStatus::exited(0)
+        .map_err(|error| format!("failed to construct process I/O exit status: {error}"))?;
+    if status != expected {
+        return Err(format!(
+            "native process I/O probe returned {status:?}, expected {expected:?}"
+        ));
+    }
+
+    let (stdout, stderr) = collect_output(client, &process).await?;
+    if stdout != b"stdout:a3s-io\n" || stderr != b"stderr:a3s-io\n" {
+        return Err(format!(
+            "native captured output mismatch: stdout={stdout:?}, stderr={stderr:?}"
+        ));
+    }
+    match timeout(
+        CALL_TIMEOUT,
+        client.write_stdin(WriteStdinRequest {
+            process,
+            data: b"late".to_vec(),
+        }),
+    )
+    .await
+    {
+        Ok(Err(error)) if error.code == ErrorCode::FailedPrecondition => Ok(()),
+        Ok(Err(error)) => Err(call_error("write after process stdin close", &error)),
+        Ok(Ok(())) => Err("native runtime accepted stdin after close".into()),
+        Err(_) => Err("write after process stdin close timed out".into()),
+    }
+}
+
+async fn collect_output(
+    client: &RuntimeClient,
+    process: &ProcessTarget,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let deadline = Instant::now() + CALL_TIMEOUT;
+    let mut cursor = 0;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut stdout_eof = false;
+    let mut stderr_eof = false;
+    while !stdout_eof || !stderr_eof {
+        let chunks = call(
+            "read process I/O probe output",
+            client.read_output(ReadOutputRequest {
+                process: process.clone(),
+                after_sequence: cursor,
+                max_bytes: 4,
+                wait_timeout_ms: Some(250),
+            }),
+        )
+        .await?;
+        for chunk in chunks {
+            if chunk.sequence <= cursor {
+                return Err("native captured output cursor did not advance".into());
+            }
+            cursor = chunk.sequence;
+            match chunk.stream {
+                OutputStream::Stdout => {
+                    stdout.extend(chunk.data);
+                    stdout_eof |= chunk.eof;
+                }
+                OutputStream::Stderr => {
+                    stderr.extend(chunk.data);
+                    stderr_eof |= chunk.eof;
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out draining native captured process output".into());
+        }
+    }
+    Ok((stdout, stderr))
+}
 
 pub(super) async fn exercise_before_init_exit(
     client: &RuntimeClient,

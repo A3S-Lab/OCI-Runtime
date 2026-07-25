@@ -3,17 +3,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ContainerStats, Error, ErrorCode, ExitStatus, ProcessRecord, Result};
+use a3s_oci_sdk::{
+    ContainerStats, Error, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 use crate::model::{
-    protocol_error, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
-    AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation, AgentProcess,
-    AgentProcessesRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange,
-    RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
+    protocol_error, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
+    AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation,
+    AgentProcess, AgentProcessesRequest, AgentReadOutputRequest, AgentRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
+    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    SessionToken,
 };
 use crate::wire::{read_frame, write_frame};
 
@@ -143,6 +146,39 @@ where
             _ => Err(protocol_error(
                 ErrorCode::Internal,
                 "guest returned the wrong response for a resource stats request",
+            )),
+        }
+    }
+
+    /// Poll captured stdout and stderr through a byte-accurate cursor.
+    pub async fn read_output(&self, request: AgentReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        match self.call(AgentRequest::ReadOutput(request)).await? {
+            AgentResponse::Output(chunks) => Ok(chunks),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a process output request",
+            )),
+        }
+    }
+
+    /// Write one bounded payload to process stdin with backpressure.
+    pub async fn write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
+        match self.call(AgentRequest::WriteStdin(request)).await? {
+            AgentResponse::StdinWritten(_) => Ok(()),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a process stdin write",
+            )),
+        }
+    }
+
+    /// Close process stdin.
+    pub async fn close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
+        match self.call(AgentRequest::CloseStdin(request)).await? {
+            AgentResponse::StdinClosed(_) => Ok(()),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a process stdin close",
             )),
         }
     }
@@ -353,6 +389,9 @@ fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> R
         AgentRequest::Processes(_) => AgentOperation::Processes,
         AgentRequest::Update(_) => AgentOperation::Update,
         AgentRequest::Stats(_) => AgentOperation::Stats,
+        AgentRequest::ReadOutput(_) => AgentOperation::ReadOutput,
+        AgentRequest::WriteStdin(_) => AgentOperation::WriteStdin,
+        AgentRequest::CloseStdin(_) => AgentOperation::CloseStdin,
     };
     if operations.contains(&required) {
         Ok(())
@@ -472,6 +511,57 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
                 ))
             }
         }
+        (AgentRequest::ReadOutput(request), AgentResponse::Output(chunks)) => {
+            let mut previous = request.after_sequence;
+            let mut total = 0_u64;
+            for chunk in chunks {
+                let width = if chunk.eof {
+                    1
+                } else {
+                    u64::try_from(chunk.data.len()).map_err(|_| {
+                        protocol_error(
+                            ErrorCode::ResourceExhausted,
+                            "guest output chunk length does not fit its sequence cursor",
+                        )
+                    })?
+                };
+                let expected = previous.checked_add(width).ok_or_else(|| {
+                    protocol_error(
+                        ErrorCode::ResourceExhausted,
+                        "guest output sequence space is exhausted",
+                    )
+                })?;
+                if chunk.sequence != expected {
+                    return Err(protocol_error(
+                        ErrorCode::Conflict,
+                        "guest output response returned a non-contiguous byte cursor",
+                    ));
+                }
+                total = total.checked_add(chunk.data.len() as u64).ok_or_else(|| {
+                    protocol_error(
+                        ErrorCode::ResourceExhausted,
+                        "guest output response byte count overflowed",
+                    )
+                })?;
+                previous = chunk.sequence;
+            }
+            if total > u64::from(request.max_bytes) {
+                return Err(protocol_error(
+                    ErrorCode::ResourceExhausted,
+                    format!(
+                        "guest returned {total} output bytes for a {}-byte request",
+                        request.max_bytes
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        (AgentRequest::WriteStdin(request), AgentResponse::StdinWritten(target)) => {
+            validate_process_target(&request.process, target)
+        }
+        (AgentRequest::CloseStdin(request), AgentResponse::StdinClosed(target)) => {
+            validate_process_target(&request.process, target)
+        }
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
             format!(
@@ -553,6 +643,9 @@ const fn request_name(request: &AgentRequest) -> &'static str {
         AgentRequest::Processes(_) => "processes",
         AgentRequest::Update(_) => "update",
         AgentRequest::Stats(_) => "stats",
+        AgentRequest::ReadOutput(_) => "read-output",
+        AgentRequest::WriteStdin(_) => "write-stdin",
+        AgentRequest::CloseStdin(_) => "close-stdin",
     }
 }
 

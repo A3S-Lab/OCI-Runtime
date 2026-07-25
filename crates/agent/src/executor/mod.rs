@@ -5,6 +5,7 @@ mod device;
 mod exec;
 mod exec_process;
 mod init;
+mod io;
 mod mount;
 #[cfg(test)]
 mod mount_tests;
@@ -16,6 +17,7 @@ mod plan;
 #[cfg(test)]
 mod plan_tests;
 mod process;
+mod process_io;
 mod rootfs;
 #[cfg(test)]
 mod rootfs_tests;
@@ -29,15 +31,16 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_agent_protocol::{
-    AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
-    AgentExecRequest, AgentKillRequest, AgentProcess, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
+    AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
+    AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcess, AgentProcessesRequest,
+    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
+    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, OperationContext,
-    ProcessRecord, Result,
+    OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -277,6 +280,7 @@ impl LinuxExecutor {
             &config_snapshot,
             &self.init_executable,
             state.cgroup_manager.as_ref(),
+            &request.io,
         )
         .await
         {
@@ -699,6 +703,18 @@ impl GuestAgentService for LinuxExecutor {
     async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
         let mut state = self.state.lock().await;
         Self::stats_new(&mut state, &request).await
+    }
+
+    async fn read_output(&self, request: AgentReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.read_output_new(&request).await
+    }
+
+    async fn write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
+        self.write_stdin_new(&request).await
+    }
+
+    async fn close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
+        self.close_stdin_new(&request).await
     }
 }
 

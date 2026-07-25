@@ -6,9 +6,9 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v9";
+    "a3s.oci.native-linux-multi-container-smoke.v10";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v7";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v8";
 
 /// Rootfs and mount enforcement evidence shared by native and utility-VM paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -386,6 +386,9 @@ impl NativeLinuxMultiContainerSmokeReport {
                     RuntimeOperation::Update,
                     RuntimeOperation::Processes,
                     RuntimeOperation::Stats,
+                    RuntimeOperation::ReadOutput,
+                    RuntimeOperation::WriteStdin,
+                    RuntimeOperation::CloseStdin,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
                 ]

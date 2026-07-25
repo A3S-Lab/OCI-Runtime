@@ -323,7 +323,10 @@ pub struct EventsRequest {
     pub wait_timeout_ms: Option<u64>,
 }
 
-/// Read captured stdout or stderr after a sequence cursor.
+/// Read captured stdout or stderr after an inclusive byte cursor.
+///
+/// Start with `after_sequence = 0`, then pass the last returned
+/// [`OutputChunk::sequence`] to the next poll.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadOutputRequest {
     pub process: ProcessTarget,
@@ -503,12 +506,20 @@ pub enum OutputStream {
     Stderr,
 }
 
-/// One ordered output frame.
+/// One globally ordered output frame.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputChunk {
+    /// Inclusive cursor immediately after this frame.
+    ///
+    /// Data frames advance the cursor by `data.len()` bytes. An EOF frame has
+    /// empty data and advances it by one logical position. This permits exact
+    /// pagination through a partially returned driver frame.
     pub sequence: u64,
+    /// Descriptor from which the frame was drained.
     pub stream: OutputStream,
+    /// Raw output bytes. Non-EOF frames are never empty.
     pub data: Vec<u8>,
+    /// Whether this is the final frame for `stream`.
     pub eof: bool,
 }
 

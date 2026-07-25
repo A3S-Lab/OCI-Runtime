@@ -66,6 +66,15 @@ generation-bound snapshot with a positive Unix-nanosecond timestamp,
 normalized CPU nanoseconds, memory bytes, process count, and named cgroup
 integer counters.
 
+Protocol version 6 adds `read-output`, `write-stdin`, and `close-stdin`.
+Every request carries an exact process target. Output polls use one globally
+ordered inclusive byte cursor across captured stdout and stderr, support
+partial-frame pagination and bounded long polling, and return an empty EOF
+frame for each captured stream. Data frames advance the cursor by their byte
+length; EOF advances it by one logical position. Stdin writes carry at most
+4 MiB per guest message and preserve backpressure. The host driver splits a
+larger SDK write into bounded guest messages. Closing stdin is idempotent.
+
 The client breaks a long init or process wait into bounded 25-millisecond
 guest requests. The single correlated connection therefore remains available
 to query or control another container between polls. Negotiation filters
@@ -75,17 +84,20 @@ neither advertises nor accepts `wait`; protocol-v1 and protocol-v2 peers
 neither advertise nor accept the version-3 process operations, and
 protocol-v1 through protocol-v3 peers neither advertise nor accept the
 version-4 control operations. Protocol-v1 through protocol-v4 peers neither
-advertise nor accept the version-5 resource operations.
+advertise nor accept the version-5 resource operations. Protocol-v1 through
+protocol-v5 peers neither advertise nor accept the version-6 process-I/O
+operations.
 
 Protocol support and executor capability remain separate. The current shared
-Linux executor negotiates version 5 and advertises the exact fourteen
+Linux executor negotiates version 6 and advertises the exact seventeen
 implemented operations: the six lifecycle/init-wait operations; exec,
 per-process signal, and per-process wait; pause, resume, and processes; and
-update and stats. It retains an exact-generation process registry, one pidfd
-per authenticated init or exec process, the private controller-enabled
-cgroup-v2 root and owned leaf, stable replay and wait results, process-group
-ownership, and session cleanup. Durable recovery across an agent restart
-remains a separate host/driver release gate.
+update and stats; plus captured-output polling and stdin write/close. It
+retains an exact-generation process registry, one pidfd per authenticated init
+or exec process, the private controller-enabled cgroup-v2 root and owned leaf,
+stable replay and wait results, process-group and standard-I/O ownership, and
+session cleanup. Durable recovery across an agent restart remains a separate
+host/driver release gate.
 
 Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current
@@ -123,6 +135,9 @@ In-memory duplex tests cover:
   live init/exec process inventory;
 - protocol-v5 partial resource updates, typed stats, exact target correlation,
   and protocol-v4 filtering and pre-dispatch rejection of forged v5 requests;
+- protocol-v6 captured-output cursor pagination and EOF, piped stdin,
+  idempotent close, rejected writes after close, exact target correlation, and
+  protocol-v5 filtering of forged v6 requests;
 - filtering and pre-dispatch rejection of forged version-3 process operations
   on a protocol-v2 connection;
 - rejection of a forged protocol-v1 wait before service dispatch;
@@ -151,17 +166,17 @@ step.
 
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 5, and retains
+pipe, authenticates the token, negotiates protocol version 6, and retains
 bounded host and shim evidence. The current guest must advertise the exact
-fourteen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
+seventeen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
-`update`, and `stats`.
+`update`, `stats`, `read-output`, `write-stdin`, and `close-stdin`.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in `a3s.oci.agent-vm-smoke.v6`. The signed path must negotiate protocol version
-5 and the exact fourteen implemented operations. The missing-entitlement path
+in `a3s.oci.agent-vm-smoke.v7`. The signed path must negotiate protocol version
+6 and the exact seventeen implemented operations. The missing-entitlement path
 must exit with status `2`, report no negotiation, terminate the shim process
 group, and leave no private endpoint residue. Both paths also retain
 in-process evidence that the exact runtime-owned endpoint was removed, the
@@ -177,8 +192,10 @@ per-process wait, exact and replayed process signal, stable repeated process
 wait, exact live init/exec inventory, replayed pause/resume, a
 progress-producing exec that stops while the cgroup is frozen and advances
 again after resume, replay-safe live CPU, memory, cpuset, and PID updates,
-normalized cgroup-v2 statistics, init-exit cleanup of another live exec,
-stopped observation, stopped-only delete, exact delete replay, and a final
+normalized cgroup-v2 statistics, captured stdout/stderr with byte-accurate
+pagination and EOF, piped stdin with idempotent close, rejected writes after
+close or exit, init-exit cleanup of another live exec, stopped observation,
+stopped-only delete, exact delete replay, and a final
 NotFound state query. The marker
 proves that the workload did not run before start and did run afterward. The
 init wrapper reads both
@@ -236,7 +253,7 @@ the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
 exact operation replay, rejection of cross-container operation-ID reuse, a
 bounded wait on A that does not block B state, exact repeated terminal results
-for both containers, and independent pidfd-backed cleanup. Its schema-v7
+for both containers, and independent pidfd-backed cleanup. Its schema-v8
 namespace phase retains a prepared donor, rejects a wrong-type namespace
 descriptor before state, joins all eight Linux namespace types across two
 workloads, proves retained-rootfs execution after the mount join, and removes
@@ -245,7 +262,7 @@ missing mount-target creation at the create barrier, shared rootfs propagation,
 read-only and masked path enforcement, recursive VFS attributes across a nested
 submount, detached `idmap` and `ridmap` filesystem ownership, read-only rootfs
 behavior, PID 1 supervision, adopted-orphan reaping, exact normal exit, state
-removal, and fixture cleanup. Native Linux runs the equivalent schema-v8
+removal, and fixture cleanup. Native Linux runs the equivalent schema-v10
 sequence through the durable SDK service and additionally proves ID-mapped
 bind recursion without changing the source tree.
 
@@ -270,8 +287,8 @@ therefore retain their exact error class and context without trusting a
 pathname socket.
 
 This is the first Linux executor vertical slice, not complete OCI
-enforcement. A pinned immutable system image, complete process I/O, rootless
-ID mapping, advanced mount semantics, resources, hooks, exhaustive recovery
-injection, broader negative isolation cases, and full platform-specific
-lifecycle evidence remain required before a utility-VM driver can advance
-beyond `probe-only`.
+enforcement. A pinned immutable system image, PTY and inherited-descriptor
+I/O, rootless ID mapping, advanced mount semantics, resources, hooks,
+exhaustive recovery injection, broader negative isolation cases, and full
+platform-specific lifecycle evidence remain required before a utility-VM
+driver can advance beyond `probe-only`.

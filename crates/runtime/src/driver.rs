@@ -2,8 +2,8 @@ use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
-    IsolationRequest, OciBundle, OperationContext, ProcessIo, ProcessRecord, ProcessTarget, Result,
-    RuntimeOperation, Signal,
+    IsolationRequest, OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord,
+    ProcessTarget, Result, RuntimeOperation, Signal,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -183,6 +183,28 @@ pub struct DriverWaitProcessRequest {
     pub timeout_ms: Option<u64>,
 }
 
+/// Exact captured-output poll passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverReadOutputRequest {
+    /// Exact container generation and process identity.
+    pub target: ProcessTarget,
+    /// Inclusive cursor returned by the previous output chunk.
+    pub after_sequence: u64,
+    /// Maximum binary payload returned by this call.
+    pub max_bytes: u32,
+    /// Optional long-poll duration. Omitted means an immediate poll.
+    pub wait_timeout_ms: Option<u64>,
+}
+
+/// Exact stdin write passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverWriteStdinRequest {
+    /// Exact container generation and process identity.
+    pub target: ProcessTarget,
+    /// Bytes delivered in order with backpressure.
+    pub data: Vec<u8>,
+}
+
 /// Exact pause or resume input passed to one driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverContainerOperationRequest {
@@ -319,5 +341,20 @@ pub trait RuntimeDriver: Send + Sync {
     /// Read normalized resource counters for one exact generation.
     async fn stats(&self, _target: ContainerTarget) -> Result<ContainerStats> {
         Err(Error::unsupported("stats"))
+    }
+
+    /// Poll captured stdout and stderr for one exact process.
+    async fn read_output(&self, _request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        Err(Error::unsupported("read-output"))
+    }
+
+    /// Write bytes to one exact process stdin with backpressure.
+    async fn write_stdin(&self, _request: DriverWriteStdinRequest) -> Result<()> {
+        Err(Error::unsupported("write-stdin"))
+    }
+
+    /// Close one exact process stdin.
+    async fn close_stdin(&self, _target: ProcessTarget) -> Result<()> {
+        Err(Error::unsupported("close-stdin"))
     }
 }

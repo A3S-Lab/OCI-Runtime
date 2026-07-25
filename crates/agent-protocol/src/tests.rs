@@ -1,20 +1,22 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerStats, ContainerTarget, CpuStats, DeleteMode, Error,
-    ErrorCode, ExitStatus, Generation, MemoryStats, OciBundle, OperationContext, OperationId,
-    ProcessId, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
+    ErrorCode, ExitStatus, Generation, IoMode, MemoryStats, OciBundle, OperationContext,
+    OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    Result, Signal,
 };
 use tokio::io::{AsyncWriteExt, DuplexStream};
 
 use crate::model::{
-    AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
-    AgentHello, AgentKillRequest, AgentProcess, AgentProcessesRequest, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello,
+    AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
+    AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess, AgentProcessesRequest,
+    AgentReadOutputRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, HelloOutcome, HostHello,
     ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
 };
 use crate::wire::{read_frame, read_frame_for_test, write_frame};
@@ -52,6 +54,8 @@ struct TestAgentState {
     exits: HashMap<ContainerId, ExitStatus>,
     processes: HashMap<(ContainerId, Generation, ProcessId), AgentProcess>,
     process_exits: HashMap<(ContainerId, Generation, ProcessId), ExitStatus>,
+    stdin: HashMap<(ContainerId, Generation, ProcessId), Vec<u8>>,
+    stdin_closed: HashSet<(ContainerId, Generation, ProcessId)>,
     next_pid: i32,
 }
 
@@ -76,6 +80,9 @@ impl GuestAgentService for TestAgent {
                 crate::AgentOperation::Processes,
                 crate::AgentOperation::Update,
                 crate::AgentOperation::Stats,
+                crate::AgentOperation::ReadOutput,
+                crate::AgentOperation::WriteStdin,
+                crate::AgentOperation::CloseStdin,
             ],
         )
         .expect("valid test capabilities")
@@ -389,6 +396,66 @@ impl GuestAgentService for TestAgent {
         })
     }
 
+    async fn read_output(&self, request: AgentReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        let agent = self.state.lock().expect("agent state lock");
+        ensure_test_process(&agent, &request.process)?;
+        const OUTPUT: &[u8] = b"ready\n";
+        let latest = OUTPUT.len() as u64 + 1;
+        if request.after_sequence > latest {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "test output cursor is ahead of the stream",
+            ));
+        }
+
+        let mut chunks = Vec::new();
+        let mut cursor = request.after_sequence;
+        if cursor < OUTPUT.len() as u64 {
+            let offset = cursor as usize;
+            let length = (request.max_bytes as usize).min(OUTPUT.len() - offset);
+            if length > 0 {
+                cursor += length as u64;
+                chunks.push(OutputChunk {
+                    sequence: cursor,
+                    stream: OutputStream::Stdout,
+                    data: OUTPUT[offset..offset + length].to_vec(),
+                    eof: false,
+                });
+            }
+        }
+        if cursor == OUTPUT.len() as u64 {
+            chunks.push(OutputChunk {
+                sequence: latest,
+                stream: OutputStream::Stdout,
+                data: Vec::new(),
+                eof: true,
+            });
+        }
+        Ok(chunks)
+    }
+
+    async fn write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
+        let key = process_key(&request.process)?;
+        let mut agent = self.state.lock().expect("agent state lock");
+        ensure_test_process(&agent, &request.process)?;
+        if agent.stdin_closed.contains(&key) {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "test process stdin is closed",
+            ));
+        }
+        agent.stdin.entry(key).or_default().extend(request.data);
+        Ok(())
+    }
+
+    async fn close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
+        let key = process_key(&request.process)?;
+        let mut agent = self.state.lock().expect("agent state lock");
+        ensure_test_process(&agent, &request.process)?;
+        agent.stdin_closed.insert(key);
+        Ok(())
+    }
+
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
         let mut agent = self.state.lock().expect("agent state lock");
         let current = agent
@@ -403,6 +470,27 @@ impl GuestAgentService for TestAgent {
         }
         agent.states.remove(&request.target.id);
         Ok(())
+    }
+}
+
+fn ensure_test_process(agent: &TestAgentState, target: &ProcessTarget) -> Result<()> {
+    let state = agent
+        .states
+        .get(&target.container.id)
+        .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+    if state.target() != &target.container {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "guest container generation does not match",
+        ));
+    }
+    if target.process_id.is_init() || agent.processes.contains_key(&process_key(target)?) {
+        Ok(())
+    } else {
+        Err(Error::new(
+            ErrorCode::NotFound,
+            "guest exec process does not exist",
+        ))
     }
 }
 
@@ -867,7 +955,7 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 6, 6)
+    let error = AgentClient::connect_for_test(host, token(9), 7, 7)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);

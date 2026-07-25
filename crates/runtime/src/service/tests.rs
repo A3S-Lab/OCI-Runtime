@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -9,23 +9,26 @@ use a3s_oci_sdk::oci_spec::runtime::{
     Arch, ContainerState, LinuxNamespaceType, LinuxResources, LinuxSeccompAction, Process,
 };
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerOperationRequest, ContainerStats, ContainerTarget, CpuStats,
-    CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus,
-    Generation, IoMode, IsolationRequest, KillRequest, ListRequest, MemoryStats, OciBundle,
-    OciRuntimeService, OciSchemaValidator, OperationContext, OperationId, ProcessId, ProcessIo,
-    ProcessRecord, ProcessTarget, ProcessesRequest, Result, RuntimeOperation, Signal,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TrustDomainId, UpdateRequest,
-    WaitProcessRequest, WaitRequest,
+    async_trait, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerStats,
+    ContainerTarget, CpuStats, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
+    ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest, ListRequest,
+    MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
+    OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, Result, RuntimeOperation, Signal, SignalProcessRequest,
+    StartRequest, StateRequest, StatsRequest, TrustDomainId, UpdateRequest, WaitProcessRequest,
+    WaitRequest, WriteStdinRequest,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
 use crate::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 
 mod fault_matrix;
+mod io_operations;
 mod process_operations;
 mod resource_operations;
 
@@ -58,6 +61,9 @@ enum DriverCall {
     Processes(ContainerTarget),
     Update(DriverUpdateRequest),
     Stats(ContainerTarget),
+    ReadOutput(DriverReadOutputRequest),
+    WriteStdin(DriverWriteStdinRequest),
+    CloseStdin(ProcessTarget),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -74,6 +80,7 @@ struct RecordingDriver {
     exec_replays: Mutex<HashMap<OperationId, (DriverExecRequest, DriverProcess)>>,
     signal_process_replays: Mutex<HashMap<OperationId, DriverSignalProcessRequest>>,
     update_replays: Mutex<HashMap<OperationId, DriverUpdateRequest>>,
+    output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
 }
 
@@ -103,6 +110,7 @@ impl RecordingDriver {
             exec_replays: Mutex::new(HashMap::new()),
             signal_process_replays: Mutex::new(HashMap::new()),
             update_replays: Mutex::new(HashMap::new()),
+            output_responses: Mutex::new(VecDeque::new()),
             failures: Mutex::new(HashMap::new()),
         }
     }
@@ -137,6 +145,9 @@ impl RecordingDriver {
             RuntimeOperation::Processes,
             RuntimeOperation::Update,
             RuntimeOperation::Stats,
+            RuntimeOperation::ReadOutput,
+            RuntimeOperation::WriteStdin,
+            RuntimeOperation::CloseStdin,
         ]);
         driver
     }
@@ -152,6 +163,13 @@ impl RecordingDriver {
             .entry(operation)
             .or_default()
             .push(error);
+    }
+
+    fn queue_output(&self, chunks: Vec<OutputChunk>) {
+        self.output_responses
+            .lock()
+            .expect("driver output responses lock")
+            .push_back(chunks);
     }
 
     fn take_failure(&self, operation: &'static str) -> Option<Error> {
@@ -700,6 +718,58 @@ impl RuntimeDriver for RecordingDriver {
             process_count: u64::from(state.status() != ContainerState::Stopped),
             metrics: BTreeMap::from([("memory.events.oom_kill".to_string(), 0)]),
         })
+    }
+
+    async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::ReadOutput(request.clone()));
+        if let Some(error) = self.take_failure("read-output") {
+            return Err(error);
+        }
+        if let Some(chunks) = self
+            .output_responses
+            .lock()
+            .expect("driver output responses lock")
+            .pop_front()
+        {
+            return Ok(chunks);
+        }
+        let sequence = request.after_sequence.checked_add(1).ok_or_else(|| {
+            Error::new(
+                ErrorCode::ResourceExhausted,
+                "test driver output sequence space is exhausted",
+            )
+        })?;
+        Ok(vec![OutputChunk {
+            sequence,
+            stream: OutputStream::Stdout,
+            data: Vec::new(),
+            eof: true,
+        }])
+    }
+
+    async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::WriteStdin(request));
+        if let Some(error) = self.take_failure("write-stdin") {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn close_stdin(&self, target: ProcessTarget) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::CloseStdin(target));
+        if let Some(error) = self.take_failure("close-stdin") {
+            return Err(error);
+        }
+        Ok(())
     }
 }
 

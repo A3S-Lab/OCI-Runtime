@@ -4,12 +4,14 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener as StdUnixListener};
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{ExitStatus as ProcessExitStatus, Stdio};
+use std::process::ExitStatus as ProcessExitStatus;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::AgentVsockEndpoint;
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
-use a3s_oci_sdk::{ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, Result};
+use a3s_oci_sdk::{
+    ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, ProcessIo, Result,
+};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -18,6 +20,7 @@ use tokio::time::timeout;
 use super::capability::CapabilityPlan;
 use super::cgroup::{self, CgroupHandle, CgroupManager};
 use super::control::{acknowledge_user_mapping, read_outcome, InitOutcome, START_BYTE};
+use super::io::ProcessIoHandle;
 use super::namespace::{self, RetainedExecutionContext};
 use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
@@ -36,6 +39,7 @@ pub(super) struct PreparedProcess {
     capabilities: CapabilityPlan,
     seccomp: SeccompPlan,
     cgroup: Option<CgroupHandle>,
+    io: ProcessIoHandle,
     exit_status: Option<ExitStatus>,
 }
 
@@ -45,6 +49,7 @@ impl PreparedProcess {
         config_snapshot: &Path,
         init_executable: &Path,
         cgroup_manager: Option<&CgroupManager>,
+        io: &ProcessIo,
     ) -> Result<Self> {
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
         let cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
@@ -57,10 +62,8 @@ impl PreparedProcess {
             .arg(&plan.bundle_directory)
             .arg(&control_name)
             .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
             .kill_on_drop(true);
+        ProcessIoHandle::configure(&mut command, io)?;
         // SAFETY: the callback runs in the freshly forked command child and
         // performs one bounded write to the already-open cgroup.procs file.
         unsafe {
@@ -75,6 +78,13 @@ impl PreparedProcess {
                 format!("failed to spawn prepared container init: {error}"),
             )
         })?;
+        let process_io = match ProcessIoHandle::attach(&mut child, io) {
+            Ok(process_io) => process_io,
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+        };
         let Some(raw_pid) = child.id() else {
             terminate(&mut child).await;
             return Err(process_error(
@@ -253,6 +263,7 @@ impl PreparedProcess {
             capabilities: plan.capabilities,
             seccomp: plan.seccomp.clone(),
             cgroup,
+            io: process_io,
             exit_status: None,
         })
     }
@@ -308,6 +319,10 @@ impl PreparedProcess {
 
     pub(super) const fn capabilities(&self) -> CapabilityPlan {
         self.capabilities
+    }
+
+    pub(super) fn io_handle(&self) -> ProcessIoHandle {
+        self.io.clone()
     }
 
     pub(super) fn pidfd_descriptor(&self) -> std::os::fd::RawFd {
