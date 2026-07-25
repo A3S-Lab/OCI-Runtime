@@ -94,17 +94,19 @@ following:
    `kill`, `delete`, and `wait`;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
-3. create returns a positive host-visible PID in the exact OCI `created`
-   state;
+3. create returns the positive host-visible PID of the configured process in
+   the exact OCI `created` state while a dedicated namespace PID 1 remains
+   behind it;
 4. the workload marker is absent before start;
 5. retrying create replays its exact result;
 6. start releases the prepared init; the workload verifies exact rootful
    UID/GID maps plus monotonic and boottime namespace offsets before the marker
    is observed;
-7. a 50-millisecond wait returns `DeadlineExceeded` while the init process is
-   still running;
-8. `SIGKILL` reaches the namespace PID 1 through its retained pidfd, and
-   retrying kill replays its exact result;
+7. a 50-millisecond wait returns `DeadlineExceeded` while the configured
+   process is still running;
+8. `SIGKILL` reaches the configured process through its retained pidfd, and
+   both internal supervisors preserve the exact signal result while retrying
+   kill replays its exact result;
 9. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
    the same terminal result;
 10. state reaches `stopped`;
@@ -112,10 +114,9 @@ following:
 12. state returns `NotFound` after delete;
 13. the marker, executor root, and complete smoke session are removed.
 
-The smoke uses `SIGKILL` because Linux protects a PID-namespace init from
-default-action signals such as `SIGTERM`. General PID 1 supervision and signal
-forwarding remain part of the executor roadmap. The runtime never resolves the
-numeric PID again for lifecycle or cleanup signaling.
+The smoke uses `SIGKILL` to prove exact signal-status propagation through the
+namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
+again for lifecycle or cleanup signaling.
 
 GitHub Actions runs this real rootful lifecycle on x86_64 and aarch64 Ubuntu.
 Each architecture runs once with `/dev/kvm` absent and once with a directory at
@@ -170,7 +171,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
-The `a3s.oci.native-linux-multi-container-smoke.v7` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v8` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -186,6 +187,12 @@ create barrier and requires:
    window;
 5. both joiners to complete without changing the donor's created state;
 6. all donor, joiner, and negative-case state to be removed.
+
+The final enforcement workload must run as PID 2+ beneath a dedicated
+namespace PID 1, prove the launcher-to-PID-1-to-workload identity chain, leave
+a long-lived grandchild that is adopted by PID 1, terminate that child, and
+observe its `/proc/<pid>` entry disappear while the workload remains alive.
+This evidence fails if PID 1 does not continuously reap adopted zombies.
 
 The same report then runs an independent rootfs enforcement workload and
 requires:
@@ -231,10 +238,11 @@ done
 The versioned `a3s.oci.native-linux-fault-cleanup.v2` report requires:
 
 1. the exact seven-operation service inventory, requested prefix, and a
-   positive runtime-visible init PID;
+   positive runtime-visible configured-process PID;
 2. marker absence behind create and exact marker contents after start;
 3. `normal_delete_attempted: false`;
-4. successful executor shutdown and disappearance of the init PID;
+4. successful executor shutdown and disappearance of the configured-process
+   PID;
 5. removal of the marker, executor runtime root, durable state, and complete
    diagnostic session root.
 
@@ -253,8 +261,7 @@ The default driver must remain `probe-only` until at least the following pass:
   restart recovery beyond the retained wrong-type pre-state rejection;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
-- namespace-internal init supervision and orphan/zombie reaping, exec,
-  per-process wait, and complete process I/O;
+- container exec, per-process signaling and wait, and complete process I/O;
 - hooks, exhaustive durable-write and driver-error recovery injection,
   descriptor-relative path handling, and adversarial cleanup;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on

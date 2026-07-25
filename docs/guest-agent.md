@@ -78,12 +78,15 @@ and time namespaces in one `unshare` call. Time offsets accept only normalized
 through `/proc/self/timens_offsets` before forking. A new PID or time namespace
 applies to the caller's next child; joined PID and time namespaces have the
 same next-child execution requirement. The wrapper therefore remains as a
-supervisor and forks the container init whenever either type is configured.
-With a newly created PID namespace that child is namespace PID 1. The child
-applies and reads back hostname and domainname with `uname`. When a new mount
-namespace is requested, it then makes `/` recursively private,
-recursively bind-mounts the rootfs onto itself, applies every configured mount
-in listed order, and uses
+launcher and forks a namespace child whenever either type is configured. For
+a newly created PID namespace, that child remains as namespace PID 1, applies
+all create-time setup, and then forks the configured container process as PID
+2 or greater. Joined PID namespaces and time-only transitions keep the direct
+launcher-to-process path because their namespace already has an init process.
+The create-time child applies and reads back hostname and domainname with
+`uname`. When a new mount namespace is requested, it makes `/` recursively
+private, recursively bind-mounts the rootfs onto itself, applies every
+configured mount in listed order, and uses
 `pivot_root(".", ".")` followed by a detached unmount of the old root. All of
 this succeeds before readiness is reported, so namespace, mount, and rootfs
 isolation are part of the create barrier. When the mount namespace is inherited
@@ -120,47 +123,53 @@ The current mount slice:
   propagation or ID-map modes, comma-packed options, `tmpcopyup`, and mount
   moves instead of silently ignoring them.
 
-Create snapshots the exact digest-bound configuration, starts an internal init
+Create snapshots the exact digest-bound configuration, starts an internal
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
-accepts only the exact kernel-reported supervisor PID. The wrapper revalidates
+accepts only the exact kernel-reported launcher PID. The wrapper revalidates
 the bundle, resolves a contained rootfs, and returns either a bounded typed
-error or readiness with the runtime-visible init PID before blocking. The
+error or readiness with the runtime-visible configured-process PID and, for a
+new PID namespace, its namespace-init PID before blocking. The
 authenticated parent permits exactly one expected user-mapping request. It
 rejects readiness that bypasses that request, a repeated request, or a request
 without a configured user namespace. For a new PID namespace, the agent
-verifies the reported PID's parent, `NSpid` mapping to 1, and namespace
-identity against the supervisor. It also verifies new user and time namespace
-identities against the authenticated supervisor's intended namespace links.
+verifies the complete launcher → namespace PID 1 → configured-process parent
+chain, the init's `NSpid` mapping to 1, the configured process's mapping above
+1, and both PID namespace links. It also verifies new user and time namespace
+identities against the authenticated launcher's intended namespace links.
 Create therefore preserves the exact rejection or returns `created` before the
 configured process runs. Before returning `created`, the executor opens a
-pidfd for that authenticated init PID. Failure to open the descriptor
-terminates the wrapper and fails create. Start sends the one-byte release
-signal; the init applies the inherited-namespace `chroot` when needed, then
-working directory, groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and
-calls `execve`.
+pidfd for that authenticated configured-process PID—the PID exposed through
+OCI state. Failure to open the descriptor terminates the wrapper and fails
+create. Start sends the one-byte release signal directly to that process; it
+applies the inherited-namespace `chroot` when needed, then working directory,
+groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
 
-State observes the init process, kill delivers one positive Linux signal
-through the retained pidfd, and delete supports stopped-only and force
-cleanup. Cleanup also signals through the pidfd and always reaps the
-authenticated wrapper before removing its runtime directory. Numeric PID
-reuse can therefore never redirect a lifecycle signal to an unrelated
-process.
+State observes the configured process, kill delivers one positive Linux signal
+through its retained pidfd, and delete supports stopped-only and force cleanup.
+Cleanup also signals through the pidfd and always reaps the authenticated
+launcher before removing its runtime directory. Numeric PID reuse can
+therefore never redirect a lifecycle signal to an unrelated process.
 
-The PID-namespace supervisor preserves the configured namespace-PID-1
-process's terminal outcome: it exits with the same normal code or resets,
-unblocks, and re-raises the same terminating signal. The executor converts
-that raw Linux status into exactly one SDK exit code or signal, caches it per
-generation, and returns it from every repeated init wait. A bounded wait
-returns `DeadlineExceeded` while the process is still running, and the
-executor releases its registry lock between observations so another
-container remains independently queryable.
+Namespace PID 1 continuously calls `waitpid(-1)` so exited descendants and
+adopted orphans cannot remain as zombies. After the configured process exits,
+PID 1 repeatedly sends `SIGKILL` to every remaining namespace process and
+reaps until `ECHILD`. It then reports the configured process's exact normal or
+signal outcome over a private channel. Only after namespace cleanup completes
+does the outer launcher exit with the same code or reset, unblock, and
+re-raise the same terminating signal. The executor converts that raw Linux
+status into exactly one SDK exit code or signal, caches it per generation, and
+returns it from every repeated wait. A bounded wait returns
+`DeadlineExceeded` while the process is still running, and the executor
+releases its registry lock between observations so another container remains
+independently queryable.
 
 Exact request retries are fingerprinted by `OperationId`, and reused IDs with
 different requests fail. Generation fences remain in memory after delete.
 
 All guest registry, generation, and idempotency state is session-local. A
-closed host connection force-stops remaining init processes and removes the
-agent-owned runtime root. Agent restart recovery is not implemented yet.
+closed host connection force-stops remaining configured processes and their
+namespace supervisors, then removes the agent-owned runtime root. Agent
+restart recovery is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
@@ -189,10 +198,11 @@ cleanup, and nominal guest runtime cleanup.
 `a3s-oci oci-vm-multi-container-smoke` keeps two distinct bundle rootfs and
 runtime slots live behind the create barrier, proves that A's start, kill,
 wait, delete, recreation, stale generation, and replay conflicts do not alter
-or block B, then completes B independently. The macOS HVF gate sends both init
-signals through distinct retained pidfds and retains both exact repeated exit
+or block B, then completes B independently. The macOS HVF gate sends both
+configured-process signals through distinct retained pidfds and retains both
+exact repeated exit
 statuses and per-container markers together with guest-runtime and
-host-process cleanup evidence. Schema v6 then retains a prepared donor and
+host-process cleanup evidence. Schema v7 then retains a prepared donor and
 qualifies wrong-type rejection plus UTS, mount, IPC, network, cgroup, PID,
 user, and time joins. Both joiner workloads must cross `exec`, remain running
 for a bounded observation window, stop cleanly, and leave the donor unchanged.
@@ -202,8 +212,10 @@ read-only mount, empty read-only masked file and directory replacements,
 recursive attributes on a bind mount and nested submount, read-only rootfs
 enforcement, exact `idmap` and `ridmap` ownership on detached filesystem
 mounts, normal exit, state removal, and removal of every host-side fixture
-artifact. The native Linux schema-v7 report additionally requires bind-source
-ownership preservation and non-recursive versus recursive bind evidence.
+artifact. The same workload proves that it is PID 2+ beneath a dedicated
+namespace PID 1 and that PID 1 reaps an adopted child. The native Linux
+schema-v8 report additionally requires bind-source ownership preservation and
+non-recursive versus recursive bind evidence.
 
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
 records that delete was not attempted, and requires guest executor shutdown to

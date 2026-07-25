@@ -137,21 +137,24 @@ one mapping request only from the already verified wrapper PID, installs and
 reads back exact UID/GID maps, then acknowledges the child. The wrapper writes
 and verifies monotonic/boottime offsets, clears inherited supplementary groups,
 and switches to mapped namespace-root UID/GID credentials before rootfs
-mutation. For a new PID namespace, the container init runs as namespace PID 1
-while the guest agent authenticates and reports its host-visible PID. Before
-returning created state, the guest opens a pidfd for that exact process;
-lifecycle and cleanup signals use the retained descriptor rather than
-resolving the numeric PID again. The host verifies marker removal and that VM
-shutdown leaves no new guest-agent runtime directory. Native Linux and macOS
-HVF retain this user/time and rootfs enforcement evidence; the historical
-WHPX qualification predates it.
+mutation. For a new PID namespace, a dedicated namespace PID 1 completes
+create-time setup and then forks the configured process as PID 2+. The guest
+agent authenticates the launcher → PID 1 → configured-process chain and
+reports the configured process's host-visible PID. Before returning created
+state, the guest opens a pidfd for that exact process; lifecycle and cleanup
+signals use the retained descriptor rather than resolving the numeric PID
+again. PID 1 reaps adopted children and terminates every remaining namespace
+process after the configured process exits. The host verifies marker removal
+and that VM shutdown leaves no new guest-agent runtime directory. Native Linux
+and macOS HVF retain this user/time, PID-supervision, and rootfs enforcement
+evidence; the historical WHPX qualification predates it.
 
 The macOS `oci-vm-multi-container-smoke` path keeps two exact targets live on
 the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
 exact operation replay, rejection of cross-container operation-ID reuse, a
 bounded wait on A that does not block B state, exact repeated terminal results
-for both containers, and independent pidfd-backed cleanup. Its schema-v6
+for both containers, and independent pidfd-backed cleanup. Its schema-v7
 namespace phase retains a prepared donor, rejects a wrong-type namespace
 descriptor before state, joins all eight Linux namespace types across two
 workloads, proves retained-rootfs execution after the mount join, and removes
@@ -159,24 +162,27 @@ all state without changing the donor's created record. A third workload proves
 missing mount-target creation at the create barrier, shared rootfs propagation,
 read-only and masked path enforcement, recursive VFS attributes across a nested
 submount, detached `idmap` and `ridmap` filesystem ownership, read-only rootfs
-behavior, exact normal exit, state removal, and fixture cleanup. Native Linux
-runs the equivalent schema-v7 sequence through the durable SDK service and
-additionally proves ID-mapped bind recursion without changing the source tree.
+behavior, PID 1 supervision, adopted-orphan reaping, exact normal exit, state
+removal, and fixture cleanup. Native Linux runs the equivalent schema-v8
+sequence through the durable SDK service and additionally proves ID-mapped
+bind recursion without changing the source tree.
 
 The `oci-vm-fault-cleanup` companion stops after a successful create, start, or
 kill request and never sends delete. Session EOF must still make the agent call
-`LinuxExecutor::shutdown`, force-stop any retained init process, remove the
-executor root, and exit successfully. The host retains the exact requested and
-injected boundary together with guest-runtime and platform cleanup evidence.
+`LinuxExecutor::shutdown`, force-stop any retained configured process and its
+namespace supervisor, remove the executor root, and exit successfully. The
+host retains the exact requested and injected boundary together with
+guest-runtime and platform cleanup evidence.
 
 The private parent/init control channel reports a user-mapping request,
-readiness with a positive runtime-visible PID, or a bounded typed SDK error.
-The parent validates the kernel-reported supervisor peer PID before reading
-any outcome. It permits the mapping request only when the exact plan requires
-one, acknowledges it only after verified writes, and rejects a bypass or
-repeat. For PID isolation it additionally verifies the reported init's parent,
-`NSpid` mapping, and namespace links; user and time namespace identities are
-also compared with the authenticated supervisor's intended links before
+readiness with a positive runtime-visible configured-process PID and optional
+namespace-init PID, or a bounded typed SDK error. The parent validates the
+kernel-reported launcher peer PID before reading any outcome. It permits the
+mapping request only when the exact plan requires one, acknowledges it only
+after verified writes, and rejects a bypass or repeat. For new PID isolation
+it additionally verifies both parent links, the PID 1 and PID 2+ `NSpid`
+mappings, and both namespace links; user and time namespace identities are
+also compared with the authenticated launcher's intended links before
 exposing the created state. Create-time namespace and rootfs failures
 therefore retain their exact error class and context without trusting a
 pathname socket.

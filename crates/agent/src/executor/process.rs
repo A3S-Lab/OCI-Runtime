@@ -168,7 +168,10 @@ impl PreparedProcess {
                     }
                     user_mapping_installed = true;
                 }
-                Ok(Ok(InitOutcome::Ready { pid: runtime_pid })) => {
+                Ok(Ok(InitOutcome::Ready {
+                    pid: runtime_pid,
+                    namespace_init_pid,
+                })) => {
                     if plan.namespaces.new_user() && !user_mapping_installed {
                         terminate(&mut child).await;
                         return Err(process_error(
@@ -176,7 +179,9 @@ impl PreparedProcess {
                             "container init bypassed required user namespace mappings",
                         ));
                     }
-                    if let Err(error) = pid::validate_runtime_pid(plan, pid, runtime_pid).await {
+                    if let Err(error) =
+                        pid::validate_runtime_pid(plan, pid, runtime_pid, namespace_init_pid).await
+                    {
                         terminate(&mut child).await;
                         return Err(error);
                     }

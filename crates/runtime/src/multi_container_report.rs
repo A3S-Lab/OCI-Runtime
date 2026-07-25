@@ -6,9 +6,9 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v7";
+    "a3s.oci.native-linux-multi-container-smoke.v8";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v6";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v7";
 
 /// Rootfs and mount enforcement evidence shared by native and utility-VM paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +89,25 @@ impl RootfsMountEvidence {
         self.idmap_source_ownership_unchanged == Some(true)
             && self.idmap_nonrecursive_enforced == Some(true)
             && self.ridmap_recursive_enforced == Some(true)
+    }
+}
+
+/// Namespace PID 1 supervision and adopted-child reaping evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PidSupervisionEvidence {
+    /// Whether the workload ran as PID 2+ under a dedicated namespace PID 1
+    /// in the same PID namespace.
+    pub pid1_supervision_enforced: bool,
+    /// Whether namespace PID 1 reaped an adopted grandchild while the workload
+    /// remained alive.
+    pub orphan_reaping_enforced: bool,
+}
+
+impl PidSupervisionEvidence {
+    /// Return whether the namespace-internal supervision invariants passed.
+    #[must_use]
+    pub const fn is_success(&self) -> bool {
+        self.pid1_supervision_enforced && self.orphan_reaping_enforced
     }
 }
 
@@ -301,6 +320,8 @@ pub struct NativeLinuxMultiContainerSmokeReport {
     pub namespace_join: NamespaceJoinEvidence,
     /// Mount-target, propagation, masking, and read-only enforcement evidence.
     pub rootfs_mount: RootfsMountEvidence,
+    /// Namespace PID 1 supervision and orphan-reaping evidence.
+    pub pid_supervision: PidSupervisionEvidence,
     /// Whether both workload markers were removed.
     pub markers_removed: bool,
     /// Whether executor shutdown removed its private transient root.
@@ -324,6 +345,7 @@ impl NativeLinuxMultiContainerSmokeReport {
             lifecycle: MultiContainerLifecycleEvidence::default(),
             namespace_join: NamespaceJoinEvidence::default(),
             rootfs_mount: RootfsMountEvidence::default(),
+            pid_supervision: PidSupervisionEvidence::default(),
             markers_removed: false,
             executor_runtime_clean: false,
             session_root_clean: false,
@@ -370,6 +392,7 @@ impl NativeLinuxMultiContainerSmokeReport {
             && self.namespace_join.is_success()
             && self.rootfs_mount.is_success()
             && self.rootfs_mount.native_idmap_bind_is_success()
+            && self.pid_supervision.is_success()
             && self.markers_removed
             && self.executor_runtime_clean
             && self.session_root_clean
@@ -393,6 +416,8 @@ pub struct OciVmMultiContainerSmokeReport {
     pub namespace_join: NamespaceJoinEvidence,
     /// Mount-target, propagation, masking, and read-only enforcement evidence.
     pub rootfs_mount: RootfsMountEvidence,
+    /// Namespace PID 1 supervision and orphan-reaping evidence.
+    pub pid_supervision: PidSupervisionEvidence,
     /// Whether both workload markers were removed.
     pub markers_removed: bool,
     /// Whether VM shutdown left no new guest-agent runtime directory.
@@ -414,6 +439,7 @@ impl OciVmMultiContainerSmokeReport {
             lifecycle: MultiContainerLifecycleEvidence::default(),
             namespace_join: NamespaceJoinEvidence::default(),
             rootfs_mount: RootfsMountEvidence::default(),
+            pid_supervision: PidSupervisionEvidence::default(),
             markers_removed: false,
             guest_runtime_clean: false,
             bridge: AgentVmSmokeReport::initial(platform),
@@ -458,6 +484,7 @@ impl OciVmMultiContainerSmokeReport {
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
             && self.namespace_join.is_success()
             && self.rootfs_mount.is_success()
+            && self.pid_supervision.is_success()
             && self.markers_removed
             && self.guest_runtime_clean
             && self.bridge.is_success()
@@ -468,7 +495,10 @@ impl OciVmMultiContainerSmokeReport {
 mod tests {
     use a3s_oci_sdk::ExitStatus;
 
-    use super::{MultiContainerLifecycleEvidence, NamespaceJoinEvidence, RootfsMountEvidence};
+    use super::{
+        MultiContainerLifecycleEvidence, NamespaceJoinEvidence, PidSupervisionEvidence,
+        RootfsMountEvidence,
+    };
 
     #[test]
     fn multi_container_success_requires_every_isolation_invariant() {
@@ -496,6 +526,19 @@ mod tests {
 
         let mut incomplete = complete;
         incomplete.wrong_type_rejected_before_state = false;
+        assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn pid_supervision_success_requires_pid1_and_orphan_reaping_evidence() {
+        let complete = PidSupervisionEvidence {
+            pid1_supervision_enforced: true,
+            orphan_reaping_enforced: true,
+        };
+        assert!(complete.is_success());
+
+        let mut incomplete = complete;
+        incomplete.orphan_reaping_enforced = false;
         assert!(!incomplete.is_success());
     }
 

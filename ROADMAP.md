@@ -97,8 +97,9 @@ Completed:
   isolated rootfs propagation, ordered OCI mounts with missing target
   creation, masked and read-only paths, read-only rootfs enforcement,
   `pivot_root`, authenticated host-visible PID reporting, exact-generation
-  state, bounded typed init rejection reporting, session idempotency, retained
-  pidfd signaling, and cleanup;
+  state, a dedicated namespace PID 1 supervisor with adopted-child reaping,
+  bounded typed init rejection reporting, session idempotency, retained
+  workload pidfd signaling, and cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -232,7 +233,8 @@ the utility-VM host/agent transport portion remains open.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the named-pipe/vsock bridge.
 - [x] Negotiate the guest protocol and retain boot evidence.
-- [x] Run a fixed init process through distinct OCI create and start calls.
+- [x] Run a fixed configured process through distinct OCI create and start
+  calls.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest
   runtime directory on the nominal path.
@@ -299,17 +301,19 @@ then may HVF become `experimental`.
   modes, and filesystem-specific data.
 - [x] Create new IPC, network, and cgroup namespaces atomically before the
   created barrier.
-- [x] Create a new PID namespace, run the container init as namespace PID 1,
-  and authenticate its host-visible PID before the created barrier.
+- [x] Create a new PID namespace, retain a dedicated namespace PID 1
+  supervisor, run the configured container process as PID 2+, and authenticate
+  the launcher-to-supervisor-to-process identity chain before the created
+  barrier.
 - [x] Prove executor shutdown cleanup without delete after successful create,
   start, and kill through native Linux and the macOS utility-VM path.
-- [x] Open and retain a pidfd for every authenticated init process, reject
-  kernels without `pidfd_open` and `pidfd_send_signal`, and deliver lifecycle
-  and cleanup signals without a numeric-PID reuse race. Prove the path through
-  native Linux and the macOS utility VM.
-- [x] Retain exact normal-or-signal init termination, return the same result
-  from repeated waits, enforce bounded wait timeouts, and prove one container's
-  wait does not block another container's state request.
+- [x] Open and retain a pidfd for every authenticated configured process,
+  reject kernels without `pidfd_open` and `pidfd_send_signal`, and deliver
+  lifecycle and cleanup signals without a numeric-PID reuse race. Prove the
+  path through native Linux and the macOS utility VM.
+- [x] Retain exact normal-or-signal configured-process termination, return the
+  same result from repeated waits, enforce bounded wait timeouts, and prove one
+  container's wait does not block another container's state request.
 - [x] Create new rootful user and time namespaces, install and read back exact
   UID/GID mappings through the authenticated parent, apply and verify
   monotonic/boottime offsets, switch to mapped namespace-root credentials
@@ -336,7 +340,10 @@ then may HVF become `experimental`.
   scheduler, I/O priority, affinity, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified
   resource enforcement.
-- [ ] Namespace-internal init supervision, orphan/zombie reaping, and exec.
+- [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
+  all remaining namespace processes after the configured process exits, and
+  preserve that process's exact exit code or terminating signal.
+- [ ] Container exec with per-process signaling, wait, and cleanup.
 - [ ] Ordered hooks with OCI state on stdin.
 - [ ] Backpressured stdin/stdout/stderr, PTY, resize, signals, and output
   cursors.

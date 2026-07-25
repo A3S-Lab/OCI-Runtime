@@ -39,7 +39,7 @@ The runtime has two execution paths:
 
 - **Native Linux** runs the reviewed namespace and mount profile with
   PID-reuse-safe process control without requiring KVM. Complete cgroup,
-  seccomp, capability, and supervision enforcement remains a release gate.
+  seccomp, capability, and exec enforcement remains a release gate.
 - **Utility VM** hosts the same Linux executor behind an authenticated guest
   agent, using KVM on Linux, HVF on macOS, or WHPX on Windows.
 
@@ -189,8 +189,8 @@ The versioned report retains two simultaneous create barriers, distinct
 positive PIDs, operation replay isolation, A/B lifecycle independence,
 nonblocking observation of B while A is being waited on, exact repeated exit
 status for both containers, generation-1 rejection after A is recreated as
-generation 2, and complete process, marker, executor-root, and durable-session
-cleanup.
+generation 2, dedicated namespace PID 1 supervision, adopted-orphan reaping,
+and complete process, marker, executor-root, and durable-session cleanup.
 
 The separate fault-cleanup diagnostic deliberately stops before OCI delete and
 requires executor shutdown to reclaim the live process and all scoped state:
@@ -207,8 +207,8 @@ done
 
 Each `a3s.oci.native-linux-fault-cleanup.v2` success identifies the exact
 injected boundary, records that normal delete was not attempted, and proves
-that the init PID, executor root, marker, and complete diagnostic session were
-removed.
+that the configured-process PID, executor root, marker, and complete
+diagnostic session were removed.
 
 ### macOS host gates
 
@@ -334,7 +334,7 @@ guest-runtime cleanup. This remains a fixed development profile rather than an
 arbitrary-workload driver.
 
 The multi-container gate places two distinct bundles in the same guest and
-keeps both init processes behind the create barrier:
+keeps both configured processes behind the create barrier:
 
 ```sh
 bundle_b="$rootfs_dir/rootfs/var/lib/a3s-oci-smoke/bundle-b"
@@ -351,7 +351,7 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$rootfs_dir/oci-multi-container.log"
 ```
 
-`a3s.oci.oci-vm-multi-container-smoke.v6` requires that starting, killing,
+`a3s.oci.oci-vm-multi-container-smoke.v7` requires that starting, killing,
 waiting for, and deleting A never changes or blocks B; both waits return and
 replay the exact normal exit status; recreating A advances generation 1 to 2;
 stale and cross-container replay requests fail; B then completes
@@ -359,9 +359,10 @@ independently; existing namespace descriptors are type-checked and joined
 across the shared executor; a third workload proves missing mount-target
 creation, shared rootfs propagation, a read-only path, an empty masked file,
 recursive read-only/noexec/nosymfollow attributes across a nested submount, and
-explicit `idmap` and `ridmap` ownership on detached filesystem mounts, and a
-read-only rootfs before exact cleanup; and VM shutdown restores guest-runtime,
-endpoint, descriptor, shim, and worker inventories.
+explicit `idmap` and `ridmap` ownership on detached filesystem mounts, a
+read-only rootfs, a PID 2+ configured process beneath a dedicated namespace
+PID 1, and adopted-orphan reaping before exact cleanup; and VM shutdown
+restores guest-runtime, endpoint, descriptor, shim, and worker inventories.
 
 Fault cleanup reuses the same signed shim and bundle but stops after each
 successful lifecycle boundary:
@@ -409,9 +410,9 @@ created  ── start completed  ──▶ running
 running  ── process exited   ──▶ stopped
 ```
 
-`create` prepares isolation and the init process without executing the
-configured program. Only `start` releases that process. Invalid transitions
-fail without weakening the barrier.
+`create` prepares isolation and the configured-process wrapper without
+executing the configured program. Only `start` releases that process. Invalid
+transitions fail without weakening the barrier.
 
 The host lifecycle stores:
 
@@ -547,7 +548,7 @@ flowchart TB
         shim --> hypervisor --> bridge --> agent
     end
 
-    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 · pidfds · wait · scoped cleanup"]
+    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 supervision · pidfds · wait · scoped cleanup"]
 
     client --> service
     selection -->|"shared-host-kernel"| native_driver
@@ -568,7 +569,7 @@ the [platform status](#platform-status) remains authoritative.
 | --- | --- | --- |
 | A3S Box product plane | Images, builds, volumes, networks, and product policy | OCI process and isolation enforcement |
 | OCI Runtime control plane | Exact OCI validation, lifecycle state, replay, reconciliation, capability reporting, and driver selection | Silent isolation fallback and product policy |
-| Platform execution plane | Hypervisor bridge, Linux namespaces and mounts, PID 1 lifecycle, signaling, and runtime-scoped cleanup | Image distribution and workload orchestration |
+| Platform execution plane | Hypervisor bridge, Linux namespaces and mounts, PID 1 supervision, signaling, and runtime-scoped cleanup | Image distribution and workload orchestration |
 
 The main runtime, CLI, and SDK do not link libkrun. Only
 `a3s-oci-krun-shim` loads the checksum-verified native runtime bundle, keeping
@@ -616,9 +617,12 @@ Security-sensitive platform controls include:
   natural zero exit, worker reap, and marker cleanup;
 - private `0700` macOS agent directories and `0600` Unix sockets, with
   `LOCAL_PEERPID` plus direct shim-child verification before token negotiation;
-- retained pidfds for every authenticated init PID, with all lifecycle and
-  cleanup signals delivered through the descriptor rather than a reused
-  numeric PID;
+- retained pidfds for every authenticated configured-process PID, with all
+  lifecycle and cleanup signals delivered through the descriptor rather than
+  a reused numeric PID;
+- a dedicated namespace PID 1 that reaps adopted children, terminates
+  remaining namespace processes after the configured process exits, and
+  preserves that process's exact terminal result;
 - isolated macOS shim process groups so timeout and failure cleanup terminate
   both the public shim and its VM worker;
 - shared Windows/macOS fixed-lifecycle evidence with exact mutation replay,

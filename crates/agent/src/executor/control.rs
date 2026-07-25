@@ -15,7 +15,10 @@ const MAX_REJECTION_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InitOutcome {
     UserMappingRequired,
-    Ready { pid: i32 },
+    Ready {
+        pid: i32,
+        namespace_init_pid: Option<i32>,
+    },
     Rejected(Error),
 }
 
@@ -62,20 +65,32 @@ pub(super) async fn acknowledge_user_mapping(stream: &mut UnixStream) -> Result<
         })
 }
 
-pub(super) fn write_ready(stream: &mut StdUnixStream, pid: i32) -> Result<()> {
+pub(super) fn write_ready(
+    stream: &mut StdUnixStream,
+    pid: i32,
+    namespace_init_pid: Option<i32>,
+) -> Result<()> {
     if pid <= 0 {
         return Err(control_error(
             ErrorCode::InvalidArgument,
-            format!("container init reported non-positive PID {pid}"),
+            format!("container payload reported non-positive PID {pid}"),
+        ));
+    }
+    let namespace_init_pid = namespace_init_pid.unwrap_or_default();
+    if namespace_init_pid < 0 || namespace_init_pid == pid {
+        return Err(control_error(
+            ErrorCode::InvalidArgument,
+            format!("container payload reported invalid namespace init PID {namespace_init_pid}"),
         ));
     }
     stream
         .write_all(&[READY_BYTE])
         .and_then(|()| stream.write_all(&pid.to_be_bytes()))
+        .and_then(|()| stream.write_all(&namespace_init_pid.to_be_bytes()))
         .map_err(|write| {
             control_error(
                 ErrorCode::Unavailable,
-                format!("failed to report prepared container init readiness: {write}"),
+                format!("failed to report prepared container payload readiness: {write}"),
             )
         })
 }
@@ -127,9 +142,12 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
         })?;
     match discriminator[0] {
         USER_MAPPING_REQUIRED_BYTE => Ok(InitOutcome::UserMappingRequired),
-        READY_BYTE => read_ready_pid(stream)
+        READY_BYTE => read_ready_pids(stream)
             .await
-            .map(|pid| InitOutcome::Ready { pid }),
+            .map(|(pid, namespace_init_pid)| InitOutcome::Ready {
+                pid,
+                namespace_init_pid,
+            }),
         REJECTED_BYTE => read_rejection(stream).await.map(InitOutcome::Rejected),
         other => Err(control_error(
             ErrorCode::FailedPrecondition,
@@ -138,22 +156,39 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
     }
 }
 
-async fn read_ready_pid(stream: &mut UnixStream) -> Result<i32> {
+async fn read_ready_pids(stream: &mut UnixStream) -> Result<(i32, Option<i32>)> {
     let mut encoded_pid = [0_u8; size_of::<i32>()];
     stream.read_exact(&mut encoded_pid).await.map_err(|read| {
         control_error(
             ErrorCode::FailedPrecondition,
-            format!("container init readiness PID was truncated: {read}"),
+            format!("container payload readiness PID was truncated: {read}"),
         )
     })?;
     let pid = i32::from_be_bytes(encoded_pid);
     if pid <= 0 {
+        return Err(control_error(
+            ErrorCode::FailedPrecondition,
+            format!("container payload reported non-positive PID {pid}"),
+        ));
+    }
+    let mut encoded_namespace_init_pid = [0_u8; size_of::<i32>()];
+    stream
+        .read_exact(&mut encoded_namespace_init_pid)
+        .await
+        .map_err(|read| {
+            control_error(
+                ErrorCode::FailedPrecondition,
+                format!("namespace init readiness PID was truncated: {read}"),
+            )
+        })?;
+    let namespace_init_pid = i32::from_be_bytes(encoded_namespace_init_pid);
+    if namespace_init_pid < 0 || namespace_init_pid == pid {
         Err(control_error(
             ErrorCode::FailedPrecondition,
-            format!("container init reported non-positive PID {pid}"),
+            format!("container payload reported invalid namespace init PID {namespace_init_pid}"),
         ))
     } else {
-        Ok(pid)
+        Ok((pid, (namespace_init_pid != 0).then_some(namespace_init_pid)))
     }
 }
 
@@ -231,28 +266,40 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn ready_round_trip_carries_the_runtime_visible_pid() {
-        let (mut writer, reader) = StdUnixStream::pair().expect("create control socket pair");
-        reader
-            .set_nonblocking(true)
-            .expect("make control reader nonblocking");
-        let writer = tokio::task::spawn_blocking(move || {
-            write_ready(&mut writer, 42_001).expect("write readiness");
-        });
-        let mut reader = tokio::net::UnixStream::from_std(reader).expect("register control reader");
+    async fn ready_round_trip_carries_the_runtime_and_optional_namespace_init_pids() {
+        for namespace_init_pid in [Some(41_999), None] {
+            let (mut writer, reader) = StdUnixStream::pair().expect("create control socket pair");
+            reader
+                .set_nonblocking(true)
+                .expect("make control reader nonblocking");
+            let writer = tokio::task::spawn_blocking(move || {
+                write_ready(&mut writer, 42_001, namespace_init_pid).expect("write readiness");
+            });
+            let mut reader =
+                tokio::net::UnixStream::from_std(reader).expect("register control reader");
 
-        assert_eq!(
-            read_outcome(&mut reader).await.expect("read readiness"),
-            InitOutcome::Ready { pid: 42_001 }
-        );
-        writer.await.expect("control writer task");
+            assert_eq!(
+                read_outcome(&mut reader).await.expect("read readiness"),
+                InitOutcome::Ready {
+                    pid: 42_001,
+                    namespace_init_pid,
+                }
+            );
+            writer.await.expect("control writer task");
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn readiness_reader_rejects_non_positive_or_truncated_pids() {
         use std::io::Write;
 
-        for payload in [0_i32.to_be_bytes().to_vec(), vec![0, 1]] {
+        for payload in [
+            [0_i32.to_be_bytes(), 0_i32.to_be_bytes()].concat(),
+            vec![0, 1],
+            42_001_i32.to_be_bytes().to_vec(),
+            [42_001_i32.to_be_bytes(), (-1_i32).to_be_bytes()].concat(),
+            [42_001_i32.to_be_bytes(), 42_001_i32.to_be_bytes()].concat(),
+        ] {
             let (mut writer, reader) = StdUnixStream::pair().expect("create control socket pair");
             reader
                 .set_nonblocking(true)

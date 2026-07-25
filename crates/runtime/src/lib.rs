@@ -49,7 +49,7 @@ pub use driver::{
 };
 pub use multi_container_report::{
     MultiContainerLifecycleEvidence, NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport,
-    OciVmMultiContainerSmokeReport, RootfsMountEvidence,
+    OciVmMultiContainerSmokeReport, PidSupervisionEvidence, RootfsMountEvidence,
 };
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
