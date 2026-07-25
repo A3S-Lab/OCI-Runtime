@@ -5,16 +5,17 @@ use std::sync::{Arc, Mutex};
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
-    Generation, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget,
-    Result, Signal,
+    Generation, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessRecord,
+    ProcessTarget, Result, Signal,
 };
 use tokio::io::{AsyncWriteExt, DuplexStream};
 
 use crate::model::{
-    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
-    AgentProcess, AgentRequest, AgentResponse, AgentSignalProcessRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome,
-    HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
+    AgentHello, AgentKillRequest, AgentProcess, AgentProcessesRequest, AgentRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange,
+    RequestEnvelope, ResponseEnvelope, ResponseOutcome,
 };
 use crate::wire::{read_frame, read_frame_for_test, write_frame};
 use crate::{
@@ -70,6 +71,9 @@ impl GuestAgentService for TestAgent {
                 crate::AgentOperation::Exec,
                 crate::AgentOperation::SignalProcess,
                 crate::AgentOperation::WaitProcess,
+                crate::AgentOperation::Pause,
+                crate::AgentOperation::Resume,
+                crate::AgentOperation::Processes,
             ],
         )
         .expect("valid test capabilities")
@@ -232,6 +236,12 @@ impl GuestAgentService for TestAgent {
                 "guest exec requires a running container",
             ));
         }
+        if container.paused() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "guest exec is unavailable while the container is paused",
+            ));
+        }
         let key = (
             request.target.container.id.clone(),
             generation,
@@ -286,6 +296,51 @@ impl GuestAgentService for TestAgent {
         })
     }
 
+    async fn pause(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
+        self.set_paused(request, true)
+    }
+
+    async fn resume(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
+        self.set_paused(request, false)
+    }
+
+    async fn processes(&self, request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
+        let agent = self.state.lock().expect("agent state lock");
+        let state = agent
+            .states
+            .get(&request.target.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if state.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        let mut records = Vec::new();
+        if state.status() != ContainerState::Stopped {
+            records.push(ProcessRecord {
+                target: ProcessTarget {
+                    container: request.target.clone(),
+                    process_id: ProcessId::init(),
+                },
+                pid: state.pid().and_then(|pid| u32::try_from(pid).ok()),
+                terminal: false,
+            });
+        }
+        for (key, process) in &agent.processes {
+            if process.target().container == request.target
+                && !agent.process_exits.contains_key(key)
+            {
+                records.push(ProcessRecord {
+                    target: process.target().clone(),
+                    pid: u32::try_from(process.pid()).ok(),
+                    terminal: process.terminal(),
+                });
+            }
+        }
+        Ok(records)
+    }
+
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
         let mut agent = self.state.lock().expect("agent state lock");
         let current = agent
@@ -300,6 +355,41 @@ impl GuestAgentService for TestAgent {
         }
         agent.states.remove(&request.target.id);
         Ok(())
+    }
+}
+
+impl TestAgent {
+    fn set_paused(
+        &self,
+        request: AgentContainerOperationRequest,
+        paused: bool,
+    ) -> Result<AgentState> {
+        let mut agent = self.state.lock().expect("agent state lock");
+        let current = agent
+            .states
+            .get(&request.target.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        if current.status() != ContainerState::Running {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "guest freezer mutation requires a running container",
+            ));
+        }
+        let state = AgentState::new_with_pause(
+            request.target.clone(),
+            current.status(),
+            current.pid(),
+            current.config_digest(),
+            paused,
+        )?;
+        agent.states.insert(request.target.id, state.clone());
+        Ok(state)
     }
 }
 
@@ -729,7 +819,7 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 4, 4)
+    let error = AgentClient::connect_for_test(host, token(9), 5, 5)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);

@@ -69,21 +69,23 @@ durable bundle at both create and start. Its mutating methods are async,
 protocol types remain behind that boundary.
 
 The host always requires the five core driver operations and advertises
-`wait`, `exec`, `signal-process`, and `wait-process` only when the selected
-driver implements each one. `WaitRequest` targets one exact generation,
-accepts an optional millisecond timeout, and returns an `ExitStatus` containing
-either an exit code in `0..=255` or a positive signal. Repeated waits must
-return the same terminal result. The native Linux driver and the protocol-v3
-utility-VM guest path implement this contract while retaining protocol-v2
-init-wait compatibility; unsupported drivers fail before dispatch.
+`wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
+`processes` only when the selected driver implements each one. `WaitRequest`
+targets one exact generation, accepts an optional millisecond timeout, and
+returns an `ExitStatus` containing either an exit code in `0..=255` or a
+positive signal. Repeated waits must return the same terminal result. The
+native Linux driver and the protocol-v4 utility-VM guest path implement this
+contract while retaining protocol-v1 through protocol-v3 compatibility;
+unsupported drivers fail before dispatch.
 
-The protocol-v3 shared Linux executor also implements exact-target exec,
-pidfd-backed per-process signal, and stable per-process wait. The public host
-path reserves process IDs before driver dispatch, persists generation-scoped
-process records, journals exec and signal mutations, and caches terminal
-results. Native Linux exposes that complete path through `RuntimeClient`.
-Utility-VM host drivers still need to opt into the three process operations
-before their host services may advertise them.
+The protocol-v4 shared Linux executor implements exact-target exec,
+pidfd-backed per-process signal, stable per-process wait, cgroup-v2
+pause/resume, and exact live process inventory. The public host path reserves
+process IDs before driver dispatch, persists generation-scoped process
+records, journals exec, signal, pause, and resume mutations, and caches
+terminal results. Native Linux exposes that complete path through
+`RuntimeClient`. Utility-VM host drivers still need to opt into these process
+and control operations before their host services may advertise them.
 
 ## Runtime Server
 

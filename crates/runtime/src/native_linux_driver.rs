@@ -3,23 +3,25 @@ use std::sync::Arc;
 
 use a3s_oci_agent::LinuxExecutor;
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService, GuestPath,
+    AgentBundle, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
+    AgentExecRequest, AgentKillRequest, AgentProcessesRequest, AgentSignalProcessRequest,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest,
+    GuestAgentService, GuestPath,
 };
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerTarget, Error, ErrorCode, ExitStatus, Result, RuntimeOperation,
+    async_trait, ContainerTarget, Error, ErrorCode, ExitStatus, ProcessRecord, Result,
+    RuntimeOperation,
 };
 
 use crate::driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
-    DriverWaitRequest, RuntimeDriver,
+    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
+    DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 
-const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 9] = [
+const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 12] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -29,6 +31,9 @@ const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 9] = [
     RuntimeOperation::Exec,
     RuntimeOperation::SignalProcess,
     RuntimeOperation::WaitProcess,
+    RuntimeOperation::Pause,
+    RuntimeOperation::Resume,
+    RuntimeOperation::Processes,
 ];
 
 /// Explicitly opted-in native Linux runtime driver.
@@ -231,6 +236,36 @@ impl RuntimeDriver for NativeLinuxDriver {
             })
             .await
     }
+
+    async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        let expected_target = request.target.clone();
+        let state = self
+            .executor
+            .pause(AgentContainerOperationRequest {
+                context: request.context,
+                target: request.target,
+            })
+            .await?;
+        driver_state(&expected_target, None, state)
+    }
+
+    async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        let expected_target = request.target.clone();
+        let state = self
+            .executor
+            .resume(AgentContainerOperationRequest {
+                context: request.context,
+                target: request.target,
+            })
+            .await?;
+        driver_state(&expected_target, None, state)
+    }
+
+    async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        self.executor
+            .processes(AgentProcessesRequest { target })
+            .await
+    }
 }
 
 async fn guest_path(bundle: &Path) -> Result<GuestPath> {
@@ -276,7 +311,7 @@ fn driver_state(
         )
         .for_operation("map-native-linux-state"));
     }
-    match state.status() {
+    let mapped = match state.status() {
         ContainerState::Created => DriverState::created(required_pid(&state)?),
         ContainerState::Running => DriverState::running(required_pid(&state)?),
         ContainerState::Stopped => Ok(DriverState::stopped()),
@@ -285,7 +320,8 @@ fn driver_state(
             format!("native Linux executor returned invalid lifecycle state {status}"),
         )
         .for_operation("map-native-linux-state")),
-    }
+    }?;
+    mapped.with_paused(state.paused())
 }
 
 fn required_pid(state: &AgentState) -> Result<i32> {
@@ -328,7 +364,28 @@ mod tests {
             let mapped = driver_state(&target, Some(DIGEST), state).expect("mapped driver state");
             assert_eq!(mapped.status(), status);
             assert_eq!(mapped.pid(), pid);
+            assert!(!mapped.paused());
         }
+
+        let paused = AgentState::new_with_pause(
+            target.clone(),
+            ContainerState::Running,
+            Some(101),
+            DIGEST,
+            true,
+        )
+        .expect("paused agent state");
+        assert!(driver_state(&target, Some(DIGEST), paused)
+            .expect("mapped paused driver state")
+            .paused());
+        assert!(AgentState::new_with_pause(
+            target,
+            ContainerState::Created,
+            Some(101),
+            DIGEST,
+            true,
+        )
+        .is_err());
     }
 
     #[test]

@@ -2,7 +2,8 @@ use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IsolationRequest,
-    OciBundle, OperationContext, ProcessIo, ProcessTarget, Result, RuntimeOperation, Signal,
+    OciBundle, OperationContext, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation,
+    Signal,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -18,6 +19,7 @@ const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
 pub struct DriverState {
     status: ContainerState,
     pid: Option<i32>,
+    paused: bool,
 }
 
 impl DriverState {
@@ -37,6 +39,7 @@ impl DriverState {
         Self {
             status: ContainerState::Stopped,
             pid: None,
+            paused: false,
         }
     }
 
@@ -52,6 +55,25 @@ impl DriverState {
         self.pid
     }
 
+    /// Whether the driver observed the container cgroup as frozen.
+    #[must_use]
+    pub const fn paused(self) -> bool {
+        self.paused
+    }
+
+    /// Attach an exact freezer observation to a live driver state.
+    pub fn with_paused(mut self, paused: bool) -> Result<Self> {
+        if paused && self.status != ContainerState::Running {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                format!("a {} driver state cannot be paused", self.status),
+            )
+            .for_operation("construct-driver-state"));
+        }
+        self.paused = paused;
+        Ok(self)
+    }
+
     fn with_process(status: ContainerState, pid: i32) -> Result<Self> {
         if pid <= 0 {
             return Err(Error::new(
@@ -63,6 +85,7 @@ impl DriverState {
         Ok(Self {
             status,
             pid: Some(pid),
+            paused: false,
         })
     }
 }
@@ -160,6 +183,15 @@ pub struct DriverWaitProcessRequest {
     pub timeout_ms: Option<u64>,
 }
 
+/// Exact pause or resume input passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverContainerOperationRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Container ID plus its exact generation.
+    pub target: ContainerTarget,
+}
+
 /// Driver-reported process identity returned after exec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriverProcess {
@@ -251,5 +283,20 @@ pub trait RuntimeDriver: Send + Sync {
     /// Wait for one exact init or exec process.
     async fn wait_process(&self, _request: DriverWaitProcessRequest) -> Result<ExitStatus> {
         Err(Error::unsupported("wait-process"))
+    }
+
+    /// Freeze every process in one exact container generation.
+    async fn pause(&self, _request: DriverContainerOperationRequest) -> Result<DriverState> {
+        Err(Error::unsupported("pause"))
+    }
+
+    /// Thaw every process in one exact container generation.
+    async fn resume(&self, _request: DriverContainerOperationRequest) -> Result<DriverState> {
+        Err(Error::unsupported("resume"))
+    }
+
+    /// List every live init and exec process in one exact generation.
+    async fn processes(&self, _target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        Err(Error::unsupported("processes"))
     }
 }

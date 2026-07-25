@@ -20,9 +20,9 @@ use a3s_oci_sdk::{
 };
 
 use crate::driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest,
-    DriverSignalProcessRequest, DriverStartRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    RuntimeDriver,
+    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
+    DriverKillRequest, DriverSignalProcessRequest, DriverStartRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
@@ -330,7 +330,7 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 9] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 12] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
@@ -340,6 +340,9 @@ fn validate_driver_operations(
         RuntimeOperation::Exec,
         RuntimeOperation::SignalProcess,
         RuntimeOperation::WaitProcess,
+        RuntimeOperation::Pause,
+        RuntimeOperation::Resume,
+        RuntimeOperation::Processes,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {
@@ -608,7 +611,12 @@ impl OciRuntimeService for HostRuntimeService {
         let observed = result?;
         lifecycle
             .store
-            .observe_state(&target, observed.status(), observed.pid())
+            .observe_state_with_pause(
+                &target,
+                observed.status(),
+                observed.pid(),
+                observed.paused(),
+            )
             .await
     }
 
@@ -802,20 +810,126 @@ impl OciRuntimeService for HostRuntimeService {
         Err(Error::unsupported("list"))
     }
 
-    async fn pause(&self, _request: ContainerOperationRequest) -> Result<ContainerRecord> {
-        Err(Error::unsupported("pause"))
+    async fn pause(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
+        let lifecycle = self.lifecycle("pause")?;
+        lifecycle.ensure_operation(RuntimeOperation::Pause, "pause")?;
+        let record = match lifecycle.store.prepare_pause(&request).await? {
+            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Prepared(record)
+            | RecordOperationPreparation::Resume(record) => record,
+        };
+        let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        lifecycle.driver_boundary(DriverOperation::Pause, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .pause(DriverContainerOperationRequest {
+                context: request.context.clone(),
+                target,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Pause, DriverBoundaryStage::AfterCall)?;
+        let observed = match result {
+            Ok(observed) => observed,
+            Err(error) => {
+                return lifecycle
+                    .fail_driver_operation(&request.context.operation_id, error)
+                    .await;
+            }
+        };
+        lifecycle
+            .store
+            .complete_pause(
+                &request.context.operation_id,
+                observed.status(),
+                observed.pid(),
+                observed.paused(),
+            )
+            .await
     }
 
-    async fn resume(&self, _request: ContainerOperationRequest) -> Result<ContainerRecord> {
-        Err(Error::unsupported("resume"))
+    async fn resume(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {
+        let lifecycle = self.lifecycle("resume")?;
+        lifecycle.ensure_operation(RuntimeOperation::Resume, "resume")?;
+        let record = match lifecycle.store.prepare_resume(&request).await? {
+            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Prepared(record)
+            | RecordOperationPreparation::Resume(record) => record,
+        };
+        let target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        lifecycle.driver_boundary(DriverOperation::Resume, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .resume(DriverContainerOperationRequest {
+                context: request.context.clone(),
+                target,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Resume, DriverBoundaryStage::AfterCall)?;
+        let observed = match result {
+            Ok(observed) => observed,
+            Err(error) => {
+                return lifecycle
+                    .fail_driver_operation(&request.context.operation_id, error)
+                    .await;
+            }
+        };
+        lifecycle
+            .store
+            .complete_resume(
+                &request.context.operation_id,
+                observed.status(),
+                observed.pid(),
+                observed.paused(),
+            )
+            .await
     }
 
     async fn update(&self, _request: UpdateRequest) -> Result<ContainerRecord> {
         Err(Error::unsupported("update"))
     }
 
-    async fn processes(&self, _request: ProcessesRequest) -> Result<Vec<ProcessRecord>> {
-        Err(Error::unsupported("processes"))
+    async fn processes(&self, request: ProcessesRequest) -> Result<Vec<ProcessRecord>> {
+        let lifecycle = self.lifecycle("processes")?;
+        lifecycle.ensure_operation(RuntimeOperation::Processes, "processes")?;
+        request.validate()?;
+        let record = lifecycle.store.state(&request.target).await?;
+        let target = ContainerTarget::exact(request.target.id, record.generation);
+        lifecycle.driver_boundary(DriverOperation::Processes, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle.driver.processes(target.clone()).await;
+        lifecycle.driver_boundary(DriverOperation::Processes, DriverBoundaryStage::AfterCall)?;
+        let mut processes = result?;
+        for (index, process) in processes.iter().enumerate() {
+            if process.target.container != target
+                || process.pid.is_none_or(|pid| pid == 0)
+                || processes[..index]
+                    .iter()
+                    .any(|candidate| candidate.target.process_id == process.target.process_id)
+            {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    "runtime driver returned an invalid process inventory",
+                )
+                .for_operation("processes"));
+            }
+        }
+        if *record.state.status() != ContainerState::Stopped
+            && !processes
+                .iter()
+                .any(|process| process.target.process_id.is_init())
+        {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "runtime driver omitted the live init process from its inventory",
+            )
+            .for_operation("processes"));
+        }
+        processes.sort_by(|left, right| {
+            left.target
+                .process_id
+                .as_ref()
+                .cmp(right.target.process_id.as_ref())
+        });
+        Ok(processes)
     }
 
     async fn stats(&self, _request: StatsRequest) -> Result<ContainerStats> {

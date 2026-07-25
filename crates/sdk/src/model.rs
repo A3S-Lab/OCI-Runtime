@@ -399,6 +399,22 @@ pub struct ContainerRecord {
     pub config_digest: String,
 }
 
+/// OCI state annotation used to expose the runtime's freezer state without
+/// inventing a non-standard OCI lifecycle status.
+pub const PAUSED_STATE_ANNOTATION: &str = "dev.a3s.oci.runtime.paused";
+
+impl ContainerRecord {
+    /// Whether all processes in this exact container generation are frozen.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.state
+            .annotations()
+            .as_ref()
+            .and_then(|annotations| annotations.get(PAUSED_STATE_ANNOTATION))
+            .is_some_and(|value| value == "true")
+    }
+}
+
 /// Runtime-visible init or exec process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessRecord {

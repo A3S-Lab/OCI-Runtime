@@ -64,6 +64,12 @@ impl LinuxExecutor {
                     "container exec requires a running configured process",
                 ));
             }
+            if record.paused {
+                return Err(executor_error(
+                    ErrorCode::FailedPrecondition,
+                    "container exec is unavailable while the container is paused",
+                ));
+            }
             if record.processes.contains_key(&request.target.process_id) {
                 return Err(executor_error(
                     ErrorCode::AlreadyExists,
@@ -130,7 +136,14 @@ impl LinuxExecutor {
                 .containers
                 .get_mut(&key)
                 .ok_or_else(|| missing_locked_container(&key))?;
-            match ExecProcess::spawn(&snapshot, &self.init_executable, &record.process).await {
+            match ExecProcess::spawn(
+                &snapshot,
+                &self.init_executable,
+                &record.process,
+                request.process.terminal().unwrap_or(false),
+            )
+            .await
+            {
                 Ok(process) => process,
                 Err(error) => {
                     let _ =
@@ -139,15 +152,17 @@ impl LinuxExecutor {
                 }
             }
         };
-        let response = match AgentProcess::new(request.target.clone(), process.pid(), false) {
-            Ok(response) => response,
-            Err(error) => {
-                let mut process = process;
-                let _ = process.force_stop().await;
-                let _ = remove_process_directory(&container_directory, &process_directory).await;
-                return Err(error);
-            }
-        };
+        let response =
+            match AgentProcess::new(request.target.clone(), process.pid(), process.terminal()) {
+                Ok(response) => response,
+                Err(error) => {
+                    let mut process = process;
+                    let _ = process.force_stop().await;
+                    let _ =
+                        remove_process_directory(&container_directory, &process_directory).await;
+                    return Err(error);
+                }
+            };
         state
             .containers
             .get_mut(&key)

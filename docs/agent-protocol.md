@@ -49,21 +49,31 @@ setting, and a positive authenticated guest PID. Signal acknowledgements and
 terminal results are also bound to the exact process target. A mismatched
 target poisons the host connection.
 
+Protocol version 4 adds `pause`, `resume`, and `processes`. Pause and resume
+carry an idempotent mutation context and exact container generation. Their
+state responses must report the requested cgroup freezer state. Processes is
+an observation that returns a duplicate-free inventory of live init and exec
+processes, each bound to that same exact generation with a positive PID.
+Freezer state is carried separately from the standard OCI lifecycle status.
+
 The client breaks a long init or process wait into bounded 25-millisecond
 guest requests. The single correlated connection therefore remains available
 to query or control another container between polls. Negotiation filters
 operations introduced after the selected version, and the server rejects a
 forged newer request before service dispatch. A protocol-v1 peer therefore
 neither advertises nor accepts `wait`; protocol-v1 and protocol-v2 peers
-neither advertise nor accept the version-3 process operations.
+neither advertise nor accept the version-3 process operations, and
+protocol-v1 through protocol-v3 peers neither advertise nor accept the
+version-4 control operations.
 
 Protocol support and executor capability remain separate. The current shared
-Linux executor negotiates version 3 and advertises the exact nine implemented
-operations: the six lifecycle/init-wait operations plus exec, per-process
-signal, and per-process wait. It retains an exact-generation process registry,
-one pidfd per authenticated init or exec process, stable replay and wait
-results, process-group ownership, and session cleanup. Durable recovery across
-an agent restart remains a separate host/driver release gate.
+Linux executor negotiates version 4 and advertises the exact twelve
+implemented operations: the six lifecycle/init-wait operations; exec,
+per-process signal, and per-process wait; and pause, resume, and processes. It
+retains an exact-generation process registry, one pidfd per authenticated init
+or exec process, the owned cgroup-v2 leaf, stable replay and wait results,
+process-group ownership, and session cleanup. Durable recovery across an agent
+restart remains a separate host/driver release gate.
 
 Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current
@@ -97,6 +107,8 @@ In-memory duplex tests cover:
 - protocol-v2 wait with exact repeated signal status;
 - protocol-v3 exec, per-process signal, stable repeated wait, and exact process
   target correlation;
+- protocol-v4 pause/resume state correlation, paused exec rejection, and exact
+  live init/exec process inventory;
 - filtering and pre-dispatch rejection of forged version-3 process operations
   on a protocol-v2 connection;
 - rejection of a forged protocol-v1 wait before service dispatch;
@@ -125,16 +137,16 @@ step.
 
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 3, and retains
-bounded host and shim evidence. The current guest must advertise the exact nine
-operations: `create`, `state`, `start`, `kill`, `delete`, `wait`, `exec`,
-`signal-process`, and `wait-process`.
+pipe, authenticates the token, negotiates protocol version 4, and retains
+bounded host and shim evidence. The current guest must advertise the exact
+twelve operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
+`exec`, `signal-process`, `wait-process`, `pause`, `resume`, and `processes`.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in `a3s.oci.agent-vm-smoke.v4`. The signed path must negotiate protocol version
-3 and the exact nine implemented operations. The missing-entitlement path must
+in `a3s.oci.agent-vm-smoke.v5`. The signed path must negotiate protocol version
+4 and the exact twelve implemented operations. The missing-entitlement path must
 exit with status `2`, report no negotiation, terminate the shim process group,
 and leave no private endpoint residue. Both paths also retain in-process
 evidence that the exact runtime-owned endpoint was removed, the complete
@@ -147,8 +159,11 @@ replay, start, running observation, marker verification, signal delivery,
 exact kill replay, a bounded wait while running, exact repeated terminal
 status, exact-target exec replay, duplicate process-ID rejection, bounded
 per-process wait, exact and replayed process signal, stable repeated process
-wait, init-exit cleanup of another live exec, stopped observation, stopped-only
-delete, exact delete replay, and a final NotFound state query. The marker
+wait, exact live init/exec inventory, replayed pause/resume, a
+progress-producing exec that stops while the cgroup is frozen and advances
+again after resume, init-exit cleanup of another live exec, stopped
+observation, stopped-only delete, exact delete replay, and a final NotFound
+state query. The marker
 proves that the workload did not run before start and did run afterward. The
 init wrapper reads both
 configured UTS names back before create returns, and the workload independently

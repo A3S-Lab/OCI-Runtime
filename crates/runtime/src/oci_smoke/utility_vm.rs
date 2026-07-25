@@ -380,6 +380,9 @@ fn lifecycle_succeeded(report: &OciVmSmokeReport) -> bool {
         && report.marker_absent_after_create
         && report.start_released
         && report.running_observed
+        && report.processes_verified
+        && report.pause_froze_workload
+        && report.resume_advanced_workload
         && report.kill_delivered
         && report.kill_replayed
         && report.stopped_observed

@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use a3s_oci_sdk::{async_trait, Error, ErrorCode, ExitStatus, Result};
+use a3s_oci_sdk::{async_trait, Error, ErrorCode, ExitStatus, ProcessRecord, Result};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::model::{
-    protocol_error, AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
-    AgentHello, AgentKillRequest, AgentProcess, AgentProcessExit, AgentProcessSignal, AgentRequest,
-    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    protocol_error, AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest,
+    AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess,
+    AgentProcessExit, AgentProcessSignal, AgentProcessesRequest, AgentRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
     AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, RequestEnvelope,
     ResponseEnvelope, ResponseOutcome, SessionToken,
 };
@@ -56,6 +57,21 @@ pub trait GuestAgentService: Send + Sync {
     /// Wait for one exact init or exec process.
     async fn wait_process(&self, _request: AgentWaitProcessRequest) -> Result<ExitStatus> {
         Err(Error::unsupported("agent-wait-process"))
+    }
+
+    /// Freeze every process in one exact container generation.
+    async fn pause(&self, _request: AgentContainerOperationRequest) -> Result<AgentState> {
+        Err(Error::unsupported("agent-pause"))
+    }
+
+    /// Thaw every process in one exact container generation.
+    async fn resume(&self, _request: AgentContainerOperationRequest) -> Result<AgentState> {
+        Err(Error::unsupported("agent-resume"))
+    }
+
+    /// List every live init and exec process in one exact generation.
+    async fn processes(&self, _request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
+        Err(Error::unsupported("agent-processes"))
     }
 }
 
@@ -186,6 +202,12 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             let status = service.wait_process(request).await?;
             AgentProcessExit::new(target, status).map(AgentResponse::ProcessExit)
         }
+        AgentRequest::Pause(request) => service.pause(request).await.map(AgentResponse::State),
+        AgentRequest::Resume(request) => service.resume(request).await.map(AgentResponse::State),
+        AgentRequest::Processes(request) => service
+            .processes(request)
+            .await
+            .map(AgentResponse::Processes),
     }
 }
 

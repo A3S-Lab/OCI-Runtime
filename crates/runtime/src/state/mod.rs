@@ -2,6 +2,7 @@ mod create;
 mod delete;
 mod failure;
 mod filesystem;
+mod freezer;
 mod kill;
 mod model;
 mod observe;

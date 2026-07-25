@@ -10,11 +10,11 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v4";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v5";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
-pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v4";
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v5";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v3";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v4";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,6 +324,9 @@ impl AgentVmSmokeReport {
                     AgentOperation::Exec,
                     AgentOperation::SignalProcess,
                     AgentOperation::WaitProcess,
+                    AgentOperation::Pause,
+                    AgentOperation::Resume,
+                    AgentOperation::Processes,
                 ]
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)
@@ -363,6 +366,12 @@ pub struct NativeLinuxSmokeReport {
     pub start_released: bool,
     /// Whether the configured process was observed running.
     pub running_observed: bool,
+    /// Whether process inventory contained the exact live init and exec processes.
+    pub processes_verified: bool,
+    /// Whether a real progress-producing workload stopped while its cgroup was frozen.
+    pub pause_froze_workload: bool,
+    /// Whether the frozen workload advanced again after resume.
+    pub resume_advanced_workload: bool,
     /// Whether the driver accepted the exact signal request.
     pub kill_delivered: bool,
     /// Whether retrying kill replayed its exact original result.
@@ -411,6 +420,9 @@ impl NativeLinuxSmokeReport {
             marker_absent_after_create: false,
             start_released: false,
             running_observed: false,
+            processes_verified: false,
+            pause_froze_workload: false,
+            resume_advanced_workload: false,
             kill_delivered: false,
             kill_replayed: false,
             wait_timeout_enforced: false,
@@ -454,6 +466,9 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Delete,
                     RuntimeOperation::Exec,
                     RuntimeOperation::Wait,
+                    RuntimeOperation::Pause,
+                    RuntimeOperation::Resume,
+                    RuntimeOperation::Processes,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
                 ]
@@ -464,6 +479,9 @@ impl NativeLinuxSmokeReport {
             && self.marker_absent_after_create
             && self.start_released
             && self.running_observed
+            && self.processes_verified
+            && self.pause_froze_workload
+            && self.resume_advanced_workload
             && self.kill_delivered
             && self.kill_replayed
             && self.wait_timeout_enforced
@@ -509,6 +527,12 @@ pub struct OciVmSmokeReport {
     pub start_released: bool,
     /// Whether the configured process was observed running.
     pub running_observed: bool,
+    /// Whether process inventory contained the exact live init and exec processes.
+    pub processes_verified: bool,
+    /// Whether a real progress-producing workload stopped while its cgroup was frozen.
+    pub pause_froze_workload: bool,
+    /// Whether the frozen workload advanced again after resume.
+    pub resume_advanced_workload: bool,
     /// Whether the guest accepted the exact signal request.
     pub kill_delivered: bool,
     /// Whether retrying kill replayed its exact original result.
@@ -554,6 +578,9 @@ impl OciVmSmokeReport {
             marker_absent_after_create: false,
             start_released: false,
             running_observed: false,
+            processes_verified: false,
+            pause_froze_workload: false,
+            resume_advanced_workload: false,
             kill_delivered: false,
             kill_replayed: false,
             wait_timeout_enforced: false,
@@ -599,6 +626,9 @@ impl OciVmSmokeReport {
             && self.marker_absent_after_create
             && self.start_released
             && self.running_observed
+            && self.processes_verified
+            && self.pause_froze_workload
+            && self.resume_advanced_workload
             && self.kill_delivered
             && self.kill_replayed
             && self.wait_timeout_enforced

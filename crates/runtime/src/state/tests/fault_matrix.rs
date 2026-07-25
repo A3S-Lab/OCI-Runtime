@@ -11,7 +11,7 @@ use super::*;
 use crate::fault::testing::RecordingFaultInjector;
 use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
 use crate::state::model::{StoredContainer, StoredGeneration};
-use crate::state::oci_state::rebuild_state;
+use crate::state::oci_state::{rebuild_paused_state, rebuild_state};
 use crate::state::DeletePreparation;
 use process::{
     exercise_exec_claim_recovery, exercise_exec_failure, exercise_exec_reconcile,
@@ -25,10 +25,15 @@ enum Scenario {
     CreateClaimRecovery,
     StartRecovery,
     KillRecovery,
+    FreezerSuccess,
+    PauseRecovery,
+    ResumeRecovery,
     DeleteRecovery,
     CreateFailure,
     StartFailure,
     KillFailure,
+    PauseFailure,
+    ResumeFailure,
     DeleteFailure,
     Observation,
     ProcessSuccess,
@@ -67,7 +72,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        356,
+        468,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -92,6 +97,12 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         DurableMutation::ReconcileKillContainer | DurableMutation::ReconcileKillOperation => {
             Scenario::KillRecovery
         }
+        DurableMutation::ReconcilePauseContainer | DurableMutation::ReconcilePauseOperation => {
+            Scenario::PauseRecovery
+        }
+        DurableMutation::ReconcileResumeContainer | DurableMutation::ReconcileResumeOperation => {
+            Scenario::ResumeRecovery
+        }
         DurableMutation::ReconcileDeleteOperation => Scenario::DeleteRecovery,
         DurableMutation::RecordCreateFailure | DurableMutation::MoveFailedCreateTombstone => {
             Scenario::CreateFailure
@@ -101,6 +112,12 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         }
         DurableMutation::ReleaseFailedKillClaim | DurableMutation::RecordKillFailure => {
             Scenario::KillFailure
+        }
+        DurableMutation::ReleaseFailedPauseClaim | DurableMutation::RecordPauseFailure => {
+            Scenario::PauseFailure
+        }
+        DurableMutation::ReleaseFailedResumeClaim | DurableMutation::RecordResumeFailure => {
+            Scenario::ResumeFailure
         }
         DurableMutation::ReleaseFailedDeleteClaim | DurableMutation::RecordDeleteFailure => {
             Scenario::DeleteFailure
@@ -141,10 +158,34 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         | DurableMutation::ClaimKillOperation
         | DurableMutation::CompleteKillContainer
         | DurableMutation::CompleteKillOperation
+        | DurableMutation::PreparePauseOperation
+        | DurableMutation::ClaimPauseOperation
+        | DurableMutation::CompletePauseContainer
+        | DurableMutation::CompletePauseOperation
+        | DurableMutation::PrepareResumeOperation
+        | DurableMutation::ClaimResumeOperation
+        | DurableMutation::CompleteResumeContainer
+        | DurableMutation::CompleteResumeOperation
         | DurableMutation::PrepareDeleteOperation
         | DurableMutation::ClaimDeleteOperation
         | DurableMutation::MoveDeleteTombstone
-        | DurableMutation::CompleteDeleteOperation => Scenario::SuccessfulLifecycle,
+        | DurableMutation::CompleteDeleteOperation => {
+            if matches!(
+                mutation,
+                DurableMutation::PreparePauseOperation
+                    | DurableMutation::ClaimPauseOperation
+                    | DurableMutation::CompletePauseContainer
+                    | DurableMutation::CompletePauseOperation
+                    | DurableMutation::PrepareResumeOperation
+                    | DurableMutation::ClaimResumeOperation
+                    | DurableMutation::CompleteResumeContainer
+                    | DurableMutation::CompleteResumeOperation
+            ) {
+                Scenario::FreezerSuccess
+            } else {
+                Scenario::SuccessfulLifecycle
+            }
+        }
     }
 }
 
@@ -155,10 +196,15 @@ async fn exercise(scenario: Scenario, point: FaultPoint) {
         Scenario::CreateClaimRecovery => exercise_create_claim_recovery(point).await,
         Scenario::StartRecovery => exercise_start_recovery(point).await,
         Scenario::KillRecovery => exercise_kill_recovery(point).await,
+        Scenario::FreezerSuccess => exercise_freezer_success(point).await,
+        Scenario::PauseRecovery => exercise_pause_recovery(point).await,
+        Scenario::ResumeRecovery => exercise_resume_recovery(point).await,
         Scenario::DeleteRecovery => exercise_delete_recovery(point).await,
         Scenario::CreateFailure => exercise_create_failure(point).await,
         Scenario::StartFailure => exercise_start_failure(point).await,
         Scenario::KillFailure => exercise_kill_failure(point).await,
+        Scenario::PauseFailure => exercise_pause_failure(point).await,
+        Scenario::ResumeFailure => exercise_resume_failure(point).await,
         Scenario::DeleteFailure => exercise_delete_failure(point).await,
         Scenario::Observation => exercise_observation(point).await,
         Scenario::ProcessSuccess => exercise_process_success(point).await,
@@ -327,6 +373,113 @@ async fn exercise_kill_recovery(point: FaultPoint) {
     assert_consistent_layout(recovered.root());
 }
 
+async fn exercise_freezer_success(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("freezer-success-create");
+    let target = prepare_running_for_freezer(&fixture.root, &create).await;
+    let pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("matrix-pause")),
+        target: target.clone(),
+    };
+    let resume = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("matrix-resume")),
+        target,
+    };
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open freezer lifecycle store");
+    let error = drive_freezer_lifecycle(&store, &pause, &resume)
+        .await
+        .expect_err("selected freezer checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen freezer lifecycle");
+    let running = drive_freezer_lifecycle(&recovered, &pause, &resume)
+        .await
+        .unwrap_or_else(|error| panic!("recover freezer lifecycle after {point}: {error}"));
+    assert!(!running.is_paused(), "{point}");
+    assert_eq!(
+        drive_freezer_lifecycle(&recovered, &pause, &resume)
+            .await
+            .expect("replay recovered freezer lifecycle"),
+        running,
+        "{point}"
+    );
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_pause_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("pause-recovery-create");
+    let (target, request) = prepare_split_pause_state(&fixture.root, &create).await;
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open pause recovery");
+    let error = store
+        .prepare_pause(&request)
+        .await
+        .expect_err("pause recovery checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen pause recovery");
+    let replayed = recovered
+        .prepare_pause(&request)
+        .await
+        .unwrap_or_else(|error| panic!("recover pause after {point}: {error}"));
+    assert!(matches!(replayed, RecordOperationPreparation::Replayed(_)));
+    assert!(
+        recovered
+            .state(&target)
+            .await
+            .expect("paused state")
+            .is_paused(),
+        "{point}"
+    );
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_resume_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("resume-recovery-create");
+    let (target, request) = prepare_split_resume_state(&fixture.root, &create).await;
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open resume recovery");
+    let error = store
+        .prepare_resume(&request)
+        .await
+        .expect_err("resume recovery checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen resume recovery");
+    let replayed = recovered
+        .prepare_resume(&request)
+        .await
+        .unwrap_or_else(|error| panic!("recover resume after {point}: {error}"));
+    assert!(matches!(replayed, RecordOperationPreparation::Replayed(_)));
+    assert!(
+        !recovered
+            .state(&target)
+            .await
+            .expect("resumed state")
+            .is_paused(),
+        "{point}"
+    );
+    assert_consistent_layout(recovered.root());
+}
+
 async fn exercise_delete_recovery(point: FaultPoint) {
     let fixture = Fixture::new();
     let create = fixture.create("delete-recovery-create");
@@ -444,6 +597,82 @@ async fn exercise_kill_failure(point: FaultPoint) {
     )
     .await
     .expect("claim released after failed kill");
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_pause_failure(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("pause-failure-create");
+    let target = prepare_running_for_freezer(&fixture.root, &create).await;
+    let request = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("failure-pause")),
+        target: target.clone(),
+    };
+    let failure = terminal_failure("pause");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open pause failure store");
+    let error = drive_failed_freezer(&store, &request, &failure, true)
+        .await
+        .expect_err("pause failure checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen pause failure");
+    drive_failed_freezer(&recovered, &request, &failure, true)
+        .await
+        .unwrap_or_else(|error| panic!("recover pause failure after {point}: {error}"));
+    let paused = drive_pause(
+        &recovered,
+        &ContainerOperationRequest {
+            context: OperationContext::new(operation_id("pause-after-failure")),
+            target,
+        },
+    )
+    .await
+    .expect("claim released after failed pause");
+    assert!(paused.is_paused(), "{point}");
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_resume_failure(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("resume-failure-create");
+    let target = prepare_paused_for_resume(&fixture.root, &create).await;
+    let request = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("failure-resume")),
+        target: target.clone(),
+    };
+    let failure = terminal_failure("resume");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open resume failure store");
+    let error = drive_failed_freezer(&store, &request, &failure, false)
+        .await
+        .expect_err("resume failure checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen resume failure");
+    drive_failed_freezer(&recovered, &request, &failure, false)
+        .await
+        .unwrap_or_else(|error| panic!("recover resume failure after {point}: {error}"));
+    let running = drive_resume(
+        &recovered,
+        &ContainerOperationRequest {
+            context: OperationContext::new(operation_id("resume-after-failure")),
+            target,
+        },
+    )
+    .await
+    .expect("claim released after failed resume");
+    assert!(!running.is_paused(), "{point}");
     assert_consistent_layout(recovered.root());
 }
 
@@ -602,6 +831,56 @@ async fn drive_start(
     }
 }
 
+async fn drive_freezer_lifecycle(
+    store: &DurableStateStore,
+    pause: &ContainerOperationRequest,
+    resume: &ContainerOperationRequest,
+) -> a3s_oci_sdk::Result<ContainerRecord> {
+    let paused = drive_pause(store, pause).await?;
+    assert!(paused.is_paused());
+    let running = drive_resume(store, resume).await?;
+    assert!(!running.is_paused());
+    Ok(running)
+}
+
+async fn drive_pause(
+    store: &DurableStateStore,
+    request: &ContainerOperationRequest,
+) -> a3s_oci_sdk::Result<ContainerRecord> {
+    match store.prepare_pause(request).await? {
+        RecordOperationPreparation::Prepared(_) | RecordOperationPreparation::Resume(_) => {
+            store
+                .complete_pause(
+                    &request.context.operation_id,
+                    ContainerState::Running,
+                    Some(4_242),
+                    true,
+                )
+                .await
+        }
+        RecordOperationPreparation::Replayed(record) => Ok(record),
+    }
+}
+
+async fn drive_resume(
+    store: &DurableStateStore,
+    request: &ContainerOperationRequest,
+) -> a3s_oci_sdk::Result<ContainerRecord> {
+    match store.prepare_resume(request).await? {
+        RecordOperationPreparation::Prepared(_) | RecordOperationPreparation::Resume(_) => {
+            store
+                .complete_resume(
+                    &request.context.operation_id,
+                    ContainerState::Running,
+                    Some(4_242),
+                    false,
+                )
+                .await
+        }
+        RecordOperationPreparation::Replayed(record) => Ok(record),
+    }
+}
+
 async fn drive_kill(
     store: &DurableStateStore,
     request: &KillRequest,
@@ -691,6 +970,37 @@ async fn drive_failed_kill(
     expect_failure(store.prepare_kill(request).await, failure)
 }
 
+async fn drive_failed_freezer(
+    store: &DurableStateStore,
+    request: &ContainerOperationRequest,
+    failure: &Error,
+    pause: bool,
+) -> a3s_oci_sdk::Result<()> {
+    let prepared = if pause {
+        store.prepare_pause(request).await
+    } else {
+        store.prepare_resume(request).await
+    };
+    match prepared {
+        Ok(RecordOperationPreparation::Prepared(_)) | Ok(RecordOperationPreparation::Resume(_)) => {
+            store
+                .fail_operation(&request.context.operation_id, failure)
+                .await?;
+        }
+        Ok(RecordOperationPreparation::Replayed(_)) => {
+            panic!("failed freezer operation unexpectedly replayed success")
+        }
+        Err(error) if error == *failure => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    let replayed = if pause {
+        store.prepare_pause(request).await
+    } else {
+        store.prepare_resume(request).await
+    };
+    expect_failure(replayed, failure)
+}
+
 async fn drive_failed_delete(
     store: &DurableStateStore,
     request: &DeleteRequest,
@@ -748,6 +1058,17 @@ async fn prepare_running_for_kill(
     root: &Path,
     create: &CreateRequest,
 ) -> (ContainerTarget, KillRequest) {
+    let target = prepare_running_for_freezer(root, create).await;
+    let request = KillRequest {
+        context: OperationContext::new(operation_id("failure-kill")),
+        target: target.clone(),
+        signal: Signal::new(15).expect("signal"),
+        all: false,
+    };
+    (target, request)
+}
+
+async fn prepare_running_for_freezer(root: &Path, create: &CreateRequest) -> ContainerTarget {
     let (target, start) = prepare_created_for_start(root, create).await;
     let store = DurableStateStore::open(root)
         .await
@@ -755,14 +1076,26 @@ async fn prepare_running_for_kill(
     drive_start(&store, &start)
         .await
         .expect("start setup container");
-    let request = KillRequest {
-        context: OperationContext::new(operation_id("failure-kill")),
-        target: target.clone(),
-        signal: Signal::new(15).expect("signal"),
-        all: false,
-    };
     drop(store);
-    (target, request)
+    target
+}
+
+async fn prepare_paused_for_resume(root: &Path, create: &CreateRequest) -> ContainerTarget {
+    let target = prepare_running_for_freezer(root, create).await;
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open pause setup");
+    drive_pause(
+        &store,
+        &ContainerOperationRequest {
+            context: OperationContext::new(operation_id("setup-pause")),
+            target: target.clone(),
+        },
+    )
+    .await
+    .expect("pause setup container");
+    drop(store);
+    target
 }
 
 async fn prepare_stopped_for_delete(root: &Path, create: &CreateRequest) -> DeleteRequest {
@@ -832,6 +1165,48 @@ async fn prepare_split_kill_state(
     (target, kill)
 }
 
+async fn prepare_split_pause_state(
+    root: &Path,
+    create: &CreateRequest,
+) -> (ContainerTarget, ContainerOperationRequest) {
+    let target = prepare_running_for_freezer(root, create).await;
+    let request = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("recovery-pause")),
+        target: target.clone(),
+    };
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open split-pause setup");
+    store
+        .prepare_pause(&request)
+        .await
+        .expect("prepare split pause");
+    write_split_freezer_state(store.root(), &create.id, true);
+    drop(store);
+    (target, request)
+}
+
+async fn prepare_split_resume_state(
+    root: &Path,
+    create: &CreateRequest,
+) -> (ContainerTarget, ContainerOperationRequest) {
+    let target = prepare_paused_for_resume(root, create).await;
+    let request = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("recovery-resume")),
+        target: target.clone(),
+    };
+    let store = DurableStateStore::open(root)
+        .await
+        .expect("open split-resume setup");
+    store
+        .prepare_resume(&request)
+        .await
+        .expect("prepare split resume");
+    write_split_freezer_state(store.root(), &create.id, false);
+    drop(store);
+    (target, request)
+}
+
 async fn prepare_moved_delete(root: &Path, create: &CreateRequest) -> DeleteRequest {
     let delete = prepare_stopped_for_delete(root, create).await;
     let store = DurableStateStore::open(root)
@@ -877,6 +1252,27 @@ fn write_split_container_state(
         .expect("open split state");
     file.write_all(&bytes).expect("write split state");
     file.sync_all().expect("sync split state");
+}
+
+fn write_split_freezer_state(root: &Path, id: &ContainerId, paused: bool) {
+    let path = root
+        .join("containers")
+        .join(id.as_str())
+        .join("record.json");
+    let mut stored: StoredContainer =
+        serde_json::from_slice(&fs::read(&path).expect("read container record"))
+            .expect("decode container record");
+    stored.record.state =
+        rebuild_paused_state(&stored.record.state, paused).expect("rebuild split freezer state");
+    let mut bytes = serde_json::to_vec_pretty(&stored).expect("encode split freezer state");
+    bytes.push(b'\n');
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .expect("open split freezer state");
+    file.write_all(&bytes).expect("write split freezer state");
+    file.sync_all().expect("sync split freezer state");
 }
 
 fn assert_injected(error: &Error, point: FaultPoint, injector: &RecordingFaultInjector) {

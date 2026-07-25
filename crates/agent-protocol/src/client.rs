@@ -3,16 +3,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, Result};
+use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, ProcessRecord, Result};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 use crate::model::{
-    protocol_error, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello,
-    AgentKillRequest, AgentOperation, AgentProcess, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange,
-    RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
+    protocol_error, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
+    AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation, AgentProcess,
+    AgentProcessesRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest,
+    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    SessionToken,
 };
 use crate::wire::{read_frame, write_frame};
 
@@ -104,6 +105,27 @@ where
     /// Query the guest state for one exact container generation.
     pub async fn state(&self, request: AgentStateRequest) -> Result<AgentState> {
         expect_state(self.call(AgentRequest::State(request)).await?, "state")
+    }
+
+    /// Freeze every process in one exact container generation.
+    pub async fn pause(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
+        expect_state(self.call(AgentRequest::Pause(request)).await?, "pause")
+    }
+
+    /// Thaw every process in one exact container generation.
+    pub async fn resume(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
+        expect_state(self.call(AgentRequest::Resume(request)).await?, "resume")
+    }
+
+    /// List every live init and exec process in one exact generation.
+    pub async fn processes(&self, request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
+        match self.call(AgentRequest::Processes(request)).await? {
+            AgentResponse::Processes(processes) => Ok(processes),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a process inventory request",
+            )),
+        }
     }
 
     /// Release a prepared init process.
@@ -307,6 +329,9 @@ fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> R
         AgentRequest::Exec(_) => AgentOperation::Exec,
         AgentRequest::SignalProcess(_) => AgentOperation::SignalProcess,
         AgentRequest::WaitProcess(_) => AgentOperation::WaitProcess,
+        AgentRequest::Pause(_) => AgentOperation::Pause,
+        AgentRequest::Resume(_) => AgentOperation::Resume,
+        AgentRequest::Processes(_) => AgentOperation::Processes,
     };
     if operations.contains(&required) {
         Ok(())
@@ -371,6 +396,44 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
         (AgentRequest::WaitProcess(request), AgentResponse::ProcessExit(exit)) => {
             validate_process_target(&request.target, exit.target())?;
             exit.status().validate()
+        }
+        (AgentRequest::Pause(request), AgentResponse::State(state)) => {
+            validate_state_target(&request.target, state)?;
+            if state.paused() {
+                Ok(())
+            } else {
+                Err(protocol_error(
+                    ErrorCode::FailedPrecondition,
+                    "guest pause response did not report a frozen container",
+                ))
+            }
+        }
+        (AgentRequest::Resume(request), AgentResponse::State(state)) => {
+            validate_state_target(&request.target, state)?;
+            if state.paused() {
+                Err(protocol_error(
+                    ErrorCode::FailedPrecondition,
+                    "guest resume response still reported a frozen container",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        (AgentRequest::Processes(request), AgentResponse::Processes(processes)) => {
+            if let Some(process) = processes
+                .iter()
+                .find(|process| process.target.container != request.target)
+            {
+                Err(protocol_error(
+                    ErrorCode::Conflict,
+                    format!(
+                        "guest process {} belongs to a different container target",
+                        process.target.process_id
+                    ),
+                ))
+            } else {
+                Ok(())
+            }
         }
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
@@ -448,6 +511,9 @@ const fn request_name(request: &AgentRequest) -> &'static str {
         AgentRequest::Exec(_) => "exec",
         AgentRequest::SignalProcess(_) => "signal-process",
         AgentRequest::WaitProcess(_) => "wait-process",
+        AgentRequest::Pause(_) => "pause",
+        AgentRequest::Resume(_) => "resume",
+        AgentRequest::Processes(_) => "processes",
     }
 }
 

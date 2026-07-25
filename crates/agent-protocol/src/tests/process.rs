@@ -4,7 +4,7 @@ use super::*;
 async fn protocol_v3_exec_signal_and_wait_are_exactly_process_scoped() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let server = spawn_server(guest, token(20));
-    let client = AgentClient::connect(host, token(20))
+    let client = AgentClient::connect_for_test(host, token(20), 3, 3)
         .await
         .expect("connect protocol-v3 client");
     assert_eq!(client.hello().selected_version(), 3);
@@ -76,6 +76,103 @@ async fn protocol_v3_exec_signal_and_wait_are_exactly_process_scoped() {
         .await
         .expect("server task")
         .expect("clean protocol-v3 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v4_freezes_and_lists_one_exact_container_generation() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let server = spawn_server(guest, token(23));
+    let client = AgentClient::connect(host, token(23))
+        .await
+        .expect("connect protocol-v4 client");
+    assert_eq!(client.hello().selected_version(), 4);
+    assert_eq!(
+        &client.hello().capabilities().operations()[9..],
+        &[
+            crate::AgentOperation::Pause,
+            crate::AgentOperation::Resume,
+            crate::AgentOperation::Processes,
+        ]
+    );
+
+    let create = create_request_for("control-container", 4, "control-create");
+    let target = create.target.clone();
+    let digest = create.bundle.config_digest().to_string();
+    client
+        .create(create)
+        .await
+        .expect("create control container");
+    client
+        .start(AgentStartRequest {
+            context: OperationContext::new(operation_id("control-start")),
+            target: target.clone(),
+            expected_config_digest: digest,
+        })
+        .await
+        .expect("start control container");
+
+    let initial = client
+        .processes(AgentProcessesRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("list init process");
+    assert_eq!(initial.len(), 1);
+    assert!(initial[0].target.process_id.is_init());
+
+    let exec = exec_request(target.clone(), "listed-command", "control-exec");
+    let exec_target = exec.target.clone();
+    client.exec(exec).await.expect("exec listed process");
+    let processes = client
+        .processes(AgentProcessesRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("list init and exec processes");
+    assert_eq!(processes.len(), 2);
+    assert!(processes
+        .iter()
+        .any(|process| process.target == exec_target));
+
+    let paused = client
+        .pause(AgentContainerOperationRequest {
+            context: OperationContext::new(operation_id("control-pause")),
+            target: target.clone(),
+        })
+        .await
+        .expect("pause container");
+    assert!(paused.paused());
+    assert!(client
+        .state(AgentStateRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("state paused container")
+        .paused());
+    let rejected = client
+        .exec(exec_request(
+            target.clone(),
+            "paused-command",
+            "control-paused-exec",
+        ))
+        .await
+        .expect_err("exec while paused must fail");
+    assert_eq!(rejected.code, ErrorCode::FailedPrecondition);
+
+    let resumed = client
+        .resume(AgentContainerOperationRequest {
+            context: OperationContext::new(operation_id("control-resume")),
+            target,
+        })
+        .await
+        .expect("resume container");
+    assert!(!resumed.paused());
+
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v4 server shutdown");
 }
 
 #[tokio::test]

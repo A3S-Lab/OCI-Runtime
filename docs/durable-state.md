@@ -95,18 +95,21 @@ different request fails with `failed-precondition`. A matching prepared
 operation resumes the original generation; a matching completed operation
 returns its exact recorded response.
 
-Start, kill, and delete use the same global journal and request fingerprinting.
-Each accepted mutation claims the target record so a second mutation cannot
-race the driver call. Start revalidates the durable configuration snapshot,
-not the caller's mutable source bundle, before recording an intent. Delete
-atomically moves the owned container directory into quarantine rather than
-recursively deleting an unresolved path.
+Start, kill, pause, resume, and delete use the same global journal and request
+fingerprinting. Each accepted mutation claims the target record so a second
+mutation cannot race the driver call. Start revalidates the durable
+configuration snapshot, not the caller's mutable source bundle, before
+recording an intent. Pause and resume preserve the standard OCI `running`
+status and store freezer state in the reserved
+`dev.a3s.oci.runtime.paused=true` state annotation. Delete atomically moves the
+owned container directory into quarantine rather than recursively deleting an
+unresolved path.
 
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
-exactly; it releases a start, kill, delete, exec, or per-process signal claim,
-while a failed create is moved out of the live namespace before its ID can be
-reused.
+exactly; it releases a start, kill, pause, resume, delete, exec, or per-process
+signal claim, while a failed create is moved out of the live namespace before
+its ID can be reused.
 
 Exec uses the same global operation journal. Preparation reserves the
 generation-scoped process ID before driver dispatch, so duplicate IDs fail
@@ -140,6 +143,8 @@ handles these interrupted states:
   idempotently with the same PID;
 - an observed running/stopped driver state can finish an interrupted start or
   kill journal;
+- an observed exact frozen/thawed driver state can finish an interrupted pause
+  or resume journal without repeating a completed freezer transition;
 - a moved delete tombstone completes an interrupted delete journal;
 - a process record created before its exec operation outcome is reconciled
   into the exact successful process result;
@@ -153,7 +158,7 @@ handles these interrupted states:
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 52 semantic mutations. Fifty atomic
+The registry currently contains 68 semantic mutations. Sixty-six atomic
 file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
@@ -165,9 +170,9 @@ file replacements are exercised at all seven commit stages:
 7. parent-directory sync.
 
 The delete and failed-create quarantine moves are each exercised after the
-rename, source-parent sync, and destination-parent sync. This expands to 356
+rename, source-parent sync, and destination-parent sync. This expands to 468
 durable fault points. The host matrix separately injects before and after all
-ten `RuntimeDriver` methods, including capability discovery, for another 20
+13 `RuntimeDriver` methods, including capability discovery, for another 26
 boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
@@ -184,6 +189,6 @@ Production uses a non-configurable no-op injector.
 
 The remaining persistence gates are startup-wide orphan scanning,
 descriptor-relative path operations, real-driver reattachment across runtime
-process restart, journals for all remaining mutating SDK operations, and fault
-injection inside the utility-VM host/agent transport below the
+process restart, journals for update and remaining process-I/O mutations, and
+fault injection inside the utility-VM host/agent transport below the
 `RuntimeDriver` boundary.

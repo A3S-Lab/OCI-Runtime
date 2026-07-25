@@ -2,14 +2,16 @@ use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerTarget, CreateRequest, ErrorCode, ExecRequest, IsolationRequest, OciBundle,
-    ProcessTarget, Result, SignalProcessRequest, ValidateRequest, WaitProcessRequest,
+    ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode, ExecRequest,
+    IsolationRequest, OciBundle, ProcessRecord, ProcessTarget, ProcessesRequest, Result,
+    SignalProcessRequest, ValidateRequest, WaitProcessRequest,
 };
 
 use crate::model::{
-    protocol_error, AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
-    AgentHello, AgentKillRequest, AgentProcess, AgentProcessExit, AgentProcessSignal, AgentRequest,
-    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    protocol_error, AgentBundle, AgentContainerOperationRequest, AgentCreateRequest,
+    AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess,
+    AgentProcessExit, AgentProcessSignal, AgentProcessesRequest, AgentRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
     AgentWaitProcessRequest, AgentWaitRequest, ProtocolRange, RequestEnvelope, ResponseEnvelope,
     ResponseOutcome, AGENT_MAX_FRAME_BYTES,
 };
@@ -95,6 +97,27 @@ impl AgentWaitProcessRequest {
     }
 }
 
+impl AgentContainerOperationRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_target(&self.target)?;
+        ContainerOperationRequest {
+            context: self.context.clone(),
+            target: self.target.clone(),
+        }
+        .validate()
+    }
+}
+
+impl AgentProcessesRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_target(&self.target)?;
+        ProcessesRequest {
+            target: self.target.clone(),
+        }
+        .validate()
+    }
+}
+
 impl AgentStartRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(&self.target)?;
@@ -126,6 +149,8 @@ impl AgentRequest {
             Self::Exec(request) => request.validate(),
             Self::SignalProcess(request) => request.validate(),
             Self::WaitProcess(request) => request.validate(),
+            Self::Pause(request) | Self::Resume(request) => request.validate(),
+            Self::Processes(request) => request.validate(),
         }
     }
 
@@ -149,6 +174,7 @@ impl AgentRequest {
             }
             Self::Wait(_) => 2,
             Self::Exec(_) | Self::SignalProcess(_) | Self::WaitProcess(_) => 3,
+            Self::Pause(_) | Self::Resume(_) | Self::Processes(_) => 4,
         }
     }
 }
@@ -157,12 +183,15 @@ impl AgentState {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(self.target())?;
         validate_digest(self.config_digest())?;
-        match (self.status(), self.pid()) {
-            (ContainerState::Created | ContainerState::Running, Some(pid)) if pid > 0 => Ok(()),
-            (ContainerState::Stopped, None) => Ok(()),
-            (status, pid) => Err(protocol_error(
+        match (self.status(), self.pid(), self.paused()) {
+            (ContainerState::Created, Some(pid), false) if pid > 0 => Ok(()),
+            (ContainerState::Running, Some(pid), _) if pid > 0 => Ok(()),
+            (ContainerState::Stopped, None, false) => Ok(()),
+            (status, pid, paused) => Err(protocol_error(
                 ErrorCode::InvalidArgument,
-                format!("guest returned invalid OCI state {status} with PID {pid:?}"),
+                format!(
+                    "guest returned invalid OCI state {status} with PID {pid:?} and paused={paused}"
+                ),
             )),
         }
     }
@@ -209,6 +238,7 @@ impl AgentResponse {
             Self::Process(process) => process.validate(),
             Self::ProcessSignaled(signal) => signal.validate(),
             Self::ProcessExit(exit) => exit.validate(),
+            Self::Processes(processes) => validate_processes(processes),
         }
     }
 
@@ -217,6 +247,7 @@ impl AgentResponse {
             Self::State(_) | Self::Deleted => 1,
             Self::ExitStatus(_) => 2,
             Self::Process(_) | Self::ProcessSignaled(_) | Self::ProcessExit(_) => 3,
+            Self::Processes(_) => 4,
         };
         if selected_version < minimum_version {
             return Err(protocol_error(
@@ -229,6 +260,34 @@ impl AgentResponse {
         }
         self.validate()
     }
+}
+
+fn validate_processes(processes: &[ProcessRecord]) -> Result<()> {
+    for (index, process) in processes.iter().enumerate() {
+        validate_exact_process_target(&process.target)?;
+        if process.pid.is_none_or(|pid| pid == 0) {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "guest process inventory returned no live PID for {}",
+                    process.target.process_id
+                ),
+            ));
+        }
+        if processes[..index]
+            .iter()
+            .any(|candidate| candidate.target == process.target)
+        {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "guest process inventory returned duplicate process {}",
+                    process.target.process_id
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl AgentHello {

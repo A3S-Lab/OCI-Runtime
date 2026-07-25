@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    ExitStatus, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessIo,
-    RuntimeClient, Signal, StartRequest, StateRequest, WaitRequest,
+    ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
+    DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, OciBundle,
+    OperationContext, OperationId, ProcessIo, ProcessTarget, ProcessesRequest, RuntimeClient,
+    Signal, StartRequest, StateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -17,6 +18,8 @@ use crate::{FaultInjectionEvidence, LifecycleFaultPoint, NativeLinuxSmokeReport}
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const FREEZER_OBSERVATION_DELAY: Duration = Duration::from_millis(1_250);
+const PROGRESS_PATH: &str = "/.a3s-oci-native-smoke";
 
 pub(super) async fn exercise(
     client: &RuntimeClient,
@@ -89,7 +92,9 @@ pub(super) async fn exercise(
         return Err("native start did not leave the workload running".into());
     }
     wait_for_marker(client, &target, marker, report).await?;
-    let cleanup_process = process::exercise_before_init_exit(client, &target, nonce).await?;
+    let cleanup_process =
+        process::exercise_before_init_exit(client, &target, nonce, PROGRESS_PATH).await?;
+    exercise_control_plane(client, &target, &cleanup_process, nonce, marker, report).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, &target).await?;
     if !report.wait_timeout_enforced {
         return Err("native wait returned before the running init process exited".into());
@@ -155,6 +160,119 @@ pub(super) async fn exercise(
         return Err("native state remained visible after delete".into());
     }
     Ok(())
+}
+
+async fn exercise_control_plane(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    worker: &ProcessTarget,
+    nonce: &str,
+    marker: &Path,
+    report: &mut NativeLinuxSmokeReport,
+) -> Result<(), String> {
+    wait_for_marker_change(marker, MARKER_CONTENTS).await?;
+    let processes = native_call(
+        "process inventory before pause",
+        client.processes(ProcessesRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    report.processes_verified = process_inventory_is_exact(&processes, target, worker);
+    if !report.processes_verified {
+        return Err(
+            "native process inventory did not contain exactly the live init and exec".into(),
+        );
+    }
+
+    let pause = ContainerOperationRequest {
+        context: operation(nonce, "pause")?,
+        target: target.clone(),
+    };
+    let paused = native_call("pause", client.pause(pause.clone())).await?;
+    if !paused.is_paused()
+        || native_call("replayed pause", client.pause(pause)).await? != paused
+        || !native_call(
+            "state while paused",
+            client.state(StateRequest {
+                target: target.clone(),
+            }),
+        )
+        .await?
+        .is_paused()
+    {
+        return Err("native pause did not expose an exact durable frozen state".into());
+    }
+    let paused_processes = native_call(
+        "process inventory while paused",
+        client.processes(ProcessesRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    if !process_inventory_is_exact(&paused_processes, target, worker) {
+        return Err("native pause changed the live process inventory".into());
+    }
+
+    let frozen_progress = read_marker(marker).await?;
+    sleep(FREEZER_OBSERVATION_DELAY).await;
+    report.pause_froze_workload = read_marker(marker).await? == frozen_progress;
+    if !report.pause_froze_workload {
+        return Err("native workload advanced while its cgroup was frozen".into());
+    }
+
+    let resume = ContainerOperationRequest {
+        context: operation(nonce, "resume")?,
+        target: target.clone(),
+    };
+    let resumed = native_call("resume", client.resume(resume.clone())).await?;
+    if resumed.is_paused()
+        || native_call("replayed resume", client.resume(resume)).await? != resumed
+        || native_call(
+            "state after resume",
+            client.state(StateRequest {
+                target: target.clone(),
+            }),
+        )
+        .await?
+        .is_paused()
+    {
+        return Err("native resume did not expose an exact durable running state".into());
+    }
+    wait_for_marker_change(marker, &frozen_progress).await?;
+    report.resume_advanced_workload = true;
+    Ok(())
+}
+
+fn process_inventory_is_exact(
+    processes: &[a3s_oci_sdk::ProcessRecord],
+    target: &ContainerTarget,
+    worker: &ProcessTarget,
+) -> bool {
+    processes.len() == 2
+        && processes.iter().all(|process| {
+            process.target.container == *target
+                && process.pid.is_some_and(|pid| pid > 0)
+                && !process.terminal
+        })
+        && processes
+            .iter()
+            .any(|process| process.target.process_id.is_init())
+        && processes.iter().any(|process| process.target == *worker)
+}
+
+async fn wait_for_marker_change(marker: &Path, previous: &[u8]) -> Result<Vec<u8>, String> {
+    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+    loop {
+        let current = read_marker(marker).await?;
+        if current != previous {
+            return Ok(current);
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out waiting for native workload progress".into());
+        }
+        sleep(POLL_INTERVAL).await;
+    }
 }
 
 async fn wait_times_out_while_running(

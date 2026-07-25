@@ -84,16 +84,17 @@ create a VM.
 The `native-linux-smoke` command opens the native driver beneath isolated
 runtime-owned directories. It exercises the durable init and process
 lifecycle through `RuntimeClient`; `HostRuntimeService` journals exec and
-per-process signal, caches init and process terminal results, and dispatches
-the exact generation through `NativeLinuxDriver` to the shared
+per-process signal plus pause/resume, caches init and process terminal results,
+and dispatches the exact generation through `NativeLinuxDriver` to the shared
 `LinuxExecutor`. The submitted bundle is strictly loaded before the lifecycle
 begins.
 
-The versioned `a3s.oci.native-linux-smoke.v3` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v4` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
-   `kill`, `delete`, `exec`, `wait`, `signal-process`, and `wait-process`;
+   `kill`, `delete`, `exec`, `wait`, `pause`, `resume`, `processes`,
+   `signal-process`, and `wait-process`;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
 3. create returns the positive host-visible PID of the configured process in
@@ -109,19 +110,23 @@ following:
    returns `DeadlineExceeded`;
 8. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
-9. a second live exec is terminated and reaped automatically when init exits,
-   while process ID `init` returns the same result as lifecycle wait;
-10. a 50-millisecond wait returns `DeadlineExceeded` while the configured
+9. process inventory returns exactly the live init and second exec process;
+   pause and its replay expose a durable frozen state, the progress-producing
+   exec remains unchanged for a bounded interval, resume and its replay expose
+   a durable thawed state, and that same exec advances again;
+10. the second live exec is terminated and reaped automatically when init
+   exits, while process ID `init` returns the same result as lifecycle wait;
+11. a 50-millisecond wait returns `DeadlineExceeded` while the configured
    process is still running;
-11. `SIGKILL` reaches the configured process through its retained pidfd, and
+12. `SIGKILL` reaches the configured process through its retained pidfd, and
    both internal supervisors preserve the exact signal result while retrying
    kill replays its exact result;
-12. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
+13. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
    the same terminal result;
-13. state reaches `stopped`;
-14. stopped-only delete and its exact retry succeed;
-15. state returns `NotFound` after delete;
-16. the marker, executor root, and complete smoke session are removed.
+14. state reaches `stopped`;
+15. stopped-only delete and its exact retry succeed;
+16. state returns `NotFound` after delete;
+17. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -173,12 +178,19 @@ replay the exact signal-9 terminal result.
 Run it with a second bundle containing its own rootfs:
 
 ```sh
+jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
+  "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
+mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
+
 sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --agent "$PWD/target/debug/a3s-oci-agent" \
   --bundle-a "$bundle_a" \
   --bundle-b "$bundle_b" \
   --work-parent "$work_parent"
 ```
+
+The two simultaneously live bundles must use distinct cgroup v2 paths; the
+checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
 The `a3s.oci.native-linux-multi-container-smoke.v9` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
@@ -246,7 +258,7 @@ done
 
 The versioned `a3s.oci.native-linux-fault-cleanup.v3` report requires:
 
-1. the exact ten-operation service inventory, requested prefix, and a positive
+1. the exact 13-operation service inventory, requested prefix, and a positive
    runtime-visible configured-process PID;
 2. marker absence behind create and exact marker contents after start;
 3. `normal_delete_attempted: false`;

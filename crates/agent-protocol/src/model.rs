@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, OciBundle, OperationContext,
-    ProcessIo, ProcessTarget, Result, Signal,
+    ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 3;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 4;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Required session-token entropy supplied by the host.
@@ -255,6 +255,12 @@ pub enum AgentOperation {
     SignalProcess,
     /// Wait for one init or exec process. Available from protocol version 3.
     WaitProcess,
+    /// Freeze every process in one container cgroup. Available from protocol version 4.
+    Pause,
+    /// Thaw every process in one container cgroup. Available from protocol version 4.
+    Resume,
+    /// List the live init and exec processes. Available from protocol version 4.
+    Processes,
 }
 
 impl AgentOperation {
@@ -263,6 +269,7 @@ impl AgentOperation {
             Self::Create | Self::State | Self::Start | Self::Kill | Self::Delete => 1,
             Self::Wait => 2,
             Self::Exec | Self::SignalProcess | Self::WaitProcess => 3,
+            Self::Pause | Self::Resume | Self::Processes => 4,
         }
     }
 }
@@ -322,6 +329,9 @@ impl AgentCapabilities {
                 AgentOperation::Exec,
                 AgentOperation::SignalProcess,
                 AgentOperation::WaitProcess,
+                AgentOperation::Pause,
+                AgentOperation::Resume,
+                AgentOperation::Processes,
             ],
         )
     }
@@ -516,6 +526,24 @@ pub struct AgentWaitProcessRequest {
     pub timeout_ms: Option<u64>,
 }
 
+/// Idempotent container freezer mutation sent to the guest executor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContainerOperationRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Container ID plus a positive exact generation.
+    pub target: ContainerTarget,
+}
+
+/// Query the live process inventory of one exact container generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentProcessesRequest {
+    /// Container ID plus a positive exact generation.
+    pub target: ContainerTarget,
+}
+
 /// OCI start input sent to the guest executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -567,6 +595,9 @@ pub enum AgentRequest {
     Exec(Box<AgentExecRequest>),
     SignalProcess(AgentSignalProcessRequest),
     WaitProcess(AgentWaitProcessRequest),
+    Pause(AgentContainerOperationRequest),
+    Resume(AgentContainerOperationRequest),
+    Processes(AgentProcessesRequest),
 }
 
 /// Guest-observed init-process state for one exact generation.
@@ -578,6 +609,8 @@ pub struct AgentState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pid: Option<i32>,
     config_digest: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    paused: bool,
 }
 
 impl AgentState {
@@ -588,11 +621,23 @@ impl AgentState {
         pid: Option<i32>,
         config_digest: impl Into<String>,
     ) -> Result<Self> {
+        Self::new_with_pause(target, status, pid, config_digest, false)
+    }
+
+    /// Construct a state report including the cgroup freezer observation.
+    pub fn new_with_pause(
+        target: ContainerTarget,
+        status: ContainerState,
+        pid: Option<i32>,
+        config_digest: impl Into<String>,
+        paused: bool,
+    ) -> Result<Self> {
         let state = Self {
             target,
             status,
             pid,
             config_digest: config_digest.into(),
+            paused,
         };
         state.validate()?;
         Ok(state)
@@ -620,6 +665,12 @@ impl AgentState {
     #[must_use]
     pub fn config_digest(&self) -> &str {
         &self.config_digest
+    }
+
+    /// Whether all processes in this generation are frozen.
+    #[must_use]
+    pub const fn paused(&self) -> bool {
+        self.paused
     }
 }
 
@@ -726,6 +777,11 @@ pub enum AgentResponse {
     Process(AgentProcess),
     ProcessSignaled(AgentProcessSignal),
     ProcessExit(AgentProcessExit),
+    Processes(Vec<ProcessRecord>),
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
