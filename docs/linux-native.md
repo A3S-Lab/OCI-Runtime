@@ -82,17 +82,18 @@ create a VM.
 ## Experimental lifecycle gate
 
 The `native-linux-smoke` command opens the native driver beneath isolated
-runtime-owned directories. It exercises the durable init lifecycle through
-`RuntimeClient` and, until the three process operations are added to
-`RuntimeDriver`, exercises exec/signal/wait directly against the same shared
+runtime-owned directories. It exercises the durable init and process
+lifecycle through `RuntimeClient`; `HostRuntimeService` journals exec and
+per-process signal, caches init and process terminal results, and dispatches
+the exact generation through `NativeLinuxDriver` to the shared
 `LinuxExecutor`. The submitted bundle is strictly loaded before the lifecycle
 begins.
 
-The versioned `a3s.oci.native-linux-smoke.v2` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v3` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
-   `kill`, `delete`, and `wait`;
+   `kill`, `delete`, `exec`, `wait`, `signal-process`, and `wait-process`;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
 3. create returns the positive host-visible PID of the configured process in
@@ -179,7 +180,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
-The `a3s.oci.native-linux-multi-container-smoke.v8` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v9` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -243,10 +244,10 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-The versioned `a3s.oci.native-linux-fault-cleanup.v2` report requires:
+The versioned `a3s.oci.native-linux-fault-cleanup.v3` report requires:
 
-1. the exact seven-operation service inventory, requested prefix, and a
-   positive runtime-visible configured-process PID;
+1. the exact ten-operation service inventory, requested prefix, and a positive
+   runtime-visible configured-process PID;
 2. marker absence behind create and exact marker contents after start;
 3. `normal_delete_attempted: false`;
 4. successful executor shutdown and disappearance of the configured-process
@@ -269,11 +270,11 @@ The default driver must remain `probe-only` until at least the following pass:
   restart recovery beyond the retained wrong-type pre-state rejection;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
-- durable host/`RuntimeDriver` exposure and restart recovery for the
-  implemented container exec, per-process signal, and wait operations, plus
-  complete process I/O and PTY handling;
-- hooks, exhaustive durable-write and driver-error recovery injection,
-  descriptor-relative path handling, and adversarial cleanup;
+- real-driver reattachment after runtime-process restart, plus complete
+  process I/O and PTY handling;
+- hooks, durable recovery for the remaining mutating operations,
+  descriptor-relative path handling, transport-level fault injection, and
+  adversarial cleanup;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
   x86_64 and aarch64 without KVM.
 

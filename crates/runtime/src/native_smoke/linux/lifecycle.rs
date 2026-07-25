@@ -20,7 +20,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(super) async fn exercise(
     client: &RuntimeClient,
-    executor: &a3s_oci_agent::LinuxExecutor,
     bundle: &OciBundle,
     nonce: &str,
     marker: &Path,
@@ -90,7 +89,7 @@ pub(super) async fn exercise(
         return Err("native start did not leave the workload running".into());
     }
     wait_for_marker(client, &target, marker, report).await?;
-    let cleanup_process = process::exercise_before_init_exit(executor, &target, nonce).await?;
+    let cleanup_process = process::exercise_before_init_exit(client, &target, nonce).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, &target).await?;
     if !report.wait_timeout_enforced {
         return Err("native wait returned before the running init process exited".into());
@@ -139,7 +138,7 @@ pub(super) async fn exercise(
     if !report.wait_replayed {
         return Err("native repeated wait returned a different exit status".into());
     }
-    process::verify_after_init_exit(executor, &target, cleanup_process, &waited).await?;
+    process::verify_after_init_exit(client, &target, cleanup_process, &waited).await?;
     report.stopped_observed = wait_until_stopped(client, &target).await?;
 
     let delete = DeleteRequest {

@@ -115,7 +115,8 @@ impl DurableStateStore {
                 }
                 StoredOperationStatus::SucceededEmpty => Ok(DeletePreparation::Replayed),
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
-                StoredOperationStatus::Succeeded { .. } => Err(state_error(
+                StoredOperationStatus::Succeeded { .. }
+                | StoredOperationStatus::SucceededProcess { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-delete",
                     format!(
@@ -155,6 +156,8 @@ impl DurableStateStore {
             }
             DeleteMode::StoppedOnly | DeleteMode::Force => {}
         }
+        self.ensure_no_active_process_operations(&stored, "prepare-delete")
+            .await?;
 
         let operation = StoredOperation {
             schema_version: OPERATION_SCHEMA_VERSION.to_string(),
@@ -162,6 +165,7 @@ impl DurableStateStore {
             kind: StoredOperationKind::Delete,
             container_id: request.target.id.clone(),
             generation: stored.record.generation,
+            process_id: None,
             request_digest: digest,
             outcome: StoredOperationStatus::Prepared,
         };
@@ -196,7 +200,8 @@ impl DurableStateStore {
             StoredOperationStatus::Prepared => {}
             StoredOperationStatus::SucceededEmpty => return Ok(()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
-            StoredOperationStatus::Succeeded { .. } => {
+            StoredOperationStatus::Succeeded { .. }
+            | StoredOperationStatus::SucceededProcess { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-delete",

@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use a3s_oci_agent::LinuxExecutor;
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, AgentWaitRequest, GuestAgentService, GuestPath,
+    AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService, GuestPath,
 };
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
@@ -13,17 +14,21 @@ use a3s_oci_sdk::{
 };
 
 use crate::driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
     DriverWaitRequest, RuntimeDriver,
 };
 
-const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 6] = [
+const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 9] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
     RuntimeOperation::Kill,
     RuntimeOperation::Delete,
     RuntimeOperation::Wait,
+    RuntimeOperation::Exec,
+    RuntimeOperation::SignalProcess,
+    RuntimeOperation::WaitProcess,
 ];
 
 /// Explicitly opted-in native Linux runtime driver.
@@ -86,10 +91,6 @@ impl NativeLinuxDriver {
     #[must_use]
     pub fn executor_root(&self) -> &Path {
         self.executor.runtime_root()
-    }
-
-    pub(crate) fn executor(&self) -> &LinuxExecutor {
-        &self.executor
     }
 }
 
@@ -177,6 +178,54 @@ impl RuntimeDriver for NativeLinuxDriver {
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
         self.executor
             .wait(AgentWaitRequest {
+                target: request.target,
+                timeout_ms: request.timeout_ms,
+            })
+            .await
+    }
+
+    async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
+        let expected_target = request.target.clone();
+        let expected_terminal = request.process.terminal().unwrap_or(false);
+        let process = self
+            .executor
+            .exec(AgentExecRequest {
+                context: request.context,
+                target: request.target,
+                process: request.process,
+                io: request.io,
+            })
+            .await?;
+        if process.target() != &expected_target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "native Linux executor returned a different process target",
+            )
+            .for_operation("map-native-linux-process"));
+        }
+        if process.terminal() != expected_terminal {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "native Linux executor returned a different process terminal mode",
+            )
+            .for_operation("map-native-linux-process"));
+        }
+        DriverProcess::new(process.pid(), process.terminal())
+    }
+
+    async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        self.executor
+            .signal_process(AgentSignalProcessRequest {
+                context: request.context,
+                target: request.target,
+                signal: request.signal,
+            })
+            .await
+    }
+
+    async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        self.executor
+            .wait_process(AgentWaitProcessRequest {
                 target: request.target,
                 timeout_ms: request.timeout_ms,
             })

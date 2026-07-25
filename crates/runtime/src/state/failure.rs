@@ -35,7 +35,9 @@ impl DurableStateStore {
                     format!("operation {operation_id} already has a different failure"),
                 ));
             }
-            StoredOperationStatus::Succeeded { .. } | StoredOperationStatus::SucceededEmpty => {
+            StoredOperationStatus::Succeeded { .. }
+            | StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::Conflict,
                     "fail-operation",
@@ -57,6 +59,34 @@ impl DurableStateStore {
             )
             .await?;
             self.reconcile_failed_create(&operation).await?;
+            return Ok(());
+        }
+
+        if matches!(
+            operation.kind,
+            StoredOperationKind::Exec | StoredOperationKind::SignalProcess
+        ) {
+            let (release_mutation, failure_mutation) = process_failure_mutations(operation.kind)
+                .ok_or_else(|| {
+                    state_error(
+                        ErrorCode::Internal,
+                        "fail-operation",
+                        format!(
+                            "operation {operation_id} reached invalid process failure handling"
+                        ),
+                    )
+                })?;
+            self.release_failed_process_operation(&operation, release_mutation)
+                .await?;
+            operation.outcome = StoredOperationStatus::Failed {
+                error: error.clone(),
+            };
+            self.write_json(
+                failure_mutation,
+                &self.operation_path(operation_id),
+                &operation,
+            )
+            .await?;
             return Ok(());
         }
 
@@ -152,6 +182,25 @@ impl DurableStateStore {
     }
 }
 
+const fn process_failure_mutations(
+    kind: StoredOperationKind,
+) -> Option<(DurableMutation, DurableMutation)> {
+    match kind {
+        StoredOperationKind::Exec => Some((
+            DurableMutation::ReleaseFailedExecClaim,
+            DurableMutation::RecordExecFailure,
+        )),
+        StoredOperationKind::SignalProcess => Some((
+            DurableMutation::ReleaseFailedSignalProcessClaim,
+            DurableMutation::RecordSignalProcessFailure,
+        )),
+        StoredOperationKind::Create
+        | StoredOperationKind::Start
+        | StoredOperationKind::Kill
+        | StoredOperationKind::Delete => None,
+    }
+}
+
 const fn failure_mutations(
     kind: StoredOperationKind,
 ) -> Option<(DurableMutation, DurableMutation)> {
@@ -169,5 +218,6 @@ const fn failure_mutations(
             DurableMutation::ReleaseFailedDeleteClaim,
             DurableMutation::RecordDeleteFailure,
         )),
+        StoredOperationKind::Exec | StoredOperationKind::SignalProcess => None,
     }
 }

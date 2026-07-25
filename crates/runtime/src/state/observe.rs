@@ -126,8 +126,25 @@ impl DurableStateStore {
                     "active operation disappeared during state reconciliation",
                 )
             })?;
-            operation.outcome = StoredOperationStatus::Succeeded {
-                response: stored.record.clone(),
+            operation.outcome = match operation.kind {
+                StoredOperationKind::SignalProcess => StoredOperationStatus::SucceededEmpty,
+                StoredOperationKind::Start | StoredOperationKind::Kill => {
+                    StoredOperationStatus::Succeeded {
+                        response: stored.record.clone(),
+                    }
+                }
+                StoredOperationKind::Create
+                | StoredOperationKind::Delete
+                | StoredOperationKind::Exec => {
+                    return Err(state_error(
+                        ErrorCode::Internal,
+                        "observe-state",
+                        format!(
+                            "operation {} cannot complete from a container observation",
+                            operation.operation_id
+                        ),
+                    ));
+                }
             };
             self.write_json(
                 DurableMutation::CompleteObservedOperation,
@@ -165,8 +182,12 @@ const fn observation_completes(kind: StoredOperationKind, status: ContainerState
         StoredOperationKind::Start => {
             matches!(status, ContainerState::Running | ContainerState::Stopped)
         }
-        StoredOperationKind::Kill => matches!(status, ContainerState::Stopped),
-        StoredOperationKind::Create | StoredOperationKind::Delete => false,
+        StoredOperationKind::Kill | StoredOperationKind::SignalProcess => {
+            matches!(status, ContainerState::Stopped)
+        }
+        StoredOperationKind::Create | StoredOperationKind::Delete | StoredOperationKind::Exec => {
+            false
+        }
     }
 }
 

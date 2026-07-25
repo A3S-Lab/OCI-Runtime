@@ -82,9 +82,10 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 - **Strict Validation**: Validate OCI 1.0.0 through 1.3.0 schemas, semantic
   relationships, paths, payload bounds, and immutable SHA-256 digests before
   state mutation
-- **Durable Lifecycle**: Persist create, start, kill, and delete with monotonic
-  generations, operation IDs, replay, fencing, reconciliation, and quarantine;
-  expose driver-backed state and stable init-process exit status
+- **Durable Lifecycle**: Persist create, start, kill, delete, exec, and
+  per-process signal with monotonic generations, operation IDs, replay,
+  fencing, reconciliation, and quarantine; cache stable init and exec-process
+  exit status across host-service reopen
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, pidfd
   init/exec process-control, stable per-process exit-status, and cleanup
   implementation directly on Linux and through the guest agent, with
@@ -140,8 +141,8 @@ prerequisite while remaining `probe-only`.
 ### Native Linux lifecycle
 
 The explicit rootful development driver proves the current OCI
-create/start/kill/wait/delete vertical slice without opening `/dev/kvm` or
-initializing libkrun:
+create/start/kill/wait/delete and exec/signal/wait-process vertical slice
+without opening `/dev/kvm` or initializing libkrun:
 
 ```sh
 sudo apt-get install busybox-static
@@ -162,10 +163,11 @@ sudo target/debug/a3s-oci native-linux-smoke \
   --work-parent "$work_parent"
 ```
 
-Success requires the exact create/start barrier, a bounded wait while running,
-the exact SIGKILL terminal result and repeated wait, running and stopped
-observation, idempotent mutation replay, marker verification, post-delete
-`NotFound`, and scoped cleanup. See
+Success requires the exact create/start barrier, exact-target exec and
+duplicate process-ID rejection, replayed per-process signal, bounded and
+stable init and exec waits, the exact SIGKILL terminal results, running and
+stopped observation, idempotent mutation replay, marker verification,
+post-delete `NotFound`, and scoped cleanup. See
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
 remaining production gates.
 
@@ -206,7 +208,7 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-Each `a3s.oci.native-linux-fault-cleanup.v2` success identifies the exact
+Each `a3s.oci.native-linux-fault-cleanup.v3` success identifies the exact
 injected boundary, records that normal delete was not attempted, and proves
 that the configured-process PID, executor root, marker, and complete
 diagnostic session were removed.
@@ -467,9 +469,9 @@ mappings, coverage for container ID 0 and every configured process ID, and an
 credentials before rootfs mutation. Mount entries and rootfs mutation remain
 unsupported when joining or inheriting a mount namespace. Other unimplemented
 OCI fields are rejected instead of ignored. Rootless mapping policy, cgroup
-resources, capabilities, hooks, seccomp, full I/O and PTY handling, durable
-host-side exec recovery, and the remaining SDK operations are still release
-gates.
+resources, capabilities, hooks, seccomp, full I/O and PTY handling,
+real-driver reattachment after runtime-process restart, and the remaining SDK
+operations are still release gates.
 
 ### SDK and protocols
 
@@ -482,17 +484,16 @@ gates.
 - typed IDs, operation IDs, deadlines, generations, and isolation requests.
 
 The durable host implements the five core lifecycle operations around an
-injected `RuntimeDriver` and exposes `wait` only when that exact driver
-implements it. The native Linux driver and protocol-v3 Linux guest executor
-return a stable init normal-exit or signal result across repeated waits.
-Protocol v3 additionally exposes exact-target exec, per-process signal, and
-per-process wait from the shared Linux executor. The executor advertises those
-nine agent operations only after retaining the exact container generation,
-process ID, pidfd, rootfs, namespace identities, replay result, and cleanup
-ownership. `RuntimeDriver` and `HostRuntimeService` have not yet mapped the
-three process operations into the public durable host path, so SDK process
-calls still fail before driver dispatch. Methods without enforcement remain
-explicitly unsupported and are not advertised early.
+injected `RuntimeDriver` and conditionally exposes init wait, exact-target
+exec, per-process signal, and per-process wait only when that exact driver
+implements them. The native Linux driver maps all four optional operations to
+the protocol-v3 Linux guest executor. Exec and signal mutations use durable
+global operation journals and generation-scoped process records; init and
+exec waits cache their exact normal-exit or signal result across repeated
+calls and host-service reopen. The guest advertises its nine operations only
+after retaining the exact container generation, process ID, pidfd, rootfs,
+namespace identities, replay result, and cleanup ownership. Methods without
+enforcement remain explicitly unsupported and are not advertised early.
 
 The OCI `Features` document validates against the pinned 1.3.0 schema. It
 reports the 61 recognized mount options in sorted order, all eight implemented
@@ -676,7 +677,7 @@ cargo clippy \
 
 Platform CI covers:
 
-- the 237-point durable commit matrix and all 14 `RuntimeDriver` call
+- the 356-point durable commit matrix and all 20 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
   existing-namespace and rootfs/mount isolation, and three-phase no-delete

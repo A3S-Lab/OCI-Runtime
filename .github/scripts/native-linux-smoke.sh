@@ -138,12 +138,13 @@ run_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v2"
+    '.schema_version == "a3s.oci.native-linux-smoke.v3"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
      and .service_operations
-         == ["features", "create", "state", "start", "kill", "delete", "wait"]
+         == ["features", "create", "state", "start", "kill", "delete",
+             "exec", "wait", "signal-process", "wait-process"]
      and .dedicated_vm_rejected_before_create
      and .create_returned_created
      and .create_replayed
@@ -189,12 +190,13 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v8"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v9"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
      and .service_operations
-         == ["features", "create", "state", "start", "kill", "delete", "wait"]
+         == ["features", "create", "state", "start", "kill", "delete",
+             "exec", "wait", "signal-process", "wait-process"]
      and .lifecycle.distinct_bundle_directories
      and .lifecycle.distinct_rootfs_directories
      and .lifecycle.both_created_before_start
@@ -293,11 +295,12 @@ run_fault_cleanup() {
       return "$status"
     fi
     jq --exit-status --arg phase "$phase" \
-      '.schema_version == "a3s.oci.native-linux-fault-cleanup.v2"
+      '.schema_version == "a3s.oci.native-linux-fault-cleanup.v3"
        and .platform == "linux" and .status == "available"
        and .bundle_loaded
        and .service_operations
-           == ["features", "create", "state", "start", "kill", "delete", "wait"]
+           == ["features", "create", "state", "start", "kill", "delete",
+               "exec", "wait", "signal-process", "wait-process"]
        and .lifecycle.requested_fault == $phase
        and .lifecycle.injected_fault == $phase
        and .lifecycle.create_completed

@@ -1,10 +1,14 @@
-use a3s_oci_sdk::{ContainerId, ContainerRecord, Error, Generation, OperationId};
+use a3s_oci_sdk::{
+    ContainerId, ContainerRecord, Error, ExitStatus, Generation, OperationId, ProcessId,
+    ProcessRecord,
+};
 use serde::{Deserialize, Serialize};
 
 pub(super) const ROOT_SCHEMA_VERSION: &str = "a3s.oci.runtime-root.v1";
 pub(super) const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.container-record.v1";
 pub(super) const GENERATION_SCHEMA_VERSION: &str = "a3s.oci.generation.v1";
 pub(super) const OPERATION_SCHEMA_VERSION: &str = "a3s.oci.operation.v1";
+pub(super) const PROCESS_SCHEMA_VERSION: &str = "a3s.oci.process-record.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -36,6 +40,19 @@ pub(super) struct StoredContainer {
     pub record: ContainerRecord,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_operation: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init_exit_status: Option<ExitStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct StoredProcess {
+    pub schema_version: String,
+    pub record: ProcessRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_operation: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<ExitStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +62,8 @@ pub(super) enum StoredOperationKind {
     Start,
     Kill,
     Delete,
+    Exec,
+    SignalProcess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +71,7 @@ pub(super) enum StoredOperationKind {
 pub(super) enum StoredOperationStatus {
     Prepared,
     Succeeded { response: ContainerRecord },
+    SucceededProcess { response: ProcessRecord },
     SucceededEmpty,
     Failed { error: Error },
 }
@@ -64,6 +84,8 @@ pub(super) struct StoredOperation {
     pub kind: StoredOperationKind,
     pub container_id: ContainerId,
     pub generation: Generation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<ProcessId>,
     pub request_digest: String,
     pub outcome: StoredOperationStatus,
 }

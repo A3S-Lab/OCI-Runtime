@@ -1,15 +1,19 @@
 use std::path::{Path, PathBuf};
 
 use a3s_oci_core::DriverKind;
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    Generation, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessIo,
-    Signal, StartRequest,
+    ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest, OciBundle,
+    OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget, Signal,
+    SignalProcessRequest, StartRequest, WaitProcessRequest,
 };
 use tempfile::TempDir;
 
-use super::{DurableStateStore, RecordOperationPreparation};
+use super::{
+    DurableStateStore, ProcessOperationPreparation, ProcessWaitPreparation,
+    RecordOperationPreparation, SignalProcessPreparation,
+};
 
 mod fault_matrix;
 

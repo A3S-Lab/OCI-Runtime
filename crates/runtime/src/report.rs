@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v4";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v4";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v2";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v3";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,7 +452,10 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Start,
                     RuntimeOperation::Kill,
                     RuntimeOperation::Delete,
+                    RuntimeOperation::Exec,
                     RuntimeOperation::Wait,
+                    RuntimeOperation::SignalProcess,
+                    RuntimeOperation::WaitProcess,
                 ]
             && self.dedicated_vm_rejected_before_create
             && self.create_returned_created
