@@ -8,10 +8,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 use crate::model::{
-    protocol_error, AgentCreateRequest, AgentDeleteRequest, AgentHello, AgentKillRequest,
-    AgentOperation, AgentRequest, AgentResponse, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope,
-    ResponseOutcome, SessionToken,
+    protocol_error, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello,
+    AgentKillRequest, AgentOperation, AgentProcess, AgentRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange,
+    RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::wire::{read_frame, write_frame};
 
@@ -119,7 +120,7 @@ where
     pub async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
         match self.call(AgentRequest::Delete(request)).await? {
             AgentResponse::Deleted => Ok(()),
-            AgentResponse::State(_) | AgentResponse::ExitStatus(_) => Err(protocol_error(
+            _ => Err(protocol_error(
                 ErrorCode::Internal,
                 "guest returned the wrong response for an OCI delete request",
             )),
@@ -141,7 +142,7 @@ where
             };
             match self.call(AgentRequest::Wait(poll)).await {
                 Ok(AgentResponse::ExitStatus(status)) => return Ok(status),
-                Ok(AgentResponse::State(_) | AgentResponse::Deleted) => {
+                Ok(_) => {
                     return Err(protocol_error(
                         ErrorCode::Internal,
                         "guest returned the wrong response for an OCI wait request",
@@ -155,6 +156,68 @@ where
                                 "timed out after {} ms waiting for container {}",
                                 request.timeout_ms.unwrap_or_default(),
                                 request.target.id
+                            ),
+                        )
+                        .retryable(true));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Execute one additional OCI process inside an exact container generation.
+    pub async fn exec(&self, request: AgentExecRequest) -> Result<AgentProcess> {
+        match self.call(AgentRequest::Exec(Box::new(request))).await? {
+            AgentResponse::Process(process) => Ok(process),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for an OCI exec request",
+            )),
+        }
+    }
+
+    /// Deliver a Linux signal to one exact init or exec process.
+    pub async fn signal_process(&self, request: AgentSignalProcessRequest) -> Result<()> {
+        match self.call(AgentRequest::SignalProcess(request)).await? {
+            AgentResponse::ProcessSignaled(_) => Ok(()),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a process signal request",
+            )),
+        }
+    }
+
+    /// Wait for one exact init or exec process and return its stable result.
+    pub async fn wait_process(&self, request: AgentWaitProcessRequest) -> Result<ExitStatus> {
+        let limit = request.timeout_ms.map(Duration::from_millis);
+        let started = Instant::now();
+        loop {
+            let poll_timeout = match limit {
+                Some(limit) => WAIT_POLL_INTERVAL.min(limit.saturating_sub(started.elapsed())),
+                None => WAIT_POLL_INTERVAL,
+            };
+            let poll = AgentWaitProcessRequest {
+                target: request.target.clone(),
+                timeout_ms: Some(duration_millis(poll_timeout)),
+            };
+            match self.call(AgentRequest::WaitProcess(poll)).await {
+                Ok(AgentResponse::ProcessExit(exit)) => return Ok(exit.into_status()),
+                Ok(_) => {
+                    return Err(protocol_error(
+                        ErrorCode::Internal,
+                        "guest returned the wrong response for a process wait request",
+                    ));
+                }
+                Err(error) if error.code == ErrorCode::DeadlineExceeded => {
+                    if limit.is_some_and(|limit| started.elapsed() >= limit) {
+                        return Err(protocol_error(
+                            ErrorCode::DeadlineExceeded,
+                            format!(
+                                "timed out after {} ms waiting for process {} in container {}",
+                                request.timeout_ms.unwrap_or_default(),
+                                request.target.process_id,
+                                request.target.container.id
                             ),
                         )
                         .retryable(true));
@@ -241,6 +304,9 @@ fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> R
         AgentRequest::Kill(_) => AgentOperation::Kill,
         AgentRequest::Delete(_) => AgentOperation::Delete,
         AgentRequest::Wait(_) => AgentOperation::Wait,
+        AgentRequest::Exec(_) => AgentOperation::Exec,
+        AgentRequest::SignalProcess(_) => AgentOperation::SignalProcess,
+        AgentRequest::WaitProcess(_) => AgentOperation::WaitProcess,
     };
     if operations.contains(&required) {
         Ok(())
@@ -285,6 +351,27 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
         }
         (AgentRequest::Delete(_), AgentResponse::Deleted) => Ok(()),
         (AgentRequest::Wait(_), AgentResponse::ExitStatus(status)) => status.validate(),
+        (AgentRequest::Exec(request), AgentResponse::Process(process)) => {
+            validate_process_target(&request.target, process.target())?;
+            let expected_terminal = request.process.terminal().unwrap_or(false);
+            if process.terminal() != expected_terminal {
+                return Err(protocol_error(
+                    ErrorCode::Conflict,
+                    format!(
+                        "guest exec response terminal={} does not match request terminal={expected_terminal}",
+                        process.terminal()
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        (AgentRequest::SignalProcess(request), AgentResponse::ProcessSignaled(signal)) => {
+            validate_process_target(&request.target, signal.target())
+        }
+        (AgentRequest::WaitProcess(request), AgentResponse::ProcessExit(exit)) => {
+            validate_process_target(&request.target, exit.target())?;
+            exit.status().validate()
+        }
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
             format!(
@@ -312,12 +399,26 @@ fn validate_state_target(
     }
 }
 
+fn validate_process_target(
+    expected: &a3s_oci_sdk::ProcessTarget,
+    actual: &a3s_oci_sdk::ProcessTarget,
+) -> Result<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(protocol_error(
+            ErrorCode::Conflict,
+            format!("guest process target {actual:?} does not match request target {expected:?}"),
+        ))
+    }
+}
+
 fn expect_state(response: AgentResponse, operation: &'static str) -> Result<AgentState> {
     match response {
         AgentResponse::State(state) => Ok(state),
-        AgentResponse::Deleted | AgentResponse::ExitStatus(_) => Err(protocol_error(
+        _ => Err(protocol_error(
             ErrorCode::Internal,
-            format!("guest returned delete acknowledgement for OCI {operation}"),
+            format!("guest returned the wrong response for OCI {operation}"),
         )),
     }
 }
@@ -344,6 +445,9 @@ const fn request_name(request: &AgentRequest) -> &'static str {
         AgentRequest::Kill(_) => "kill",
         AgentRequest::Delete(_) => "delete",
         AgentRequest::Wait(_) => "wait",
+        AgentRequest::Exec(_) => "exec",
+        AgentRequest::SignalProcess(_) => "signal-process",
+        AgentRequest::WaitProcess(_) => "wait-process",
     }
 }
 

@@ -53,7 +53,7 @@ Completed:
   host-visible marker verification, bounded worker reap, and marker cleanup;
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
-  one-time token authentication, protocol-v2 negotiation, exact six-operation
+  one-time token authentication, protocol-v3 negotiation, exact six-operation
   advertisement, process-group termination, exact endpoint removal,
   observed PID reap, and in-process descriptor-inventory restoration;
 - real macOS fixed-bundle create/state/start/kill/wait/delete evidence using
@@ -121,7 +121,8 @@ Completed:
 - tested Windows named-pipe and Unix-domain-socket client connectors;
 - authenticated, version-negotiated, bounded host/guest lifecycle protocol
   with exact bundle and response correlation, protocol-v1 compatibility, and
-  protocol-v2 stable init wait;
+  protocol-v2 stable init wait plus protocol-v3 exact-target exec, process
+  signal, and process wait messages;
 - existing `features` CLI path routed through the Rust SDK;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
@@ -267,7 +268,7 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
-  authenticate protocol-v2 negotiation with a one-time token.
+  authenticate protocol-v3 negotiation with a one-time token.
 - [x] Run the same fixed create/state/start/kill/wait/delete OCI lifecycle used
   by WHPX, including bounded running wait and exact repeated exit status.
 - [x] Prove deterministic VM, process, descriptor, and filesystem cleanup

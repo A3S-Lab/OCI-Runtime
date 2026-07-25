@@ -234,7 +234,7 @@ jobs:
                and (.bridge_process_id > 0)
                and (.bridge_process_id != .shim_process_id)
                and .shim_client_verified and .protocol_negotiated
-               and .selected_protocol == 2
+               and .selected_protocol == 3
                and .agent_version == $agent_version
                and .guest_architecture == "aarch64"
                and .advertised_operations
@@ -374,7 +374,7 @@ jobs:
                     != .bridge.shim_process_id)
                and .bridge.shim_client_verified
                and .bridge.protocol_negotiated
-               and .bridge.selected_protocol == 2
+               and .bridge.selected_protocol == 3
                and .bridge.guest_architecture == "aarch64"
                and .bridge.advertised_operations
                    == ["create", "state", "start", "kill", "delete", "wait"]
@@ -570,7 +570,7 @@ jobs:
                and .bridge.platform == "macos"
                and .bridge.status == "available"
                and .bridge.protocol_negotiated
-               and .bridge.selected_protocol == 2
+               and .bridge.selected_protocol == 3
                and .bridge.advertised_operations
                    == ["create", "state", "start", "kill", "delete", "wait"]
                and .bridge.shim_report_verified
@@ -679,7 +679,7 @@ jobs:
                  and .marker_removed and .guest_runtime_clean
                  and .bridge.status == "available"
                  and .bridge.protocol_negotiated
-                 and .bridge.selected_protocol == 2
+                 and .bridge.selected_protocol == 3
                  and .bridge.advertised_operations
                      == ["create", "state", "start", "kill", "delete", "wait"]
                  and .bridge.shim_report_verified

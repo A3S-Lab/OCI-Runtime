@@ -30,6 +30,11 @@ impl ValidateRequest for CreateRequest {
 
 impl ValidateRequest for ExecRequest {
     fn validate(&self) -> Result<()> {
+        if self.process_id.is_init() {
+            return Err(invalid_request(
+                "exec.process_id `init` is reserved for the container's configured process",
+            ));
+        }
         OciSemanticValidator::new()?.validate_process(&self.process)?;
         validate_process_io(&self.io, self.process.terminal().unwrap_or(false))
     }
@@ -256,6 +261,29 @@ mod tests {
             },
         };
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn reserves_the_init_process_id_for_the_container_process() {
+        let process: Process = serde_json::from_value(json!({
+            "cwd": "/",
+            "args": ["/bin/true"],
+            "user": {"uid": 0, "gid": 0},
+            "terminal": false
+        }))
+        .expect("decode process");
+        let request = ExecRequest {
+            context: context(),
+            container: target(),
+            process_id: ProcessId::init(),
+            process,
+            io: ProcessIo::default(),
+        };
+
+        let error = request
+            .validate()
+            .expect_err("exec must not replace the reserved init process");
+        assert_eq!(error.code, crate::ErrorCode::InvalidArgument);
     }
 
     #[test]

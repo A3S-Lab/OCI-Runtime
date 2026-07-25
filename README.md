@@ -302,7 +302,7 @@ target/debug/a3s-oci agent-vm-smoke \
 
 An `a3s.oci.agent-vm-smoke.v4` success proves a private host socket, the
 expected shim and direct worker PID relationship, one-time token
-authentication, protocol version 2, the arm64 guest identity, and the exact
+authentication, protocol version 3, the arm64 guest identity, and the exact
 six guest operations (`create`, `state`, `start`, `kill`, `delete`, and
 `wait`). It also requires the exact runtime-owned
 endpoint to be removed, the current process's complete descriptor inventory to
@@ -475,10 +475,12 @@ SDK operations are still release gates.
 
 The durable host implements the five core lifecycle operations around an
 injected `RuntimeDriver` and exposes `wait` only when that exact driver
-implements it. The native Linux driver and protocol-v2 Linux guest executor
+implements it. The native Linux driver and protocol-v3 Linux guest executor
 return a stable normal-exit or signal result across repeated waits. Methods
 without enforcement remain explicitly unsupported and are not advertised
-early.
+early. Protocol v3 defines exact-target exec, per-process signal, and
+per-process wait messages while the current executor deliberately withholds
+those capabilities until their process lifecycle is implemented.
 
 The OCI `Features` document validates against the pinned 1.3.0 schema. It
 reports the 61 recognized mount options in sorted order, all eight implemented
@@ -497,7 +499,7 @@ boundary.
 | --- | --- | --- | --- |
 | Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v2 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v3 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when

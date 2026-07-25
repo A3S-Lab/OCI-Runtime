@@ -40,10 +40,27 @@ timeout and returns exactly one terminal result: an exit code in `0..=255` or
 a positive Linux signal, plus an OOM flag that is valid only for signal
 termination. Repeated waits return the same cached result.
 
-The client breaks a long wait into bounded 25-millisecond guest requests. The
-single correlated connection therefore remains available to query or control
-another container between polls. A protocol-v1 peer neither advertises nor
-accepts `wait`.
+Protocol version 3 adds `exec`, `signal-process`, and `wait-process`. Exec
+carries one complete OCI `Process`, its I/O contract, mutation context, and an
+exact `(container ID, generation, process ID)` target. The process ID `init`
+is reserved for the configured container process and cannot be reused by
+exec. A successful exec response repeats that exact target, the terminal
+setting, and a positive authenticated guest PID. Signal acknowledgements and
+terminal results are also bound to the exact process target. A mismatched
+target poisons the host connection.
+
+The client breaks a long init or process wait into bounded 25-millisecond
+guest requests. The single correlated connection therefore remains available
+to query or control another container between polls. Negotiation filters
+operations introduced after the selected version, and the server rejects a
+forged newer request before service dispatch. A protocol-v1 peer therefore
+neither advertises nor accepts `wait`; protocol-v1 and protocol-v2 peers
+neither advertise nor accept the version-3 process operations.
+
+Protocol support and executor capability remain separate. The current shared
+Linux executor negotiates version 3 but continues to advertise only the six
+implemented lifecycle and init-wait operations until container exec has
+complete process registry, pidfd, cleanup, and recovery evidence.
 
 Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current
@@ -75,6 +92,10 @@ In-memory duplex tests cover:
 
 - protocol-v1 negotiation and the unchanged five-operation core lifecycle;
 - protocol-v2 wait with exact repeated signal status;
+- protocol-v3 exec, per-process signal, stable repeated wait, and exact process
+  target correlation;
+- filtering and pre-dispatch rejection of forged version-3 process operations
+  on a protocol-v2 connection;
 - rejection of a forged protocol-v1 wait before service dispatch;
 - two simultaneously registered container IDs with distinct PIDs, independent
   lifecycle transitions, stale-generation fencing, and generation-2 reuse;
@@ -101,7 +122,7 @@ step.
 
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 2, and retains
+pipe, authenticates the token, negotiates protocol version 3, and retains
 bounded host and shim evidence. The current guest must advertise the exact six
 operations: `create`, `state`, `start`, `kill`, `delete`, and `wait`.
 
@@ -109,12 +130,12 @@ The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
 in `a3s.oci.agent-vm-smoke.v4`. The signed path must negotiate protocol version
-2 and the exact six operations. The missing-entitlement path must exit with
-status `2`, report no negotiation, terminate the shim process group, and leave
-no private endpoint residue. Both paths also retain in-process evidence that
-the exact runtime-owned endpoint was removed, the complete current-process
-descriptor inventory returned to its baseline, and every observed shim or
-VM-worker PID disappeared.
+3 and the exact six implemented operations. The missing-entitlement path must
+exit with status `2`, report no negotiation, terminate the shim process group,
+and leave no private endpoint residue. Both paths also retain in-process
+evidence that the exact runtime-owned endpoint was removed, the complete
+current-process descriptor inventory returned to its baseline, and every
+observed shim or VM-worker PID disappeared.
 
 The real Windows and macOS `oci-vm-smoke` paths keep the same authenticated
 connection open and prove a fixed bundle through create, state, exact create

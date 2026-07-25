@@ -1,10 +1,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, OciBundle, OperationContext,
-    ProcessIo, Result, Signal,
+    ProcessIo, ProcessTarget, Result, Signal,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 2;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 3;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Required session-token entropy supplied by the host.
@@ -249,6 +249,22 @@ pub enum AgentOperation {
     Delete,
     /// Wait for init termination. Available from protocol version 2.
     Wait,
+    /// Execute an additional OCI process. Available from protocol version 3.
+    Exec,
+    /// Signal one init or exec process. Available from protocol version 3.
+    SignalProcess,
+    /// Wait for one init or exec process. Available from protocol version 3.
+    WaitProcess,
+}
+
+impl AgentOperation {
+    pub(crate) const fn minimum_protocol_version(self) -> u16 {
+        match self {
+            Self::Create | Self::State | Self::Start | Self::Kill | Self::Delete => 1,
+            Self::Wait => 2,
+            Self::Exec | Self::SignalProcess | Self::WaitProcess => 3,
+        }
+    }
 }
 
 /// Runtime properties reported by the guest during negotiation.
@@ -289,6 +305,9 @@ impl AgentCapabilities {
     }
 
     /// Construct the Linux executor capability report, including protocol-v2 wait.
+    ///
+    /// Process operations remain absent until the executor implements their
+    /// complete lifecycle and cleanup contract.
     pub fn linux_executor(
         agent_version: impl Into<String>,
         architecture: impl Into<String>,
@@ -369,11 +388,9 @@ impl AgentCapabilities {
 
     pub(crate) fn for_protocol(&self, selected_version: u16) -> Result<Self> {
         let mut capabilities = self.clone();
-        if selected_version == 1 {
-            capabilities
-                .operations
-                .retain(|operation| *operation != AgentOperation::Wait);
-        }
+        capabilities
+            .operations
+            .retain(|operation| operation.minimum_protocol_version() <= selected_version);
         capabilities.validate_for_protocol(selected_version)?;
         Ok(capabilities)
     }
@@ -386,10 +403,14 @@ impl AgentCapabilities {
                 format!("unsupported agent protocol version {selected_version}"),
             ));
         }
-        if selected_version == 1 && self.operations.contains(&AgentOperation::Wait) {
+        if let Some(operation) = self
+            .operations
+            .iter()
+            .find(|operation| operation.minimum_protocol_version() > selected_version)
+        {
             return Err(protocol_error(
                 ErrorCode::FailedPrecondition,
-                "protocol version 1 cannot advertise wait",
+                format!("protocol version {selected_version} cannot advertise {operation:?}"),
             ));
         }
         Ok(())
@@ -458,6 +479,43 @@ pub struct AgentWaitRequest {
     pub timeout_ms: Option<u64>,
 }
 
+/// Execute one additional complete OCI process inside an exact container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentExecRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Exact container generation plus caller-selected exec process ID.
+    pub target: ProcessTarget,
+    /// Complete OCI process configuration.
+    pub process: Process,
+    /// Requested process standard-I/O disposition.
+    pub io: ProcessIo,
+}
+
+/// Signal one exact init or exec process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSignalProcessRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Exact container generation and process ID.
+    pub target: ProcessTarget,
+    /// Positive Linux signal number delivered unchanged.
+    pub signal: Signal,
+}
+
+/// Wait for one exact init or exec process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentWaitProcessRequest {
+    /// Exact container generation and process ID.
+    pub target: ProcessTarget,
+    /// Maximum wait duration. `None` waits without a protocol-imposed deadline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
 /// OCI start input sent to the guest executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -506,6 +564,9 @@ pub enum AgentRequest {
     Kill(AgentKillRequest),
     Delete(AgentDeleteRequest),
     Wait(AgentWaitRequest),
+    Exec(Box<AgentExecRequest>),
+    SignalProcess(AgentSignalProcessRequest),
+    WaitProcess(AgentWaitProcessRequest),
 }
 
 /// Guest-observed init-process state for one exact generation.
@@ -562,6 +623,99 @@ impl AgentState {
     }
 }
 
+/// Guest-observed process identity created by an exec request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentProcess {
+    target: ProcessTarget,
+    pid: i32,
+    terminal: bool,
+}
+
+impl AgentProcess {
+    /// Construct a process report with a positive authenticated guest PID.
+    pub fn new(target: ProcessTarget, pid: i32, terminal: bool) -> Result<Self> {
+        let process = Self {
+            target,
+            pid,
+            terminal,
+        };
+        process.validate()?;
+        Ok(process)
+    }
+
+    /// Exact container generation and caller-selected process ID.
+    #[must_use]
+    pub const fn target(&self) -> &ProcessTarget {
+        &self.target
+    }
+
+    /// Positive host-visible PID authenticated by the guest executor.
+    #[must_use]
+    pub const fn pid(&self) -> i32 {
+        self.pid
+    }
+
+    /// Whether the process uses a terminal.
+    #[must_use]
+    pub const fn terminal(&self) -> bool {
+        self.terminal
+    }
+}
+
+/// Exact process target acknowledged after signal delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentProcessSignal {
+    target: ProcessTarget,
+}
+
+impl AgentProcessSignal {
+    pub(crate) fn new(target: ProcessTarget) -> Result<Self> {
+        let signal = Self { target };
+        signal.validate()?;
+        Ok(signal)
+    }
+
+    /// Exact process that accepted the signal request.
+    #[must_use]
+    pub const fn target(&self) -> &ProcessTarget {
+        &self.target
+    }
+}
+
+/// Stable terminal result bound to one exact process target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentProcessExit {
+    target: ProcessTarget,
+    status: ExitStatus,
+}
+
+impl AgentProcessExit {
+    pub(crate) fn new(target: ProcessTarget, status: ExitStatus) -> Result<Self> {
+        let exit = Self { target, status };
+        exit.validate()?;
+        Ok(exit)
+    }
+
+    /// Exact process whose result is reported.
+    #[must_use]
+    pub const fn target(&self) -> &ProcessTarget {
+        &self.target
+    }
+
+    /// Stable normal-exit or signal result.
+    #[must_use]
+    pub const fn status(&self) -> &ExitStatus {
+        &self.status
+    }
+
+    pub(crate) fn into_status(self) -> ExitStatus {
+        self.status
+    }
+}
+
 /// Successful guest response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "value", rename_all = "kebab-case")]
@@ -569,6 +723,9 @@ pub enum AgentResponse {
     State(AgentState),
     Deleted,
     ExitStatus(ExitStatus),
+    Process(AgentProcess),
+    ProcessSignaled(AgentProcessSignal),
+    ProcessExit(AgentProcessExit),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -73,8 +73,9 @@ The host always requires the five core driver operations and advertises
 exact generation, accepts an optional millisecond timeout, and returns an
 `ExitStatus` containing either an exit code in `0..=255` or a positive signal.
 Repeated waits must return the same terminal result. The native Linux driver
-and the protocol-v2 utility-VM guest path implement this contract; unsupported
-drivers fail before dispatch.
+and the protocol-v3 utility-VM guest path implement this contract while
+retaining protocol-v2 init-wait compatibility; unsupported drivers fail before
+dispatch.
 
 ## Runtime Server
 
