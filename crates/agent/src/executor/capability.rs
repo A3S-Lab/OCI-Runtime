@@ -243,24 +243,44 @@ const fn capability_number(capability: Capability) -> u32 {
 }
 
 fn read_last_capability() -> Result<u32> {
-    let value = std::fs::read_to_string("/proc/sys/kernel/cap_last_cap").map_err(|error| {
-        security_error(
+    let mut last_capability = None;
+    for capability in 0..=63 {
+        // SAFETY: `PR_CAPBSET_READ` consumes the integer capability number
+        // and zero padding arguments without mutating process state.
+        let result = unsafe {
+            libc::prctl(
+                libc::PR_CAPBSET_READ,
+                libc::c_ulong::from(capability),
+                0,
+                0,
+                0,
+            )
+        };
+        if result >= 0 {
+            last_capability = Some(capability);
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EINVAL) {
+            break;
+        }
+        return Err(security_error(
             ErrorCode::FailedPrecondition,
-            format!("failed to read kernel cap_last_cap: {error}"),
+            format!("failed to probe kernel capability {capability}: {error}"),
+        ));
+    }
+    let value = last_capability.ok_or_else(|| {
+        security_error(
+            ErrorCode::Unsupported,
+            "kernel did not expose a supported capability range",
         )
     })?;
-    let value = value.trim().parse::<u32>().map_err(|error| {
-        security_error(
-            ErrorCode::FailedPrecondition,
-            format!("kernel cap_last_cap is invalid: {error}"),
-        )
-    })?;
-    if !(LAST_KNOWN_CAPABILITY..=63).contains(&value) {
+    if value < LAST_KNOWN_CAPABILITY {
         return Err(security_error(
             ErrorCode::Unsupported,
             format!(
-                "kernel cap_last_cap {value} is outside the supported capability range \
-                 {LAST_KNOWN_CAPABILITY}..=63"
+                "kernel capability ceiling {value} is below the required capability \
+                 {LAST_KNOWN_CAPABILITY}"
             ),
         ));
     }
@@ -354,7 +374,12 @@ fn security_error(code: ErrorCode, message: impl Into<String>) -> Error {
 mod tests {
     use a3s_oci_sdk::oci_spec::runtime::LinuxCapabilities;
 
-    use super::CapabilityPlan;
+    use super::{read_last_capability, CapabilityPlan, LAST_KNOWN_CAPABILITY};
+
+    #[test]
+    fn probes_the_kernel_capability_ceiling_without_procfs() {
+        assert!(read_last_capability().expect("probe capability ceiling") >= LAST_KNOWN_CAPABILITY);
+    }
 
     #[test]
     fn plans_the_exact_a3s_box_capability_profile() {
