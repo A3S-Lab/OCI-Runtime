@@ -20,6 +20,7 @@ mod driver;
 mod fault;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
+mod multi_container_report;
 #[cfg(target_os = "linux")]
 mod native_linux_driver;
 mod native_smoke;
@@ -44,10 +45,16 @@ pub use driver::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
     RuntimeDriver,
 };
+pub use multi_container_report::{
+    MultiContainerLifecycleEvidence, NativeLinuxMultiContainerSmokeReport,
+    OciVmMultiContainerSmokeReport,
+};
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
-pub use native_smoke::{native_linux_fault_cleanup, native_linux_smoke};
-pub use oci_smoke::{oci_vm_fault_cleanup, oci_vm_smoke};
+pub use native_smoke::{
+    native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_smoke,
+};
+pub use oci_smoke::{oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke};
 pub use report::{
     AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxSmokeReport,
     OciVmSmokeReport, WhpxSmokeReport,

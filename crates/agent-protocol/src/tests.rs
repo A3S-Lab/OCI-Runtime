@@ -34,7 +34,14 @@ const TEST_CONFIG: &str = concat!(
 
 #[derive(Debug, Default)]
 struct TestAgent {
-    states: Mutex<HashMap<ContainerId, AgentState>>,
+    state: Mutex<TestAgentState>,
+}
+
+#[derive(Debug, Default)]
+struct TestAgentState {
+    states: HashMap<ContainerId, AgentState>,
+    highest_generations: HashMap<ContainerId, Generation>,
+    next_pid: i32,
 }
 
 #[async_trait]
@@ -45,66 +52,128 @@ impl GuestAgentService for TestAgent {
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
+        let generation = request
+            .target
+            .generation
+            .expect("validated guest create carries an exact generation");
+        let mut agent = self.state.lock().expect("agent state lock");
+        if agent.states.contains_key(&request.target.id) {
+            return Err(Error::new(
+                ErrorCode::AlreadyExists,
+                "guest container ID is already active",
+            ));
+        }
+        if agent
+            .highest_generations
+            .get(&request.target.id)
+            .is_some_and(|highest| generation <= *highest)
+        {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation is stale",
+            ));
+        }
+        agent.next_pid += 101;
         let state = AgentState::new(
             request.target.clone(),
             ContainerState::Created,
-            Some(101),
+            Some(agent.next_pid),
             request.bundle.config_digest(),
         )?;
-        self.states
-            .lock()
-            .expect("agent states lock")
-            .insert(request.target.id, state.clone());
+        agent
+            .highest_generations
+            .insert(request.target.id.clone(), generation);
+        agent.states.insert(request.target.id, state.clone());
         Ok(state)
     }
 
     async fn state(&self, request: AgentStateRequest) -> Result<AgentState> {
-        self.states
+        let state = self
+            .state
             .lock()
-            .expect("agent states lock")
+            .expect("agent state lock")
+            .states
             .get(&request.target.id)
             .cloned()
             .ok_or_else(|| {
                 Error::new(ErrorCode::NotFound, "guest container does not exist")
                     .for_operation("agent-state")
-            })
+            })?;
+        if state.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        Ok(state)
     }
 
     async fn start(&self, request: AgentStartRequest) -> Result<AgentState> {
+        let mut agent = self.state.lock().expect("agent state lock");
+        let current = agent
+            .states
+            .get(&request.target.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        if current.status() != ContainerState::Created
+            || current.config_digest() != request.expected_config_digest
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "guest container cannot start from its current state",
+            ));
+        }
         let state = AgentState::new(
             request.target.clone(),
             ContainerState::Running,
-            Some(101),
+            current.pid(),
             request.expected_config_digest,
         )?;
-        self.states
-            .lock()
-            .expect("agent states lock")
-            .insert(request.target.id, state.clone());
+        agent.states.insert(request.target.id, state.clone());
         Ok(state)
     }
 
     async fn kill(&self, request: AgentKillRequest) -> Result<AgentState> {
-        let mut states = self.states.lock().expect("agent states lock");
-        let digest = states
+        let mut agent = self.state.lock().expect("agent state lock");
+        let current = agent
+            .states
             .get(&request.target.id)
-            .map(|state| state.config_digest().to_string())
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        let digest = current.config_digest().to_string();
         let state = AgentState::new(
             request.target.clone(),
             ContainerState::Stopped,
             None,
             digest,
         )?;
-        states.insert(request.target.id, state.clone());
+        agent.states.insert(request.target.id, state.clone());
         Ok(state)
     }
 
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
-        self.states
-            .lock()
-            .expect("agent states lock")
-            .remove(&request.target.id);
+        let mut agent = self.state.lock().expect("agent state lock");
+        let current = agent
+            .states
+            .get(&request.target.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        agent.states.remove(&request.target.id);
         Ok(())
     }
 }
@@ -126,14 +195,18 @@ fn token(byte: u8) -> SessionToken {
 }
 
 fn create_request() -> AgentCreateRequest {
-    let directory = std::env::temp_dir().join("a3s-agent-protocol-test-bundle");
+    create_request_for("container-1", 1, "create-1")
+}
+
+fn create_request_for(container: &str, generation: u64, operation: &str) -> AgentCreateRequest {
+    let directory = std::env::temp_dir().join(format!("a3s-agent-protocol-{container}"));
     let bundle = OciBundle::from_json(directory, TEST_CONFIG).expect("valid OCI bundle");
     AgentCreateRequest {
-        context: OperationContext::new(operation_id("create-1")),
-        target: ContainerTarget::exact(container_id("container-1"), Generation(1)),
+        context: OperationContext::new(operation_id(operation)),
+        target: ContainerTarget::exact(container_id(container), Generation(generation)),
         bundle: crate::AgentBundle::new(
             &bundle,
-            GuestPath::new("/run/a3s/bundles/container-1").expect("guest path"),
+            GuestPath::new(format!("/run/a3s/bundles/{container}")).expect("guest path"),
         ),
         io: ProcessIo::default(),
     }
@@ -211,6 +284,133 @@ async fn negotiates_and_round_trips_the_core_oci_lifecycle() {
         .await
         .expect("server task")
         .expect("clean server shutdown");
+}
+
+#[tokio::test]
+async fn transports_two_independently_fenced_container_generations() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let server = spawn_server(guest, token(17));
+    let client = AgentClient::connect(host, token(17))
+        .await
+        .expect("connect multi-container client");
+
+    let create_a = create_request_for("multi-a", 1, "multi-create-a-1");
+    let create_b = create_request_for("multi-b", 1, "multi-create-b-1");
+    let target_a1 = create_a.target.clone();
+    let target_b = create_b.target.clone();
+    let digest_a = create_a.bundle.config_digest().to_string();
+    let digest_b = create_b.bundle.config_digest().to_string();
+    let created_a = client.create(create_a).await.expect("create container A");
+    let created_b = client.create(create_b).await.expect("create container B");
+    assert_eq!(created_a.status(), ContainerState::Created);
+    assert_eq!(created_b.status(), ContainerState::Created);
+    assert!(created_a.pid().is_some_and(|pid| pid > 0));
+    assert!(created_b.pid().is_some_and(|pid| pid > 0));
+    assert_ne!(created_a.pid(), created_b.pid());
+
+    let running_a = client
+        .start(AgentStartRequest {
+            context: OperationContext::new(operation_id("multi-start-a-1")),
+            target: target_a1.clone(),
+            expected_config_digest: digest_a,
+        })
+        .await
+        .expect("start container A");
+    assert_eq!(running_a.status(), ContainerState::Running);
+    assert_eq!(
+        client
+            .state(AgentStateRequest {
+                target: target_b.clone()
+            })
+            .await
+            .expect("container B remains visible"),
+        created_b
+    );
+
+    client
+        .kill(AgentKillRequest {
+            context: OperationContext::new(operation_id("multi-kill-a-1")),
+            target: target_a1.clone(),
+            signal: Signal::new(15).expect("signal"),
+            all: false,
+        })
+        .await
+        .expect("kill container A");
+    client
+        .delete(AgentDeleteRequest {
+            context: OperationContext::new(operation_id("multi-delete-a-1")),
+            target: target_a1.clone(),
+            mode: DeleteMode::StoppedOnly,
+        })
+        .await
+        .expect("delete container A");
+    assert_eq!(
+        client
+            .state(AgentStateRequest {
+                target: target_b.clone()
+            })
+            .await
+            .expect("container B survives A delete"),
+        created_b
+    );
+
+    let stale = client
+        .create(create_request_for("multi-a", 1, "multi-stale-a-1"))
+        .await
+        .expect_err("stale generation must fail");
+    assert_eq!(stale.code, ErrorCode::Conflict);
+    let create_a2 = create_request_for("multi-a", 2, "multi-create-a-2");
+    let target_a2 = create_a2.target.clone();
+    let recreated_a = client
+        .create(create_a2)
+        .await
+        .expect("recreate container A");
+    assert_eq!(recreated_a.status(), ContainerState::Created);
+    let stale_state = client
+        .state(AgentStateRequest { target: target_a1 })
+        .await
+        .expect_err("old generation must remain fenced");
+    assert_eq!(stale_state.code, ErrorCode::Conflict);
+    client
+        .delete(AgentDeleteRequest {
+            context: OperationContext::new(operation_id("multi-delete-a-2")),
+            target: target_a2,
+            mode: DeleteMode::Force,
+        })
+        .await
+        .expect("delete recreated container A");
+
+    client
+        .start(AgentStartRequest {
+            context: OperationContext::new(operation_id("multi-start-b-1")),
+            target: target_b.clone(),
+            expected_config_digest: digest_b,
+        })
+        .await
+        .expect("start container B");
+    client
+        .kill(AgentKillRequest {
+            context: OperationContext::new(operation_id("multi-kill-b-1")),
+            target: target_b.clone(),
+            signal: Signal::new(15).expect("signal"),
+            all: false,
+        })
+        .await
+        .expect("kill container B");
+    client
+        .delete(AgentDeleteRequest {
+            context: OperationContext::new(operation_id("multi-delete-b-1")),
+            target: target_b,
+            mode: DeleteMode::StoppedOnly,
+        })
+        .await
+        .expect("delete container B");
+
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean multi-container server shutdown");
 }
 
 #[tokio::test]

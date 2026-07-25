@@ -11,11 +11,14 @@ sudo apt-get install --yes busybox-static jq
 cargo build -p a3s-oci-agent -p a3s-oci-cli
 
 bundle="$runner_temp/a3s-native-bundle"
+bundle_b="$runner_temp/a3s-native-bundle-b"
 work_parent="$runner_temp/a3s-native-work"
-mkdir -p "$bundle/rootfs/bin" "$work_parent"
-cp fixtures/native-linux/config.json "$bundle/config.json"
-cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
-ln -s busybox "$bundle/rootfs/bin/sh"
+mkdir -p "$bundle/rootfs/bin" "$bundle_b/rootfs/bin" "$work_parent"
+for candidate in "$bundle" "$bundle_b"; do
+  cp fixtures/native-linux/config.json "$candidate/config.json"
+  cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
+  ln -s busybox "$candidate/rootfs/bin/sh"
+done
 
 run_smoke() {
   local expected_kvm_present="$1"
@@ -29,6 +32,69 @@ run_smoke() {
     --argjson expected "$expected_kvm_present" \
     '.status == "available" and .kvm_device_present == $expected' \
     <<<"$output" >/dev/null
+}
+
+run_multi_container_smoke() {
+  local expected_kvm_present="$1"
+  local output
+  output="$(sudo "$PWD/target/debug/a3s-oci" \
+    native-linux-multi-container-smoke \
+    --agent "$PWD/target/debug/a3s-oci-agent" \
+    --bundle-a "$bundle" \
+    --bundle-b "$bundle_b" \
+    --work-parent "$work_parent")"
+  printf '%s\n' "$output"
+  jq --exit-status \
+    --argjson expected "$expected_kvm_present" \
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v1"
+     and .platform == "linux" and .status == "available"
+     and .kvm_device_present == $expected
+     and .bundles_loaded
+     and .service_operations
+         == ["features", "create", "state", "start", "kill", "delete"]
+     and .lifecycle.distinct_bundle_directories
+     and .lifecycle.distinct_rootfs_directories
+     and .lifecycle.both_created_before_start
+     and .lifecycle.initial_generation_a == 1
+     and .lifecycle.initial_generation_b == 1
+     and .lifecycle.recreated_generation_a == 2
+     and (.lifecycle.created_pid_a > 0)
+     and (.lifecycle.created_pid_b > 0)
+     and .lifecycle.distinct_created_pids
+     and .lifecycle.create_replays_exact
+     and .lifecycle.both_markers_absent_before_start
+     and .lifecycle.start_a_replayed
+     and .lifecycle.marker_a_verified
+     and .lifecycle.b_unchanged_after_a_start
+     and .lifecycle.marker_b_absent_after_a_start
+     and .lifecycle.kill_a_replayed
+     and .lifecycle.a_stopped
+     and .lifecycle.b_unchanged_after_a_kill
+     and .lifecycle.marker_b_absent_after_a_kill
+     and .lifecycle.delete_a_replayed
+     and .lifecycle.a_missing_after_delete
+     and .lifecycle.b_unchanged_after_a_delete
+     and .lifecycle.stale_generation_rejected
+     and .lifecycle.generation_a_monotonic
+     and .lifecycle.recreate_a_replayed
+     and .lifecycle.marker_a_absent_after_recreate
+     and .lifecycle.cross_container_operation_rejected
+     and .lifecycle.b_unchanged_after_replay_conflict
+     and .lifecycle.recreated_a_deleted
+     and .lifecycle.start_b_replayed
+     and .lifecycle.marker_b_verified
+     and .lifecycle.kill_b_replayed
+     and .lifecycle.b_stopped
+     and .lifecycle.delete_b_replayed
+     and .lifecycle.b_missing_after_delete
+     and .markers_removed
+     and .executor_runtime_clean
+     and .session_root_clean
+     and (.reason == null)' \
+    <<<"$output" >/dev/null
+  test ! -e "$bundle/rootfs/.a3s-oci-native-smoke"
+  test ! -e "$bundle_b/rootfs/.a3s-oci-native-smoke"
+  test -z "$(find "$work_parent" -mindepth 1 -print -quit)"
 }
 
 run_fault_cleanup() {
@@ -94,6 +160,8 @@ if [[ -e /dev/kvm || -L /dev/kvm ]]; then
 fi
 
 run_smoke false
+run_multi_container_smoke false
 run_fault_cleanup
 sudo mkdir /dev/kvm
 run_smoke true
+run_multi_container_smoke true

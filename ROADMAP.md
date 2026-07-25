@@ -270,7 +270,11 @@ then may HVF become `experimental`.
 
 ### R3 — Shared Linux Executor And Guest Agent
 
-- [ ] Multi-container guest registry with per-container generations.
+- [x] Multi-container guest registry with per-container generations, proven
+  with two distinct bundles, simultaneous create barriers, independent
+  start/kill/delete, exact replay isolation, generation-1 fencing after
+  generation-2 recreation, and complete cleanup through native Linux and the
+  macOS utility VM.
 - [x] Create a new UTS namespace and apply the configured hostname and
   domainname before the created barrier.
 - [x] Create a new mount namespace, make the inherited mount tree recursively

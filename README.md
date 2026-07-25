@@ -84,7 +84,8 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   quarantine, backed by exhaustive durable-write and driver-boundary fault
   matrices
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, process,
-  and cleanup implementation directly on Linux and through the guest agent
+  and cleanup implementation directly on Linux and through the guest agent,
+  with independently fenced per-container generations
 - **Cross-Platform Drivers**: Inspect native Linux, KVM, HVF, and WHPX
   prerequisites without silently weakening requested isolation
 - **Typed SDK and IPC**: Expose an async `Send + Sync` Rust contract with
@@ -162,6 +163,27 @@ observation, idempotent mutation replay, marker verification, post-delete
 `NotFound`, and scoped cleanup. See
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
 remaining production gates.
+
+Create a second distinct bundle to run the multi-container gate:
+
+```sh
+bundle_b="$demo_root/bundle-b"
+mkdir -p "$bundle_b/rootfs/bin"
+cp fixtures/native-linux/config.json "$bundle_b/config.json"
+cp "$(command -v busybox)" "$bundle_b/rootfs/bin/busybox"
+ln -s busybox "$bundle_b/rootfs/bin/sh"
+
+sudo target/debug/a3s-oci native-linux-multi-container-smoke \
+  --agent "$PWD/target/debug/a3s-oci-agent" \
+  --bundle-a "$bundle" \
+  --bundle-b "$bundle_b" \
+  --work-parent "$work_parent"
+```
+
+The versioned report retains two simultaneous create barriers, distinct
+positive PIDs, operation replay isolation, A/B lifecycle independence,
+generation-1 rejection after A is recreated as generation 2, and complete
+process, marker, executor-root, and durable-session cleanup.
 
 The separate fault-cleanup diagnostic deliberately stops before OCI delete and
 requires executor shutdown to reclaim the live process and all scoped state:
@@ -300,6 +322,29 @@ running and stopped observation, marker verification, post-delete `NotFound`,
 and nominal endpoint, process, marker, and guest-runtime cleanup. This remains
 a fixed development profile rather than an arbitrary-workload driver.
 
+The multi-container gate places two distinct bundles in the same guest and
+keeps both init processes behind the create barrier:
+
+```sh
+bundle_b="$rootfs_dir/rootfs/var/lib/a3s-oci-smoke/bundle-b"
+mkdir -p "$bundle_b/rootfs"
+cp fixtures/utility-vm/config.json "$bundle_b/config.json"
+tar -xzf "$rootfs_archive" -C "$bundle_b/rootfs"
+
+target/debug/a3s-oci oci-vm-multi-container-smoke \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --vm-rootfs "$rootfs_dir/rootfs" \
+  --bundle-a "$bundle" \
+  --bundle-b "$bundle_b" \
+  --console "$rootfs_dir/oci-multi-container.log"
+```
+
+`a3s.oci.oci-vm-multi-container-smoke.v1` requires that starting, killing, and
+deleting A never changes B; recreating A advances generation 1 to 2; stale and
+cross-container replay requests fail; B then completes independently; and VM
+shutdown restores guest-runtime, endpoint, descriptor, shim, and worker
+inventories.
+
 Fault cleanup reuses the same signed shim and bundle but stops after each
 successful lifecycle boundary:
 
@@ -362,6 +407,12 @@ Matching retries reproduce the original result. Stale generations, reused
 operation IDs with different payloads, invalid isolation, and unsupported
 configuration fail before driver mutation.
 
+The shared Linux executor independently indexes every live `(container ID,
+generation)` pair, retains a highest-generation fence after delete, and gives
+each container a private runtime slot. The native Linux and macOS utility-VM
+multi-container gates keep two slots live concurrently and verify that every
+state transition and replay remains container-scoped.
+
 ### Linux executor boundary
 
 The current executor implements a reviewed bootstrap vertical slice:
@@ -401,9 +452,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Real rootful core lifecycle plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Real rootful core lifecycle, two-container generation and mutation isolation, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated static arm64 guest agent, fixed OCI core lifecycle, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated static arm64 guest agent, fixed and two-container OCI lifecycles, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when

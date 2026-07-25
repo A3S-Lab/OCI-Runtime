@@ -420,6 +420,34 @@ marker, and left no endpoint or VM worker. CI exercises the signed lifecycle
 when virtualization is available and otherwise requires the same fail-closed
 pre-entry behavior.
 
+## Multi-container lifecycle
+
+`oci-vm-multi-container-smoke` submits two distinct contained bundles over one
+authenticated guest-agent connection. Both init processes must remain behind
+their create barriers with distinct positive guest-visible PIDs. Starting,
+killing, and deleting A must preserve B's exact created state and leave B's
+marker absent.
+
+The command then rejects A generation 1 after delete, recreates A as generation
+2, rejects cross-container reuse of A's operation ID for B, removes recreated
+A, and lets B complete independently:
+
+```sh
+target/debug/a3s-oci oci-vm-multi-container-smoke \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --vm-rootfs "$rootfs" \
+  --bundle-a "$bundle_a" \
+  --bundle-b "$bundle_b" \
+  --console "$asset_dir/oci-multi-container.log"
+```
+
+The `a3s.oci.oci-vm-multi-container-smoke.v1` report also requires exact
+mutation replay, both marker removals, no new guest runtime root, exact host
+endpoint removal, shim and direct VM-worker reap, and full descriptor-inventory
+restoration. The Apple Silicon HVF qualification and macOS CI both run this
+gate; an unavailable-hypervisor branch must fail before negotiation while
+retaining the same host cleanup evidence.
+
 ## Fault-injected shutdown cleanup
 
 `oci-vm-fault-cleanup` deliberately skips OCI delete after a successful create,

@@ -112,6 +112,37 @@ The script installs `busybox-static` and `jq`, builds the matching
 `a3s-oci-agent` and CLI binaries, constructs the checked-in fixture, and
 executes both KVM-independent cases.
 
+## Multi-container generation gate
+
+`native-linux-multi-container-smoke` opens one durable host service and one
+shared `LinuxExecutor` for two distinct bundles. Both containers must return
+positive, different PIDs in `created` before either workload marker exists.
+Starting A must leave B's complete created record and marker unchanged;
+killing and deleting A must do the same.
+
+After deleting A generation 1, the diagnostic removes only A's marker and
+recreates the same container ID. The durable host must allocate generation 2,
+reject an exact generation-1 state request, and reject reuse of A's create
+operation ID for B without changing B. Recreated A is force-deleted while B
+remains created, then B independently completes start, kill, stopped-only
+delete, and post-delete `NotFound`.
+
+Run it with a second bundle containing its own rootfs:
+
+```sh
+sudo target/debug/a3s-oci native-linux-multi-container-smoke \
+  --agent "$PWD/target/debug/a3s-oci-agent" \
+  --bundle-a "$bundle_a" \
+  --bundle-b "$bundle_b" \
+  --work-parent "$work_parent"
+```
+
+The `a3s.oci.native-linux-multi-container-smoke.v1` success additionally
+requires exact create/start/kill/delete replay, both marker removals, executor
+shutdown, and complete durable-session removal. GitHub Actions runs the gate
+on x86_64 and aarch64 both without `/dev/kvm` and with a present but unusable
+placeholder at that path.
+
 ## Fault-injected shutdown cleanup
 
 `native-linux-fault-cleanup` accepts exactly `after-create`, `after-start`, or
