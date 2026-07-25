@@ -13,7 +13,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 7;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 8;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Maximum binary process-I/O payload carried by one agent request or response.
@@ -275,10 +275,13 @@ pub enum AgentOperation {
     /// Read captured stdout and stderr. Available from protocol version 6.
     ReadOutput,
     /// Write process stdin with backpressure. Available from protocol version 6.
+    /// Protocol version 8 adds durable idempotency metadata.
     WriteStdin,
     /// Close process stdin. Available from protocol version 6.
+    /// Protocol version 8 adds durable idempotency metadata.
     CloseStdin,
     /// Resize a process terminal. Available from protocol version 7.
+    /// Protocol version 8 adds durable idempotency metadata.
     Resize,
 }
 
@@ -611,6 +614,9 @@ pub struct AgentReadOutputRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentWriteStdinRequest {
+    /// Stable idempotency and deadline metadata. Required by protocol version 8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<OperationContext>,
     /// Exact container generation and process ID.
     pub process: ProcessTarget,
     /// Bytes written in order with transport backpressure.
@@ -621,6 +627,9 @@ pub struct AgentWriteStdinRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentCloseStdinRequest {
+    /// Stable idempotency and deadline metadata. Required by protocol version 8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<OperationContext>,
     /// Exact container generation and process ID.
     pub process: ProcessTarget,
 }
@@ -629,6 +638,9 @@ pub struct AgentCloseStdinRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentResizeRequest {
+    /// Stable idempotency and deadline metadata. Required by protocol version 8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<OperationContext>,
     /// Exact container generation and process ID.
     pub process: ProcessTarget,
     /// Positive terminal dimensions.

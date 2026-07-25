@@ -9,6 +9,7 @@ mod observe;
 mod oci_state;
 mod operation;
 mod process;
+mod process_io;
 mod start;
 mod update;
 
@@ -93,6 +94,17 @@ pub(crate) enum ProcessWaitPreparation {
     Replayed(a3s_oci_sdk::ExitStatus),
     /// The exact process target must be waited through the driver.
     Prepared(ProcessTarget),
+}
+
+/// Result of preparing a durable process-I/O mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProcessIoPreparation {
+    /// This call durably created a new operation intent.
+    Prepared(ProcessTarget),
+    /// A matching operation intent requires driver reconciliation.
+    Resume(ProcessTarget),
+    /// A matching operation already completed.
+    Replayed,
 }
 
 /// Single-writer durable lifecycle store.

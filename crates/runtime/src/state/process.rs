@@ -705,7 +705,7 @@ impl DurableStateStore {
         .await
     }
 
-    async fn release_process_operation_claim(
+    pub(super) async fn release_process_operation_claim(
         &self,
         operation: &StoredOperation,
         operation_id: &OperationId,
@@ -868,14 +868,17 @@ async fn validate_signal_target(
     Ok(())
 }
 
-fn exact_process_target(container: &StoredContainer, process_id: ProcessId) -> ProcessTarget {
+pub(super) fn exact_process_target(
+    container: &StoredContainer,
+    process_id: ProcessId,
+) -> ProcessTarget {
     ProcessTarget {
         container: ContainerTarget::exact(container.id.clone(), container.record.generation),
         process_id,
     }
 }
 
-fn validate_requested_generation(
+pub(super) fn validate_requested_generation(
     container: &StoredContainer,
     target: &ContainerTarget,
     operation: &'static str,
@@ -893,7 +896,10 @@ fn validate_requested_generation(
     Ok(())
 }
 
-fn ensure_container_unclaimed(container: &StoredContainer, operation: &'static str) -> Result<()> {
+pub(super) fn ensure_container_unclaimed(
+    container: &StoredContainer,
+    operation: &'static str,
+) -> Result<()> {
     if let Some(active) = &container.active_operation {
         return Err(state_error(
             ErrorCode::Conflict,
@@ -908,7 +914,7 @@ fn ensure_container_unclaimed(container: &StoredContainer, operation: &'static s
     Ok(())
 }
 
-fn validate_process_retry(
+pub(super) fn validate_process_retry(
     stored: &StoredOperation,
     operation_id: &OperationId,
     kind: StoredOperationKind,
@@ -928,7 +934,7 @@ fn validate_process_retry(
     Ok(())
 }
 
-fn required_operation_process_id<'a>(
+pub(super) fn required_operation_process_id<'a>(
     operation: &'a StoredOperation,
     operation_name: &'static str,
 ) -> Result<&'a ProcessId> {
@@ -987,7 +993,7 @@ fn ensure_active_process_operation(
     }
 }
 
-async fn claim_active_process_operation(
+pub(super) async fn claim_active_process_operation(
     store: &DurableStateStore,
     process: &mut StoredProcess,
     operation_id: &OperationId,

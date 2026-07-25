@@ -329,7 +329,7 @@ target/debug/a3s-oci agent-vm-smoke \
 
 An `a3s.oci.agent-vm-smoke.v8` success proves a private host socket, the
 expected shim and direct worker PID relationship, one-time token
-authentication, protocol version 7, the arm64 guest identity, and the exact
+authentication, protocol version 8, the arm64 guest identity, and the exact
 eighteen guest operations (`create`, `state`, `start`, `kill`, `delete`,
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`,
 `processes`, `update`, `stats`, `read-output`, `write-stdin`, and
@@ -364,8 +364,8 @@ rejection, bounded and stable per-process wait, replayed pidfd signal delivery,
 an exact init/exec process inventory, idempotent live CPU, memory, cpuset, and
 PID updates, normalized cgroup-v2 statistics, pause/resume replay, a real
 workload that stops advancing while frozen and continues after resume,
-byte-accurate captured stdout/stderr polling with EOF, piped stdin and
-idempotent close, rejected late writes, controlling PTY allocation, interactive
+byte-accurate captured stdout/stderr polling with EOF, exactly replayed piped
+stdin writes and idempotent close, rejected late writes, controlling PTY allocation, interactive
 terminal input, exact initial and resized dimensions, merged output, terminal
 VEOF, init-exit cleanup of a live exec process, and nominal endpoint, process,
 marker, and guest-runtime cleanup. This remains a fixed development profile
@@ -552,9 +552,9 @@ injected `RuntimeDriver` and conditionally exposes init wait, exact-target
 exec, per-process signal/wait, pause/resume, live resource update, process
 inventory, statistics, captured output, stdin write/close, and terminal resize
 only when that exact driver implements them. The native Linux driver maps all
-thirteen optional operations to the protocol-v7 Linux guest executor. Exec,
-signal, pause, resume, and update mutations use durable
-global operation journals and generation-scoped records; init and exec waits
+thirteen optional operations to the protocol-v8 Linux guest executor. Exec,
+signal, pause, resume, update, write-stdin, close-stdin, and resize mutations
+use durable global operation journals and generation-scoped records; init and exec waits
 cache their exact normal-exit or signal result across repeated calls and
 host-service reopen. The guest advertises its eighteen operations only after
 retaining the exact container generation, process ID, pidfd, cgroup, rootfs,
@@ -578,9 +578,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping, exact init and exec SIGKILL status, exec/signal/update replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping, exact init and exec SIGKILL status, exec/signal/update/process-I/O replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v7 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -745,7 +745,7 @@ cargo clippy \
 
 Platform CI covers:
 
-- the 510-point durable commit matrix and all 38 `RuntimeDriver` call
+- the 636-point durable commit matrix and all 38 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
   existing-namespace and rootfs/mount isolation, and three-phase no-delete

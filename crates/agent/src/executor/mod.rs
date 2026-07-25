@@ -711,15 +711,15 @@ impl GuestAgentService for LinuxExecutor {
     }
 
     async fn write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
-        self.write_stdin_new(&request).await
+        self.write_stdin_recorded(request).await
     }
 
     async fn close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
-        self.close_stdin_new(&request).await
+        self.close_stdin_recorded(request).await
     }
 
     async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
-        self.resize_new(&request).await
+        self.resize_recorded(request).await
     }
 }
 

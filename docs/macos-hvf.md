@@ -281,7 +281,7 @@ The host runtime establishes the trust chain in this order:
 8. remove the socket and private directory while retaining the accepted
    stream;
 9. send the token only after process identity verification, negotiate protocol
-   version 7, and require the static arm64 guest to advertise exactly
+   version 8, and require the static arm64 guest to advertise exactly
    `create`, `state`, `start`, `kill`, `delete`, `wait`, `exec`,
    `signal-process`, `wait-process`, `pause`, `resume`, `processes`, `update`,
    `stats`, `read-output`, `write-stdin`, `close-stdin`, and `resize`.
@@ -337,7 +337,7 @@ qualification must retain the following contract:
   "bridge_process_id": 12346,
   "shim_client_verified": true,
   "protocol_negotiated": true,
-  "selected_protocol": 7,
+  "selected_protocol": 8,
   "agent_version": "0.1.0",
   "guest_architecture": "aarch64",
   "advertised_operations": [

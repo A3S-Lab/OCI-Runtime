@@ -53,7 +53,7 @@ Completed:
   host-visible marker verification, bounded worker reap, and marker cleanup;
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
-  one-time token authentication, protocol-v7 negotiation, exact
+  one-time token authentication, protocol-v8 negotiation, exact
   eighteen-operation advertisement, process-group termination, exact endpoint
   removal, observed PID reap, and in-process descriptor-inventory restoration;
 - real macOS fixed-bundle create/state/start/kill/wait/delete evidence using
@@ -150,7 +150,8 @@ Completed:
   signal, and process wait messages, all dispatched by the shared Linux
   executor with version-filtered capability advertisement, plus protocol-v4
   pause, resume, and live process inventory, protocol-v5 update and stats,
-  protocol-v6 bounded process I/O, and protocol-v7 terminal resize;
+  protocol-v6 bounded process I/O, protocol-v7 terminal resize, and
+  protocol-v8 durable process-I/O mutation contexts with exact session replay;
 - existing `features` CLI path routed through the Rust SDK;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
@@ -160,11 +161,11 @@ Completed:
   `create`, `state`, `start`, `kill`, `delete`, and driver-advertised `wait`,
   `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
   `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, and `resize`;
-- generation-scoped durable process records, global exec and per-process
-  signal journals, durable update journals, terminal failure replay,
-  active-operation claims, and stable init/exec exit-status caching across
-  host-service reopen;
-- typed, exhaustive recovery injection at all 510 registered durable commit
+- generation-scoped durable process records, global exec, per-process signal,
+  and write-stdin/close-stdin/resize journals, durable update journals,
+  terminal failure replay, active-operation claims, and stable init/exec
+  exit-status caching across host-service reopen;
+- typed, exhaustive recovery injection at all 636 registered durable commit
   stages and all 38 before/after `RuntimeDriver` method boundaries;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
@@ -231,7 +232,9 @@ enforce it. No property is silently ignored.
   observation, reconciliation, claim release, and terminal failure replay.
 - [x] Extend idempotent journals to update, including exact retry, terminal
   failure replay, claim release, and fault-injected recovery.
-- [ ] Extend idempotent journals to remaining process-I/O mutations.
+- [x] Extend idempotent journals to write-stdin, close-stdin, and resize,
+  including exact driver/guest replay, claim release, terminal failure replay,
+  and fault-injected recovery.
 - [x] Reconcile interrupted core lifecycle operations and quarantine failed
   create/delete state.
 - [x] Implement driver-independent `create`, `state`, `start`, `kill`, and
@@ -308,7 +311,7 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
-  authenticate protocol-v7 negotiation with a one-time token.
+  authenticate protocol-v8 negotiation with a one-time token.
 - [x] Run the same fixed create/state/start/kill/wait/delete OCI lifecycle used
   by WHPX, including bounded running wait, exact repeated exit status,
   pause/resume, live process inventory, resource update, and normalized stats.

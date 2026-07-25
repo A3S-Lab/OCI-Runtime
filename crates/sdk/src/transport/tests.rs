@@ -84,7 +84,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 1);
+    assert_eq!(client.protocol_version(), 2);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
@@ -157,8 +157,8 @@ async fn client_reports_an_incompatible_server_protocol() {
         write_frame(
             &mut server_io,
             &ServerMessage::Reject {
-                protocol_min: 2,
-                protocol_max: 3,
+                protocol_min: 3,
+                protocol_max: 4,
                 message: "no common protocol".to_string(),
             },
         )
@@ -183,7 +183,7 @@ async fn client_rejects_a_mismatched_response_id() {
             .expect("read client hello")
             .expect("client hello frame");
         assert!(matches!(hello, ClientMessage::Hello { .. }));
-        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 1 })
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 2 })
             .await
             .expect("write server welcome");
 
@@ -198,7 +198,7 @@ async fn client_rejects_a_mismatched_response_id() {
         write_frame(
             &mut server_io,
             &ServerMessage::Response {
-                protocol: 1,
+                protocol: 2,
                 request_id: request_id + 1,
                 result: Box::new(WireResult::Error {
                     error: Error::unsupported("test"),
@@ -237,8 +237,8 @@ async fn server_rejects_the_reserved_zero_request_id() {
     write_frame(
         &mut client_io,
         &ClientMessage::Hello {
-            protocol_min: 1,
-            protocol_max: 1,
+            protocol_min: 2,
+            protocol_max: 2,
         },
     )
     .await
@@ -247,12 +247,12 @@ async fn server_rejects_the_reserved_zero_request_id() {
         .await
         .expect("read welcome")
         .expect("welcome frame");
-    assert_eq!(welcome, ServerMessage::Welcome { protocol: 1 });
+    assert_eq!(welcome, ServerMessage::Welcome { protocol: 2 });
 
     write_frame(
         &mut client_io,
         &ClientMessage::Request {
-            protocol: 1,
+            protocol: 2,
             request_id: 0,
             request: Box::new(super::wire::WireRequest::Features),
         },
@@ -278,8 +278,8 @@ async fn server_validates_untrusted_wire_requests_before_dispatch() {
     write_frame(
         &mut client_io,
         &ClientMessage::Hello {
-            protocol_min: 1,
-            protocol_max: 1,
+            protocol_min: 2,
+            protocol_max: 2,
         },
     )
     .await
@@ -288,12 +288,12 @@ async fn server_validates_untrusted_wire_requests_before_dispatch() {
         .await
         .expect("read welcome")
         .expect("welcome frame");
-    assert_eq!(welcome, ServerMessage::Welcome { protocol: 1 });
+    assert_eq!(welcome, ServerMessage::Welcome { protocol: 2 });
 
     write_frame(
         &mut client_io,
         &ClientMessage::Request {
-            protocol: 1,
+            protocol: 2,
             request_id: 1,
             request: Box::new(super::wire::WireRequest::Events(EventsRequest {
                 container: None,

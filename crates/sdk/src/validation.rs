@@ -265,6 +265,7 @@ mod tests {
         assert!(read.validate().is_err());
 
         let write = WriteStdinRequest {
+            context: context(),
             process: read.process,
             data: vec![0; MAX_STDIN_WRITE_BYTES + 1],
         };
@@ -337,6 +338,7 @@ mod tests {
         assert!(zero_size.validate().is_err());
 
         ResizeRequest {
+            context: context(),
             process: crate::ProcessTarget {
                 container: target(),
                 process_id: ProcessId::new("terminal").expect("process ID"),
@@ -349,6 +351,7 @@ mod tests {
         .validate()
         .expect("positive terminal resize");
         assert!(ResizeRequest {
+            context: context(),
             process: crate::ProcessTarget {
                 container: target(),
                 process_id: ProcessId::new("terminal").expect("process ID"),

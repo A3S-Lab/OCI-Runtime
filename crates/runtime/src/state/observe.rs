@@ -156,6 +156,9 @@ impl DurableStateStore {
                 StoredOperationKind::Create
                 | StoredOperationKind::Delete
                 | StoredOperationKind::Exec
+                | StoredOperationKind::WriteStdin
+                | StoredOperationKind::CloseStdin
+                | StoredOperationKind::Resize
                 | StoredOperationKind::Update => {
                     return Err(state_error(
                         ErrorCode::Internal,
@@ -211,6 +214,9 @@ fn observation_completes(kind: StoredOperationKind, status: ContainerState, paus
         StoredOperationKind::Create
         | StoredOperationKind::Delete
         | StoredOperationKind::Exec
+        | StoredOperationKind::WriteStdin
+        | StoredOperationKind::CloseStdin
+        | StoredOperationKind::Resize
         | StoredOperationKind::Update => false,
     }
 }

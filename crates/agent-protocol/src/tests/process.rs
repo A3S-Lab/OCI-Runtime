@@ -291,6 +291,7 @@ async fn protocol_v6_captures_output_and_controls_stdin() {
 
     client
         .write_stdin(AgentWriteStdinRequest {
+            context: None,
             process: process.clone(),
             data: b"input".to_vec(),
         })
@@ -324,18 +325,21 @@ async fn protocol_v6_captures_output_and_controls_stdin() {
 
     client
         .close_stdin(AgentCloseStdinRequest {
+            context: None,
             process: process.clone(),
         })
         .await
         .expect("close stdin");
     client
         .close_stdin(AgentCloseStdinRequest {
+            context: None,
             process: process.clone(),
         })
         .await
         .expect("repeat stdin close");
     let error = client
         .write_stdin(AgentWriteStdinRequest {
+            context: None,
             process: process.clone(),
             data: b"late".to_vec(),
         })
@@ -344,6 +348,7 @@ async fn protocol_v6_captures_output_and_controls_stdin() {
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
     let resize_error = client
         .resize(AgentResizeRequest {
+            context: None,
             process: process.clone(),
             size: TerminalSize {
                 width: 120,
@@ -374,7 +379,7 @@ async fn protocol_v7_resizes_one_exact_process_terminal() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let agent = Arc::new(TestAgent::default());
     let server = spawn_server_with_agent(guest, token(27), Arc::clone(&agent));
-    let client = AgentClient::connect(host, token(27))
+    let client = AgentClient::connect_for_test(host, token(27), 7, 7)
         .await
         .expect("connect protocol-v7 client");
     assert_eq!(client.hello().selected_version(), 7);
@@ -399,11 +404,21 @@ async fn protocol_v7_resizes_one_exact_process_terminal() {
     };
     client
         .resize(AgentResizeRequest {
+            context: None,
             process: process.clone(),
             size,
         })
         .await
         .expect("resize terminal");
+    let context_error = client
+        .resize(AgentResizeRequest {
+            context: Some(OperationContext::new(operation_id("v7-resize-context"))),
+            process: process.clone(),
+            size,
+        })
+        .await
+        .expect_err("protocol-v7 client must reject v8 mutation context");
+    assert_eq!(context_error.code, ErrorCode::Unsupported);
 
     let key = process_key(&process).expect("exact process key");
     assert_eq!(
@@ -416,6 +431,108 @@ async fn protocol_v7_resizes_one_exact_process_terminal() {
         .await
         .expect("server task")
         .expect("clean protocol-v7 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v8_requires_durable_context_for_process_io_mutations() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let agent = Arc::new(TestAgent::default());
+    let server = spawn_server_with_agent(guest, token(29), Arc::clone(&agent));
+    let client = AgentClient::connect(host, token(29))
+        .await
+        .expect("connect protocol-v8 client");
+    assert_eq!(client.hello().selected_version(), 8);
+
+    let mut create = create_request_for("durable-io-container", 11, "durable-io-create");
+    create.io.stdin = IoMode::Pipe;
+    let target = create.target.clone();
+    let digest = create.bundle.config_digest().to_string();
+    client
+        .create(create)
+        .await
+        .expect("create durable I/O container");
+    client
+        .start(AgentStartRequest {
+            context: OperationContext::new(operation_id("durable-io-start")),
+            target: target.clone(),
+            expected_config_digest: digest,
+        })
+        .await
+        .expect("start durable I/O container");
+    let process = ProcessTarget {
+        container: target.clone(),
+        process_id: ProcessId::init(),
+    };
+    let size = TerminalSize {
+        width: 120,
+        height: 40,
+    };
+
+    let write_error = client
+        .write_stdin(AgentWriteStdinRequest {
+            context: None,
+            process: process.clone(),
+            data: b"missing-context".to_vec(),
+        })
+        .await
+        .expect_err("protocol-v8 stdin write without context must fail");
+    assert_eq!(write_error.code, ErrorCode::InvalidArgument);
+    let close_error = client
+        .close_stdin(AgentCloseStdinRequest {
+            context: None,
+            process: process.clone(),
+        })
+        .await
+        .expect_err("protocol-v8 stdin close without context must fail");
+    assert_eq!(close_error.code, ErrorCode::InvalidArgument);
+    let resize_error = client
+        .resize(AgentResizeRequest {
+            context: None,
+            process: process.clone(),
+            size,
+        })
+        .await
+        .expect_err("protocol-v8 terminal resize without context must fail");
+    assert_eq!(resize_error.code, ErrorCode::InvalidArgument);
+
+    client
+        .write_stdin(AgentWriteStdinRequest {
+            context: Some(OperationContext::new(operation_id("durable-io-write"))),
+            process: process.clone(),
+            data: b"input".to_vec(),
+        })
+        .await
+        .expect("write stdin with durable context");
+    client
+        .resize(AgentResizeRequest {
+            context: Some(OperationContext::new(operation_id("durable-io-resize"))),
+            process: process.clone(),
+            size,
+        })
+        .await
+        .expect("resize terminal with durable context");
+    client
+        .close_stdin(AgentCloseStdinRequest {
+            context: Some(OperationContext::new(operation_id("durable-io-close"))),
+            process: process.clone(),
+        })
+        .await
+        .expect("close stdin with durable context");
+
+    let generation = target.generation.expect("exact target");
+    let key = (target.id, generation, ProcessId::init());
+    {
+        let state = agent.state.lock().expect("agent state lock");
+        assert_eq!(state.stdin[&key], b"input");
+        assert_eq!(state.terminal_sizes[&key], size);
+        assert!(state.stdin_closed.contains(&key));
+    }
+
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v8 server shutdown");
 }
 
 #[tokio::test]
@@ -452,6 +569,7 @@ async fn protocol_v6_filters_and_rejects_forged_v7_terminal_resize() {
             version: 6,
             request_id: 43,
             request: AgentRequest::Resize(AgentResizeRequest {
+                context: None,
                 process: ProcessTarget {
                     container: ContainerTarget::exact(
                         container_id("forged-terminal"),

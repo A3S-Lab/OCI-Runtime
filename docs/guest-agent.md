@@ -185,7 +185,11 @@ buffered frame exactly at the requested byte bound, optionally long-poll, and
 emit one empty EOF frame per captured stream. A cursor older than retained
 data or ahead of produced output fails closed. Guest messages carry at most
 4 MiB of process-I/O payload; the native host driver splits larger SDK stdin
-writes at that boundary.
+writes at that boundary and derives a stable operation ID for each chunk.
+Protocol-v8 write, close, and resize mutations retain their exact session-local
+success or failure. Replaying a stdin write therefore cannot append its bytes
+again, while changing the payload, target, size, or mutation kind under the
+same operation ID fails closed.
 
 Terminal execution adapts the A3S Box PTY design. `openpty` supplies one
 runtime-owned master and child descriptors 0-2 use the slave. The launcher
@@ -263,8 +267,8 @@ repeated init status, exact-target exec replay, duplicate process-ID rejection,
 bounded and stable process wait, replayed process signal, exact live init/exec
 inventory, replay-safe live resource update, normalized cgroup-v2 statistics,
 replayed pause/resume, a progress-producing exec that stops while frozen and
-advances after resume, piped stdin, bounded captured stdout/stderr cursor
-pagination and EOF, idempotent stdin close, rejected late writes, controlling
+advances after resume, exactly replayed piped stdin, bounded captured
+stdout/stderr cursor pagination and EOF, idempotent stdin close, rejected late writes, controlling
 PTY allocation, initial and resized dimensions, interactive input, merged
 terminal output, VEOF close, init-exit exec cleanup, signal-driven stop,
 post-delete NotFound, marker cleanup, and nominal guest runtime cleanup.

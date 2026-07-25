@@ -1,6 +1,6 @@
 use super::*;
 
-async fn io_fixture() -> (
+pub(super) async fn io_fixture() -> (
     tempfile::TempDir,
     Arc<RecordingDriver>,
     HostRuntimeService,
@@ -30,7 +30,7 @@ async fn io_fixture() -> (
     (temporary, driver, service, target)
 }
 
-fn init_process(container: ContainerTarget) -> ProcessTarget {
+pub(super) fn init_process(container: ContainerTarget) -> ProcessTarget {
     ProcessTarget {
         container,
         process_id: ProcessId::init(),
@@ -62,23 +62,27 @@ async fn process_io_resolves_current_targets_to_the_exact_generation() {
     );
     service
         .write_stdin(WriteStdinRequest {
+            context: OperationContext::new(operation_id("io-write")),
             process: current.clone(),
             data: b"input".to_vec(),
         })
         .await
         .expect("write stdin");
+    let close = CloseStdinRequest {
+        context: OperationContext::new(operation_id("io-close")),
+        process: current.clone(),
+    };
     service
-        .close_stdin(CloseStdinRequest {
-            process: current.clone(),
-        })
+        .close_stdin(close.clone())
         .await
         .expect("close stdin");
     service
-        .close_stdin(CloseStdinRequest { process: current })
+        .close_stdin(close)
         .await
         .expect("repeat close stdin");
     service
         .resize(ResizeRequest {
+            context: OperationContext::new(operation_id("io-resize")),
             process: init_process(ContainerTarget::current(target.id.clone())),
             size: TerminalSize {
                 width: 120,
@@ -112,12 +116,16 @@ async fn process_io_resolves_current_targets_to_the_exact_generation() {
                 wait_timeout_ms: Some(25),
             }),
             DriverCall::WriteStdin(DriverWriteStdinRequest {
+                context: OperationContext::new(operation_id("io-write")),
                 target: exact.clone(),
                 data: b"input".to_vec(),
             }),
-            DriverCall::CloseStdin(exact.clone()),
-            DriverCall::CloseStdin(exact.clone()),
+            DriverCall::CloseStdin(DriverCloseStdinRequest {
+                context: OperationContext::new(operation_id("io-close")),
+                target: exact.clone(),
+            }),
             DriverCall::Resize(DriverResizeRequest {
+                context: OperationContext::new(operation_id("io-resize")),
                 target: exact,
                 size: TerminalSize {
                     width: 120,
@@ -146,6 +154,7 @@ async fn process_io_rejects_generation_mismatches_and_missing_processes_before_d
     assert_eq!(read_error.code, ErrorCode::Conflict);
     let write_error = service
         .write_stdin(WriteStdinRequest {
+            context: OperationContext::new(operation_id("mismatched-write")),
             process: mismatched.clone(),
             data: b"x".to_vec(),
         })
@@ -154,6 +163,7 @@ async fn process_io_rejects_generation_mismatches_and_missing_processes_before_d
     assert_eq!(write_error.code, ErrorCode::Conflict);
     let close_error = service
         .close_stdin(CloseStdinRequest {
+            context: OperationContext::new(operation_id("mismatched-close")),
             process: mismatched,
         })
         .await
@@ -161,6 +171,7 @@ async fn process_io_rejects_generation_mismatches_and_missing_processes_before_d
     assert_eq!(close_error.code, ErrorCode::Conflict);
     let resize_error = service
         .resize(ResizeRequest {
+            context: OperationContext::new(operation_id("mismatched-resize")),
             process: init_process(ContainerTarget::exact(target.id.clone(), wrong_generation)),
             size: TerminalSize {
                 width: 120,
@@ -288,6 +299,7 @@ async fn process_io_request_limits_fail_before_driver_dispatch() {
 
     let write_error = service
         .write_stdin(WriteStdinRequest {
+            context: OperationContext::new(operation_id("oversized-write")),
             process,
             data: vec![0; a3s_oci_sdk::MAX_STDIN_WRITE_BYTES + 1],
         })

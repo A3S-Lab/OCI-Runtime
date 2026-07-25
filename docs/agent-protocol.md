@@ -83,6 +83,14 @@ the stdout stream, and applies positive runtime dimensions with
 because a PTY master cannot be half-closed. A resize acknowledgement repeats
 the exact process target and mismatched correlation poisons the client.
 
+Protocol version 8 adds required `OperationContext` metadata to
+`write-stdin`, `close-stdin`, and `resize`. The guest journals the exact
+request and its success or failure by `OperationId`, so retrying a completed
+stdin write does not deliver the bytes twice. Reusing an ID for a different
+payload, target, size, or mutation kind fails closed. Version-6 and version-7
+process-I/O requests omit this field for wire compatibility; a version-8 peer
+rejects a missing context, and an older peer rejects a version-8 context.
+
 The client breaks a long init or process wait into bounded 25-millisecond
 guest requests. The single correlated connection therefore remains available
 to query or control another container between polls. Negotiation filters
@@ -95,18 +103,21 @@ version-4 control operations. Protocol-v1 through protocol-v4 peers neither
 advertise nor accept the version-5 resource operations. Protocol-v1 through
 protocol-v5 peers neither advertise nor accept the version-6 process-I/O
 operations. Protocol-v1 through protocol-v6 peers neither advertise nor accept
-the version-7 terminal resize operation.
+the version-7 terminal resize operation. Protocol-v1 through protocol-v7 peers
+reject version-8 process-I/O mutation context.
 
 Protocol support and executor capability remain separate. The current shared
-Linux executor negotiates version 7 and advertises the exact eighteen
+Linux executor negotiates version 8 and advertises the exact eighteen
 implemented operations: the six lifecycle/init-wait operations; exec,
 per-process signal, and per-process wait; pause, resume, and processes; and
 update and stats; plus captured-output polling, stdin write/close, and terminal
 resize. It
 retains an exact-generation process registry, one pidfd per authenticated init
 or exec process, the private controller-enabled cgroup-v2 root and owned leaf,
-stable replay and wait results, process-group and standard-I/O ownership, and
-session cleanup. Durable recovery across an agent restart remains a separate
+stable replay and wait results, exact session-local write/close/resize replay,
+process-group and standard-I/O ownership, and session cleanup. The native host
+driver gives every bounded chunk of a larger SDK stdin write a stable derived
+operation ID. Durable recovery across an agent restart remains a separate
 host/driver release gate.
 
 Mutating guest operations must be idempotent by `OperationId`. Production
@@ -150,6 +161,8 @@ In-memory duplex tests cover:
   protocol-v5 filtering of forged v6 requests;
 - protocol-v7 exact-target terminal resize, positive dimensions, protocol-v6
   capability filtering, and pre-dispatch rejection of forged v7 requests;
+- protocol-v8 required process-I/O mutation context, successful exact dispatch,
+  missing-context rejection, and rejection of v8 context by protocol-v7 peers;
 - filtering and pre-dispatch rejection of forged version-3 process operations
   on a protocol-v2 connection;
 - rejection of a forged protocol-v1 wait before service dispatch;
@@ -178,7 +191,7 @@ step.
 
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 7, and retains
+pipe, authenticates the token, negotiates protocol version 8, and retains
 bounded host and shim evidence. The current guest must advertise the exact
 eighteen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
@@ -188,7 +201,7 @@ The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
 in `a3s.oci.agent-vm-smoke.v8`. The signed path must negotiate protocol version
-7 and the exact eighteen implemented operations. The missing-entitlement path
+8 and the exact eighteen implemented operations. The missing-entitlement path
 must exit with status `2`, report no negotiation, terminate the shim process
 group, and leave no private endpoint residue. Both paths also retain
 in-process evidence that the exact runtime-owned endpoint was removed, the
@@ -205,8 +218,8 @@ wait, exact live init/exec inventory, replayed pause/resume, a
 progress-producing exec that stops while the cgroup is frozen and advances
 again after resume, replay-safe live CPU, memory, cpuset, and PID updates,
 normalized cgroup-v2 statistics, captured stdout/stderr with byte-accurate
-pagination and EOF, piped stdin with idempotent close, rejected writes after
-close or exit, controlling PTY allocation, initial and resized dimensions,
+pagination and EOF, exact replay of piped stdin writes with idempotent close,
+rejected writes after close or exit, controlling PTY allocation, initial and resized dimensions,
 interactive input, merged terminal output, VEOF close, init-exit cleanup of
 another live exec, stopped observation,
 stopped-only delete, exact delete replay, and a final

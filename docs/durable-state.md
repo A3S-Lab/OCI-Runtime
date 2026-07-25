@@ -109,8 +109,8 @@ quarantine rather than recursively deleting an unresolved path.
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
 exactly; it releases a start, kill, pause, resume, update, delete, exec, or
-per-process signal claim, while a failed create is moved out of the live
-namespace before its ID can be reused.
+per-process signal, write-stdin, close-stdin, or resize claim, while a failed
+create is moved out of the live namespace before its ID can be reused.
 
 Exec uses the same global operation journal. Preparation reserves the
 generation-scoped process ID before driver dispatch, so duplicate IDs fail
@@ -126,6 +126,14 @@ mutation is active. Init and exec wait are observations rather than operation
 journal entries, but their first terminal result is cached in the container or
 process record and returned unchanged after repeated calls and host-service
 reopen.
+
+Write-stdin, close-stdin, and resize use the same global journal. Their request
+fingerprints include the exact process target plus the complete bytes or
+terminal dimensions. The init container record or exec process record is
+claimed before driver dispatch; successful and terminal outcomes release the
+claim and replay unchanged after host-service reopen. A retryable error keeps
+the intent resumable. Drivers receive the same `OperationContext` and must
+deduplicate a call that completed before the host committed its outcome.
 
 Queries may target the current container generation or provide an exact
 generation fence. A stale fence fails with `conflict`.
@@ -153,6 +161,8 @@ handles these interrupted states:
   into the exact successful process result;
 - an exec or per-process signal claim interrupted before driver dispatch is
   resumed without allocating another process identity;
+- an interrupted write-stdin, close-stdin, or resize intent resumes through an
+  idempotent driver, while a committed result replays without driver dispatch;
 - cached init and exec terminal results survive host-service reopen;
 - a terminal create failure completes quarantine before replaying its exact
   error;
@@ -161,7 +171,7 @@ handles these interrupted states:
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 74 semantic mutations. Seventy-two atomic
+The registry currently contains 92 semantic mutations. Ninety atomic
 file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
@@ -173,7 +183,7 @@ file replacements are exercised at all seven commit stages:
 7. parent-directory sync.
 
 The delete and failed-create quarantine moves are each exercised after the
-rename, source-parent sync, and destination-parent sync. This expands to 510
+rename, source-parent sync, and destination-parent sync. This expands to 636
 durable fault points. The host matrix separately injects before and after all
 19 `RuntimeDriver` methods, including capability discovery, for another 38
 boundaries.
@@ -192,6 +202,5 @@ Production uses a non-configurable no-op injector.
 
 The remaining persistence gates are startup-wide orphan scanning,
 descriptor-relative path operations, real-driver reattachment across runtime
-process restart, journals for remaining process-I/O mutations, and fault
-injection inside the utility-VM host/agent transport below the `RuntimeDriver`
-boundary.
+process restart, and fault injection inside the utility-VM host/agent transport
+below the `RuntimeDriver` boundary.

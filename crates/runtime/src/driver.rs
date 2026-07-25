@@ -199,15 +199,28 @@ pub struct DriverReadOutputRequest {
 /// Exact stdin write passed to one driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverWriteStdinRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
     /// Exact container generation and process identity.
     pub target: ProcessTarget,
     /// Bytes delivered in order with backpressure.
     pub data: Vec<u8>,
 }
 
+/// Exact stdin close passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverCloseStdinRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Exact container generation and process identity.
+    pub target: ProcessTarget,
+}
+
 /// Exact terminal resize passed to one driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverResizeRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
     /// Exact container generation and process identity.
     pub target: ProcessTarget,
     /// Positive terminal dimensions.
@@ -363,7 +376,7 @@ pub trait RuntimeDriver: Send + Sync {
     }
 
     /// Close one exact process stdin.
-    async fn close_stdin(&self, _target: ProcessTarget) -> Result<()> {
+    async fn close_stdin(&self, _request: DriverCloseStdinRequest) -> Result<()> {
         Err(Error::unsupported("close-stdin"))
     }
 

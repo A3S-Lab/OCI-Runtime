@@ -29,7 +29,7 @@ The runtime:
    Linux rootfs, and verifies a guest-written marker through virtiofs;
 9. boots `/usr/bin/a3s-oci-agent`, carries its host-CID port 4093 connection
    through libkrun to the protected pipe, authenticates the exact shim PID and
-   one-time token, negotiates protocol version 7, and waits for zero
+   one-time token, negotiates protocol version 8, and waits for zero
    guest/shim exit;
 10. runs a fixed OCI bundle through distinct create, start, init signal/wait,
     exact-target exec, process signal/wait, live resource update and stats,
@@ -95,7 +95,7 @@ A successful end-to-end agent VM smoke additionally proves that:
 - guest AF_VSOCK reaches the protected Windows named pipe through libkrun;
 - only the exact spawned shim PID is accepted before the token is sent;
 - the real guest authenticates the one-time token and negotiates protocol
-  version 7;
+  version 8;
 - the agent version and `x86_64` guest architecture are reported;
 - the guest advertises exactly create, state, start, kill, delete, wait, exec,
   signal-process, wait-process, pause, resume, processes, update, stats,

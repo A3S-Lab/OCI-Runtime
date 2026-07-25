@@ -188,9 +188,10 @@ mod tests {
 
     #[test]
     fn negotiation_selects_highest_common_version() {
-        assert_eq!(select_protocol(1, 1), Some(1));
-        assert_eq!(select_protocol(0, 1), Some(1));
-        assert_eq!(select_protocol(2, 3), None);
-        assert_eq!(select_protocol(2, 1), None);
+        assert_eq!(select_protocol(2, 2), Some(2));
+        assert_eq!(select_protocol(1, 2), Some(2));
+        assert_eq!(select_protocol(1, 1), None);
+        assert_eq!(select_protocol(3, 3), None);
+        assert_eq!(select_protocol(3, 2), None);
     }
 }

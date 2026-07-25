@@ -23,8 +23,9 @@ pub(super) async fn exercise_process_io(
         nonce,
         "io",
         "exec-io",
-        "IFS= read -r line; printf 'stdout:%s\\n' \"$line\"; \
-         printf 'stderr:%s\\n' \"$line\" >&2",
+        "IFS= read -r first; IFS= read -r second; \
+         printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
+         printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
     )?;
     request.io = ProcessIo {
         stdin: IoMode::Pipe,
@@ -41,15 +42,32 @@ pub(super) async fn exercise_process_io(
         return Err("native process I/O probe returned an invalid identity".into());
     }
 
+    let first_write = WriteStdinRequest {
+        context: operation(nonce, "write-io-first")?,
+        process: process.clone(),
+        data: b"a3s-io-first\n".to_vec(),
+    };
     call(
-        "write process I/O probe stdin",
+        "write first process I/O probe stdin",
+        client.write_stdin(first_write.clone()),
+    )
+    .await?;
+    call(
+        "replay first process I/O probe stdin write",
+        client.write_stdin(first_write),
+    )
+    .await?;
+    call(
+        "write second process I/O probe stdin",
         client.write_stdin(WriteStdinRequest {
+            context: operation(nonce, "write-io-second")?,
             process: process.clone(),
-            data: b"a3s-io\n".to_vec(),
+            data: b"a3s-io-second\n".to_vec(),
         }),
     )
     .await?;
     let close = CloseStdinRequest {
+        context: operation(nonce, "close-io")?,
         process: process.clone(),
     };
     call(
@@ -80,7 +98,9 @@ pub(super) async fn exercise_process_io(
     }
 
     let (stdout, stderr) = collect_output(client, &process).await?;
-    if stdout != b"stdout:a3s-io\n" || stderr != b"stderr:a3s-io\n" {
+    if stdout != b"stdout:a3s-io-first:a3s-io-second\n"
+        || stderr != b"stderr:a3s-io-first:a3s-io-second\n"
+    {
         return Err(format!(
             "native captured output mismatch: stdout={stdout:?}, stderr={stderr:?}"
         ));
@@ -88,6 +108,7 @@ pub(super) async fn exercise_process_io(
     match timeout(
         CALL_TIMEOUT,
         client.write_stdin(WriteStdinRequest {
+            context: operation(nonce, "write-io-late")?,
             process,
             data: b"late".to_vec(),
         }),
@@ -132,6 +153,7 @@ pub(super) async fn exercise_terminal_io(
     call(
         "resize terminal probe",
         client.resize(ResizeRequest {
+            context: operation(nonce, "resize-terminal")?,
             process: process_target.clone(),
             size: TerminalSize {
                 width: 120,
@@ -143,6 +165,7 @@ pub(super) async fn exercise_terminal_io(
     call(
         "write terminal probe stdin",
         client.write_stdin(WriteStdinRequest {
+            context: operation(nonce, "write-terminal")?,
             process: process_target.clone(),
             data: b"hello\n".to_vec(),
         }),
@@ -203,6 +226,7 @@ pub(super) async fn exercise_terminal_io(
         return Err("native terminal EOF probe returned an invalid identity".into());
     }
     let close = CloseStdinRequest {
+        context: operation(nonce, "close-terminal-eof")?,
         process: cat_target.clone(),
     };
     call(
