@@ -17,11 +17,11 @@ pub(super) enum ChildOutcome {
     Signaled(i32),
 }
 
-pub(super) fn fork_namespace_init() -> Result<ForkRole> {
+pub(super) fn fork_namespaced_init() -> Result<ForkRole> {
     let (mut supervisor_channel, mut init_channel) = UnixStream::pair().map_err(|error| {
         pid_error(
             ErrorCode::Internal,
-            format!("failed to create PID namespace supervisor channel: {error}"),
+            format!("failed to create namespace supervisor channel: {error}"),
         )
     })?;
     // SAFETY: the internal init wrapper enters this path before constructing a
@@ -29,7 +29,7 @@ pub(super) fn fork_namespace_init() -> Result<ForkRole> {
     // the socket endpoint they do not own.
     let child_pid = unsafe { libc::fork() };
     if child_pid < 0 {
-        return Err(last_os_error("fork PID namespace init process"));
+        return Err(last_os_error("fork namespace init process"));
     }
     if child_pid == 0 {
         drop(supervisor_channel);
@@ -37,20 +37,20 @@ pub(super) fn fork_namespace_init() -> Result<ForkRole> {
         // parent-death signal ensures that killing the authenticated
         // supervisor cannot orphan the namespace init.
         if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } != 0 {
-            return Err(last_os_error("arm PID namespace init parent-death signal"));
+            return Err(last_os_error("arm namespace init parent-death signal"));
         }
         let mut encoded_pid = [0_u8; size_of::<libc::pid_t>()];
         init_channel.read_exact(&mut encoded_pid).map_err(|error| {
             pid_error(
                 ErrorCode::Unavailable,
-                format!("PID namespace supervisor closed before identifying init: {error}"),
+                format!("namespace supervisor closed before identifying init: {error}"),
             )
         })?;
         let runtime_pid = libc::pid_t::from_be_bytes(encoded_pid);
         if runtime_pid <= 0 {
             return Err(pid_error(
                 ErrorCode::Internal,
-                format!("PID namespace supervisor reported non-positive init PID {runtime_pid}"),
+                format!("namespace supervisor reported non-positive init PID {runtime_pid}"),
             ));
         }
         drop(init_channel);
@@ -63,7 +63,7 @@ pub(super) fn fork_namespace_init() -> Result<ForkRole> {
         let _ = wait_for_child(child_pid);
         return Err(pid_error(
             ErrorCode::Internal,
-            format!("failed to identify PID namespace init process: {error}"),
+            format!("failed to identify namespace init process: {error}"),
         ));
     }
     drop(supervisor_channel);
@@ -82,7 +82,7 @@ pub(super) fn wait_for_child(pid: libc::pid_t) -> Result<ChildOutcome> {
         if waited < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
             continue;
         }
-        return Err(last_os_error("reap PID namespace init process"));
+        return Err(last_os_error("reap namespace init process"));
     }
 }
 
@@ -106,7 +106,7 @@ fn decode_wait_status(status: i32) -> Result<ChildOutcome> {
     }
     Err(pid_error(
         ErrorCode::Internal,
-        format!("PID namespace init produced unsupported wait status {status:#x}"),
+        format!("namespace init produced unsupported wait status {status:#x}"),
     ))
 }
 
@@ -141,9 +141,9 @@ pub(super) async fn validate_runtime_pid(
     supervisor_pid: i32,
     runtime_pid: i32,
 ) -> Result<()> {
-    if !plan.new_pid_namespace {
+    if !plan.namespaces.requires_child_process() {
         if runtime_pid == supervisor_pid {
-            return Ok(());
+            return validate_created_namespace_identities(plan, supervisor_pid, runtime_pid).await;
         }
         return Err(pid_error(
             ErrorCode::PermissionDenied,
@@ -156,7 +156,7 @@ pub(super) async fn validate_runtime_pid(
     if runtime_pid == supervisor_pid {
         return Err(pid_error(
             ErrorCode::PermissionDenied,
-            "PID namespace init must differ from its authenticated supervisor",
+            "namespace init must differ from its authenticated supervisor",
         ));
     }
 
@@ -165,7 +165,7 @@ pub(super) async fn validate_runtime_pid(
         .map_err(|error| {
             pid_error(
                 ErrorCode::PermissionDenied,
-                format!("failed to inspect reported PID namespace init {runtime_pid}: {error}"),
+                format!("failed to inspect reported namespace init {runtime_pid}: {error}"),
             )
         })?;
     let identity = parse_pid_identity(&status)?;
@@ -173,59 +173,125 @@ pub(super) async fn validate_runtime_pid(
         return Err(pid_error(
             ErrorCode::PermissionDenied,
             format!(
-                "reported PID namespace init {runtime_pid} has parent {}, expected authenticated \
+                "reported namespace init {runtime_pid} has parent {}, expected authenticated \
                  supervisor {supervisor_pid}",
                 identity.parent_pid
             ),
         ));
     }
-    if identity.namespace_pids.first() != Some(&runtime_pid)
-        || identity.namespace_pids.last() != Some(&1)
-        || identity.namespace_pids.len() < 2
-    {
-        return Err(pid_error(
-            ErrorCode::PermissionDenied,
-            format!("reported PID namespace init {runtime_pid} does not map to namespace PID 1"),
-        ));
-    }
-
-    let init_namespace = tokio::fs::read_link(format!("/proc/{runtime_pid}/ns/pid"))
-        .await
-        .map_err(|error| {
-            pid_error(
+    if plan.namespaces.new_pid() {
+        if identity.namespace_pids.first() != Some(&runtime_pid)
+            || identity.namespace_pids.last() != Some(&1)
+            || identity.namespace_pids.len() < 2
+        {
+            return Err(pid_error(
                 ErrorCode::PermissionDenied,
-                format!("failed to inspect PID namespace for init {runtime_pid}: {error}"),
-            )
-        })?;
-    let runtime_namespace = tokio::fs::read_link("/proc/self/ns/pid")
-        .await
-        .map_err(|error| {
-            pid_error(
-                ErrorCode::Internal,
-                format!("failed to inspect guest-agent PID namespace: {error}"),
-            )
-        })?;
-    let intended_namespace =
-        tokio::fs::read_link(format!("/proc/{supervisor_pid}/ns/pid_for_children"))
+                format!(
+                    "reported PID namespace init {runtime_pid} does not map to namespace PID 1"
+                ),
+            ));
+        }
+
+        let init_namespace = tokio::fs::read_link(format!("/proc/{runtime_pid}/ns/pid"))
             .await
             .map_err(|error| {
                 pid_error(
                     ErrorCode::PermissionDenied,
-                    format!(
-                        "failed to inspect authenticated supervisor PID namespace target: {error}"
-                    ),
+                    format!("failed to inspect PID namespace for init {runtime_pid}: {error}"),
                 )
             })?;
-    if init_namespace == runtime_namespace || init_namespace != intended_namespace {
-        return Err(pid_error(
-            ErrorCode::PermissionDenied,
-            format!(
-                "reported init {runtime_pid} is not in the authenticated supervisor's new PID \
-                 namespace"
-            ),
-        ));
+        let runtime_namespace =
+            tokio::fs::read_link("/proc/self/ns/pid")
+                .await
+                .map_err(|error| {
+                    pid_error(
+                        ErrorCode::Internal,
+                        format!("failed to inspect guest-agent PID namespace: {error}"),
+                    )
+                })?;
+        let intended_namespace =
+            tokio::fs::read_link(format!("/proc/{supervisor_pid}/ns/pid_for_children"))
+                .await
+                .map_err(|error| {
+                    pid_error(
+                        ErrorCode::PermissionDenied,
+                        format!(
+                            "failed to inspect authenticated supervisor PID namespace target: \
+                             {error}"
+                        ),
+                    )
+                })?;
+        if init_namespace == runtime_namespace || init_namespace != intended_namespace {
+            return Err(pid_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "reported init {runtime_pid} is not in the authenticated supervisor's new PID \
+                     namespace"
+                ),
+            ));
+        }
+    }
+    validate_created_namespace_identities(plan, supervisor_pid, runtime_pid).await
+}
+
+async fn validate_created_namespace_identities(
+    plan: &InitPlan,
+    supervisor_pid: i32,
+    runtime_pid: i32,
+) -> Result<()> {
+    if plan.namespaces.new_user() {
+        validate_namespace_identity(
+            "user",
+            &format!("/proc/{supervisor_pid}/ns/user"),
+            &format!("/proc/{runtime_pid}/ns/user"),
+            "/proc/self/ns/user",
+        )
+        .await?;
+    }
+    if plan.namespaces.new_time() {
+        validate_namespace_identity(
+            "time",
+            &format!("/proc/{supervisor_pid}/ns/time_for_children"),
+            &format!("/proc/{runtime_pid}/ns/time"),
+            "/proc/self/ns/time",
+        )
+        .await?;
     }
     Ok(())
+}
+
+async fn validate_namespace_identity(
+    namespace: &str,
+    intended_path: &str,
+    actual_path: &str,
+    runtime_path: &str,
+) -> Result<()> {
+    let intended = tokio::fs::read_link(intended_path).await.map_err(|error| {
+        pid_error(
+            ErrorCode::PermissionDenied,
+            format!("failed to inspect intended {namespace} namespace: {error}"),
+        )
+    })?;
+    let actual = tokio::fs::read_link(actual_path).await.map_err(|error| {
+        pid_error(
+            ErrorCode::PermissionDenied,
+            format!("failed to inspect container init {namespace} namespace: {error}"),
+        )
+    })?;
+    let runtime = tokio::fs::read_link(runtime_path).await.map_err(|error| {
+        pid_error(
+            ErrorCode::Internal,
+            format!("failed to inspect runtime {namespace} namespace: {error}"),
+        )
+    })?;
+    if actual != intended || actual == runtime {
+        Err(pid_error(
+            ErrorCode::PermissionDenied,
+            format!("container init did not enter the authenticated new {namespace} namespace"),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn terminate_pid(pid: libc::pid_t) {

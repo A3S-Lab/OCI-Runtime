@@ -148,10 +148,11 @@ cargo build -p a3s-oci-agent -p a3s-oci-cli
 demo_root="$(mktemp -d)"
 bundle="$demo_root/bundle"
 work_parent="$demo_root/work"
-mkdir -p "$bundle/rootfs/bin" "$work_parent"
+mkdir -p "$bundle/rootfs/bin" "$bundle/rootfs/proc" "$work_parent"
 cp fixtures/native-linux/config.json "$bundle/config.json"
 cp "$(command -v busybox)" "$bundle/rootfs/bin/busybox"
 ln -s busybox "$bundle/rootfs/bin/sh"
+sudo chown -R 0:0 "$bundle/rootfs"
 
 sudo target/debug/a3s-oci native-linux-smoke \
   --agent "$PWD/target/debug/a3s-oci-agent" \
@@ -170,10 +171,11 @@ Create a second distinct bundle to run the multi-container gate:
 
 ```sh
 bundle_b="$demo_root/bundle-b"
-mkdir -p "$bundle_b/rootfs/bin"
+mkdir -p "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc"
 cp fixtures/native-linux/config.json "$bundle_b/config.json"
 cp "$(command -v busybox)" "$bundle_b/rootfs/bin/busybox"
 ln -s busybox "$bundle_b/rootfs/bin/sh"
+sudo chown -R 0:0 "$bundle_b/rootfs"
 
 sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --agent "$PWD/target/debug/a3s-oci-agent" \
@@ -314,6 +316,7 @@ bundle="$rootfs_dir/rootfs/var/lib/a3s-oci-smoke/bundle"
 mkdir -p "$bundle/rootfs"
 cp fixtures/utility-vm/config.json "$bundle/config.json"
 tar -xzf "$rootfs_archive" -C "$bundle/rootfs"
+sudo chown -R 0:0 "$bundle/rootfs"
 
 target/debug/a3s-oci oci-vm-smoke \
   --shim "$smoke_dir/a3s-oci-krun-shim" \
@@ -337,6 +340,7 @@ bundle_b="$rootfs_dir/rootfs/var/lib/a3s-oci-smoke/bundle-b"
 mkdir -p "$bundle_b/rootfs"
 cp fixtures/utility-vm/config.json "$bundle_b/config.json"
 tar -xzf "$rootfs_archive" -C "$bundle_b/rootfs"
+sudo chown -R 0:0 "$bundle_b/rootfs"
 
 target/debug/a3s-oci oci-vm-multi-container-smoke \
   --shim "$smoke_dir/a3s-oci-krun-shim" \
@@ -425,17 +429,22 @@ state transition and replay remains container-scoped.
 
 The current executor implements a reviewed bootstrap vertical slice:
 
-- new UTS, mount, IPC, network, cgroup, and PID namespaces;
+- new UTS, mount, IPC, network, cgroup, PID, user, and time namespaces;
+- parent-authenticated rootful UID/GID mappings plus read-back verification,
+  with normalized monotonic and boottime offsets applied before the first
+  time-namespace child;
 - hostname and domain name configuration;
 - recursively private mount propagation and `pivot_root`;
 - ordered existing-target OCI mounts with bind/rbind and common VFS options;
-- PID-authenticated create/start barrier;
+- PID- and namespace-authenticated create/start barrier;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
   signaling, exact normal-or-signal exit status, repeated wait, observation,
   and scoped cleanup.
 
-Unimplemented OCI fields are rejected instead of ignored. User and time
-namespaces, namespace joins, complete mount semantics, cgroup resources,
+The supported user-namespace slice is rootful: it requires both UID and GID
+mappings, coverage for every configured process ID, and an `allow` setgroups
+policy. Unimplemented OCI fields are rejected instead of ignored. Rootless
+mapping policy, namespace joins, complete mount semantics, cgroup resources,
 capabilities, hooks, seccomp, full I/O, recovery, and the remaining SDK
 operations are still release gates.
 
@@ -475,24 +484,37 @@ runtime prerequisite.
 
 ## Architecture
 
-The control plane is platform-neutral. Platform-specific isolation and native
-libraries stay behind explicit driver and shim boundaries:
+The platform-neutral control plane is independent of the host isolation
+mechanism. Native libraries and Linux-specific execution stay behind explicit
+driver, shim, and guest-agent boundaries:
 
-```mermaid
-flowchart TB
-    consumers["Consumers<br/>A3S Box · a3s-oci CLI · planned containerd shim"]
-    control["Platform-neutral control plane<br/>RuntimeClient → OciRuntimeService → HostRuntimeService<br/>validation · lifecycle · reconciliation"]
-    state[("Durable state<br/>exact bundle · generations · operation journal")]
-    selection{"RuntimeDriver<br/>explicit isolation selection"}
-    native["Native Linux<br/>NativeLinuxDriver · experimental opt-in"]
-    utility["Utility VM host · qualification path<br/>isolated a3s-oci-krun-shim → libkrun<br/>KVM · HVF · WHPX"]
-    agent["A3S Linux guest<br/>authenticated AF_VSOCK → a3s-oci-agent"]
-    executor["Shared LinuxExecutor<br/>namespaces · mounts · PID 1 · pidfd process control"]
-
-    consumers --> control --> selection
-    control <--> state
-    selection --> native --> executor
-    selection --> utility --> agent --> executor
+```text
+A3S Box / a3s-oci CLI / Rust SDK consumers
+                    │
+        RuntimeClient / OciRuntimeService
+                    │
+      in-process call or bounded local IPC
+                    │
+          OCI validation and lifecycle
+                    │
+            HostRuntimeService
+ exact bundle · generations · journal · reconciliation
+                    │
+               RuntimeDriver
+          ┌─────────┴──────────┐
+          │                    │
+ Native Linux host      Utility VM qualification
+ NativeLinuxDriver      a3s-oci-krun-shim → libkrun
+          │             KVM · HVF · WHPX
+          │                    │
+          │          authenticated guest protocol
+          │                    │
+          │              a3s-oci-agent
+          │                    │
+          └─────────┬──────────┘
+                    │
+             LinuxExecutor
+ namespaces · mounts · PID 1 · pidfds · wait · cleanup
 ```
 
 The same `LinuxExecutor` is called directly on Linux and through the guest

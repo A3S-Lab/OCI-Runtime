@@ -386,9 +386,13 @@ independent private-endpoint baseline comparison to pass.
 `oci-vm-smoke` reuses the Windows lifecycle harness without introducing a
 macOS-specific OCI profile. The checked-in
 `fixtures/utility-vm/config.json` requests new UTS, mount, IPC, network,
-cgroup, and PID namespaces. Its namespace PID 1 installs an explicit
-`SIGTERM` handler, writes the known marker only after start, and remains
-running until the host delivers the lifecycle signal.
+cgroup, PID, user, and time namespaces. The parent-authenticated user mapping
+handshake installs exact rootful UID/GID maps before the remaining namespaces
+are created, and the time offsets are written and read back before the first
+namespace child is forked. Namespace PID 1 verifies the maps and offsets,
+installs an explicit `SIGTERM` handler, writes the known marker only after
+those checks and start, and remains running until the host delivers the
+lifecycle signal.
 
 Prepare a contained bundle from the already verified Alpine archive:
 
@@ -397,6 +401,7 @@ bundle="$rootfs/var/lib/a3s-oci-smoke/bundle"
 mkdir -p "$bundle/rootfs"
 cp fixtures/utility-vm/config.json "$bundle/config.json"
 tar -xzf "$archive" -C "$bundle/rootfs"
+sudo chown -R 0:0 "$bundle/rootfs"
 
 target/debug/a3s-oci oci-vm-smoke \
   --shim "$smoke_dir/a3s-oci-krun-shim" \
@@ -404,6 +409,11 @@ target/debug/a3s-oci oci-vm-smoke \
   --bundle "$bundle" \
   --console "$asset_dir/oci-console.log"
 ```
+
+The fixture maps container ID 0 to guest ID 0. Rootfs trees extracted by a
+macOS user therefore must be changed to guest-root ownership before the VM
+starts; otherwise APFS ownership such as ID 501 remains unmapped and the
+create barrier correctly fails instead of weakening filesystem checks.
 
 The signed Apple Silicon qualification contract is
 `a3s.oci.oci-vm-smoke.v4`: bundle loading, created state, exact create replay,
@@ -464,6 +474,13 @@ Both retained init handles completed independently, the observed container
 PIDs were 205 and 207, the host descriptor inventory returned from 10 to 10,
 and the endpoint, both workload markers, shim, VM worker, and guest runtime
 root were removed.
+
+The rootful user/time namespace requalification used the 8,618,816-byte static
+arm64 agent with SHA-256
+`4daaad94dd7166b15f6efbc4aae670897331e1dc58d681b32382dc98f5a90148`.
+The fixed lifecycle, two-container lifecycle, and all three no-delete cleanup
+phases passed on Apple Silicon HVF only after the workload verified its exact
+UID/GID maps and monotonic/boottime offsets.
 
 ## Fault-injected shutdown cleanup
 

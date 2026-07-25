@@ -11,7 +11,19 @@ use a3s_oci_core::{
 const KVM_DEVICE: &str = "/dev/kvm";
 const KVM_API_VERSION: i32 = 12;
 const KVM_GET_API_VERSION: libc::c_ulong = 0xAE00;
-const REQUIRED_NAMESPACE_FILES: [&str; 7] = ["cgroup", "ipc", "mnt", "net", "pid", "user", "uts"];
+const APPARMOR_USER_NAMESPACE_POLICY: &str =
+    "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
+const REQUIRED_NAMESPACE_FILES: [&str; 9] = [
+    "cgroup",
+    "ipc",
+    "mnt",
+    "net",
+    "pid",
+    "time",
+    "time_for_children",
+    "user",
+    "uts",
+];
 
 #[derive(Debug)]
 struct NativeLinuxObservation {
@@ -19,6 +31,7 @@ struct NativeLinuxObservation {
     cgroup_v2: bool,
     pidfd_signaling: bool,
     unprivileged_user_namespaces: &'static str,
+    apparmor_user_namespace_restriction: &'static str,
     reason: Option<String>,
 }
 
@@ -66,6 +79,7 @@ fn observe_native_linux() -> NativeLinuxObservation {
         cgroup_v2,
         pidfd_signaling,
         unprivileged_user_namespaces: observe_unprivileged_user_namespaces(),
+        apparmor_user_namespace_restriction: observe_apparmor_user_namespace_restriction(),
         reason,
     }
 }
@@ -76,6 +90,16 @@ fn observe_unprivileged_user_namespaces() -> &'static str {
         Ok(value) if value.trim() == "0" => "disabled",
         Ok(_) => "unknown",
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => "kernel-policy-implicit",
+        Err(_) => "unavailable",
+    }
+}
+
+fn observe_apparmor_user_namespace_restriction() -> &'static str {
+    match fs::read_to_string(APPARMOR_USER_NAMESPACE_POLICY) {
+        Ok(value) if value.trim() == "1" => "enabled",
+        Ok(value) if value.trim() == "0" => "disabled",
+        Ok(_) => "unknown",
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "not-present",
         Err(_) => "unavailable",
     }
 }
@@ -94,6 +118,10 @@ fn native_capability(observation: NativeLinuxObservation) -> DriverCapability {
     evidence.insert(
         "unprivileged_user_namespaces".to_string(),
         observation.unprivileged_user_namespaces.to_string(),
+    );
+    evidence.insert(
+        "apparmor_restrict_unprivileged_userns".to_string(),
+        observation.apparmor_user_namespace_restriction.to_string(),
     );
 
     DriverCapability {
@@ -231,6 +259,7 @@ mod tests {
             cgroup_v2: true,
             pidfd_signaling: true,
             unprivileged_user_namespaces: "enabled",
+            apparmor_user_namespace_restriction: "disabled",
             reason: None,
         });
 
@@ -240,6 +269,10 @@ mod tests {
         assert_eq!(
             capability.isolation_classes,
             [IsolationClass::SharedHostKernel]
+        );
+        assert_eq!(
+            capability.evidence["apparmor_restrict_unprivileged_userns"],
+            "disabled"
         );
         assert!(!capability.can_launch());
     }
@@ -251,6 +284,7 @@ mod tests {
             cgroup_v2: false,
             pidfd_signaling: true,
             unprivileged_user_namespaces: "disabled",
+            apparmor_user_namespace_restriction: "enabled",
             reason: Some("cgroup v2 is unavailable".to_string()),
         });
 
@@ -258,6 +292,10 @@ mod tests {
         assert_eq!(
             capability.evidence["unprivileged_user_namespaces"],
             "disabled"
+        );
+        assert_eq!(
+            capability.evidence["apparmor_restrict_unprivileged_userns"],
+            "enabled"
         );
         assert!(!capability.can_launch());
     }
@@ -269,6 +307,7 @@ mod tests {
             cgroup_v2: true,
             pidfd_signaling: false,
             unprivileged_user_namespaces: "enabled",
+            apparmor_user_namespace_restriction: "not-present",
             reason: Some("pidfd signaling is unavailable".to_string()),
         });
 

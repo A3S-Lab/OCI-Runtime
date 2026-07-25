@@ -26,6 +26,8 @@ The native probe performs read-only inspection of:
 - `/proc/self/ns/mnt`;
 - `/proc/self/ns/net`;
 - `/proc/self/ns/pid`;
+- `/proc/self/ns/time`;
+- `/proc/self/ns/time_for_children`;
 - `/proc/self/ns/user`;
 - `/proc/self/ns/uts`;
 - `/sys/fs/cgroup/cgroup.controllers`.
@@ -39,6 +41,11 @@ result.
 It also records `/proc/sys/kernel/unprivileged_userns_clone` when that
 distribution-specific policy file exists. The policy is evidence for future
 rootless execution; it is not required for rootful host availability.
+On kernels that expose
+`/proc/sys/kernel/apparmor_restrict_unprivileged_userns`, the probe reports the
+setting as `apparmor_restrict_unprivileged_userns`. This is diagnostic evidence:
+an AppArmor or other LSM policy can still reject a requested user-namespace
+mount after the read-only baseline probe succeeds.
 
 The native probe never:
 
@@ -91,7 +98,9 @@ following:
    state;
 4. the workload marker is absent before start;
 5. retrying create replays its exact result;
-6. start releases the prepared init and the marker is observed;
+6. start releases the prepared init; the workload verifies exact rootful
+   UID/GID maps plus monotonic and boottime namespace offsets before the marker
+   is observed;
 7. a 50-millisecond wait returns `DeadlineExceeded` while the init process is
    still running;
 8. `SIGKILL` reaches the namespace PID 1 through its retained pidfd, and
@@ -114,6 +123,14 @@ that path, which is present but unusable as a KVM device. The script validates
 the corresponding `kvm_device_present` report field and restores any original
 device after the test.
 
+The fixture is created beneath a private `/var/tmp` directory whose complete
+ancestor chain is searchable by the mapped host root identity. This is required
+after entering the child user namespace: its capabilities no longer bypass
+mode bits owned by the initial user namespace. The script does not weaken
+AppArmor or another host security policy. A production rootfs must likewise be
+reachable by its configured host mappings; an inaccessible ancestor or an LSM
+denial fails the create operation.
+
 Run the same gate on a supported Ubuntu host:
 
 ```sh
@@ -121,8 +138,9 @@ bash .github/scripts/native-linux-smoke.sh
 ```
 
 The script installs `busybox-static` and `jq`, builds the matching
-`a3s-oci-agent` and CLI binaries, constructs the checked-in fixture, and
-executes both KVM-independent cases.
+`a3s-oci-agent` and CLI binaries, constructs the checked-in fixture with a
+root-owned, searchable rootfs and `/proc` mount target, executes both
+KVM-independent cases, and removes its qualification directory on exit.
 
 ## Multi-container generation gate
 
@@ -194,8 +212,9 @@ every command.
 This evidence proves one rootful bootstrap profile, not general OCI support.
 The default driver must remain `probe-only` until at least the following pass:
 
-- rootless lifecycle using user namespaces and UID/GID mappings;
-- namespace joins, time namespaces, and security-negative cases;
+- rootless lifecycle using subordinate UID/GID mappings and the
+  `setgroups=deny` flow;
+- namespace joins and lifecycle-level namespace security-negative cases;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
 - namespace-internal init supervision and orphan/zombie reaping, exec,

@@ -128,14 +128,19 @@ checks its hostname. When requested, the same create barrier also covers a new
 mount namespace, recursively private propagation, a self-bound rootfs, and
 `pivot_root`. Ordered existing-target mount entries run before that pivot,
 including relative bundle bind sources, common VFS flags, propagation, and
-bounded filesystem-specific data. Requested IPC, network, cgroup, and PID
-namespace setup is atomic with UTS and mount isolation. For a new PID
+bounded filesystem-specific data. Requested IPC, network, cgroup, PID, and
+time namespace setup follows the authenticated user-namespace mapping barrier
+and is atomic with UTS and mount isolation. The parent accepts one mapping
+request only from the already verified wrapper PID, installs and reads back
+exact UID/GID maps, then acknowledges the child. The wrapper writes and
+verifies monotonic/boottime offsets before its first child. For a new PID
 namespace, the container init runs as namespace PID 1 while the guest agent
 authenticates and reports its host-visible PID. Before returning created state,
 the guest opens a pidfd for that exact process; lifecycle and cleanup signals
 use the retained descriptor rather than resolving the numeric PID again. The
 host verifies marker removal and that VM shutdown leaves no new guest-agent
-runtime directory.
+runtime directory. Native Linux and macOS HVF retain this user/time evidence;
+the historical WHPX qualification predates it.
 
 The macOS `oci-vm-multi-container-smoke` path keeps two exact targets live on
 the same connection. It proves distinct runtime slots and PIDs, simultaneous
@@ -152,17 +157,21 @@ kill request and never sends delete. Session EOF must still make the agent call
 executor root, and exit successfully. The host retains the exact requested and
 injected boundary together with guest-runtime and platform cleanup evidence.
 
-The private parent/init control channel reports either readiness with a
-positive runtime-visible PID or a bounded, typed SDK error. The parent validates
-the kernel-reported supervisor peer PID before reading that outcome. For PID
-isolation it additionally verifies the reported init's parent, `NSpid` mapping,
-and namespace links before exposing the created state. Create-time namespace
-and rootfs failures therefore retain their exact error class and context
-without trusting a pathname socket.
+The private parent/init control channel reports a user-mapping request,
+readiness with a positive runtime-visible PID, or a bounded typed SDK error.
+The parent validates the kernel-reported supervisor peer PID before reading
+any outcome. It permits the mapping request only when the exact plan requires
+one, acknowledges it only after verified writes, and rejects a bypass or
+repeat. For PID isolation it additionally verifies the reported init's parent,
+`NSpid` mapping, and namespace links; user and time namespace identities are
+also compared with the authenticated supervisor's intended links before
+exposing the created state. Create-time namespace and rootfs failures
+therefore retain their exact error class and context without trusting a
+pathname socket.
 
 This is the first Linux executor vertical slice, not complete OCI
-enforcement. A pinned immutable system image, complete process I/O, remaining
-user/time namespace creation, namespace joins, advanced mount semantics,
-resources, hooks, exhaustive recovery injection, negative isolation cases, and
-full lifecycle evidence remain required before the WHPX driver can advance
-beyond `probe-only`.
+enforcement. A pinned immutable system image, complete process I/O, rootless
+ID mapping, namespace joins, advanced mount semantics, resources, hooks,
+exhaustive recovery injection, negative isolation cases, and full
+platform-specific lifecycle evidence remain required before a utility-VM
+driver can advance beyond `probe-only`.

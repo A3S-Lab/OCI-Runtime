@@ -13,7 +13,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
-use super::control::{read_outcome, InitOutcome, START_BYTE};
+use super::control::{acknowledge_user_mapping, read_outcome, InitOutcome, START_BYTE};
+use super::namespace;
 use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
@@ -131,28 +132,71 @@ impl PreparedProcess {
                 ),
             ));
         }
-        let runtime_pid = match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
-            Ok(Ok(InitOutcome::Ready { pid: runtime_pid })) => {
-                if let Err(error) = pid::validate_runtime_pid(plan, pid, runtime_pid).await {
+        let mut user_mapping_installed = false;
+        let runtime_pid = loop {
+            match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
+                Ok(Ok(InitOutcome::UserMappingRequired)) => {
+                    if !plan.namespaces.new_user() || user_mapping_installed {
+                        terminate(&mut child).await;
+                        return Err(process_error(
+                            ErrorCode::PermissionDenied,
+                            "container init sent an unexpected user namespace mapping request",
+                        ));
+                    }
+                    match timeout(
+                        INIT_READY_TIMEOUT,
+                        namespace::install_user_mappings(&plan.namespaces, pid),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            terminate(&mut child).await;
+                            return Err(error);
+                        }
+                        Err(_) => {
+                            terminate(&mut child).await;
+                            return Err(process_error(
+                                ErrorCode::DeadlineExceeded,
+                                "timed out installing container user namespace mappings",
+                            ));
+                        }
+                    }
+                    if let Err(error) = acknowledge_user_mapping(&mut control).await {
+                        terminate(&mut child).await;
+                        return Err(error);
+                    }
+                    user_mapping_installed = true;
+                }
+                Ok(Ok(InitOutcome::Ready { pid: runtime_pid })) => {
+                    if plan.namespaces.new_user() && !user_mapping_installed {
+                        terminate(&mut child).await;
+                        return Err(process_error(
+                            ErrorCode::PermissionDenied,
+                            "container init bypassed required user namespace mappings",
+                        ));
+                    }
+                    if let Err(error) = pid::validate_runtime_pid(plan, pid, runtime_pid).await {
+                        terminate(&mut child).await;
+                        return Err(error);
+                    }
+                    break runtime_pid;
+                }
+                Ok(Ok(InitOutcome::Rejected(error))) => {
                     terminate(&mut child).await;
                     return Err(error);
                 }
-                runtime_pid
-            }
-            Ok(Ok(InitOutcome::Rejected(error))) => {
-                terminate(&mut child).await;
-                return Err(error);
-            }
-            Ok(Err(error)) => {
-                terminate(&mut child).await;
-                return Err(error);
-            }
-            Err(_) => {
-                terminate(&mut child).await;
-                return Err(process_error(
-                    ErrorCode::DeadlineExceeded,
-                    "timed out reading prepared container init readiness",
-                ));
+                Ok(Err(error)) => {
+                    terminate(&mut child).await;
+                    return Err(error);
+                }
+                Err(_) => {
+                    terminate(&mut child).await;
+                    return Err(process_error(
+                        ErrorCode::DeadlineExceeded,
+                        "timed out reading prepared container init readiness",
+                    ));
+                }
             }
         };
         let pidfd = match PidFd::open(runtime_pid) {

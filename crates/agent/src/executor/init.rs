@@ -10,6 +10,7 @@ use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CO
 
 use super::control::{write_ready, write_rejection, START_BYTE};
 use super::mount;
+use super::namespace;
 use super::pid::{self, ForkRole};
 use super::plan::InitPlan;
 use super::rootfs;
@@ -61,11 +62,11 @@ fn run_container_init(
             Ok(prepared) => prepared,
             Err(error) => return reject_before_ready(&mut control, error),
         };
-    if let Err(error) = unshare_namespaces(&plan) {
+    if let Err(error) = namespace::enter_new_namespaces(&plan.namespaces, &mut control) {
         return reject_before_ready(&mut control, error);
     }
-    if plan.new_pid_namespace {
-        return run_pid_namespace_init(&plan, &canonical_bundle, &rootfs, control);
+    if plan.namespaces.requires_child_process() {
+        return run_namespaced_init(&plan, &canonical_bundle, &rootfs, control);
     }
     if let Err(error) = prepare_create_environment(&plan, &canonical_bundle, &rootfs) {
         return reject_before_ready(&mut control, error);
@@ -95,13 +96,13 @@ fn wait_for_start_and_exec(plan: &InitPlan, rootfs: &Path, mut control: UnixStre
     enter_rootfs_and_exec(plan, rootfs)
 }
 
-fn run_pid_namespace_init(
+fn run_namespaced_init(
     plan: &InitPlan,
     bundle_directory: &Path,
     rootfs: &Path,
     mut control: UnixStream,
 ) -> Result<()> {
-    match pid::fork_namespace_init() {
+    match pid::fork_namespaced_init() {
         Ok(ForkRole::Supervisor { child_pid }) => {
             drop(control);
             let outcome = pid::wait_for_child(child_pid)?;
@@ -166,43 +167,13 @@ fn prepare_container_init(
     Ok((plan, canonical_bundle, rootfs))
 }
 
-fn unshare_namespaces(plan: &InitPlan) -> Result<()> {
-    let mut namespace_flags = 0;
-    if plan.new_uts_namespace {
-        namespace_flags |= libc::CLONE_NEWUTS;
-    }
-    if plan.new_mount_namespace {
-        namespace_flags |= libc::CLONE_NEWNS;
-    }
-    if plan.new_ipc_namespace {
-        namespace_flags |= libc::CLONE_NEWIPC;
-    }
-    if plan.new_network_namespace {
-        namespace_flags |= libc::CLONE_NEWNET;
-    }
-    if plan.new_cgroup_namespace {
-        namespace_flags |= libc::CLONE_NEWCGROUP;
-    }
-    if plan.new_pid_namespace {
-        namespace_flags |= libc::CLONE_NEWPID;
-    }
-    if namespace_flags != 0 {
-        // SAFETY: `unshare` has no pointer preconditions. This dedicated
-        // wrapper is single-threaded before it reports the created barrier.
-        if unsafe { libc::unshare(namespace_flags) } != 0 {
-            return Err(last_os_error("create Linux OCI namespaces"));
-        }
-    }
-    Ok(())
-}
-
 fn prepare_create_environment(
     plan: &InitPlan,
     bundle_directory: &Path,
     rootfs: &Path,
 ) -> Result<()> {
     if let Some(hostname) = &plan.hostname {
-        if !plan.new_uts_namespace {
+        if !plan.namespaces.new_uts() {
             return Err(init_error(
                 ErrorCode::FailedPrecondition,
                 "refusing to change hostname outside a new UTS namespace",
@@ -215,7 +186,7 @@ fn prepare_create_environment(
         }
     }
     if let Some(domainname) = &plan.domainname {
-        if !plan.new_uts_namespace {
+        if !plan.namespaces.new_uts() {
             return Err(init_error(
                 ErrorCode::FailedPrecondition,
                 "refusing to change domainname outside a new UTS namespace",
@@ -230,7 +201,7 @@ fn prepare_create_environment(
         }
     }
     verify_uts_names(plan)?;
-    if plan.new_mount_namespace {
+    if plan.namespaces.new_mount() {
         rootfs::prepare_pivot(rootfs)?;
         mount::apply_all(&plan.mounts, bundle_directory, rootfs)?;
         rootfs::pivot_root(rootfs)?;
@@ -351,7 +322,7 @@ fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &Path) -> Result<()> {
         .collect::<Vec<_>>();
     environment_pointers.push(std::ptr::null());
 
-    if !plan.new_mount_namespace {
+    if !plan.namespaces.new_mount() {
         rootfs::chroot(rootfs)?;
     }
 

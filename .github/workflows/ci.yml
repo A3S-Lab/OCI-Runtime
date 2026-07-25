@@ -325,6 +325,7 @@ jobs:
           mkdir -p "$container_rootfs"
           cp fixtures/utility-vm/config.json "$bundle_dir/config.json"
           tar -xzf "$rootfs_archive" -C "$container_rootfs"
+          sudo chown -R 0:0 "$container_rootfs"
 
           endpoint_baseline="$(
             find /private/tmp -maxdepth 1 \
@@ -468,6 +469,7 @@ jobs:
           mkdir -p "$bundle_b/rootfs"
           cp fixtures/utility-vm/config.json "$bundle_b/config.json"
           tar -xzf "$rootfs_archive" -C "$bundle_b/rootfs"
+          sudo chown -R 0:0 "$bundle_b/rootfs"
 
           endpoint_baseline="$(
             find /private/tmp -maxdepth 1 \

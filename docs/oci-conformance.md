@@ -76,10 +76,10 @@ does not make it a native Windows container.
 | Complete `Spec` object | Yes | Official schema, version range, unknown fields, initial semantics | No | No |
 | Common root, mounts, process, hostname, annotations | Yes | Initial cross-field rules; normative manifest pending | Bootstrap slice applies writable rootfs, ordered existing-target mounts, hostname/domainname, credentials, and process launch; advanced mount semantics remain rejected | No |
 | POSIX hooks | Yes | Initial path and environment rules | No | No |
-| Linux namespaces and ID mappings | Yes | Initial relationship and range rules | Bootstrap slice creates new UTS, mount, IPC, network, cgroup, and PID namespaces; user/time creation, joins, and ID mappings remain rejected | No |
+| Linux namespaces and ID mappings | Yes | Initial relationship and range rules | Bootstrap slice creates new UTS, mount, IPC, network, cgroup, PID, user, and time namespaces and installs verified rootful UID/GID maps; joins and rootless mapping policy remain rejected | No |
 | Linux devices, seccomp, capabilities, LSM, sysctl | Yes | Initial path, seccomp, and namespaced-sysctl rules; capability/LSM rules pending | No | No |
 | Linux cgroup resources | Yes | Initial CPU, block I/O, and RDMA relationships | No | No |
-| Linux Intel RDT, memory policy, time offsets, net devices | Yes | Initial cross-field and path rules | No | No |
+| Linux Intel RDT, memory policy, time offsets, net devices | Yes | Initial cross-field and path rules | Bootstrap slice applies and reads back normalized monotonic/boottime offsets; other fields remain unenforced | No |
 | VM hypervisor, kernel, initrd, image, and parameters | Yes | Initial absolute-path and NUL rules; driver policy pending | No | No |
 | OCI `State` | Yes | Official schema, typed transitions, and generation fences | Durable core `creating`/`created`/`running`/`stopped` records | No |
 | OCI `Features` | Yes | Official schema, version and operation separation | Default service is feature-only; configured service reports only its implemented operations | No |

@@ -56,12 +56,14 @@ fn accepts_the_exact_bootstrap_profile() {
     assert_eq!(plan.args[0], "/bin/sh");
     assert_eq!(plan.umask, Some(0o22));
     assert!(plan.no_new_privileges);
-    assert!(!plan.new_uts_namespace);
-    assert!(!plan.new_mount_namespace);
-    assert!(!plan.new_ipc_namespace);
-    assert!(!plan.new_network_namespace);
-    assert!(!plan.new_cgroup_namespace);
-    assert!(!plan.new_pid_namespace);
+    assert!(!plan.namespaces.new_uts());
+    assert!(!plan.namespaces.new_mount());
+    assert!(!plan.namespaces.new_ipc());
+    assert!(!plan.namespaces.new_network());
+    assert!(!plan.namespaces.new_cgroup());
+    assert!(!plan.namespaces.new_pid());
+    assert!(!plan.namespaces.new_user());
+    assert!(!plan.namespaces.new_time());
 }
 
 #[test]
@@ -101,8 +103,8 @@ fn rejects_non_null_process_io() {
 fn accepts_a_new_uts_namespace_and_bounded_uts_names() {
     let plan =
         InitPlan::from_bundle(&bundle(UTS_CONFIG), &null_io()).expect("UTS namespace profile");
-    assert!(plan.new_uts_namespace);
-    assert!(!plan.new_mount_namespace);
+    assert!(plan.namespaces.new_uts());
+    assert!(!plan.namespaces.new_mount());
     assert_eq!(plan.hostname.as_deref(), Some("a3s-smoke"));
     assert_eq!(plan.domainname.as_deref(), Some("runtime.test"));
 
@@ -125,8 +127,8 @@ fn accepts_new_uts_and_mount_namespaces_in_any_order() {
     let mount_only = serde_json::to_string(&mount_only).expect("encode mount-only configuration");
     let plan =
         InitPlan::from_bundle(&bundle(&mount_only), &null_io()).expect("new mount namespace");
-    assert!(!plan.new_uts_namespace);
-    assert!(plan.new_mount_namespace);
+    assert!(!plan.namespaces.new_uts());
+    assert!(plan.namespaces.new_mount());
 
     for namespaces in [
         r#"{"type": "uts"}, {"type": "mount"}"#,
@@ -135,8 +137,8 @@ fn accepts_new_uts_and_mount_namespaces_in_any_order() {
         let config = UTS_CONFIG.replace(r#"{"type": "uts"}"#, namespaces);
         let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
             .expect("new UTS and mount namespaces");
-        assert!(plan.new_uts_namespace);
-        assert!(plan.new_mount_namespace);
+        assert!(plan.namespaces.new_uts());
+        assert!(plan.namespaces.new_mount());
     }
 }
 
@@ -158,9 +160,9 @@ fn accepts_new_ipc_network_and_cgroup_namespaces_in_any_order() {
         let config = serde_json::to_string(&config).expect("encode namespace configuration");
         let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
             .expect("new IPC, network, and cgroup namespaces");
-        assert!(plan.new_ipc_namespace);
-        assert!(plan.new_network_namespace);
-        assert!(plan.new_cgroup_namespace);
+        assert!(plan.namespaces.new_ipc());
+        assert!(plan.namespaces.new_network());
+        assert!(plan.namespaces.new_cgroup());
     }
 }
 
@@ -182,10 +184,196 @@ fn accepts_a_new_pid_namespace_in_any_supported_order() {
         let config = serde_json::to_string(&config).expect("encode namespace configuration");
         let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
             .expect("new PID namespace with supported peers");
-        assert!(plan.new_pid_namespace);
-        assert!(plan.new_uts_namespace);
-        assert!(plan.new_mount_namespace);
+        assert!(plan.namespaces.new_pid());
+        assert!(plan.namespaces.new_uts());
+        assert!(plan.namespaces.new_mount());
     }
+}
+
+#[test]
+fn accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    config["linux"] = serde_json::json!({
+        "namespaces": [
+            {"type": "user"},
+            {"type": "time"},
+            {"type": "pid"}
+        ],
+        "uidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ],
+        "timeOffsets": {
+            "monotonic": {"secs": 3600, "nanosecs": 7},
+            "boottime": {"secs": 7200, "nanosecs": 11}
+        }
+    });
+    let config = serde_json::to_string(&config).expect("encode namespace configuration");
+
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("new user and time namespace profile");
+    assert!(plan.namespaces.new_user());
+    assert!(plan.namespaces.new_time());
+    assert!(plan.namespaces.requires_child_process());
+    assert_eq!(plan.namespaces.uid_mappings().len(), 1);
+    assert_eq!(plan.namespaces.gid_mappings().len(), 1);
+    assert_eq!(
+        plan.namespaces.monotonic_offset(),
+        Some(super::namespace::TimeOffset {
+            secs: 3600,
+            nanosecs: 7,
+        })
+    );
+    assert_eq!(
+        plan.namespaces.boottime_offset(),
+        Some(super::namespace::TimeOffset {
+            secs: 7200,
+            nanosecs: 11,
+        })
+    );
+}
+
+#[test]
+fn accepts_the_last_uint32_id_in_user_namespace_mappings() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    config["process"]["user"]["uid"] = serde_json::json!(u32::MAX);
+    config["process"]["user"]["gid"] = serde_json::json!(u32::MAX);
+    config["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": [
+            {"containerID": u32::MAX, "hostID": u32::MAX, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": u32::MAX, "hostID": u32::MAX, "size": 1}
+        ]
+    });
+    let config = serde_json::to_string(&config).expect("encode maximum-ID configuration");
+
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("the final uint32 ID is a one-element valid range");
+    assert!(plan.namespaces.new_user());
+    assert!(!plan.namespaces.requires_child_process());
+    assert_eq!(plan.namespaces.uid_mappings()[0].container_id, u32::MAX);
+    assert_eq!(plan.namespaces.uid_mappings()[0].host_id, u32::MAX);
+}
+
+#[test]
+fn rejects_incomplete_or_unusable_user_namespace_mappings() {
+    let mut missing_gid: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    missing_gid["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ]
+    });
+    let missing_gid =
+        serde_json::to_string(&missing_gid).expect("encode incomplete mapping configuration");
+    let error = InitPlan::from_bundle(&bundle(&missing_gid), &null_io())
+        .expect_err("executor requires both mapping classes");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("both UID and GID mappings"));
+
+    let mut unmapped_uid: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    unmapped_uid["process"]["user"]["uid"] = serde_json::json!(7);
+    unmapped_uid["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ]
+    });
+    let unmapped_uid =
+        serde_json::to_string(&unmapped_uid).expect("encode unmapped UID configuration");
+    let error = InitPlan::from_bundle(&bundle(&unmapped_uid), &null_io())
+        .expect_err("process UID must be mapped");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("process.user.uid value 7"));
+
+    let mut unmapped_gid: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    unmapped_gid["process"]["user"]["gid"] = serde_json::json!(7);
+    unmapped_gid["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ]
+    });
+    let unmapped_gid =
+        serde_json::to_string(&unmapped_gid).expect("encode unmapped GID configuration");
+    let error = InitPlan::from_bundle(&bundle(&unmapped_gid), &null_io())
+        .expect_err("process GID must be mapped");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("process.user.gid value 7"));
+
+    let mut unmapped_additional_gid: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    unmapped_additional_gid["process"]["user"]["additionalGids"] = serde_json::json!([7]);
+    unmapped_additional_gid["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": 0, "hostID": 1000, "size": 1}
+        ]
+    });
+    let unmapped_additional_gid = serde_json::to_string(&unmapped_additional_gid)
+        .expect("encode unmapped supplementary GID configuration");
+    let error = InitPlan::from_bundle(&bundle(&unmapped_additional_gid), &null_io())
+        .expect_err("supplementary GIDs must be mapped");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error
+        .message
+        .contains("process.user.additionalGids[0] value 7"));
+}
+
+#[test]
+fn rejects_noncanonical_time_namespace_nanoseconds() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    config["linux"] = serde_json::json!({
+        "namespaces": [{"type": "time"}],
+        "timeOffsets": {
+            "monotonic": {"secs": 0, "nanosecs": 1000000000}
+        }
+    });
+    let config = serde_json::to_string(&config).expect("encode time offset configuration");
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("nanoseconds must be normalized");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("nanosecs"));
+}
+
+#[test]
+fn bounds_user_namespace_mapping_count() {
+    let mappings = (0..=340_u32)
+        .map(|id| serde_json::json!({"containerID": id, "hostID": id, "size": 1}))
+        .collect::<Vec<_>>();
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode namespace configuration");
+    config["linux"] = serde_json::json!({
+        "namespaces": [{"type": "user"}],
+        "uidMappings": mappings,
+        "gidMappings": [
+            {"containerID": 0, "hostID": 0, "size": 1}
+        ]
+    });
+    let config = serde_json::to_string(&config).expect("encode excessive mapping configuration");
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("kernel mapping count must remain bounded");
+    assert_eq!(error.code, ErrorCode::ResourceExhausted);
+    assert!(error.message.contains("maximum is 340"));
 }
 
 #[test]
@@ -213,36 +401,7 @@ fn rejects_uts_names_outside_the_supported_profile() {
 }
 
 #[test]
-fn rejects_unimplemented_or_joined_namespaces() {
-    let mut user: serde_json::Value =
-        serde_json::from_str(UTS_CONFIG).expect("decode test configuration");
-    let root = user
-        .as_object_mut()
-        .expect("test configuration must be an object");
-    root.remove("hostname");
-    root.remove("domainname");
-    user["linux"]["namespaces"][0]["type"] = serde_json::Value::String("user".into());
-    user["linux"]["uidMappings"] = serde_json::json!([{"containerID": 0, "hostID": 0, "size": 1}]);
-    user["linux"]["gidMappings"] = serde_json::json!([{"containerID": 0, "hostID": 0, "size": 1}]);
-    let user = serde_json::to_string(&user).expect("encode user namespace test");
-    let error = InitPlan::from_bundle(&bundle(&user), &null_io())
-        .expect_err("single user namespace unsupported");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("namespaces[0].type"));
-
-    let mut multiple: serde_json::Value =
-        serde_json::from_str(UTS_CONFIG).expect("decode mixed namespace configuration");
-    multiple["linux"] = serde_json::json!({
-        "namespaces": [{"type": "uts"}, {"type": "user"}],
-        "uidMappings": [{"containerID": 0, "hostID": 0, "size": 1}],
-        "gidMappings": [{"containerID": 0, "hostID": 0, "size": 1}]
-    });
-    let multiple = serde_json::to_string(&multiple).expect("encode mixed namespace configuration");
-    let error = InitPlan::from_bundle(&bundle(&multiple), &null_io())
-        .expect_err("mixed UTS and user namespaces unsupported");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("linux.namespaces"));
-
+fn rejects_joined_namespaces() {
     let joined = UTS_CONFIG.replace(
         r#""type": "uts""#,
         r#""type": "uts", "path": "/proc/1/ns/uts""#,

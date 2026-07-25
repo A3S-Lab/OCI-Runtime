@@ -2,9 +2,45 @@
 
 set -euo pipefail
 
-runner_temp="${RUNNER_TEMP:?RUNNER_TEMP must identify the CI job temporary directory}"
-run_id="${GITHUB_RUN_ID:?GITHUB_RUN_ID must identify the CI run}"
-run_attempt="${GITHUB_RUN_ATTEMPT:?GITHUB_RUN_ATTEMPT must identify the CI attempt}"
+qualification_root=""
+saved_kvm="/dev/a3s-oci-kvm-$$"
+kvm_original_moved=false
+kvm_test_directory_created=false
+
+restore_host() {
+  local command_status=$?
+  local cleanup_status=0
+  local status
+  trap - EXIT
+  set +e
+
+  if [[ "$kvm_test_directory_created" == true && -d /dev/kvm ]]; then
+    sudo rmdir /dev/kvm
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ -n "$qualification_root" && -d "$qualification_root" ]]; then
+    sudo rm -rf --one-file-system "$qualification_root"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ "$kvm_original_moved" == true ]]; then
+    sudo mv "$saved_kvm" /dev/kvm
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if ((command_status != 0)); then
+    exit "$command_status"
+  fi
+  exit "$cleanup_status"
+}
+trap restore_host EXIT
 
 sudo apt-get update
 sudo apt-get install --yes busybox-static jq
@@ -23,24 +59,83 @@ jq --exit-status \
    )' \
   <<<"$features" >/dev/null
 
-bundle="$runner_temp/a3s-native-bundle"
-bundle_b="$runner_temp/a3s-native-bundle-b"
-work_parent="$runner_temp/a3s-native-work"
-mkdir -p "$bundle/rootfs/bin" "$bundle_b/rootfs/bin" "$work_parent"
+qualification_root="$(mktemp -d /var/tmp/a3s-oci-native.XXXXXXXX)"
+bundle="$qualification_root/bundle"
+bundle_b="$qualification_root/bundle-b"
+work_parent="$qualification_root/work"
+mkdir -p \
+  "$bundle/rootfs/bin" "$bundle/rootfs/proc" \
+  "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
+  "$work_parent"
 for candidate in "$bundle" "$bundle_b"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
 done
+sudo chown -R 0:0 "$qualification_root"
+sudo chmod 0755 "$qualification_root"
+
+report_native_failure() {
+  local rootfs="$1"
+  local status
+
+  printf '%s\n' 'Native Linux host diagnostics:'
+  uname -a || true
+  printf 'LSM stack: '
+  cat /sys/kernel/security/lsm 2>/dev/null || printf '%s\n' unavailable
+  printf 'Runner profile: '
+  cat /proc/self/attr/current 2>/dev/null || printf '%s\n' unavailable
+  findmnt --target / --output TARGET,SOURCE,FSTYPE,OPTIONS --noheadings || true
+  findmnt --target "$rootfs" \
+    --output TARGET,SOURCE,FSTYPE,OPTIONS --noheadings || true
+  namei --long "$rootfs" || true
+  sudo sh -c \
+    'grep -E "^(NoNewPrivs|Seccomp|Cap(Inh|Prm|Eff|Bnd|Amb)):" /proc/self/status' ||
+    true
+  if sudo timeout 10s unshare \
+      --user --map-root-user --mount --fork -- \
+      sh -c \
+        'mount --make-rprivate / && mount --rbind "$1" "$1"' \
+        sh "$rootfs"; then
+    printf '%s\n' 'Combined user/mount namespace rbind probe: succeeded'
+  else
+    status=$?
+    printf 'Combined user/mount namespace rbind probe: failed (%s)\n' "$status"
+  fi
+
+  if sudo timeout 10s unshare \
+      --user --map-root-user --fork -- \
+      unshare --mount --fork -- \
+      sh -c \
+        'mount --make-rprivate / && mount --rbind "$1" "$1"' \
+        sh "$rootfs"; then
+    printf '%s\n' 'Sequential user-then-mount namespace rbind probe: succeeded'
+  else
+    status=$?
+    printf 'Sequential user-then-mount namespace rbind probe: failed (%s)\n' \
+      "$status"
+  fi
+
+  sudo dmesg --ctime 2>/dev/null | tail -n 120 || true
+}
 
 run_smoke() {
   local expected_kvm_present="$1"
   local output
-  output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
-    --agent "$PWD/target/debug/a3s-oci-agent" \
-    --bundle "$bundle" \
-    --work-parent "$work_parent")"
+  local status
+  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle "$bundle" \
+      --work-parent "$work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
   printf '%s\n' "$output"
+  if ((status != 0)); then
+    report_native_failure "$bundle/rootfs"
+    return "$status"
+  fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
     '.schema_version == "a3s.oci.native-linux-smoke.v2"
@@ -76,13 +171,22 @@ run_smoke() {
 run_multi_container_smoke() {
   local expected_kvm_present="$1"
   local output
-  output="$(sudo "$PWD/target/debug/a3s-oci" \
-    native-linux-multi-container-smoke \
-    --agent "$PWD/target/debug/a3s-oci-agent" \
-    --bundle-a "$bundle" \
-    --bundle-b "$bundle_b" \
-    --work-parent "$work_parent")"
+  local status
+  if output="$(sudo "$PWD/target/debug/a3s-oci" \
+      native-linux-multi-container-smoke \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle-a "$bundle" \
+      --bundle-b "$bundle_b" \
+      --work-parent "$work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
   printf '%s\n' "$output"
+  if ((status != 0)); then
+    report_native_failure "$bundle/rootfs"
+    return "$status"
+  fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
     '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v2"
@@ -144,13 +248,22 @@ run_multi_container_smoke() {
 run_fault_cleanup() {
   local phase
   local output
+  local status
   for phase in after-create after-start after-kill; do
-    output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-fault-cleanup \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
-      --bundle "$bundle" \
-      --work-parent "$work_parent" \
-      --fault-after "$phase")"
+    if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-fault-cleanup \
+        --agent "$PWD/target/debug/a3s-oci-agent" \
+        --bundle "$bundle" \
+        --work-parent "$work_parent" \
+        --fault-after "$phase")"; then
+      status=0
+    else
+      status=$?
+    fi
     printf '%s\n' "$output"
+    if ((status != 0)); then
+      report_native_failure "$bundle/rootfs"
+      return "$status"
+    fi
     jq --exit-status --arg phase "$phase" \
       '.schema_version == "a3s.oci.native-linux-fault-cleanup.v2"
        and .platform == "linux" and .status == "available"
@@ -188,24 +301,15 @@ run_fault_cleanup() {
   done
 }
 
-saved_kvm="/dev/a3s-oci-kvm-${run_id}-${run_attempt}"
-restore_kvm() {
-  if [[ -d /dev/kvm ]]; then
-    sudo rmdir /dev/kvm
-  fi
-  if [[ -e "$saved_kvm" || -L "$saved_kvm" ]]; then
-    sudo mv "$saved_kvm" /dev/kvm
-  fi
-}
-trap restore_kvm EXIT
-
 if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   sudo mv /dev/kvm "$saved_kvm"
+  kvm_original_moved=true
 fi
 
 run_smoke false
 run_multi_container_smoke false
 run_fault_cleanup
 sudo mkdir /dev/kvm
+kvm_test_directory_created=true
 run_smoke true
 run_multi_container_smoke true

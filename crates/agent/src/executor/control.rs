@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream as StdUnixStream;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -7,13 +7,59 @@ use tokio::net::UnixStream;
 
 pub(super) const READY_BYTE: u8 = 0xA3;
 pub(super) const START_BYTE: u8 = 0x5A;
+const USER_MAPPING_REQUIRED_BYTE: u8 = 0xB1;
+const USER_MAPPING_APPLIED_BYTE: u8 = 0xB2;
 const REJECTED_BYTE: u8 = 0xE1;
 const MAX_REJECTION_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InitOutcome {
+    UserMappingRequired,
     Ready { pid: i32 },
     Rejected(Error),
+}
+
+pub(super) fn request_user_mapping(stream: &mut StdUnixStream) -> Result<()> {
+    stream
+        .write_all(&[USER_MAPPING_REQUIRED_BYTE])
+        .map_err(|write| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to request user namespace mappings: {write}"),
+            )
+        })?;
+    let mut acknowledgement = [0_u8; 1];
+    stream.read_exact(&mut acknowledgement).map_err(|read| {
+        control_error(
+            ErrorCode::Unavailable,
+            format!("user namespace mapping acknowledgement failed: {read}"),
+        )
+    })?;
+    if acknowledgement[0] == USER_MAPPING_APPLIED_BYTE {
+        Ok(())
+    } else {
+        Err(control_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "user namespace mapping returned unknown acknowledgement byte {:#04x}",
+                acknowledgement[0]
+            ),
+        ))
+    }
+}
+
+pub(super) async fn acknowledge_user_mapping(stream: &mut UnixStream) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    stream
+        .write_all(&[USER_MAPPING_APPLIED_BYTE])
+        .await
+        .map_err(|write| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to acknowledge user namespace mappings: {write}"),
+            )
+        })
 }
 
 pub(super) fn write_ready(stream: &mut StdUnixStream, pid: i32) -> Result<()> {
@@ -80,6 +126,7 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
             )
         })?;
     match discriminator[0] {
+        USER_MAPPING_REQUIRED_BYTE => Ok(InitOutcome::UserMappingRequired),
         READY_BYTE => read_ready_pid(stream)
             .await
             .map(|pid| InitOutcome::Ready { pid }),
@@ -155,7 +202,33 @@ mod tests {
 
     use a3s_oci_sdk::{Error, ErrorCode};
 
-    use super::{read_outcome, write_ready, write_rejection, InitOutcome};
+    use super::{
+        acknowledge_user_mapping, read_outcome, request_user_mapping, write_ready, write_rejection,
+        InitOutcome,
+    };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn user_mapping_handshake_blocks_until_the_parent_acknowledges() {
+        let (mut child, parent) = StdUnixStream::pair().expect("create control socket pair");
+        parent
+            .set_nonblocking(true)
+            .expect("make control parent nonblocking");
+        let child = tokio::task::spawn_blocking(move || {
+            request_user_mapping(&mut child).expect("mapping handshake");
+        });
+        let mut parent = tokio::net::UnixStream::from_std(parent).expect("register control parent");
+
+        assert_eq!(
+            read_outcome(&mut parent)
+                .await
+                .expect("read mapping request"),
+            InitOutcome::UserMappingRequired
+        );
+        acknowledge_user_mapping(&mut parent)
+            .await
+            .expect("acknowledge mappings");
+        child.await.expect("mapping child");
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn ready_round_trip_carries_the_runtime_visible_pid() {
