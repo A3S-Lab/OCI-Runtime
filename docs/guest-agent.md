@@ -63,7 +63,9 @@ parent verifies the distinct namespace, writes each
 `/proc/<pid>/setgroups` to remain `allow`. After creating the remaining
 namespaces and verifying any time offsets, the wrapper clears inherited
 supplementary groups and switches all UID/GID slots to mapped namespace root
-before any rootfs or mount mutation. Rootless `setgroups=deny` and
+before any rootfs or mount mutation. Native x86_64 and aarch64 qualification
+uses the A3S Box mapping of container root to host UID 100000 and GID 200000
+and verifies it from inside the workload. Rootless `setgroups=deny` and
 subordinate-ID helper flows are not implemented.
 
 Before any namespace transition, the wrapper opens every join target and

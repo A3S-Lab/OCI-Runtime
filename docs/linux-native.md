@@ -147,9 +147,12 @@ namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
 again for lifecycle or cleanup signaling.
 
 GitHub Actions runs this real rootful lifecycle on x86_64 and aarch64 Ubuntu.
-Each architecture runs once with `/dev/kvm` absent and once with a directory at
-that path, which is present but unusable as a KVM device. The script validates
-the corresponding `kvm_device_present` report field and restores any original
+The checked-in fixture uses the same isolation boundary as A3S Box: container
+root maps to host UID 100000 and GID 200000, never to host root. Its workload
+reads both installed maps back before emitting the success marker. Each
+architecture runs once with `/dev/kvm` absent and once with a directory at that
+path, which is present but unusable as a KVM device. The script validates the
+corresponding `kvm_device_present` report field and restores any original
 device after the test.
 
 The fixture is created beneath a private `/var/tmp` directory whose complete
@@ -168,8 +171,9 @@ bash .github/scripts/native-linux-smoke.sh
 
 The script installs `busybox-static` and `jq`, builds the matching
 `a3s-oci-agent` and CLI binaries, constructs the checked-in fixture with a
-root-owned, searchable rootfs and `/proc` mount target, executes both
-KVM-independent cases, and removes its qualification directory on exit.
+100000:200000-owned, searchable rootfs and `/proc` mount target, checks that
+the on-disk ownership and OCI mappings match, executes both KVM-independent
+cases, and removes its qualification directory on exit.
 
 ## Multi-container generation gate
 

@@ -75,8 +75,18 @@ done
 jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
   "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
 mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
-sudo chown -R 0:0 "$qualification_root"
+for candidate in "$bundle" "$bundle_b"; do
+  jq --exit-status \
+    '.linux.uidMappings
+         == [{"containerID": 0, "hostID": 100000, "size": 65536}]
+     and .linux.gidMappings
+         == [{"containerID": 0, "hostID": 200000, "size": 65536}]' \
+    "$candidate/config.json" >/dev/null
+done
+sudo chown -R 100000:200000 "$bundle/rootfs" "$bundle_b/rootfs"
 sudo chmod 0755 "$qualification_root"
+test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
+test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
 
 report_native_failure() {
   local rootfs="$1"
