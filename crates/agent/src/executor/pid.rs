@@ -5,6 +5,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
+use super::namespace::RetainedExecutionContext;
 use super::plan::InitPlan;
 
 const MAX_PROC_STATUS_BYTES: u64 = 64 * 1024;
@@ -141,6 +142,31 @@ pub(super) async fn validate_runtime_pid(
         ));
     }
     validate_created_namespace_identities(plan, launcher_pid, runtime_pid).await
+}
+
+pub(super) async fn validate_exec_runtime_pid(
+    launcher_pid: i32,
+    runtime_pid: i32,
+    context: &RetainedExecutionContext,
+) -> Result<()> {
+    if runtime_pid <= 0 || runtime_pid == launcher_pid {
+        return Err(pid_error(
+            ErrorCode::PermissionDenied,
+            format!("exec helper {launcher_pid} reported invalid payload PID {runtime_pid}"),
+        ));
+    }
+    let identity = read_pid_identity(runtime_pid, "exec payload").await?;
+    if identity.parent_pid != launcher_pid {
+        return Err(pid_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "reported exec payload {runtime_pid} has parent {}, expected authenticated helper \
+                 {launcher_pid}",
+                identity.parent_pid
+            ),
+        ));
+    }
+    context.validate_process(runtime_pid).await
 }
 
 async fn read_pid_identity(pid: i32, role: &str) -> Result<PidIdentity> {

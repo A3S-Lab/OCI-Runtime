@@ -10,10 +10,12 @@ use super::control;
 
 mod join;
 mod mount_idmap;
+mod retained;
 mod time;
 mod user;
 
 pub(super) use mount_idmap::{IdmapNamespaceHandles, IdmapPlan};
+pub(super) use retained::{RetainedExecutionContext, RetainedNamespaceArgument};
 pub(super) use user::install_user_mappings;
 
 const MAX_ID_MAPPINGS: usize = 340;
@@ -317,7 +319,7 @@ pub(super) fn enter_new_namespaces(plan: &NamespacePlan, control: &mut UnixStrea
     Ok(())
 }
 
-fn become_user_namespace_root(kind: &str) -> Result<()> {
+pub(super) fn become_user_namespace_root(kind: &str) -> Result<()> {
     // SAFETY: the dedicated init wrapper is single-threaded. A successful new
     // or joined user-namespace transition grants the capabilities required to
     // clear supplementary groups and select mapped namespace-root IDs.

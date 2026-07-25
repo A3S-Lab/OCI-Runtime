@@ -58,9 +58,12 @@ neither advertises nor accepts `wait`; protocol-v1 and protocol-v2 peers
 neither advertise nor accept the version-3 process operations.
 
 Protocol support and executor capability remain separate. The current shared
-Linux executor negotiates version 3 but continues to advertise only the six
-implemented lifecycle and init-wait operations until container exec has
-complete process registry, pidfd, cleanup, and recovery evidence.
+Linux executor negotiates version 3 and advertises the exact nine implemented
+operations: the six lifecycle/init-wait operations plus exec, per-process
+signal, and per-process wait. It retains an exact-generation process registry,
+one pidfd per authenticated init or exec process, stable replay and wait
+results, process-group ownership, and session cleanup. Durable recovery across
+an agent restart remains a separate host/driver release gate.
 
 Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current
@@ -123,14 +126,15 @@ step.
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
 pipe, authenticates the token, negotiates protocol version 3, and retains
-bounded host and shim evidence. The current guest must advertise the exact six
-operations: `create`, `state`, `start`, `kill`, `delete`, and `wait`.
+bounded host and shim evidence. The current guest must advertise the exact nine
+operations: `create`, `state`, `start`, `kill`, `delete`, `wait`, `exec`,
+`signal-process`, and `wait-process`.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
 in `a3s.oci.agent-vm-smoke.v4`. The signed path must negotiate protocol version
-3 and the exact six implemented operations. The missing-entitlement path must
+3 and the exact nine implemented operations. The missing-entitlement path must
 exit with status `2`, report no negotiation, terminate the shim process group,
 and leave no private endpoint residue. Both paths also retain in-process
 evidence that the exact runtime-owned endpoint was removed, the complete
@@ -141,9 +145,12 @@ The real Windows and macOS `oci-vm-smoke` paths keep the same authenticated
 connection open and prove a fixed bundle through create, state, exact create
 replay, start, running observation, marker verification, signal delivery,
 exact kill replay, a bounded wait while running, exact repeated terminal
-status, stopped observation, stopped-only delete, exact delete replay, and a
-final NotFound state query. The marker proves that the workload did not run
-before start and did run afterward. The init wrapper reads both
+status, exact-target exec replay, duplicate process-ID rejection, bounded
+per-process wait, exact and replayed process signal, stable repeated process
+wait, init-exit cleanup of another live exec, stopped observation, stopped-only
+delete, exact delete replay, and a final NotFound state query. The marker
+proves that the workload did not run before start and did run afterward. The
+init wrapper reads both
 configured UTS names back before create returns, and the workload independently
 checks its hostname. When requested, the same create barrier also covers a new
 mount namespace, recursively private propagation, a self-bound rootfs, and
@@ -169,6 +176,20 @@ process after the configured process exits. The host verifies marker removal
 and that VM shutdown leaves no new guest-agent runtime directory. Native Linux
 and macOS HVF retain this user/time, PID-supervision, and rootfs enforcement
 evidence; the historical WHPX qualification predates it.
+
+Exec uses the same fail-closed process planner as init. The agent snapshots the
+accepted OCI `Process`, preserves descriptors for the exact configured
+process's root and all configured namespaces, and starts a fresh
+single-threaded helper. The helper authenticates its launcher, enters retained
+user/cgroup/IPC/UTS/network/mount/PID/time namespaces in a fixed order, forks
+for PID/time next-child semantics, creates a dedicated process group, chroots,
+applies cwd, groups, GID, UID, umask, and `no_new_privileges`, then blocks on a
+start barrier. Before release, the agent validates the helper peer PID,
+payload parent, host-visible PID, pidfd, root identity, every namespace
+identity, and that init is still alive. The helper monitors init's pidfd and
+uses the same non-destructive `waitid(WNOWAIT)` ownership pattern as the A3S
+Box PID 1 reaper so descendants are killed before the leader PID/PGID can be
+reused.
 
 The macOS `oci-vm-multi-container-smoke` path keeps two exact targets live on
 the same connection. It proves distinct runtime slots and PIDs, simultaneous

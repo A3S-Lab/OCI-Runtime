@@ -77,6 +77,14 @@ and the protocol-v3 utility-VM guest path implement this contract while
 retaining protocol-v2 init-wait compatibility; unsupported drivers fail before
 dispatch.
 
+The protocol-v3 shared Linux executor also implements exact-target exec,
+pidfd-backed per-process signal, and stable per-process wait. Those operations
+are deliberately not advertised by `HostRuntimeService` yet: the
+`RuntimeDriver` request types, durable process records and journals,
+generation-fenced restart reconciliation, and native/utility-VM driver
+adapters must land together before A3S Box can reach them through
+`RuntimeClient`.
+
 ## Runtime Server
 
 Listener creation and access control belong to the runtime process because

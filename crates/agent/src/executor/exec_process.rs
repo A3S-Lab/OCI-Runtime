@@ -1,0 +1,327 @@
+use std::io;
+use std::os::fd::RawFd;
+use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+
+use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, Result};
+use tokio::io::AsyncWriteExt;
+use tokio::process::{Child, Command};
+use tokio::time::timeout;
+
+use super::control::{read_outcome, InitOutcome, START_BYTE};
+use super::namespace::RetainedNamespaceArgument;
+use super::pid;
+use super::pid_supervisor;
+use super::pidfd::{PidFd, SignalOutcome};
+use super::process::{bind_control_listener, convert_exit_status, terminate};
+
+mod helper;
+
+const EXEC_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const EXEC_MODE: &str = "container-exec";
+
+#[derive(Debug)]
+pub(super) struct ExecProcess {
+    child: Child,
+    pid: i32,
+    pidfd: PidFd,
+    exit_status: Option<ExitStatus>,
+}
+
+impl ExecProcess {
+    pub(super) async fn spawn(
+        snapshot: &Path,
+        init_executable: &Path,
+        init_process: &super::process::PreparedProcess,
+    ) -> Result<Self> {
+        let context = init_process.execution_context();
+        let init_pidfd = init_process.pidfd_descriptor();
+        let inherited = context.inherited_descriptors(init_pidfd)?;
+        let namespace_arguments = context.namespace_arguments();
+        let (listener, control_name) = bind_control_listener()?;
+
+        let mut command = Command::new(init_executable);
+        command
+            .arg(EXEC_MODE)
+            .arg(snapshot)
+            .arg(&control_name)
+            .arg(context.root_descriptor().to_string())
+            .arg(init_pidfd.to_string())
+            .arg(std::process::id().to_string());
+        append_namespace_arguments(&mut command, &namespace_arguments);
+        command
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        // SAFETY: the callback runs in the freshly forked command child and
+        // performs only `fcntl` calls before `execve`. It changes descriptor
+        // flags only in the child-side descriptor table.
+        unsafe {
+            command.pre_exec(move || make_descriptors_inheritable(&inherited));
+        }
+        let mut child = command.spawn().map_err(|error| {
+            exec_error(
+                ErrorCode::Internal,
+                format!("failed to spawn container exec helper: {error}"),
+            )
+        })?;
+        let Some(raw_launcher_pid) = child.id() else {
+            terminate(&mut child).await;
+            return Err(exec_error(
+                ErrorCode::Internal,
+                "spawned container exec helper has no live process ID",
+            ));
+        };
+        let launcher_pid = match i32::try_from(raw_launcher_pid) {
+            Ok(pid) => pid,
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::ResourceExhausted,
+                    format!(
+                        "exec helper PID {raw_launcher_pid} does not fit the process model: {error}"
+                    ),
+                ));
+            }
+        };
+
+        enum ReadyOutcome {
+            Connected(io::Result<(tokio::net::UnixStream, tokio::net::unix::SocketAddr)>),
+            Exited(io::Result<std::process::ExitStatus>),
+        }
+        let ready = timeout(EXEC_READY_TIMEOUT, async {
+            tokio::select! {
+                accepted = listener.accept() => ReadyOutcome::Connected(accepted),
+                status = child.wait() => ReadyOutcome::Exited(status),
+            }
+        })
+        .await;
+        let mut control = match ready {
+            Ok(ReadyOutcome::Connected(Ok((control, _)))) => control,
+            Ok(ReadyOutcome::Connected(Err(error))) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::Internal,
+                    format!("failed to accept container exec control connection: {error}"),
+                ));
+            }
+            Ok(ReadyOutcome::Exited(Ok(status))) => {
+                return Err(exec_error(
+                    ErrorCode::FailedPrecondition,
+                    format!("container exec helper rejected its plan and exited with {status}"),
+                ));
+            }
+            Ok(ReadyOutcome::Exited(Err(error))) => {
+                return Err(exec_error(
+                    ErrorCode::Internal,
+                    format!("failed to wait for container exec helper: {error}"),
+                ));
+            }
+            Err(_) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::DeadlineExceeded,
+                    "timed out waiting for the container exec helper",
+                ));
+            }
+        };
+        let peer = match control.peer_cred() {
+            Ok(peer) => peer,
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::Internal,
+                    format!("failed to read container exec helper credentials: {error}"),
+                ));
+            }
+        };
+        if peer.pid() != Some(launcher_pid) {
+            terminate(&mut child).await;
+            return Err(exec_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "exec control peer PID {:?} does not match spawned helper {launcher_pid}",
+                    peer.pid()
+                ),
+            ));
+        }
+
+        let runtime_pid = match timeout(EXEC_READY_TIMEOUT, read_outcome(&mut control)).await {
+            Ok(Ok(InitOutcome::Ready {
+                pid,
+                namespace_init_pid: None,
+            })) => pid,
+            Ok(Ok(InitOutcome::Ready {
+                namespace_init_pid: Some(pid),
+                ..
+            })) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::PermissionDenied,
+                    format!("exec helper unexpectedly reported namespace init PID {pid}"),
+                ));
+            }
+            Ok(Ok(InitOutcome::Rejected(error))) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+            Ok(Ok(InitOutcome::UserMappingRequired)) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::PermissionDenied,
+                    "exec helper requested an unexpected user mapping",
+                ));
+            }
+            Ok(Err(error)) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+            Err(_) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::DeadlineExceeded,
+                    "timed out reading container exec readiness",
+                ));
+            }
+        };
+        let pidfd = match PidFd::open(runtime_pid) {
+            Ok(pidfd) => pidfd,
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = pid::validate_exec_runtime_pid(launcher_pid, runtime_pid, context).await
+        {
+            terminate(&mut child).await;
+            return Err(error);
+        }
+        match init_process.signal(0) {
+            Ok(SignalOutcome::Delivered) => {}
+            Ok(SignalOutcome::Exited) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::FailedPrecondition,
+                    "configured container process exited before exec release",
+                ));
+            }
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+        }
+        if let Err(error) = control.write_all(&[START_BYTE]).await {
+            terminate(&mut child).await;
+            return Err(exec_error(
+                ErrorCode::Unavailable,
+                format!("failed to release prepared exec process: {error}"),
+            ));
+        }
+        drop(control);
+        drop(listener);
+
+        Ok(Self {
+            child,
+            pid: runtime_pid,
+            pidfd,
+            exit_status: None,
+        })
+    }
+
+    pub(super) const fn pid(&self) -> i32 {
+        self.pid
+    }
+
+    pub(super) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
+        if let Some(status) = &self.exit_status {
+            return Ok(Some(status.clone()));
+        }
+        let status = self.child.try_wait().map_err(|error| {
+            exec_error(
+                ErrorCode::Internal,
+                format!("failed to inspect exec process state: {error}"),
+            )
+        })?;
+        status
+            .map(|status| self.cache_exit_status(status))
+            .transpose()
+    }
+
+    pub(super) fn signal(&self, signal: i32) -> Result<SignalOutcome> {
+        self.pidfd.send_signal(signal)
+    }
+
+    pub(super) async fn force_stop(&mut self) -> Result<()> {
+        if self.try_wait()?.is_some() {
+            return Ok(());
+        }
+        pid_supervisor::terminate_process_group(self.pid);
+        match self.pidfd.send_signal(libc::SIGKILL) {
+            Ok(SignalOutcome::Delivered | SignalOutcome::Exited) => {}
+            Err(error) => {
+                terminate(&mut self.child).await;
+                return Err(error);
+            }
+        }
+        match timeout(EXEC_READY_TIMEOUT, self.child.wait()).await {
+            Ok(Ok(status)) => {
+                self.cache_exit_status(status)?;
+            }
+            Ok(Err(error)) => {
+                return Err(exec_error(
+                    ErrorCode::Internal,
+                    format!("failed to reap exec helper during cleanup: {error}"),
+                ));
+            }
+            Err(_) => {
+                terminate(&mut self.child).await;
+                return Err(exec_error(
+                    ErrorCode::DeadlineExceeded,
+                    "timed out reaping exec helper during cleanup",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn cache_exit_status(&mut self, status: std::process::ExitStatus) -> Result<ExitStatus> {
+        let status = convert_exit_status(status)?;
+        self.exit_status = Some(status.clone());
+        Ok(status)
+    }
+}
+
+pub(crate) fn run_container_exec_if_requested() -> Option<Result<()>> {
+    helper::run_container_exec_if_requested()
+}
+
+fn append_namespace_arguments(command: &mut Command, namespaces: &[RetainedNamespaceArgument]) {
+    for namespace in namespaces {
+        command.arg(format!(
+            "{}:{}:{}",
+            namespace.name, namespace.clone_flag, namespace.descriptor
+        ));
+    }
+}
+
+fn make_descriptors_inheritable(descriptors: &[RawFd]) -> io::Result<()> {
+    for descriptor in descriptors {
+        // SAFETY: each descriptor is live in the child descriptor table.
+        let flags = unsafe { libc::fcntl(*descriptor, libc::F_GETFD) };
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `F_SETFD` changes only the close-on-exec bit for this child.
+        if unsafe { libc::fcntl(*descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn exec_error(code: ErrorCode, message: impl Into<String>) -> Error {
+    Error::new(code, message).for_operation("run-container-exec")
+}

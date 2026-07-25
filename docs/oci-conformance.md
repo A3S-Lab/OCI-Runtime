@@ -83,9 +83,9 @@ does not make it a native Windows container.
 | VM hypervisor, kernel, initrd, image, and parameters | Yes | Initial absolute-path and NUL rules; driver policy pending | No | No |
 | OCI `State` | Yes | Official schema, typed transitions, and generation fences | Durable core `creating`/`created`/`running`/`stopped` records | No |
 | OCI `Features` | Yes | Official schema, version and operation separation; the generated runtime document is validated against the pinned 1.3.0 schema | Default service is feature-only; configured service reports only its implemented operations; Linux reports 61 sorted recognized mount options, all eight implemented namespace types, and the enabled ID-map extension while unsupported controls remain empty or disabled | No |
-| `create/state/start/kill/delete` plus init `wait` | SDK contract | Exhaustive request boundary, protocol-v1/v2 compatibility tests, protocol-v3 process-message tests, durable lifecycle tests, and native/utility-VM lifecycle gates | Driver-independent core orchestration plus driver-advertised stable init wait and a fail-closed guest bootstrap slice; protocol-v3 process operations are not advertised by the executor yet | No |
+| `create/state/start/kill/delete` plus init `wait` | SDK contract | Exhaustive request boundary, protocol-v1/v2 compatibility tests, protocol-v3 process-message tests, durable lifecycle tests, and native/utility-VM lifecycle gates | Driver-independent core orchestration plus driver-advertised stable init wait and a fail-closed guest bootstrap slice | No |
 | Hooks and rollback ordering | SDK contract | Pending | No | No |
-| Exec, I/O, PTY, per-process wait, pause/resume, update | SDK contract | Typed requests | No | No |
+| Exec, I/O, PTY, per-process wait, pause/resume, update | SDK contract | Typed requests; protocol-v3 exact target/correlation tests; fail-closed shared process planning | The shared Linux executor advertises exact-target exec, pidfd-backed process signal, stable process wait, init-exit supervision, and cleanup for null I/O; durable `RuntimeDriver`/host exposure, stream I/O, PTY, pause/resume, and update remain unenforced | No |
 | Checkpoint and restore | SDK contract | Typed requests | No | No |
 
 The current runtime must therefore remain `probe-only`.

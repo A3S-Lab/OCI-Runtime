@@ -1,5 +1,5 @@
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
@@ -74,6 +74,10 @@ impl PidFd {
                 error,
             ))
         }
+    }
+
+    pub(super) fn raw_descriptor(&self) -> RawFd {
+        self.descriptor.as_raw_fd()
     }
 }
 

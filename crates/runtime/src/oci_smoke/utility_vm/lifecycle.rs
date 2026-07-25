@@ -3,13 +3,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest,
-    AgentStartRequest, AgentStateRequest, AgentWaitRequest, GuestPath,
+    AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
+    AgentKillRequest, AgentSignalProcessRequest, AgentStartRequest, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
 };
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IoMode, OciBundle, OperationContext,
-    OperationId, ProcessIo, Signal,
+    OperationId, ProcessId, ProcessIo, ProcessTarget, Signal,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{sleep, timeout, Instant};
@@ -22,6 +23,7 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const LINUX_SIGTERM: i32 = 15;
+const LINUX_SIGKILL: i32 = 9;
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 
 pub(super) trait AgentStream: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -85,6 +87,7 @@ pub(super) async fn exercise<T: AgentStream>(
     }
 
     wait_for_running_marker(client, target, marker, report).await?;
+    let cleanup_process = exercise_exec_processes(client, target, nonce).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, target).await?;
     if !report.wait_timeout_enforced {
         return Err("guest wait returned before the running init process exited".into());
@@ -126,6 +129,41 @@ pub(super) async fn exercise<T: AgentStream>(
             "guest wait returned {waited:?}, expected {expected_exit:?}"
         ));
     }
+    let cleaned_exec = guest_call(
+        "wait for exec cleanup after init exit",
+        client.wait_process(AgentWaitProcessRequest {
+            target: cleanup_process,
+            timeout_ms: Some(
+                u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                    .map_err(|_| "exec cleanup timeout does not fit wait request".to_string())?,
+            ),
+        }),
+    )
+    .await?;
+    let expected_exec_cleanup = ExitStatus::signaled(LINUX_SIGKILL, false)
+        .map_err(|error| format!("failed to construct expected exec cleanup status: {error}"))?;
+    if cleaned_exec != expected_exec_cleanup {
+        return Err(format!(
+            "init exit cleaned exec with {cleaned_exec:?}, expected {expected_exec_cleanup:?}"
+        ));
+    }
+    let init_process_wait = guest_call(
+        "wait for reserved init process",
+        client.wait_process(AgentWaitProcessRequest {
+            target: ProcessTarget {
+                container: target.clone(),
+                process_id: ProcessId::init(),
+            },
+            timeout_ms: Some(
+                u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                    .map_err(|_| "init process timeout does not fit wait request".to_string())?,
+            ),
+        }),
+    )
+    .await?;
+    if init_process_wait != waited {
+        return Err("reserved init process wait disagreed with lifecycle wait".into());
+    }
     report.wait_replayed = guest_call("repeated wait", client.wait(wait)).await? == waited;
     if !report.wait_replayed {
         return Err("guest repeated wait returned a different exit status".into());
@@ -146,6 +184,122 @@ pub(super) async fn exercise<T: AgentStream>(
         return Err("guest state remained visible after delete".into());
     }
     Ok(())
+}
+
+async fn exercise_exec_processes<T: AgentStream>(
+    client: &AgentClient<T>,
+    target: &ContainerTarget,
+    nonce: &str,
+) -> Result<ProcessTarget, String> {
+    let controlled = exec_request(target, nonce, "controlled", "exec-controlled")?;
+    let controlled_target = controlled.target.clone();
+    let created = guest_call("exec controlled process", client.exec(controlled.clone())).await?;
+    if created.target() != &controlled_target || created.pid() <= 0 || created.terminal() {
+        return Err("exec returned an invalid controlled-process identity".into());
+    }
+    let replayed = guest_call("replayed exec", client.exec(controlled.clone())).await?;
+    if replayed != created {
+        return Err("guest did not exactly replay exec".into());
+    }
+
+    let mut duplicate = controlled;
+    duplicate.context = operation(nonce, "exec-duplicate")?;
+    match timeout(GUEST_CALL_TIMEOUT, client.exec(duplicate)).await {
+        Ok(Err(error)) if error.code == ErrorCode::AlreadyExists => {}
+        Ok(Err(error)) => return Err(guest_error("duplicate exec process ID", &error)),
+        Ok(Ok(_)) => return Err("guest accepted a duplicate exec process ID".into()),
+        Err(_) => return Err("duplicate exec process ID check timed out".into()),
+    }
+
+    match timeout(
+        GUEST_CALL_TIMEOUT,
+        client.wait_process(AgentWaitProcessRequest {
+            target: controlled_target.clone(),
+            timeout_ms: Some(50),
+        }),
+    )
+    .await
+    {
+        Ok(Err(error)) if error.code == ErrorCode::DeadlineExceeded => {}
+        Ok(Err(error)) => return Err(guest_error("bounded exec wait", &error)),
+        Ok(Ok(status)) => {
+            return Err(format!(
+                "bounded exec wait returned {status:?} while the process was running"
+            ));
+        }
+        Err(_) => return Err("bounded exec wait exceeded its outer timeout".into()),
+    }
+
+    let signal = AgentSignalProcessRequest {
+        context: operation(nonce, "signal-controlled")?,
+        target: controlled_target.clone(),
+        signal: Signal::new(LINUX_SIGKILL)
+            .map_err(|error| format!("invalid exec smoke signal: {error}"))?,
+    };
+    guest_call(
+        "signal controlled exec process",
+        client.signal_process(signal.clone()),
+    )
+    .await?;
+    guest_call(
+        "replayed controlled exec signal",
+        client.signal_process(signal),
+    )
+    .await?;
+    let wait = AgentWaitProcessRequest {
+        target: controlled_target,
+        timeout_ms: Some(
+            u64::try_from(LIFECYCLE_TIMEOUT.as_millis())
+                .map_err(|_| "exec wait timeout does not fit request".to_string())?,
+        ),
+    };
+    let status = guest_call(
+        "wait controlled exec process",
+        client.wait_process(wait.clone()),
+    )
+    .await?;
+    let expected = ExitStatus::signaled(LINUX_SIGKILL, false)
+        .map_err(|error| format!("failed to construct expected exec status: {error}"))?;
+    if status != expected {
+        return Err(format!(
+            "controlled exec wait returned {status:?}, expected {expected:?}"
+        ));
+    }
+    if guest_call("repeated controlled exec wait", client.wait_process(wait)).await? != status {
+        return Err("repeated exec wait returned a different result".into());
+    }
+
+    let cleanup = exec_request(target, nonce, "cleanup", "exec-cleanup")?;
+    let cleanup_target = cleanup.target.clone();
+    guest_call("exec cleanup process", client.exec(cleanup)).await?;
+    Ok(cleanup_target)
+}
+
+fn exec_request(
+    target: &ContainerTarget,
+    nonce: &str,
+    process_suffix: &str,
+    operation_suffix: &str,
+) -> Result<AgentExecRequest, String> {
+    let process: Process = serde_json::from_value(serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0, "umask": 18},
+        "args": ["/bin/sh", "-c", "while :; do :; done"],
+        "env": ["PATH=/bin:/usr/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    }))
+    .map_err(|error| format!("failed to construct exec smoke process: {error}"))?;
+    Ok(AgentExecRequest {
+        context: operation(nonce, operation_suffix)?,
+        target: ProcessTarget {
+            container: target.clone(),
+            process_id: ProcessId::new(format!("exec-{nonce}-{process_suffix}"))
+                .map_err(|error| format!("failed to construct exec process ID: {error}"))?,
+        },
+        process,
+        io: null_io(),
+    })
 }
 
 async fn wait_times_out_while_running<T: AgentStream>(

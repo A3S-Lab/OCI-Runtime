@@ -1,6 +1,7 @@
+use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo};
 
-use super::plan::InitPlan;
+use super::plan::{InitPlan, ProcessPlan};
 
 const FIXED_CONFIG: &str = r#"{
   "ociVersion": "1.3.0",
@@ -64,6 +65,58 @@ fn accepts_the_exact_bootstrap_profile() {
     assert!(!plan.namespaces.new_pid());
     assert!(!plan.namespaces.new_user());
     assert!(!plan.namespaces.new_time());
+}
+
+#[test]
+fn builds_the_same_fail_closed_plan_for_an_exec_process() {
+    let process: Process = serde_json::from_value(
+        serde_json::from_str::<serde_json::Value>(FIXED_CONFIG).expect("decode fixed config")
+            ["process"]
+            .clone(),
+    )
+    .expect("decode fixed process");
+    let plan = ProcessPlan::from_process(&process, &null_io()).expect("supported exec process");
+    assert_eq!(plan.args, ["/bin/sh", "-c", "printf ready"]);
+    assert_eq!(plan.cwd, "/");
+    assert_eq!(plan.umask, Some(0o22));
+    assert!(plan.no_new_privileges);
+
+    let encoded = serde_json::to_vec(&plan).expect("encode process plan");
+    assert_eq!(
+        serde_json::from_slice::<ProcessPlan>(&encoded).expect("decode process plan"),
+        plan
+    );
+}
+
+#[test]
+fn exec_process_planning_rejects_unenforced_security_and_io() {
+    let mut value = serde_json::from_str::<serde_json::Value>(FIXED_CONFIG)
+        .expect("decode fixed config")["process"]
+        .clone();
+    value["capabilities"] = serde_json::json!({
+        "bounding": [],
+        "effective": [],
+        "inheritable": [],
+        "permitted": [],
+        "ambient": []
+    });
+    let process: Process = serde_json::from_value(value).expect("decode process");
+    let error = ProcessPlan::from_process(&process, &null_io())
+        .expect_err("capabilities must not be silently ignored");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("process.capabilities"));
+
+    let process: Process = serde_json::from_value(
+        serde_json::from_str::<serde_json::Value>(FIXED_CONFIG).expect("decode fixed config")
+            ["process"]
+            .clone(),
+    )
+    .expect("decode fixed process");
+    let mut io = null_io();
+    io.stdout = IoMode::Capture;
+    let error = ProcessPlan::from_process(&process, &io)
+        .expect_err("capture must remain unsupported until streaming is implemented");
+    assert_eq!(error.code, ErrorCode::Unsupported);
 }
 
 #[test]

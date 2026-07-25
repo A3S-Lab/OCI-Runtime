@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use a3s_oci_agent_protocol::AgentState;
+use a3s_oci_agent_protocol::{AgentProcess, AgentState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ErrorCode, ExitStatus, OperationId, Result};
+use a3s_oci_sdk::{ErrorCode, ExitStatus, OperationId, ProcessId, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use super::exec_process::ExecProcess;
 use super::process::PreparedProcess;
 use super::{executor_error, MAX_OPERATION_RECORDS};
 
@@ -42,12 +43,14 @@ impl ExecutorState {
             record.validate_request(request)?;
             match &record.outcome {
                 RecordedOutcome::State(result) => result.clone(),
-                RecordedOutcome::Deleted(_) => Err(reused_operation(operation_id)),
+                RecordedOutcome::Unit(_) | RecordedOutcome::Process(_) => {
+                    Err(reused_operation(operation_id))
+                }
             }
         })
     }
 
-    pub(super) fn replay_delete(
+    pub(super) fn replay_unit(
         &self,
         operation_id: &OperationId,
         request: &RecordedRequest,
@@ -55,8 +58,26 @@ impl ExecutorState {
         self.operations.get(operation_id).map(|record| {
             record.validate_request(request)?;
             match &record.outcome {
-                RecordedOutcome::Deleted(result) => result.clone(),
-                RecordedOutcome::State(_) => Err(reused_operation(operation_id)),
+                RecordedOutcome::Unit(result) => result.clone(),
+                RecordedOutcome::State(_) | RecordedOutcome::Process(_) => {
+                    Err(reused_operation(operation_id))
+                }
+            }
+        })
+    }
+
+    pub(super) fn replay_process(
+        &self,
+        operation_id: &OperationId,
+        request: &RecordedRequest,
+    ) -> Option<Result<AgentProcess>> {
+        self.operations.get(operation_id).map(|record| {
+            record.validate_request(request)?;
+            match &record.outcome {
+                RecordedOutcome::Process(result) => result.clone(),
+                RecordedOutcome::State(_) | RecordedOutcome::Unit(_) => {
+                    Err(reused_operation(operation_id))
+                }
             }
         })
     }
@@ -105,12 +126,16 @@ pub(super) struct ContainerRecord {
     pub(super) config_digest: String,
     pub(super) status: ContainerState,
     pub(super) process: PreparedProcess,
+    pub(super) processes: BTreeMap<ProcessId, ExecProcess>,
     pub(super) runtime_directory: PathBuf,
 }
 
 impl ContainerRecord {
     pub(super) fn refresh(&mut self) -> Result<()> {
         self.poll_wait()?;
+        for process in self.processes.values_mut() {
+            process.try_wait()?;
+        }
         Ok(())
     }
 
@@ -134,6 +159,22 @@ impl ContainerRecord {
             self.config_digest.clone(),
         )
     }
+
+    pub(super) async fn force_stop_all(&mut self) -> Result<()> {
+        let mut first_error = None;
+        for process in self.processes.values_mut() {
+            if let Err(error) = process.force_stop().await {
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Err(error) = self.process.force_stop().await {
+            first_error.get_or_insert(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +183,8 @@ pub(super) enum MutationKind {
     Start,
     Kill,
     Delete,
+    Exec,
+    SignalProcess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +230,8 @@ impl OperationRecord {
 #[derive(Debug, Clone)]
 pub(super) enum RecordedOutcome {
     State(Result<AgentState>),
-    Deleted(Result<()>),
+    Unit(Result<()>),
+    Process(Result<AgentProcess>),
 }
 
 fn reused_operation(operation_id: &OperationId) -> a3s_oci_sdk::Error {
@@ -213,14 +257,14 @@ mod tests {
         state.record(
             operation_id.clone(),
             request.clone(),
-            RecordedOutcome::Deleted(Ok(())),
+            RecordedOutcome::Unit(Ok(())),
         );
 
-        assert_eq!(state.replay_delete(&operation_id, &request), Some(Ok(())));
+        assert_eq!(state.replay_unit(&operation_id, &request), Some(Ok(())));
         let changed = RecordedRequest::new(MutationKind::Delete, &json!({"target": "two"}))
             .expect("fingerprint changed request");
         let error = state
-            .replay_delete(&operation_id, &changed)
+            .replay_unit(&operation_id, &changed)
             .expect("operation exists")
             .expect_err("changed request must fail");
         assert_eq!(error.code, ErrorCode::Conflict);

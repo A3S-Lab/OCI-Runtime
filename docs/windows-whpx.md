@@ -31,9 +31,9 @@ The runtime:
    through libkrun to the protected pipe, authenticates the exact shim PID and
    one-time token, negotiates protocol version 3, and waits for zero
    guest/shim exit;
-10. runs a fixed OCI bundle through distinct create, start, signal, wait, and
-    delete calls, verifies lifecycle replay and cleanup, and keeps the built-in
-    driver disabled;
+10. runs a fixed OCI bundle through distinct create, start, init signal/wait,
+    exact-target exec, process signal/wait, and delete calls, verifies replay
+    and cleanup, and keeps the built-in driver disabled;
 11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
@@ -95,7 +95,8 @@ A successful end-to-end agent VM smoke additionally proves that:
 - the real guest authenticates the one-time token and negotiates protocol
   version 3;
 - the agent version and `x86_64` guest architecture are reported;
-- the guest advertises exactly create, state, start, kill, delete, and wait;
+- the guest advertises exactly create, state, start, kill, delete, wait, exec,
+  signal-process, and wait-process;
 - the shim reports every VM configuration stage and a zero guest exit;
 - the host rejects an existing console destination rather than overwriting
   it.
@@ -123,6 +124,11 @@ A successful fixed OCI VM smoke additionally proves that:
   `no_new_privileges`, then calls `execve`;
 - the host observes `running` and the exact workload marker;
 - a bounded wait returns `DeadlineExceeded` while the workload is running;
+- exact-target exec and its retry return the same authenticated process, a
+  duplicate process ID is rejected, bounded process wait times out while the
+  process runs, pidfd signal and its retry succeed, and repeated process wait
+  returns the same terminal signal;
+- another live exec is terminated and reaped automatically when init exits;
 - kill delivers `SIGTERM`, its exact retry replays the original result, wait
   returns and replays exit code zero, and state then observes `stopped`;
 - stopped-only delete and its exact retry succeed;

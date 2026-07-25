@@ -26,10 +26,10 @@ exact libkrun shim PID before it sends the token.
 
 ## Current Executor Boundary
 
-The current root-only bootstrap executor advertises
-`create`, `state`, `start`, `kill`, `delete`, and `wait`. It is intentionally
-narrower than the final OCI executor and rejects every property it cannot
-enforce.
+The current root-only bootstrap executor advertises `create`, `state`,
+`start`, `kill`, `delete`, `wait`, `exec`, `signal-process`, and
+`wait-process`. It is intentionally narrower than the final OCI executor and
+rejects every property it cannot enforce.
 
 The accepted bootstrap profile requires:
 
@@ -163,13 +163,41 @@ returns it from every repeated wait. A bounded wait returns
 releases its registry lock between observations so another container remains
 independently queryable.
 
+Exec accepts one exact `(container ID, generation, process ID)` target while
+the configured process is running. `init` is reserved, duplicate process IDs
+fail, and exact mutation retries replay their original process or signal
+result. Init and exec share the same fail-closed OCI process planner; the
+current slice therefore requires null I/O and rejects terminal, capture, pipe,
+capability, rlimit, scheduler, and other unenforced process settings.
+
+Create retains descriptors for the configured process's root and every
+configured namespace. A fresh single-threaded exec helper inherits only those
+validated descriptors plus init's pidfd, authenticates its launcher, enters
+retained user, cgroup, IPC, UTS, network, mount, PID, and time namespaces in a
+fixed order, and forks for PID/time next-child semantics. The payload creates
+its own process group, enters the retained root with `chroot`, applies cwd,
+groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and blocks before `execve`.
+The parent verifies the helper's kernel peer PID, the payload parent and
+host-visible PID, an exact pidfd, root identity, every namespace identity, and
+the continued liveness of init before releasing that barrier.
+
+Every exec process has a retained pidfd and stable cached terminal result.
+Per-process signal and wait are bound to the exact target; bounded wait returns
+`DeadlineExceeded`, and repeated wait returns the same exit code or signal.
+The helper monitors init's pidfd and terminates the complete exec process group
+when init exits. It peeks natural exit with `waitid(WNOWAIT)` before killing
+remaining group members, preserving the leader PID/PGID until cleanup is
+issued—the same ownership mechanism proven by A3S Box's PID 1 reaper. Delete,
+shutdown, and session EOF also force-stop and reap every registered exec
+helper and process group before removing state.
+
 Exact request retries are fingerprinted by `OperationId`, and reused IDs with
 different requests fail. Generation fences remain in memory after delete.
 
 All guest registry, generation, and idempotency state is session-local. A
-closed host connection force-stops remaining configured processes and their
-namespace supervisors, then removes the agent-owned runtime root. Agent
-restart recovery is not implemented yet.
+closed host connection force-stops remaining configured processes, exec
+process groups and helpers, and namespace supervisors, then removes the
+agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
@@ -189,11 +217,13 @@ cargo zigbuild -p a3s-oci-agent --release `
 
 `a3s-oci agent-vm-smoke` proves the authenticated
 guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact
-six-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a bundle
-below the VM rootfs and proves the distinct create/start barrier, state
+nine-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a
+bundle below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, bounded running wait, exact
-repeated terminal status, signal-driven stop, post-delete NotFound, marker
-cleanup, and nominal guest runtime cleanup.
+repeated init status, exact-target exec replay, duplicate process-ID rejection,
+bounded and stable process wait, replayed process signal, init-exit exec
+cleanup, signal-driven stop, post-delete NotFound, marker cleanup, and nominal
+guest runtime cleanup.
 
 `a3s-oci oci-vm-multi-container-smoke` keeps two distinct bundle rootfs and
 runtime slots live behind the create barrier, proves that A's start, kill,

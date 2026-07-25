@@ -282,7 +282,8 @@ The host runtime establishes the trust chain in this order:
    stream;
 9. send the token only after process identity verification, negotiate protocol
    version 3, and require the static arm64 guest to advertise exactly
-   `create`, `state`, `start`, `kill`, `delete`, and `wait`.
+   `create`, `state`, `start`, `kill`, `delete`, `wait`, `exec`,
+   `signal-process`, and `wait-process`.
 
 The parent shim validates the rootfs, fixed
 `/usr/bin/a3s-oci-agent`, console, and protected socket before spawning the
@@ -420,9 +421,12 @@ The signed Apple Silicon qualification contract is
 `a3s.oci.oci-vm-smoke.v4`: bundle loading, created state, exact create replay,
 pre-start marker absence, start, running observation, a bounded wait that must
 time out while running, exact kill replay, exact normal exit status from the
-SIGTERM trap, repeated wait, stopped observation, marker verification,
-stopped-only delete, exact delete replay, post-delete NotFound, marker removal,
-guest-runtime cleanup, and the complete nested authenticated bridge report.
+SIGTERM trap, repeated wait, exact-target exec replay, duplicate process-ID
+rejection, bounded process wait, replayed pidfd process signal, stable repeated
+process wait, init-exit cleanup of another live exec, stopped observation,
+marker verification, stopped-only delete, exact delete replay, post-delete
+NotFound, marker removal, guest-runtime cleanup, and the complete nested
+authenticated bridge report.
 The observed container PID must be positive, and the nested report must prove
 exact endpoint removal, complete current-process descriptor-inventory
 restoration, and disappearance of both shim/worker PIDs after exit.

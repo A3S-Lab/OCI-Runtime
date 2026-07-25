@@ -160,6 +160,7 @@ journals, avoid duplicate live and quarantined generations, and remove every
 Production uses a non-configurable no-op injector.
 
 The remaining persistence gates are startup-wide orphan scanning,
-descriptor-relative path operations, journals for all remaining mutating SDK
-operations, and fault injection inside the utility-VM host/agent transport
-below the `RuntimeDriver` boundary.
+descriptor-relative path operations, exact process records and journals for
+exec/per-process signal, generation-fenced process recovery, journals for all
+remaining mutating SDK operations, and fault injection inside the utility-VM
+host/agent transport below the `RuntimeDriver` boundary.

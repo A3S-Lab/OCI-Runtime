@@ -10,6 +10,7 @@ mod fault_cleanup;
 mod filesystem;
 mod lifecycle;
 mod multi_container;
+mod process;
 
 use filesystem::{
     canonical_directory, create_private_directory, fixed_rootfs, path_exists, remove_marker,
@@ -114,7 +115,15 @@ pub(super) async fn run(
     };
     let client = RuntimeClient::new(service.clone());
 
-    let exercise = exercise(&client, &bundle, &nonce, &marker, &mut report).await;
+    let exercise = exercise(
+        &client,
+        driver.executor(),
+        &bundle,
+        &nonce,
+        &marker,
+        &mut report,
+    )
+    .await;
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;
     }

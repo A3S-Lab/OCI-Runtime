@@ -87,6 +87,10 @@ impl NativeLinuxDriver {
     pub fn executor_root(&self) -> &Path {
         self.executor.runtime_root()
     }
+
+    pub(crate) fn executor(&self) -> &LinuxExecutor {
+        &self.executor
+    }
 }
 
 #[async_trait]

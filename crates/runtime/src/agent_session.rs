@@ -443,6 +443,9 @@ fn expected_operations() -> Vec<AgentOperation> {
         AgentOperation::Kill,
         AgentOperation::Delete,
         AgentOperation::Wait,
+        AgentOperation::Exec,
+        AgentOperation::SignalProcess,
+        AgentOperation::WaitProcess,
     ]
 }
 

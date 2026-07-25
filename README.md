@@ -38,8 +38,9 @@ profile.
 The runtime has two execution paths:
 
 - **Native Linux** runs the reviewed namespace and mount profile with
-  PID-reuse-safe process control without requiring KVM. Complete cgroup,
-  seccomp, capability, and exec enforcement remains a release gate.
+  PID-reuse-safe init and exec process control without requiring KVM. Complete
+  cgroup, seccomp, capability, hook, and process-I/O enforcement remains a
+  release gate.
 - **Utility VM** hosts the same Linux executor behind an authenticated guest
   agent, using KVM on Linux, HVF on macOS, or WHPX on Windows.
 
@@ -85,9 +86,9 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   generations, operation IDs, replay, fencing, reconciliation, and quarantine;
   expose driver-backed state and stable init-process exit status
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, pidfd
-  process-control, exit-status, and cleanup implementation directly on Linux
-  and through the guest agent, with independently fenced per-container
-  generations
+  init/exec process-control, stable per-process exit-status, and cleanup
+  implementation directly on Linux and through the guest agent, with
+  independently fenced per-container generations
 - **Cross-Platform Drivers**: Inspect native Linux, KVM, HVF, and WHPX
   prerequisites without silently weakening requested isolation
 - **Typed SDK and IPC**: Expose an async `Send + Sync` Rust contract with
@@ -303,8 +304,8 @@ target/debug/a3s-oci agent-vm-smoke \
 An `a3s.oci.agent-vm-smoke.v4` success proves a private host socket, the
 expected shim and direct worker PID relationship, one-time token
 authentication, protocol version 3, the arm64 guest identity, and the exact
-six guest operations (`create`, `state`, `start`, `kill`, `delete`, and
-`wait`). It also requires the exact runtime-owned
+nine guest operations (`create`, `state`, `start`, `kill`, `delete`, `wait`,
+`exec`, `signal-process`, and `wait-process`). It also requires the exact runtime-owned
 endpoint to be removed, the current process's complete descriptor inventory to
 return to its pre-session baseline, and both observed host process IDs to
 disappear.
@@ -329,9 +330,11 @@ target/debug/a3s-oci oci-vm-smoke \
 Success proves distinct create and start, exact create/kill/delete replay, a
 bounded wait while running, exact and replayed normal exit status after the
 SIGTERM trap, running and stopped observation, marker verification,
-post-delete `NotFound`, and nominal endpoint, process, marker, and
-guest-runtime cleanup. This remains a fixed development profile rather than an
-arbitrary-workload driver.
+post-delete `NotFound`, exact-target exec replay, duplicate process-ID
+rejection, bounded and stable per-process wait, replayed pidfd signal delivery,
+init-exit cleanup of a live exec process, and nominal endpoint, process,
+marker, and guest-runtime cleanup. This remains a fixed development profile
+rather than an arbitrary-workload driver.
 
 The multi-container gate places two distinct bundles in the same guest and
 keeps both configured processes behind the create barrier:
@@ -452,7 +455,11 @@ The current executor implements a reviewed bootstrap vertical slice:
 - PID- and namespace-authenticated create/start barrier;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
   signaling, exact normal-or-signal exit status, repeated wait, observation,
-  and scoped cleanup.
+  and scoped cleanup;
+- exact-generation exec process registries with reserved init identity,
+  retained root and namespace descriptors, parent/PID/root/namespace
+  authentication, pidfd-backed per-process signaling, stable repeated wait,
+  process-group cleanup, and automatic exec termination when init exits.
 
 The supported user-namespace slice is rootful: it requires both UID and GID
 mappings, coverage for container ID 0 and every configured process ID, and an
@@ -460,8 +467,9 @@ mappings, coverage for container ID 0 and every configured process ID, and an
 credentials before rootfs mutation. Mount entries and rootfs mutation remain
 unsupported when joining or inheriting a mount namespace. Other unimplemented
 OCI fields are rejected instead of ignored. Rootless mapping policy, cgroup
-resources, capabilities, hooks, seccomp, full I/O, recovery, and the remaining
-SDK operations are still release gates.
+resources, capabilities, hooks, seccomp, full I/O and PTY handling, durable
+host-side exec recovery, and the remaining SDK operations are still release
+gates.
 
 ### SDK and protocols
 
@@ -476,11 +484,15 @@ SDK operations are still release gates.
 The durable host implements the five core lifecycle operations around an
 injected `RuntimeDriver` and exposes `wait` only when that exact driver
 implements it. The native Linux driver and protocol-v3 Linux guest executor
-return a stable normal-exit or signal result across repeated waits. Methods
-without enforcement remain explicitly unsupported and are not advertised
-early. Protocol v3 defines exact-target exec, per-process signal, and
-per-process wait messages while the current executor deliberately withholds
-those capabilities until their process lifecycle is implemented.
+return a stable init normal-exit or signal result across repeated waits.
+Protocol v3 additionally exposes exact-target exec, per-process signal, and
+per-process wait from the shared Linux executor. The executor advertises those
+nine agent operations only after retaining the exact container generation,
+process ID, pidfd, rootfs, namespace identities, replay result, and cleanup
+ownership. `RuntimeDriver` and `HostRuntimeService` have not yet mapped the
+three process operations into the public durable host path, so SDK process
+calls still fail before driver dispatch. Methods without enforcement remain
+explicitly unsupported and are not advertised early.
 
 The OCI `Features` document validates against the pinned 1.3.0 schema. It
 reports the 61 recognized mount options in sorted order, all eight implemented
@@ -497,7 +509,7 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact SIGKILL status and repeated wait, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with exact init and exec SIGKILL status, exec/signal replay, stable per-process wait, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v3 arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
@@ -550,7 +562,7 @@ flowchart TB
         shim --> hypervisor --> bridge --> agent
     end
 
-    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 supervision · pidfds · wait · scoped cleanup"]
+    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 supervision · pidfds · exec/signal/wait · scoped cleanup"]
 
     client --> service
     selection -->|"shared-host-kernel"| native_driver

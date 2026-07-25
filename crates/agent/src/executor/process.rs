@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener as StdUnixListener};
@@ -14,7 +15,7 @@ use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 use super::control::{acknowledge_user_mapping, read_outcome, InitOutcome, START_BYTE};
-use super::namespace;
+use super::namespace::{self, RetainedExecutionContext};
 use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
@@ -27,6 +28,7 @@ pub(super) struct PreparedProcess {
     control: Option<UnixStream>,
     pid: i32,
     pidfd: PidFd,
+    execution_context: RetainedExecutionContext,
     exit_status: Option<ExitStatus>,
 }
 
@@ -36,6 +38,7 @@ impl PreparedProcess {
         config_snapshot: &Path,
         init_executable: &Path,
     ) -> Result<Self> {
+        let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
         let (listener, control_name) = bind_control_listener()?;
         let mut command = Command::new(init_executable);
         command
@@ -211,6 +214,16 @@ impl PreparedProcess {
                 return Err(error);
             }
         };
+        let execution_context =
+            match RetainedExecutionContext::capture(&plan.namespaces, runtime_pid, original_rootfs)
+                .await
+            {
+                Ok(context) => context,
+                Err(error) => {
+                    terminate(&mut child).await;
+                    return Err(error);
+                }
+            };
         drop(listener);
 
         Ok(Self {
@@ -218,6 +231,7 @@ impl PreparedProcess {
             control: Some(control),
             pid: runtime_pid,
             pidfd,
+            execution_context,
             exit_status: None,
         })
     }
@@ -261,6 +275,14 @@ impl PreparedProcess {
 
     pub(super) fn signal(&self, signal: i32) -> Result<SignalOutcome> {
         self.pidfd.send_signal(signal)
+    }
+
+    pub(super) const fn execution_context(&self) -> &RetainedExecutionContext {
+        &self.execution_context
+    }
+
+    pub(super) fn pidfd_descriptor(&self) -> std::os::fd::RawFd {
+        self.pidfd.raw_descriptor()
     }
 
     pub(super) async fn force_stop(&mut self) -> Result<()> {
@@ -310,7 +332,24 @@ impl PreparedProcess {
     }
 }
 
-fn bind_control_listener() -> Result<(UnixListener, String)> {
+async fn retain_original_rootfs(path: &Path) -> Result<File> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| {
+            process_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "failed to retain container rootfs {} before init launch: {error}",
+                    path.display()
+                ),
+            )
+        })?
+        .into_std()
+        .await;
+    Ok(file)
+}
+
+pub(super) fn bind_control_listener() -> Result<(UnixListener, String)> {
     let endpoint = AgentVsockEndpoint::generate()?;
     let control_name = format!("a3s-oci-init-{}", endpoint.pipe_name());
     let address = StdSocketAddr::from_abstract_name(control_name.as_bytes()).map_err(|error| {
@@ -340,7 +379,7 @@ fn bind_control_listener() -> Result<(UnixListener, String)> {
     Ok((listener, control_name))
 }
 
-async fn terminate(child: &mut Child) {
+pub(super) async fn terminate(child: &mut Child) {
     let _ = child.kill().await;
     let _ = child.wait().await;
 }
@@ -349,7 +388,7 @@ fn process_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("run-container-init")
 }
 
-fn convert_exit_status(status: ProcessExitStatus) -> Result<ExitStatus> {
+pub(super) fn convert_exit_status(status: ProcessExitStatus) -> Result<ExitStatus> {
     if let Some(exit_code) = status.code() {
         return ExitStatus::exited(exit_code);
     }

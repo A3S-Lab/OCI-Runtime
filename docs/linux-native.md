@@ -82,10 +82,11 @@ create a VM.
 ## Experimental lifecycle gate
 
 The `native-linux-smoke` command opens the native driver beneath isolated
-runtime-owned directories and exercises it only through `RuntimeClient`. The
-submitted bundle is strictly loaded before the lifecycle begins, and the
-driver translates the durable host contract directly to the shared
-`LinuxExecutor`.
+runtime-owned directories. It exercises the durable init lifecycle through
+`RuntimeClient` and, until the three process operations are added to
+`RuntimeDriver`, exercises exec/signal/wait directly against the same shared
+`LinuxExecutor`. The submitted bundle is strictly loaded before the lifecycle
+begins.
 
 The versioned `a3s.oci.native-linux-smoke.v2` report requires all of the
 following:
@@ -102,17 +103,24 @@ following:
 6. start releases the prepared init; the workload verifies exact rootful
    UID/GID maps plus monotonic and boottime namespace offsets before the marker
    is observed;
-7. a 50-millisecond wait returns `DeadlineExceeded` while the configured
+7. exact-target exec and its retry return the same positive authenticated PID,
+   a duplicate process ID is rejected, and a 50-millisecond process wait
+   returns `DeadlineExceeded`;
+8. per-process `SIGKILL` and its exact retry succeed through the retained
+   pidfd, process wait returns signal 9, and repeated process wait is stable;
+9. a second live exec is terminated and reaped automatically when init exits,
+   while process ID `init` returns the same result as lifecycle wait;
+10. a 50-millisecond wait returns `DeadlineExceeded` while the configured
    process is still running;
-8. `SIGKILL` reaches the configured process through its retained pidfd, and
+11. `SIGKILL` reaches the configured process through its retained pidfd, and
    both internal supervisors preserve the exact signal result while retrying
    kill replays its exact result;
-9. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
+12. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
    the same terminal result;
-10. state reaches `stopped`;
-11. stopped-only delete and its exact retry succeed;
-12. state returns `NotFound` after delete;
-13. the marker, executor root, and complete smoke session are removed.
+13. state reaches `stopped`;
+14. stopped-only delete and its exact retry succeed;
+15. state returns `NotFound` after delete;
+16. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -261,7 +269,9 @@ The default driver must remain `probe-only` until at least the following pass:
   restart recovery beyond the retained wrong-type pre-state rejection;
 - complete mount, credential, capability, seccomp, LSM, and cgroup v2
   enforcement;
-- container exec, per-process signaling and wait, and complete process I/O;
+- durable host/`RuntimeDriver` exposure and restart recovery for the
+  implemented container exec, per-process signal, and wait operations, plus
+  complete process I/O and PTY handling;
 - hooks, exhaustive durable-write and driver-error recovery injection,
   descriptor-relative path handling, and adversarial cleanup;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
