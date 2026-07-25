@@ -25,6 +25,7 @@ mod seccomp;
 #[cfg(test)]
 mod seccomp_tests;
 mod state;
+mod terminal;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,8 +34,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcess, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
-    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentReadOutputRequest, AgentResizeRequest, AgentSignalProcessRequest, AgentStartRequest,
+    AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
     AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
@@ -715,6 +716,10 @@ impl GuestAgentService for LinuxExecutor {
 
     async fn close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
         self.close_stdin_new(&request).await
+    }
+
+    async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
+        self.resize_new(&request).await
     }
 }
 

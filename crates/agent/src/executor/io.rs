@@ -8,6 +8,8 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{watch, Mutex};
 use tokio::time::{timeout_at, Instant};
 
+use super::terminal::{TerminalHandle, TerminalSetup};
+
 const OUTPUT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 const OUTPUT_READER_CHUNK_BYTES: usize = 16 * 1024;
 
@@ -24,13 +26,47 @@ pub(super) struct ProcessIoHandle {
 #[derive(Debug)]
 struct ProcessIoInner {
     stdin_mode: IoMode,
-    stdin: Mutex<Option<ChildStdin>>,
+    stdin: Mutex<Option<ProcessStdin>>,
     output: Option<Arc<OutputBuffer>>,
+    terminal: Option<TerminalHandle>,
+}
+
+#[derive(Debug)]
+enum ProcessStdin {
+    Pipe(ChildStdin),
+    Terminal(TerminalHandle),
+}
+
+/// Process descriptors prepared before `Command::spawn`.
+#[derive(Debug)]
+pub(super) struct ProcessIoSetup {
+    terminal: Option<TerminalSetup>,
 }
 
 impl ProcessIoHandle {
     /// Configure supported child descriptors before spawn.
-    pub(super) fn configure(command: &mut Command, io: &ProcessIo) -> Result<()> {
+    pub(super) fn configure(command: &mut Command, io: &ProcessIo) -> Result<ProcessIoSetup> {
+        if terminal_io(io) {
+            let size = io.terminal_size.ok_or_else(|| {
+                io_error(
+                    ErrorCode::InvalidArgument,
+                    "terminal process I/O requires an initial terminal size",
+                )
+            })?;
+            return TerminalSetup::configure(command, size).map(|terminal| ProcessIoSetup {
+                terminal: Some(terminal),
+            });
+        }
+        if matches!(io.stdin, IoMode::Terminal)
+            || matches!(io.stdout, IoMode::Terminal)
+            || matches!(io.stderr, IoMode::Terminal)
+            || io.terminal_size.is_some()
+        {
+            return Err(io_error(
+                ErrorCode::InvalidArgument,
+                "terminal process I/O requires terminal stdin, stdout, stderr, and size",
+            ));
+        }
         command.stdin(match io.stdin {
             IoMode::Null => std::process::Stdio::null(),
             IoMode::Pipe => std::process::Stdio::piped(),
@@ -46,19 +82,32 @@ impl ProcessIoHandle {
             IoMode::Capture => std::process::Stdio::piped(),
             mode => return Err(unsupported_mode("stderr", mode)),
         });
-        Ok(())
+        Ok(ProcessIoSetup { terminal: None })
     }
 
     /// Take configured descriptors from a newly spawned child and start
     /// non-blocking output drains.
-    pub(super) fn attach(child: &mut Child, io: &ProcessIo) -> Result<Self> {
+    pub(super) fn attach(setup: ProcessIoSetup, child: &mut Child, io: &ProcessIo) -> Result<Self> {
+        if let Some(terminal) = setup.terminal {
+            let terminal = terminal.attach()?;
+            let output = Arc::new(OutputBuffer::new(1));
+            spawn_terminal_reader(terminal.clone(), Arc::clone(&output));
+            return Ok(Self {
+                inner: Arc::new(ProcessIoInner {
+                    stdin_mode: IoMode::Terminal,
+                    stdin: Mutex::new(Some(ProcessStdin::Terminal(terminal.clone()))),
+                    output: Some(output),
+                    terminal: Some(terminal),
+                }),
+            });
+        }
         let stdin = match io.stdin {
-            IoMode::Pipe => Some(child.stdin.take().ok_or_else(|| {
+            IoMode::Pipe => Some(ProcessStdin::Pipe(child.stdin.take().ok_or_else(|| {
                 io_error(
                     ErrorCode::Internal,
                     "spawned process did not expose its configured stdin pipe",
                 )
-            })?),
+            })?)),
             IoMode::Null => None,
             mode => return Err(unsupported_mode("stdin", mode)),
         };
@@ -98,6 +147,7 @@ impl ProcessIoHandle {
                 stdin_mode: io.stdin,
                 stdin: Mutex::new(stdin),
                 output,
+                terminal: None,
             }),
         })
     }
@@ -120,10 +170,10 @@ impl ProcessIoHandle {
     }
 
     pub(super) async fn write_stdin(&self, data: &[u8]) -> Result<()> {
-        if self.inner.stdin_mode != IoMode::Pipe {
+        if !matches!(self.inner.stdin_mode, IoMode::Pipe | IoMode::Terminal) {
             return Err(io_error(
                 ErrorCode::FailedPrecondition,
-                "process stdin was not configured as a pipe",
+                "process stdin was not configured as a pipe or terminal",
             ));
         }
         let mut stdin = self.inner.stdin.lock().await;
@@ -133,19 +183,49 @@ impl ProcessIoHandle {
                 "process stdin has already been closed",
             )
         })?;
-        stdin.write_all(data).await.map_err(stdin_write_error)?;
-        stdin.flush().await.map_err(stdin_write_error)
+        match stdin {
+            ProcessStdin::Pipe(stdin) => {
+                stdin.write_all(data).await.map_err(stdin_write_error)?;
+                stdin.flush().await.map_err(stdin_write_error)
+            }
+            ProcessStdin::Terminal(terminal) => {
+                terminal.write_all(data).await.map_err(stdin_write_error)
+            }
+        }
     }
 
     pub(super) async fn close_stdin(&self) -> Result<()> {
-        if self.inner.stdin_mode != IoMode::Pipe {
+        if !matches!(self.inner.stdin_mode, IoMode::Pipe | IoMode::Terminal) {
             return Err(io_error(
                 ErrorCode::FailedPrecondition,
-                "process stdin was not configured as a pipe",
+                "process stdin was not configured as a pipe or terminal",
             ));
         }
-        self.inner.stdin.lock().await.take();
+        let mut stdin = self.inner.stdin.lock().await;
+        if let Some(ProcessStdin::Terminal(terminal)) = stdin.as_ref() {
+            terminal.close_input().await.map_err(stdin_write_error)?;
+        }
+        stdin.take();
         Ok(())
+    }
+
+    pub(super) fn resize(&self, size: a3s_oci_sdk::TerminalSize) -> Result<()> {
+        self.inner
+            .terminal
+            .as_ref()
+            .ok_or_else(|| {
+                io_error(
+                    ErrorCode::FailedPrecondition,
+                    "process was not configured with a terminal",
+                )
+            })?
+            .resize(size)
+    }
+}
+
+impl ProcessIoSetup {
+    pub(super) const fn uses_terminal(&self) -> bool {
+        self.terminal.is_some()
     }
 }
 
@@ -401,6 +481,39 @@ fn spawn_output_reader(
             }
         }
     });
+}
+
+fn spawn_terminal_reader(terminal: TerminalHandle, buffer: Arc<OutputBuffer>) {
+    tokio::spawn(async move {
+        let mut bytes = vec![0_u8; OUTPUT_READER_CHUNK_BYTES];
+        loop {
+            match terminal.read(&mut bytes).await {
+                Ok(0) => {
+                    buffer.finish(OutputStream::Stdout, None).await;
+                    return;
+                }
+                Ok(length) => {
+                    buffer
+                        .append(OutputStream::Stdout, bytes[..length].to_vec())
+                        .await;
+                }
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => {
+                    // Linux returns EIO from a PTY master after its final slave
+                    // closes; this is the terminal equivalent of pipe EOF.
+                    buffer.finish(OutputStream::Stdout, None).await;
+                    return;
+                }
+                Err(error) => {
+                    buffer.finish(OutputStream::Stdout, Some(error)).await;
+                    return;
+                }
+            }
+        }
+    });
+}
+
+fn terminal_io(io: &ProcessIo) -> bool {
+    io.stdin == IoMode::Terminal && io.stdout == IoMode::Terminal && io.stderr == IoMode::Terminal
 }
 
 fn unsupported_mode(stream: &str, mode: IoMode) -> Error {

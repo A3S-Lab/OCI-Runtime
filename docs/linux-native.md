@@ -89,13 +89,13 @@ results, and dispatches the exact generation through `NativeLinuxDriver` to
 the shared `LinuxExecutor`. The submitted bundle is strictly loaded before the
 lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v6` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v7` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
    `kill`, `delete`, `exec`, `wait`, `pause`, `resume`, `update`, `processes`,
-   `stats`, `read-output`, `write-stdin`, `close-stdin`, `signal-process`, and
-   `wait-process`;
+   `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
+   `signal-process`, and `wait-process`;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
 3. create returns the positive host-visible PID of the configured process in
@@ -121,22 +121,26 @@ following:
 12. an exact-target process accepts piped stdin, returns captured stdout and
    stderr through byte-accurate partial pagination, emits EOF for both streams,
    accepts repeated stdin close, and rejects writes after close or exit;
-13. pause and its replay expose a durable frozen state, the progress-producing
+13. a terminal process starts with a controlling 80x24 PTY, reports the initial
+    and resized 120x40 dimensions, accepts interactive input through merged
+    output, advances one byte cursor through EOF, and accepts repeated close
+    while delivering `VEOF` to a live terminal reader;
+14. pause and its replay expose a durable frozen state, the progress-producing
    exec remains unchanged for a bounded interval, resume and its replay expose
    a durable thawed state, and that same exec advances again;
-14. the second live exec is terminated and reaped automatically when init
+15. the second live exec is terminated and reaped automatically when init
    exits, while process ID `init` returns the same result as lifecycle wait;
-15. a 50-millisecond wait returns `DeadlineExceeded` while the configured
+16. a 50-millisecond wait returns `DeadlineExceeded` while the configured
    process is still running;
-16. `SIGKILL` reaches the configured process through its retained pidfd, and
+17. `SIGKILL` reaches the configured process through its retained pidfd, and
    both internal supervisors preserve the exact signal result while retrying
    kill replays its exact result;
-17. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
+18. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
    the same terminal result;
-18. state reaches `stopped`;
-19. stopped-only delete and its exact retry succeed;
-20. state returns `NotFound` after delete;
-21. the marker, executor root, and complete smoke session are removed.
+19. state reaches `stopped`;
+20. stopped-only delete and its exact retry succeed;
+21. state returns `NotFound` after delete;
+22. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -202,7 +206,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v10` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v11` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -266,9 +270,9 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-The versioned `a3s.oci.native-linux-fault-cleanup.v4` report requires:
+The versioned `a3s.oci.native-linux-fault-cleanup.v5` report requires:
 
-1. the exact 18-operation service inventory, requested prefix, and a positive
+1. the exact 19-operation service inventory, requested prefix, and a positive
    runtime-visible configured-process PID;
 2. marker absence behind create and exact marker contents after start;
 3. `normal_delete_attempted: false`;
@@ -293,7 +297,7 @@ The default driver must remain `probe-only` until at least the following pass:
 - remaining mount and credential controls, broader cgroup v2 policies and
   device-access BPF, multi-architecture/notification seccomp, and LSM
   enforcement;
-- real-driver reattachment after runtime-process restart, plus PTY and
+- real-driver reattachment after runtime-process restart, plus
   inherited-descriptor I/O handling;
 - hooks, durable recovery for the remaining mutating operations,
   descriptor-relative path handling, transport-level fault injection, and

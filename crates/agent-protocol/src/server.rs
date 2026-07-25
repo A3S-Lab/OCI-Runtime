@@ -9,10 +9,10 @@ use crate::model::{
     protocol_error, AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest,
     AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
     AgentProcess, AgentProcessExit, AgentProcessSignal, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, HelloOutcome, HostHello,
-    RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
+    AgentReadOutputRequest, AgentRequest, AgentResizeRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
+    HelloOutcome, HostHello, RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::validation::negotiate_protocol;
 use crate::wire::{read_frame, write_frame};
@@ -100,6 +100,11 @@ pub trait GuestAgentService: Send + Sync {
     /// Close process stdin. Repeated closes should remain idempotent.
     async fn close_stdin(&self, _request: AgentCloseStdinRequest) -> Result<()> {
         Err(Error::unsupported("agent-close-stdin"))
+    }
+
+    /// Resize one process terminal.
+    async fn resize(&self, _request: AgentResizeRequest) -> Result<()> {
+        Err(Error::unsupported("agent-resize"))
     }
 }
 
@@ -251,6 +256,11 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             let target = request.process.clone();
             service.close_stdin(request).await?;
             Ok(AgentResponse::StdinClosed(target))
+        }
+        AgentRequest::Resize(request) => {
+            let target = request.process.clone();
+            service.resize(request).await?;
+            Ok(AgentResponse::TerminalResized(target))
         }
     }
 }

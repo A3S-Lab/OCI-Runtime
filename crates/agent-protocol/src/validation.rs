@@ -4,18 +4,18 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     CloseStdinRequest, ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode,
     ExecRequest, IsolationRequest, OciBundle, OutputChunk, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, Result, SignalProcessRequest, StatsRequest, UpdateRequest,
-    ValidateRequest, WaitProcessRequest,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, SignalProcessRequest, StatsRequest,
+    UpdateRequest, ValidateRequest, WaitProcessRequest,
 };
 
 use crate::model::{
     protocol_error, AgentBundle, AgentCloseStdinRequest, AgentContainerOperationRequest,
     AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
     AgentProcess, AgentProcessExit, AgentProcessSignal, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, ProtocolRange,
-    RequestEnvelope, ResponseEnvelope, ResponseOutcome, AGENT_MAX_FRAME_BYTES,
+    AgentReadOutputRequest, AgentRequest, AgentResizeRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
+    ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome, AGENT_MAX_FRAME_BYTES,
     AGENT_MAX_IO_PAYLOAD_BYTES,
 };
 
@@ -193,6 +193,17 @@ impl AgentCloseStdinRequest {
     }
 }
 
+impl AgentResizeRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(&self.process)?;
+        ResizeRequest {
+            process: self.process.clone(),
+            size: self.size,
+        }
+        .validate()
+    }
+}
+
 impl AgentStartRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(&self.target)?;
@@ -231,6 +242,7 @@ impl AgentRequest {
             Self::ReadOutput(request) => request.validate(),
             Self::WriteStdin(request) => request.validate(),
             Self::CloseStdin(request) => request.validate(),
+            Self::Resize(request) => request.validate(),
         }
     }
 
@@ -257,6 +269,7 @@ impl AgentRequest {
             Self::Pause(_) | Self::Resume(_) | Self::Processes(_) => 4,
             Self::Update(_) | Self::Stats(_) => 5,
             Self::ReadOutput(_) | Self::WriteStdin(_) | Self::CloseStdin(_) => 6,
+            Self::Resize(_) => 7,
         }
     }
 }
@@ -323,9 +336,9 @@ impl AgentResponse {
             Self::Processes(processes) => validate_processes(processes),
             Self::Stats(stats) => stats.validate(),
             Self::Output(chunks) => validate_output_chunks(chunks),
-            Self::StdinWritten(target) | Self::StdinClosed(target) => {
-                validate_exact_process_target(target)
-            }
+            Self::StdinWritten(target)
+            | Self::StdinClosed(target)
+            | Self::TerminalResized(target) => validate_exact_process_target(target),
         }
     }
 
@@ -337,6 +350,7 @@ impl AgentResponse {
             Self::Processes(_) => 4,
             Self::Stats(_) => 5,
             Self::Output(_) | Self::StdinWritten(_) | Self::StdinClosed(_) => 6,
+            Self::TerminalResized(_) => 7,
         };
         if selected_version < minimum_version {
             return Err(protocol_error(

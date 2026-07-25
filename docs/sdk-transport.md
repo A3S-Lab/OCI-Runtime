@@ -70,20 +70,22 @@ protocol types remain behind that boundary.
 
 The host always requires the five core driver operations and advertises
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
-`processes`, `update`, `stats`, `read-output`, `write-stdin`, and `close-stdin`
-only when the selected driver implements each one. `WaitRequest` targets one
-exact generation, accepts an optional
+`processes`, `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`,
+and `resize` only when the selected driver implements each one. `WaitRequest`
+targets one exact generation, accepts an optional
 millisecond timeout, and returns an `ExitStatus` containing either an exit
 code in `0..=255` or a positive signal. Repeated waits must return the same
-terminal result. The native Linux driver and the protocol-v6 utility-VM guest
-path implement this contract while retaining protocol-v1 through protocol-v5
+terminal result. The native Linux driver and the protocol-v7 utility-VM guest
+path implement this contract while retaining protocol-v1 through protocol-v6
 compatibility; unsupported drivers fail before dispatch.
 
-The protocol-v6 shared Linux executor implements exact-target exec,
+The protocol-v7 shared Linux executor implements exact-target exec,
 pidfd-backed per-process signal, stable per-process wait, cgroup-v2
 pause/resume, exact live process inventory, partial live CPU/memory/cpuset/PID
 updates, normalized resource statistics, piped stdin, and bounded captured
-stdout/stderr. Output uses one inclusive byte cursor across both streams: the
+stdout/stderr, plus controlling PTYs with initial dimensions, merged terminal
+output, interactive input, runtime resize, and VEOF close. Output uses one
+inclusive byte cursor across both streams: the
 caller begins at zero and supplies the last returned `OutputChunk::sequence`
 to the next poll. Data advances the cursor by its byte length and each
 per-stream EOF advances it by one logical position, so a poll can split a

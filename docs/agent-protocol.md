@@ -75,6 +75,14 @@ length; EOF advances it by one logical position. Stdin writes carry at most
 4 MiB per guest message and preserve backpressure. The host driver splits a
 larger SDK write into bounded guest messages. Closing stdin is idempotent.
 
+Protocol version 7 adds `resize`. Terminal processes require terminal mode on
+stdin, stdout, and stderr plus positive initial dimensions. The shared Linux
+executor allocates a controlling PTY, reports its merged stdout/stderr bytes as
+the stdout stream, and applies positive runtime dimensions with
+`TIOCSWINSZ`. Closing terminal stdin delivers the active `VEOF` character
+because a PTY master cannot be half-closed. A resize acknowledgement repeats
+the exact process target and mismatched correlation poisons the client.
+
 The client breaks a long init or process wait into bounded 25-millisecond
 guest requests. The single correlated connection therefore remains available
 to query or control another container between polls. Negotiation filters
@@ -86,13 +94,15 @@ protocol-v1 through protocol-v3 peers neither advertise nor accept the
 version-4 control operations. Protocol-v1 through protocol-v4 peers neither
 advertise nor accept the version-5 resource operations. Protocol-v1 through
 protocol-v5 peers neither advertise nor accept the version-6 process-I/O
-operations.
+operations. Protocol-v1 through protocol-v6 peers neither advertise nor accept
+the version-7 terminal resize operation.
 
 Protocol support and executor capability remain separate. The current shared
-Linux executor negotiates version 6 and advertises the exact seventeen
+Linux executor negotiates version 7 and advertises the exact eighteen
 implemented operations: the six lifecycle/init-wait operations; exec,
 per-process signal, and per-process wait; pause, resume, and processes; and
-update and stats; plus captured-output polling and stdin write/close. It
+update and stats; plus captured-output polling, stdin write/close, and terminal
+resize. It
 retains an exact-generation process registry, one pidfd per authenticated init
 or exec process, the private controller-enabled cgroup-v2 root and owned leaf,
 stable replay and wait results, process-group and standard-I/O ownership, and
@@ -138,6 +148,8 @@ In-memory duplex tests cover:
 - protocol-v6 captured-output cursor pagination and EOF, piped stdin,
   idempotent close, rejected writes after close, exact target correlation, and
   protocol-v5 filtering of forged v6 requests;
+- protocol-v7 exact-target terminal resize, positive dimensions, protocol-v6
+  capability filtering, and pre-dispatch rejection of forged v7 requests;
 - filtering and pre-dispatch rejection of forged version-3 process operations
   on a protocol-v2 connection;
 - rejection of a forged protocol-v1 wait before service dispatch;
@@ -166,17 +178,17 @@ step.
 
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 6, and retains
+pipe, authenticates the token, negotiates protocol version 7, and retains
 bounded host and shim evidence. The current guest must advertise the exact
-seventeen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
+eighteen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
-`update`, `stats`, `read-output`, `write-stdin`, and `close-stdin`.
+`update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, and `resize`.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in `a3s.oci.agent-vm-smoke.v7`. The signed path must negotiate protocol version
-6 and the exact seventeen implemented operations. The missing-entitlement path
+in `a3s.oci.agent-vm-smoke.v8`. The signed path must negotiate protocol version
+7 and the exact eighteen implemented operations. The missing-entitlement path
 must exit with status `2`, report no negotiation, terminate the shim process
 group, and leave no private endpoint residue. Both paths also retain
 in-process evidence that the exact runtime-owned endpoint was removed, the
@@ -194,7 +206,9 @@ progress-producing exec that stops while the cgroup is frozen and advances
 again after resume, replay-safe live CPU, memory, cpuset, and PID updates,
 normalized cgroup-v2 statistics, captured stdout/stderr with byte-accurate
 pagination and EOF, piped stdin with idempotent close, rejected writes after
-close or exit, init-exit cleanup of another live exec, stopped observation,
+close or exit, controlling PTY allocation, initial and resized dimensions,
+interactive input, merged terminal output, VEOF close, init-exit cleanup of
+another live exec, stopped observation,
 stopped-only delete, exact delete replay, and a final
 NotFound state query. The marker
 proves that the workload did not run before start and did run afterward. The
@@ -217,7 +231,6 @@ mutation. For a new PID namespace, a dedicated namespace PID 1 completes
 create-time setup and then forks the configured process as PID 2+. The guest
 agent authenticates the launcher → PID 1 → configured-process chain and
 reports the configured process's host-visible PID. Before returning created
-state, the guest opens a pidfd for that exact process; lifecycle and cleanup
 signals use the retained descriptor rather than resolving the numeric PID
 again. PID 1 reaps adopted children and terminates every remaining namespace
 process after the configured process exits. The host verifies marker removal
@@ -248,12 +261,18 @@ uses the same non-destructive `waitid(WNOWAIT)` ownership pattern as the A3S
 Box PID 1 reaper so descendants are killed before the leader PID/PGID can be
 reused.
 
+Terminal execution adapts the existing A3S Box PTY mechanism: `openpty`
+allocates the pair, the launcher creates a session and acquires the slave as
+its controlling terminal, and the workload process group becomes foreground.
+OCI Runtime keeps its own Tokio backpressure and byte-cursor output buffer
+around that proven descriptor model.
+
 The macOS `oci-vm-multi-container-smoke` path keeps two exact targets live on
 the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
 exact operation replay, rejection of cross-container operation-ID reuse, a
 bounded wait on A that does not block B state, exact repeated terminal results
-for both containers, and independent pidfd-backed cleanup. Its schema-v8
+for both containers, and independent pidfd-backed cleanup. Its schema-v9
 namespace phase retains a prepared donor, rejects a wrong-type namespace
 descriptor before state, joins all eight Linux namespace types across two
 workloads, proves retained-rootfs execution after the mount join, and removes
@@ -262,7 +281,7 @@ missing mount-target creation at the create barrier, shared rootfs propagation,
 read-only and masked path enforcement, recursive VFS attributes across a nested
 submount, detached `idmap` and `ridmap` filesystem ownership, read-only rootfs
 behavior, PID 1 supervision, adopted-orphan reaping, exact normal exit, state
-removal, and fixture cleanup. Native Linux runs the equivalent schema-v10
+removal, and fixture cleanup. Native Linux runs the equivalent schema-v11
 sequence through the durable SDK service and additionally proves ID-mapped
 bind recursion without changing the source tree.
 
@@ -287,8 +306,8 @@ therefore retain their exact error class and context without trusting a
 pathname socket.
 
 This is the first Linux executor vertical slice, not complete OCI
-enforcement. A pinned immutable system image, PTY and inherited-descriptor
-I/O, rootless ID mapping, advanced mount semantics, resources, hooks,
+enforcement. A pinned immutable system image, inherited-descriptor I/O,
+rootless ID mapping, advanced mount semantics, resources, hooks,
 exhaustive recovery injection, broader negative isolation cases, and full
 platform-specific lifecycle evidence remain required before a utility-VM
 driver can advance beyond `probe-only`.

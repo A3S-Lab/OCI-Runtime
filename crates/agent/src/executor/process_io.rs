@@ -1,5 +1,5 @@
 use a3s_oci_agent_protocol::{
-    AgentCloseStdinRequest, AgentReadOutputRequest, AgentWriteStdinRequest,
+    AgentCloseStdinRequest, AgentReadOutputRequest, AgentResizeRequest, AgentWriteStdinRequest,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{ErrorCode, OutputChunk, ProcessTarget, Result};
@@ -40,6 +40,14 @@ impl LinuxExecutor {
         };
         io.close_stdin().await
     }
+
+    pub(super) async fn resize_new(&self, request: &AgentResizeRequest) -> Result<()> {
+        let io = {
+            let mut state = self.state.lock().await;
+            process_io_handle(&mut state, &request.process, Access::Resize)?
+        };
+        io.resize(request.size)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +55,7 @@ enum Access {
     Read,
     Write,
     Close,
+    Resize,
 }
 
 fn process_io_handle(
@@ -76,6 +85,12 @@ fn process_io_handle(
                 ),
             ));
         }
+        if access == Access::Resize && record.status == ContainerState::Stopped {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                "configured process has already exited",
+            ));
+        }
         return Ok(record.process.io_handle());
     }
 
@@ -92,6 +107,12 @@ fn process_io_handle(
             )
         })?;
     if access == Access::Write && process.try_wait()?.is_some() {
+        return Err(executor_error(
+            ErrorCode::FailedPrecondition,
+            format!("process {} has already exited", target.process_id),
+        ));
+    }
+    if access == Access::Resize && process.try_wait()?.is_some() {
         return Err(executor_error(
             ErrorCode::FailedPrecondition,
             format!("process {} has already exited", target.process_id),

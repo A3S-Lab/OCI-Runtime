@@ -29,12 +29,13 @@ The runtime:
    Linux rootfs, and verifies a guest-written marker through virtiofs;
 9. boots `/usr/bin/a3s-oci-agent`, carries its host-CID port 4093 connection
    through libkrun to the protected pipe, authenticates the exact shim PID and
-   one-time token, negotiates protocol version 6, and waits for zero
+   one-time token, negotiates protocol version 7, and waits for zero
    guest/shim exit;
 10. runs a fixed OCI bundle through distinct create, start, init signal/wait,
     exact-target exec, process signal/wait, live resource update and stats,
-    pause/resume, process inventory, captured output, piped stdin, and delete
-    calls, verifies replay and cleanup, and keeps the built-in driver disabled;
+    pause/resume, process inventory, captured output, piped stdin, controlling
+    PTYs, terminal resize, and delete calls, verifies replay and cleanup, and
+    keeps the built-in driver disabled;
 11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
@@ -94,11 +95,11 @@ A successful end-to-end agent VM smoke additionally proves that:
 - guest AF_VSOCK reaches the protected Windows named pipe through libkrun;
 - only the exact spawned shim PID is accepted before the token is sent;
 - the real guest authenticates the one-time token and negotiates protocol
-  version 6;
+  version 7;
 - the agent version and `x86_64` guest architecture are reported;
 - the guest advertises exactly create, state, start, kill, delete, wait, exec,
   signal-process, wait-process, pause, resume, processes, update, stats,
-  read-output, write-stdin, and close-stdin;
+  read-output, write-stdin, close-stdin, and resize;
 - the shim reports every VM configuration stage and a zero guest exit;
 - the host rejects an existing console destination rather than overwriting
   it.
@@ -139,6 +140,9 @@ A successful fixed OCI VM smoke additionally proves that:
 - an exact-target process accepts piped stdin, returns captured stdout/stderr
   through bounded byte-cursor pagination with EOF, accepts repeated close, and
   rejects writes after close or exit;
+- a terminal process proves controlling-PTY allocation, exact initial and
+  resized dimensions, interactive input, merged output, one ordered cursor,
+  EOF, and idempotent `VEOF` close;
 - another live exec is terminated and reaped automatically when init exits;
 - kill delivers `SIGTERM`, its exact retry replays the original result, wait
   returns and replays exit code zero, and state then observes `stopped`;
@@ -200,7 +204,7 @@ does not build it.
 The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
-- configured networking, inherited process I/O, or PTY handling works;
+- configured networking or inherited process I/O works;
 - the rootful user/time namespace slice now exercised on native Linux and
   macOS, namespace joins, advanced mount semantics, resources, capabilities,
   seccomp, or hooks work through WHPX;
@@ -220,7 +224,7 @@ The next vertical slice must:
 2. mount one protected runtime-owned root through virtio-fs;
 3. qualify the shared rootful user/time and existing-namespace slices on WHPX
    and add advanced mount, capability, resource, seccomp, and hook enforcement;
-4. qualify the current captured-output and piped-stdin gate on WHPX and add PTY
+4. extend the current piped and terminal I/O gate with inherited-descriptor
    handling plus arbitrary natural exit-code coverage;
 5. reconcile stopped state after host runtime restart;
 6. add concurrent-container and negative isolation evidence;

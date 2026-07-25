@@ -1,5 +1,5 @@
 use a3s_oci_sdk::oci_spec::runtime::Process;
-use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo};
+use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize};
 
 use super::plan::{InitPlan, ProcessPlan};
 
@@ -212,6 +212,45 @@ fn accepts_capture_and_pipe_but_rejects_unimplemented_process_io() {
     let error = InitPlan::from_bundle(&bundle(FIXED_CONFIG), &io)
         .expect_err("inherited output remains unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
+}
+
+#[test]
+fn accepts_only_the_exact_terminal_process_io_contract() {
+    let mut value =
+        serde_json::from_str::<serde_json::Value>(FIXED_CONFIG).expect("decode fixed config");
+    value["process"]["terminal"] = serde_json::Value::Bool(true);
+    let config = serde_json::to_string(&value).expect("encode terminal config");
+    let terminal_io = ProcessIo {
+        stdin: IoMode::Terminal,
+        stdout: IoMode::Terminal,
+        stderr: IoMode::Terminal,
+        terminal_size: Some(TerminalSize {
+            width: 80,
+            height: 24,
+        }),
+    };
+
+    let plan =
+        InitPlan::from_bundle(&bundle(&config), &terminal_io).expect("terminal init process plan");
+    assert!(plan.terminal);
+
+    let process: Process =
+        serde_json::from_value(value["process"].clone()).expect("decode terminal process");
+    let plan =
+        ProcessPlan::from_process(&process, &terminal_io).expect("terminal exec process plan");
+    assert!(plan.terminal);
+
+    let mut partial = terminal_io.clone();
+    partial.stderr = IoMode::Capture;
+    let error = ProcessPlan::from_process(&process, &partial)
+        .expect_err("partial terminal descriptors must fail");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+
+    let mut missing_size = terminal_io;
+    missing_size.terminal_size = None;
+    let error = ProcessPlan::from_process(&process, &missing_size)
+        .expect_err("terminal dimensions are required");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
 }
 
 #[test]

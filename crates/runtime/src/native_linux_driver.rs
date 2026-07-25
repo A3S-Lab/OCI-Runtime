@@ -5,8 +5,8 @@ use a3s_oci_agent::LinuxExecutor;
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
-    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentReadOutputRequest, AgentResizeRequest, AgentSignalProcessRequest, AgentStartRequest,
+    AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
     AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService, GuestPath,
     AGENT_MAX_IO_PAYLOAD_BYTES,
 };
@@ -19,12 +19,12 @@ use a3s_oci_sdk::{
 
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverResizeRequest,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
+    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 
-const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 17] = [
+const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 18] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -42,6 +42,7 @@ const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 17] = [
     RuntimeOperation::ReadOutput,
     RuntimeOperation::WriteStdin,
     RuntimeOperation::CloseStdin,
+    RuntimeOperation::Resize,
 ];
 
 /// Explicitly opted-in native Linux runtime driver.
@@ -341,6 +342,15 @@ impl RuntimeDriver for NativeLinuxDriver {
     async fn close_stdin(&self, target: a3s_oci_sdk::ProcessTarget) -> Result<()> {
         self.executor
             .close_stdin(AgentCloseStdinRequest { process: target })
+            .await
+    }
+
+    async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
+        self.executor
+            .resize(AgentResizeRequest {
+                process: request.target,
+                size: request.size,
+            })
             .await
     }
 }

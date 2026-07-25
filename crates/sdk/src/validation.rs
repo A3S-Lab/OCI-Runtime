@@ -74,6 +74,12 @@ impl ValidateRequest for WriteStdinRequest {
     }
 }
 
+impl ValidateRequest for ResizeRequest {
+    fn validate(&self) -> Result<()> {
+        validate_terminal_size(self.size.width, self.size.height, "resize.size")
+    }
+}
+
 impl ValidateRequest for CheckpointRequest {
     fn validate(&self) -> Result<()> {
         validate_absolute_path(&self.directory, "checkpoint.directory")
@@ -119,7 +125,6 @@ valid_by_construction!(
     ProcessesRequest,
     StatsRequest,
     CloseStdinRequest,
-    ResizeRequest,
     SignalProcessRequest,
     WaitProcessRequest,
 );
@@ -135,18 +140,45 @@ fn initial_process_uses_terminal(request: &CreateRequest) -> bool {
 }
 
 fn validate_process_io(io: &ProcessIo, process_uses_terminal: bool) -> Result<()> {
-    let requests_terminal = matches!(io.stdin, IoMode::Terminal)
-        || matches!(io.stdout, IoMode::Terminal)
-        || matches!(io.stderr, IoMode::Terminal);
-    if requests_terminal && !process_uses_terminal {
+    let terminal_modes = [
+        matches!(io.stdin, IoMode::Terminal),
+        matches!(io.stdout, IoMode::Terminal),
+        matches!(io.stderr, IoMode::Terminal),
+    ];
+    if process_uses_terminal && terminal_modes != [true, true, true] {
+        return Err(invalid_request(
+            "process.terminal requires terminal stdin, stdout, and stderr",
+        ));
+    }
+    if !process_uses_terminal && terminal_modes.iter().any(|terminal| *terminal) {
         return Err(invalid_request(
             "terminal I/O requires process.terminal to be true",
         ));
     }
-    if io.terminal_size.is_some() && !process_uses_terminal {
-        return Err(invalid_request(
-            "terminal_size requires process.terminal to be true",
-        ));
+    match (process_uses_terminal, io.terminal_size) {
+        (true, Some(size)) => {
+            validate_terminal_size(size.width, size.height, "process_io.terminal_size")?
+        }
+        (true, None) => {
+            return Err(invalid_request(
+                "process.terminal requires an initial terminal_size",
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(invalid_request(
+                "terminal_size requires process.terminal to be true",
+            ));
+        }
+        (false, None) => {}
+    }
+    Ok(())
+}
+
+fn validate_terminal_size(width: u16, height: u16, field: &str) -> Result<()> {
+    if width == 0 || height == 0 {
+        return Err(invalid_request(format!(
+            "{field} width and height must both be positive"
+        )));
     }
     Ok(())
 }
@@ -197,7 +229,7 @@ mod tests {
     use crate::{
         CheckpointRequest, ContainerId, ContainerTarget, EventsRequest, ExecRequest, Generation,
         IoMode, OperationContext, OperationId, ProcessId, ProcessIo, ReadOutputRequest,
-        UpdateRequest, WriteStdinRequest,
+        ResizeRequest, TerminalSize, UpdateRequest, WriteStdinRequest,
     };
 
     fn target() -> ContainerTarget {
@@ -261,6 +293,73 @@ mod tests {
             },
         };
         assert!(request.validate().is_err());
+
+        let terminal_process: Process = serde_json::from_value(json!({
+            "cwd": "/",
+            "args": ["/bin/sh"],
+            "user": {"uid": 0, "gid": 0},
+            "terminal": true
+        }))
+        .expect("decode terminal process");
+        let terminal_io = ProcessIo {
+            stdin: IoMode::Terminal,
+            stdout: IoMode::Terminal,
+            stderr: IoMode::Terminal,
+            terminal_size: Some(TerminalSize {
+                width: 80,
+                height: 24,
+            }),
+        };
+        let terminal_request = ExecRequest {
+            context: context(),
+            container: target(),
+            process_id: ProcessId::new("terminal").expect("process ID"),
+            process: terminal_process.clone(),
+            io: terminal_io.clone(),
+        };
+        terminal_request
+            .validate()
+            .expect("exact terminal contract must validate");
+
+        let mut partial = terminal_request.clone();
+        partial.io.stderr = IoMode::Capture;
+        assert!(partial.validate().is_err());
+
+        let mut missing_size = terminal_request.clone();
+        missing_size.io.terminal_size = None;
+        assert!(missing_size.validate().is_err());
+
+        let mut zero_size = terminal_request;
+        zero_size.io.terminal_size = Some(TerminalSize {
+            width: 0,
+            height: 24,
+        });
+        assert!(zero_size.validate().is_err());
+
+        ResizeRequest {
+            process: crate::ProcessTarget {
+                container: target(),
+                process_id: ProcessId::new("terminal").expect("process ID"),
+            },
+            size: TerminalSize {
+                width: 120,
+                height: 40,
+            },
+        }
+        .validate()
+        .expect("positive terminal resize");
+        assert!(ResizeRequest {
+            process: crate::ProcessTarget {
+                container: target(),
+                process_id: ProcessId::new("terminal").expect("process ID"),
+            },
+            size: TerminalSize {
+                width: 120,
+                height: 0,
+            },
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

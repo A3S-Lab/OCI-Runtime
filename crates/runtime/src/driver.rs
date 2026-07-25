@@ -3,7 +3,7 @@ use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
     IsolationRequest, OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord,
-    ProcessTarget, Result, RuntimeOperation, Signal,
+    ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -205,6 +205,15 @@ pub struct DriverWriteStdinRequest {
     pub data: Vec<u8>,
 }
 
+/// Exact terminal resize passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverResizeRequest {
+    /// Exact container generation and process identity.
+    pub target: ProcessTarget,
+    /// Positive terminal dimensions.
+    pub size: TerminalSize,
+}
+
 /// Exact pause or resume input passed to one driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverContainerOperationRequest {
@@ -356,5 +365,10 @@ pub trait RuntimeDriver: Send + Sync {
     /// Close one exact process stdin.
     async fn close_stdin(&self, _target: ProcessTarget) -> Result<()> {
         Err(Error::unsupported("close-stdin"))
+    }
+
+    /// Resize one exact process terminal.
+    async fn resize(&self, _request: DriverResizeRequest) -> Result<()> {
+        Err(Error::unsupported("resize"))
     }
 }

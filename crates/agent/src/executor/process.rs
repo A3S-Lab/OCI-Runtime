@@ -63,13 +63,17 @@ impl PreparedProcess {
             .arg(&control_name)
             .env_clear()
             .kill_on_drop(true);
-        ProcessIoHandle::configure(&mut command, io)?;
+        let io_setup = ProcessIoHandle::configure(&mut command, io)?;
+        let terminal = io_setup.uses_terminal();
         // SAFETY: the callback runs in the freshly forked command child and
-        // performs one bounded write to the already-open cgroup.procs file.
+        // performs one bounded write to the already-open cgroup.procs file,
+        // then establishes the configured controlling terminal when present.
         unsafe {
-            command.pre_exec(move || match cgroup_procs {
-                Some(descriptor) => cgroup::join_from_pre_exec(descriptor),
-                None => Ok(()),
+            command.pre_exec(move || {
+                if let Some(descriptor) = cgroup_procs {
+                    cgroup::join_from_pre_exec(descriptor)?;
+                }
+                super::terminal::prepare_child_terminal(terminal)
             });
         }
         let mut child = command.spawn().map_err(|error| {
@@ -78,7 +82,7 @@ impl PreparedProcess {
                 format!("failed to spawn prepared container init: {error}"),
             )
         })?;
-        let process_io = match ProcessIoHandle::attach(&mut child, io) {
+        let process_io = match ProcessIoHandle::attach(io_setup, &mut child, io) {
             Ok(process_io) => process_io,
             Err(error) => {
                 terminate(&mut child).await;

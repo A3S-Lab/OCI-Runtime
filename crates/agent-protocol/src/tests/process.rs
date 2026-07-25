@@ -258,7 +258,7 @@ async fn protocol_v6_captures_output_and_controls_stdin() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let agent = Arc::new(TestAgent::default());
     let server = spawn_server_with_agent(guest, token(25), Arc::clone(&agent));
-    let client = AgentClient::connect(host, token(25))
+    let client = AgentClient::connect_for_test(host, token(25), 6, 6)
         .await
         .expect("connect protocol-v6 client");
     assert_eq!(client.hello().selected_version(), 6);
@@ -342,6 +342,17 @@ async fn protocol_v6_captures_output_and_controls_stdin() {
         .await
         .expect_err("write after close must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    let resize_error = client
+        .resize(AgentResizeRequest {
+            process: process.clone(),
+            size: TerminalSize {
+                width: 120,
+                height: 40,
+            },
+        })
+        .await
+        .expect_err("protocol-v6 client must reject a v7 terminal resize locally");
+    assert_eq!(resize_error.code, ErrorCode::Unsupported);
 
     let generation = target.generation.expect("exact target");
     let key = (target.id, generation, ProcessId::init());
@@ -352,6 +363,123 @@ async fn protocol_v6_captures_output_and_controls_stdin() {
     }
 
     drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v6 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v7_resizes_one_exact_process_terminal() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let agent = Arc::new(TestAgent::default());
+    let server = spawn_server_with_agent(guest, token(27), Arc::clone(&agent));
+    let client = AgentClient::connect(host, token(27))
+        .await
+        .expect("connect protocol-v7 client");
+    assert_eq!(client.hello().selected_version(), 7);
+    assert_eq!(
+        client.hello().capabilities().operations().last(),
+        Some(&crate::AgentOperation::Resize)
+    );
+
+    let create = create_request_for("terminal-container", 10, "terminal-create");
+    let target = create.target.clone();
+    client
+        .create(create)
+        .await
+        .expect("create terminal container");
+    let process = ProcessTarget {
+        container: target,
+        process_id: ProcessId::init(),
+    };
+    let size = TerminalSize {
+        width: 120,
+        height: 40,
+    };
+    client
+        .resize(AgentResizeRequest {
+            process: process.clone(),
+            size,
+        })
+        .await
+        .expect("resize terminal");
+
+    let key = process_key(&process).expect("exact process key");
+    assert_eq!(
+        agent.state.lock().expect("agent state lock").terminal_sizes[&key],
+        size
+    );
+
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v7 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v6_filters_and_rejects_forged_v7_terminal_resize() {
+    let (mut host, guest) = tokio::io::duplex(1024 * 1024);
+    let expected_token = token(28);
+    let server = spawn_server(guest, expected_token.clone());
+
+    write_frame(
+        &mut host,
+        &HostHello {
+            protocols: ProtocolRange { min: 6, max: 6 },
+            token: expected_token,
+        },
+    )
+    .await
+    .expect("write protocol-v6 hello");
+    let hello: HelloOutcome = read_frame(&mut host)
+        .await
+        .expect("read protocol-v6 hello")
+        .expect("server returned protocol-v6 hello");
+    let HelloOutcome::Accepted { hello } = hello else {
+        panic!("protocol-v6 negotiation was rejected");
+    };
+    assert_eq!(hello.selected_version(), 6);
+    assert!(!hello
+        .capabilities()
+        .operations()
+        .contains(&crate::AgentOperation::Resize));
+
+    write_frame(
+        &mut host,
+        &RequestEnvelope {
+            version: 6,
+            request_id: 43,
+            request: AgentRequest::Resize(AgentResizeRequest {
+                process: ProcessTarget {
+                    container: ContainerTarget::exact(
+                        container_id("forged-terminal"),
+                        Generation(1),
+                    ),
+                    process_id: ProcessId::init(),
+                },
+                size: TerminalSize {
+                    width: 120,
+                    height: 40,
+                },
+            }),
+        },
+    )
+    .await
+    .expect("write forged protocol-v6 terminal resize");
+    let response: ResponseEnvelope = read_frame(&mut host)
+        .await
+        .expect("read forged terminal resize response")
+        .expect("server returned forged terminal resize response");
+    assert_eq!(response.version, 6);
+    assert_eq!(response.request_id, 43);
+    let ResponseOutcome::Failed { error } = response.outcome else {
+        panic!("forged protocol-v6 terminal resize unexpectedly succeeded");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+
+    drop(host);
     server
         .await
         .expect("server task")

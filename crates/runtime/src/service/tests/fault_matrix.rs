@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        36,
+        38,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -57,6 +57,7 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 | DriverOperation::ReadOutput
                 | DriverOperation::WriteStdin
                 | DriverOperation::CloseStdin
+                | DriverOperation::Resize
         ) {
             setup
                 .start(StartRequest {
@@ -193,6 +194,7 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::ReadOutput
             | DriverOperation::WriteStdin
             | DriverOperation::CloseStdin
+            | DriverOperation::Resize
     )
 }
 
@@ -216,6 +218,7 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::ReadOutput(_), DriverOperation::ReadOutput)
             | (DriverCall::WriteStdin(_), DriverOperation::WriteStdin)
             | (DriverCall::CloseStdin(_), DriverOperation::CloseStdin)
+            | (DriverCall::Resize(_), DriverOperation::Resize)
     )
 }
 
@@ -385,6 +388,20 @@ async fn invoke_operation(
                     process: ProcessTarget {
                         container: target.expect("close-stdin target").clone(),
                         process_id: ProcessId::init(),
+                    },
+                })
+                .await
+        }
+        DriverOperation::Resize => {
+            service
+                .resize(ResizeRequest {
+                    process: ProcessTarget {
+                        container: target.expect("resize target").clone(),
+                        process_id: ProcessId::init(),
+                    },
+                    size: TerminalSize {
+                        width: 120,
+                        height: 40,
                     },
                 })
                 .await

@@ -59,7 +59,7 @@ fn agent_vm_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.agent-vm-smoke.v7");
+    assert_eq!(report["schema_version"], "a3s.oci.agent-vm-smoke.v8");
     assert_ne!(report["status"], "available");
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         let cleanup = &report["macos_cleanup"];
@@ -110,7 +110,7 @@ fn native_linux_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v6");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v7");
     assert_ne!(report["status"], "available");
 }
 
@@ -136,7 +136,7 @@ fn native_linux_multi_container_smoke_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.native-linux-multi-container-smoke.v10"
+        "a3s.oci.native-linux-multi-container-smoke.v11"
     );
     assert_ne!(report["status"], "available");
 }
@@ -163,7 +163,7 @@ fn native_linux_fault_cleanup_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.native-linux-fault-cleanup.v4"
+        "a3s.oci.native-linux-fault-cleanup.v5"
     );
     assert_eq!(report["lifecycle"]["requested_fault"], "after-start");
     assert_ne!(report["status"], "available");
@@ -189,7 +189,7 @@ fn oci_vm_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.oci-vm-smoke.v7");
+    assert_eq!(report["schema_version"], "a3s.oci.oci-vm-smoke.v8");
     assert_ne!(report["status"], "available");
 }
 
@@ -217,7 +217,7 @@ fn oci_vm_multi_container_smoke_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.oci-vm-multi-container-smoke.v8"
+        "a3s.oci.oci-vm-multi-container-smoke.v9"
     );
     assert_ne!(report["status"], "available");
 }
@@ -244,7 +244,7 @@ fn oci_vm_fault_cleanup_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("diagnostic output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.oci-vm-fault-cleanup.v3");
+    assert_eq!(report["schema_version"], "a3s.oci.oci-vm-fault-cleanup.v4");
     assert_eq!(report["lifecycle"]["requested_fault"], "after-kill");
     assert_ne!(report["status"], "available");
 }
