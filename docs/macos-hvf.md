@@ -414,6 +414,11 @@ positive, and the nested report proved exact endpoint removal, complete
 current-process descriptor-inventory restoration, and disappearance of both
 shim/worker PIDs after exit.
 
+The guest opens a pidfd for the authenticated namespace PID 1 before returning
+created state. The lifecycle `SIGTERM` and all forced cleanup therefore target
+that retained kernel process reference instead of resolving its numeric PID
+again.
+
 The same command with an unsigned shim returned status `2` before protocol
 negotiation, retained the nested `krun_start_enter` failure, wrote no workload
 marker, and left no endpoint or VM worker. CI exercises the signed lifecycle
@@ -447,6 +452,14 @@ endpoint removal, shim and direct VM-worker reap, and full descriptor-inventory
 restoration. The Apple Silicon HVF qualification and macOS CI both run this
 gate; an unavailable-hypervisor branch must fail before negotiation while
 retaining the same host cleanup evidence.
+
+The pidfd requalification used the 8,493,136-byte static arm64 agent with
+SHA-256
+`28a283576a62fc36c02642638580ec9fbed29953b868bcb0705218cef50aaa3e`.
+Both retained init handles completed independently, the observed container
+PIDs were 205 and 207, the host descriptor inventory returned from 10 to 10,
+and the endpoint, both workload markers, shim, VM worker, and guest runtime
+root were removed.
 
 ## Fault-injected shutdown cleanup
 

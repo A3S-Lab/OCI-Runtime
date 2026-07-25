@@ -10,6 +10,19 @@ sudo apt-get update
 sudo apt-get install --yes busybox-static jq
 cargo build -p a3s-oci-agent -p a3s-oci-cli
 
+features="$("$PWD/target/debug/a3s-oci" features)"
+printf '%s\n' "$features"
+jq --exit-status \
+  '.platform == "linux"
+   and any(
+     .drivers[];
+     .driver == "native-linux"
+     and .status == "available"
+     and .readiness == "probe-only"
+     and .evidence.pidfd_signaling == "true"
+   )' \
+  <<<"$features" >/dev/null
+
 bundle="$runner_temp/a3s-native-bundle"
 bundle_b="$runner_temp/a3s-native-bundle-b"
 work_parent="$runner_temp/a3s-native-work"

@@ -118,15 +118,18 @@ including relative bundle bind sources, common VFS flags, propagation, and
 bounded filesystem-specific data. Requested IPC, network, cgroup, and PID
 namespace setup is atomic with UTS and mount isolation. For a new PID
 namespace, the container init runs as namespace PID 1 while the guest agent
-authenticates and reports its host-visible PID. The host verifies marker
-removal and that VM shutdown leaves no new guest-agent runtime directory.
+authenticates and reports its host-visible PID. Before returning created state,
+the guest opens a pidfd for that exact process; lifecycle and cleanup signals
+use the retained descriptor rather than resolving the numeric PID again. The
+host verifies marker removal and that VM shutdown leaves no new guest-agent
+runtime directory.
 
 The macOS `oci-vm-multi-container-smoke` path keeps two exact targets live on
 the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
 exact operation replay, rejection of cross-container operation-ID reuse, and
-independent cleanup. Native Linux runs the equivalent sequence through the
-durable SDK service around the same executor.
+independent pidfd-backed cleanup. Native Linux runs the equivalent sequence
+through the durable SDK service around the same executor.
 
 The `oci-vm-fault-cleanup` companion stops after a successful create, start, or
 kill request and never sends delete. Session EOF must still make the agent call

@@ -36,8 +36,9 @@ profile.
 
 The runtime has two execution paths:
 
-- **Native Linux** uses namespaces, mounts, cgroup v2, seccomp, capabilities,
-  and process supervision without requiring KVM.
+- **Native Linux** runs the reviewed namespace and mount profile with
+  PID-reuse-safe process control without requiring KVM. Complete cgroup,
+  seccomp, capability, and supervision enforcement remains a release gate.
 - **Utility VM** hosts the same Linux executor behind an authenticated guest
   agent, using KVM on Linux, HVF on macOS, or WHPX on Windows.
 
@@ -83,9 +84,9 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   monotonic generations, operation IDs, replay, fencing, reconciliation, and
   quarantine, backed by exhaustive durable-write and driver-boundary fault
   matrices
-- **Shared Linux Executor**: Reuse one fail-closed namespace, mount, process,
-  and cleanup implementation directly on Linux and through the guest agent,
-  with independently fenced per-container generations
+- **Shared Linux Executor**: Reuse one fail-closed namespace, mount, pidfd
+  process-control, and cleanup implementation directly on Linux and through
+  the guest agent, with independently fenced per-container generations
 - **Cross-Platform Drivers**: Inspect native Linux, KVM, HVF, and WHPX
   prerequisites without silently weakening requested isolation
 - **Typed SDK and IPC**: Expose an async `Send + Sync` Rust contract with
@@ -422,8 +423,8 @@ The current executor implements a reviewed bootstrap vertical slice:
 - recursively private mount propagation and `pivot_root`;
 - ordered existing-target OCI mounts with bind/rbind and common VFS options;
 - PID-authenticated create/start barrier;
-- credentials, umask, `no_new_privileges`, `execve`, signaling, observation,
-  and scoped cleanup.
+- credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
+  signaling, observation, and scoped cleanup.
 
 Unimplemented OCI fields are rejected instead of ignored. User and time
 namespaces, namespace joins, complete mount semantics, cgroup resources,
@@ -452,9 +453,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Real rootful core lifecycle, two-container generation and mutation isolation, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful core lifecycle, two-container generation and mutation isolation, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated static arm64 guest agent, fixed and two-container OCI lifecycles, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated static arm64 guest agent, pidfd-backed fixed and two-container OCI lifecycles, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -475,7 +476,7 @@ flowchart TB
     native["Native Linux<br/>NativeLinuxDriver · experimental opt-in"]
     utility["Utility VM host · qualification path<br/>isolated a3s-oci-krun-shim → libkrun<br/>KVM · HVF · WHPX"]
     agent["A3S Linux guest<br/>authenticated AF_VSOCK → a3s-oci-agent"]
-    executor["Shared LinuxExecutor<br/>namespaces · mounts · PID 1 · process lifecycle"]
+    executor["Shared LinuxExecutor<br/>namespaces · mounts · PID 1 · pidfd process control"]
 
     consumers --> control --> selection
     control <--> state
@@ -538,6 +539,9 @@ Security-sensitive platform controls include:
   natural zero exit, worker reap, and marker cleanup;
 - private `0700` macOS agent directories and `0600` Unix sockets, with
   `LOCAL_PEERPID` plus direct shim-child verification before token negotiation;
+- retained pidfds for every authenticated init PID, with all lifecycle and
+  cleanup signals delivered through the descriptor rather than a reused
+  numeric PID;
 - isolated macOS shim process groups so timeout and failure cleanup terminate
   both the public shim and its VM worker;
 - shared Windows/macOS fixed-lifecycle evidence with exact mutation replay,
@@ -578,11 +582,13 @@ Platform CI covers:
 
 - the 237-point durable commit matrix and all 12 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
-- Ubuntu x86_64 native lifecycle and three-phase no-delete cleanup without KVM;
-- Ubuntu aarch64 native lifecycle and three-phase no-delete cleanup without KVM;
+- Ubuntu x86_64 native pidfd probe, lifecycle, multi-container isolation, and
+  three-phase no-delete cleanup without KVM;
+- Ubuntu aarch64 native pidfd probe, lifecycle, multi-container isolation, and
+  three-phase no-delete cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,
-  fixed OCI lifecycle, three-phase no-delete cleanup, and missing-entitlement
-  fail-closed gates;
+  pidfd-backed fixed and multi-container OCI lifecycles, three-phase no-delete
+  cleanup, and missing-entitlement fail-closed gates;
 - Windows WHPX and libkrun context gates;
 - static x86_64 and aarch64 musl guest-agent output.
 
