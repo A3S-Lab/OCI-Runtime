@@ -2,23 +2,27 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
-    Generation, OciBundle, OperationContext, OperationId, ProcessIo, Result, Signal,
+    Generation, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget,
+    Result, Signal,
 };
 use tokio::io::{AsyncWriteExt, DuplexStream};
 
 use crate::model::{
-    AgentCreateRequest, AgentDeleteRequest, AgentHello, AgentKillRequest, AgentRequest,
-    AgentResponse, AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest,
-    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
+    AgentProcess, AgentRequest, AgentResponse, AgentSignalProcessRequest, AgentStartRequest,
+    AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome,
+    HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
 };
 use crate::wire::{read_frame, read_frame_for_test, write_frame};
 use crate::{
     serve_agent_connection, AgentCapabilities, AgentClient, GuestAgentService, GuestPath,
     SessionToken,
 };
+
+mod process;
 
 const TEST_CONFIG: &str = concat!(
     "{\n",
@@ -37,6 +41,7 @@ const TEST_CONFIG: &str = concat!(
 struct TestAgent {
     state: Mutex<TestAgentState>,
     wait_dispatches: AtomicUsize,
+    exec_dispatches: AtomicUsize,
 }
 
 #[derive(Debug, Default)]
@@ -44,14 +49,30 @@ struct TestAgentState {
     states: HashMap<ContainerId, AgentState>,
     highest_generations: HashMap<ContainerId, Generation>,
     exits: HashMap<ContainerId, ExitStatus>,
+    processes: HashMap<(ContainerId, Generation, ProcessId), AgentProcess>,
+    process_exits: HashMap<(ContainerId, Generation, ProcessId), ExitStatus>,
     next_pid: i32,
 }
 
 #[async_trait]
 impl GuestAgentService for TestAgent {
     fn capabilities(&self) -> AgentCapabilities {
-        AgentCapabilities::linux_executor("0.1.0-test", std::env::consts::ARCH)
-            .expect("valid test capabilities")
+        AgentCapabilities::new(
+            "0.1.0-test",
+            std::env::consts::ARCH,
+            vec![
+                crate::AgentOperation::Create,
+                crate::AgentOperation::State,
+                crate::AgentOperation::Start,
+                crate::AgentOperation::Kill,
+                crate::AgentOperation::Delete,
+                crate::AgentOperation::Wait,
+                crate::AgentOperation::Exec,
+                crate::AgentOperation::SignalProcess,
+                crate::AgentOperation::WaitProcess,
+            ],
+        )
+        .expect("valid test capabilities")
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
@@ -187,6 +208,84 @@ impl GuestAgentService for TestAgent {
         })
     }
 
+    async fn exec(&self, request: AgentExecRequest) -> Result<AgentProcess> {
+        self.exec_dispatches.fetch_add(1, Ordering::SeqCst);
+        let generation = request
+            .target
+            .container
+            .generation
+            .expect("validated guest exec carries an exact generation");
+        let mut agent = self.state.lock().expect("agent state lock");
+        let container = agent
+            .states
+            .get(&request.target.container.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if container.target() != &request.target.container {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        if container.status() != ContainerState::Running {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "guest exec requires a running container",
+            ));
+        }
+        let key = (
+            request.target.container.id.clone(),
+            generation,
+            request.target.process_id.clone(),
+        );
+        if agent.processes.contains_key(&key) {
+            return Err(Error::new(
+                ErrorCode::AlreadyExists,
+                "guest exec process ID already exists",
+            ));
+        }
+        agent.next_pid += 101;
+        let process = AgentProcess::new(
+            request.target,
+            agent.next_pid,
+            request.process.terminal().unwrap_or(false),
+        )?;
+        agent.processes.insert(key, process.clone());
+        Ok(process)
+    }
+
+    async fn signal_process(&self, request: AgentSignalProcessRequest) -> Result<()> {
+        let key = process_key(&request.target)?;
+        let mut agent = self.state.lock().expect("agent state lock");
+        if !agent.processes.contains_key(&key) {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest exec process does not exist",
+            ));
+        }
+        agent
+            .process_exits
+            .insert(key, ExitStatus::signaled(request.signal.get(), false)?);
+        Ok(())
+    }
+
+    async fn wait_process(&self, request: AgentWaitProcessRequest) -> Result<ExitStatus> {
+        let key = process_key(&request.target)?;
+        let agent = self.state.lock().expect("agent state lock");
+        if !agent.processes.contains_key(&key) {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest exec process does not exist",
+            ));
+        }
+        agent.process_exits.get(&key).cloned().ok_or_else(|| {
+            Error::new(
+                ErrorCode::DeadlineExceeded,
+                "test exec process has not exited",
+            )
+            .for_operation("agent-wait-process")
+        })
+    }
+
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
         let mut agent = self.state.lock().expect("agent state lock");
         let current = agent
@@ -216,6 +315,24 @@ fn operation_id(value: &str) -> OperationId {
     identifier(value, OperationId::new)
 }
 
+fn process_id(value: &str) -> ProcessId {
+    identifier(value, ProcessId::new)
+}
+
+fn process_key(target: &ProcessTarget) -> Result<(ContainerId, Generation, ProcessId)> {
+    let generation = target.container.generation.ok_or_else(|| {
+        Error::new(
+            ErrorCode::InvalidArgument,
+            "test process target requires an exact generation",
+        )
+    })?;
+    Ok((
+        target.container.id.clone(),
+        generation,
+        target.process_id.clone(),
+    ))
+}
+
 fn token(byte: u8) -> SessionToken {
     SessionToken::from_bytes([byte; 32]).expect("nonzero session token")
 }
@@ -234,6 +351,28 @@ fn create_request_for(container: &str, generation: u64, operation: &str) -> Agen
             &bundle,
             GuestPath::new(format!("/run/a3s/bundles/{container}")).expect("guest path"),
         ),
+        io: ProcessIo::default(),
+    }
+}
+
+fn exec_request(target: ContainerTarget, process_name: &str, operation: &str) -> AgentExecRequest {
+    let process: Process = serde_json::from_str(
+        r#"{
+            "terminal": false,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/sh", "-c", "exit 0"],
+            "cwd": "/",
+            "env": ["A3S_EXEC_TEST=1"]
+        }"#,
+    )
+    .expect("valid OCI exec process");
+    AgentExecRequest {
+        context: OperationContext::new(operation_id(operation)),
+        target: ProcessTarget {
+            container: target,
+            process_id: process_id(process_name),
+        },
+        process,
         io: ProcessIo::default(),
     }
 }
@@ -320,7 +459,7 @@ async fn negotiates_and_round_trips_the_core_oci_lifecycle() {
 async fn protocol_v2_wait_returns_and_replays_the_exact_exit_status() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let server = spawn_server(guest, token(18));
-    let client = AgentClient::connect(host, token(18))
+    let client = AgentClient::connect_for_test(host, token(18), 2, 2)
         .await
         .expect("connect protocol-v2 client");
     assert_eq!(client.hello().selected_version(), 2);
@@ -590,7 +729,7 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 3, 3)
+    let error = AgentClient::connect_for_test(host, token(9), 4, 4)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);

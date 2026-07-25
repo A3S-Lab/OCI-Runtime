@@ -4,9 +4,10 @@ use a3s_oci_sdk::{async_trait, Error, ErrorCode, ExitStatus, Result};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::model::{
-    protocol_error, AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentHello,
-    AgentKillRequest, AgentRequest, AgentResponse, AgentStartRequest, AgentState,
-    AgentStateRequest, AgentWaitRequest, HelloOutcome, HostHello, RequestEnvelope,
+    protocol_error, AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
+    AgentHello, AgentKillRequest, AgentProcess, AgentProcessExit, AgentProcessSignal, AgentRequest,
+    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, RequestEnvelope,
     ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::validation::negotiate_protocol;
@@ -40,6 +41,21 @@ pub trait GuestAgentService: Send + Sync {
     /// Wait for the exact container init process.
     async fn wait(&self, _request: AgentWaitRequest) -> Result<ExitStatus> {
         Err(Error::unsupported("agent-wait"))
+    }
+
+    /// Execute an additional complete OCI process configuration.
+    async fn exec(&self, _request: AgentExecRequest) -> Result<AgentProcess> {
+        Err(Error::unsupported("agent-exec"))
+    }
+
+    /// Signal one exact init or exec process.
+    async fn signal_process(&self, _request: AgentSignalProcessRequest) -> Result<()> {
+        Err(Error::unsupported("agent-signal-process"))
+    }
+
+    /// Wait for one exact init or exec process.
+    async fn wait_process(&self, _request: AgentWaitProcessRequest) -> Result<ExitStatus> {
+        Err(Error::unsupported("agent-wait-process"))
     }
 }
 
@@ -146,6 +162,30 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             Ok(AgentResponse::Deleted)
         }
         AgentRequest::Wait(request) => service.wait(request).await.map(AgentResponse::ExitStatus),
+        AgentRequest::Exec(request) => {
+            let expected_target = request.target.clone();
+            let process = service.exec(*request).await?;
+            if process.target() != &expected_target {
+                return Err(invalid_service_response(protocol_error(
+                    ErrorCode::Conflict,
+                    format!(
+                        "exec service returned process target {:?}, expected {expected_target:?}",
+                        process.target()
+                    ),
+                )));
+            }
+            Ok(AgentResponse::Process(process))
+        }
+        AgentRequest::SignalProcess(request) => {
+            let target = request.target.clone();
+            service.signal_process(request).await?;
+            AgentProcessSignal::new(target).map(AgentResponse::ProcessSignaled)
+        }
+        AgentRequest::WaitProcess(request) => {
+            let target = request.target.clone();
+            let status = service.wait_process(request).await?;
+            AgentProcessExit::new(target, status).map(AgentResponse::ProcessExit)
+        }
     }
 }
 

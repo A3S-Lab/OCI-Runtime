@@ -2,13 +2,15 @@ use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerTarget, CreateRequest, ErrorCode, IsolationRequest, OciBundle, Result, ValidateRequest,
+    ContainerTarget, CreateRequest, ErrorCode, ExecRequest, IsolationRequest, OciBundle,
+    ProcessTarget, Result, SignalProcessRequest, ValidateRequest, WaitProcessRequest,
 };
 
 use crate::model::{
-    protocol_error, AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentHello,
-    AgentKillRequest, AgentRequest, AgentResponse, AgentStartRequest, AgentState,
-    AgentStateRequest, AgentWaitRequest, ProtocolRange, RequestEnvelope, ResponseEnvelope,
+    protocol_error, AgentBundle, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
+    AgentHello, AgentKillRequest, AgentProcess, AgentProcessExit, AgentProcessSignal, AgentRequest,
+    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, ProtocolRange, RequestEnvelope, ResponseEnvelope,
     ResponseOutcome, AGENT_MAX_FRAME_BYTES,
 };
 
@@ -56,6 +58,43 @@ impl AgentWaitRequest {
     }
 }
 
+impl AgentExecRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(&self.target)?;
+        ExecRequest {
+            context: self.context.clone(),
+            container: self.target.container.clone(),
+            process_id: self.target.process_id.clone(),
+            process: self.process.clone(),
+            io: self.io.clone(),
+        }
+        .validate()
+    }
+}
+
+impl AgentSignalProcessRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(&self.target)?;
+        SignalProcessRequest {
+            context: self.context.clone(),
+            process: self.target.clone(),
+            signal: self.signal,
+        }
+        .validate()
+    }
+}
+
+impl AgentWaitProcessRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(&self.target)?;
+        WaitProcessRequest {
+            process: self.target.clone(),
+            timeout_ms: self.timeout_ms,
+        }
+        .validate()
+    }
+}
+
 impl AgentStartRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(&self.target)?;
@@ -84,11 +123,13 @@ impl AgentRequest {
             Self::Kill(request) => request.validate(),
             Self::Delete(request) => request.validate(),
             Self::Wait(request) => request.validate(),
+            Self::Exec(request) => request.validate(),
+            Self::SignalProcess(request) => request.validate(),
+            Self::WaitProcess(request) => request.validate(),
         }
     }
 
     pub(crate) fn validate_for_protocol(&self, selected_version: u16) -> Result<()> {
-        self.validate()?;
         if selected_version < self.minimum_protocol_version() {
             return Err(protocol_error(
                 ErrorCode::Unsupported,
@@ -98,7 +139,7 @@ impl AgentRequest {
                 ),
             ));
         }
-        Ok(())
+        self.validate()
     }
 
     const fn minimum_protocol_version(&self) -> u16 {
@@ -107,6 +148,7 @@ impl AgentRequest {
                 1
             }
             Self::Wait(_) => 2,
+            Self::Exec(_) | Self::SignalProcess(_) | Self::WaitProcess(_) => 3,
         }
     }
 }
@@ -126,24 +168,66 @@ impl AgentState {
     }
 }
 
+impl AgentProcess {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(self.target())?;
+        if self.target().process_id.is_init() {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                "exec response cannot use the reserved init process ID",
+            ));
+        }
+        if self.pid() <= 0 {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                format!("guest returned invalid exec process PID {}", self.pid()),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl AgentProcessSignal {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(self.target())
+    }
+}
+
+impl AgentProcessExit {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_process_target(self.target())?;
+        self.status().validate()
+    }
+}
+
 impl AgentResponse {
     pub(crate) fn validate(&self) -> Result<()> {
         match self {
             Self::State(state) => state.validate(),
             Self::Deleted => Ok(()),
             Self::ExitStatus(status) => status.validate(),
+            Self::Process(process) => process.validate(),
+            Self::ProcessSignaled(signal) => signal.validate(),
+            Self::ProcessExit(exit) => exit.validate(),
         }
     }
 
     pub(crate) fn validate_for_protocol(&self, selected_version: u16) -> Result<()> {
-        self.validate()?;
-        if selected_version == 1 && matches!(self, Self::ExitStatus(_)) {
+        let minimum_version = match self {
+            Self::State(_) | Self::Deleted => 1,
+            Self::ExitStatus(_) => 2,
+            Self::Process(_) | Self::ProcessSignaled(_) | Self::ProcessExit(_) => 3,
+        };
+        if selected_version < minimum_version {
             return Err(protocol_error(
                 ErrorCode::Unsupported,
-                "protocol version 1 cannot carry an exit-status response",
+                format!(
+                    "agent response requires protocol version {minimum_version}, negotiated \
+                     {selected_version}"
+                ),
             ));
         }
-        Ok(())
+        self.validate()
     }
 }
 
@@ -246,6 +330,10 @@ fn validate_exact_target(target: &ContainerTarget) -> Result<()> {
             ),
         )),
     }
+}
+
+fn validate_exact_process_target(target: &ProcessTarget) -> Result<()> {
+    validate_exact_target(&target.container)
 }
 
 fn validate_digest(value: &str) -> Result<()> {

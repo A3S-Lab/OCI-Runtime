@@ -133,6 +133,22 @@ identifier!(ProcessId, "process ID");
 identifier!(OperationId, "operation ID");
 identifier!(TrustDomainId, "trust-domain ID");
 
+const INIT_PROCESS_ID: &str = "init";
+
+impl ProcessId {
+    /// Reserved process ID representing the container's configured init process.
+    #[must_use]
+    pub fn init() -> Self {
+        Self(INIT_PROCESS_ID.to_string())
+    }
+
+    /// Whether this ID addresses the container's configured init process.
+    #[must_use]
+    pub fn is_init(&self) -> bool {
+        self.as_str() == INIT_PROCESS_ID
+    }
+}
+
 /// Monotonic incarnation of a container ID used to reject stale retries.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -142,7 +158,7 @@ pub struct Generation(pub u64);
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerId, Generation};
+    use super::{ContainerId, Generation, ProcessId};
 
     #[test]
     fn accepts_path_safe_identifier() {
@@ -175,6 +191,14 @@ mod tests {
                 "{value:?} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn constructs_the_reserved_init_process_id() {
+        let init = ProcessId::init();
+        assert_eq!(init.as_str(), "init");
+        assert!(init.is_init());
+        assert!(!ProcessId::new("exec-1").expect("process ID").is_init());
     }
 
     #[test]
