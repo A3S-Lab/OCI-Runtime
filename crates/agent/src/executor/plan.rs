@@ -6,10 +6,12 @@ use serde_json::{Map, Value};
 
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
+use super::rootfs::RootfsPropagation;
 
 const MAX_ARGUMENTS: usize = 4_096;
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
 const MAX_EXEC_BYTES: usize = 1024 * 1024;
+const MAX_RESTRICTED_PATHS: usize = 4_096;
 const LINUX_UTS_NAME_MAX: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +28,10 @@ pub(super) struct InitPlan {
     pub(super) no_new_privileges: bool,
     pub(super) namespaces: NamespacePlan,
     pub(super) mounts: Vec<MountPlan>,
+    pub(super) root_readonly: bool,
+    pub(super) rootfs_propagation: Option<RootfsPropagation>,
+    pub(super) masked_paths: Vec<PathBuf>,
+    pub(super) readonly_paths: Vec<PathBuf>,
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
 }
@@ -53,12 +59,7 @@ impl InitPlan {
                 "the bootstrap executor currently requires the normalized relative path `rootfs`",
             ));
         }
-        if root.readonly().unwrap_or(false) {
-            return Err(unsupported(
-                "root.readonly",
-                "read-only root filesystems are not enforced yet",
-            ));
-        }
+        let root_readonly = root.readonly().unwrap_or(false);
 
         let process = spec
             .process()
@@ -109,11 +110,45 @@ impl InitPlan {
             user.gid(),
             &additional_gids,
         )?;
+        let rootfs_propagation = spec
+            .linux()
+            .as_ref()
+            .and_then(|linux| linux.rootfs_propagation().as_deref())
+            .map(RootfsPropagation::parse)
+            .transpose()?;
+        let masked_paths = plan_restricted_paths(
+            spec.linux()
+                .as_ref()
+                .and_then(|linux| linux.masked_paths().as_deref()),
+            "linux.maskedPaths",
+        )?;
+        if masked_paths.iter().any(|path| path == Path::new("/")) {
+            return Err(invalid(
+                "linux.maskedPaths must not replace the container root",
+            ));
+        }
+        let readonly_paths = plan_restricted_paths(
+            spec.linux()
+                .as_ref()
+                .and_then(|linux| linux.readonly_paths().as_deref()),
+            "linux.readonlyPaths",
+        )?;
         let mounts = mount::plan_all(spec.mounts().as_deref())?;
         if !mounts.is_empty() && !namespaces.new_mount() {
             return Err(unsupported(
                 "mounts",
                 "the bootstrap executor applies mounts only in a newly created mount namespace",
+            ));
+        }
+        if (root_readonly
+            || rootfs_propagation.is_some()
+            || !masked_paths.is_empty()
+            || !readonly_paths.is_empty())
+            && !namespaces.new_mount()
+        {
+            return Err(unsupported(
+                "rootfs mount controls",
+                "rootfs propagation, path restrictions, and read-only enforcement require a newly created mount namespace",
             ));
         }
         let hostname = spec
@@ -146,6 +181,10 @@ impl InitPlan {
             no_new_privileges: true,
             namespaces,
             mounts,
+            root_readonly,
+            rootfs_propagation,
+            masked_paths,
+            readonly_paths,
             hostname,
             domainname,
         })
@@ -202,38 +241,96 @@ fn validate_profile(raw: &Value) -> Result<()> {
         return Ok(());
     };
     let linux = object(linux, "linux")?;
-    let Some(namespaces) = linux.get("namespaces") else {
-        return reject_unimplemented_keys(linux, "linux", &["namespaces"]);
-    };
-    let namespaces = namespaces
-        .as_array()
-        .ok_or_else(|| invalid("linux.namespaces must be an array"))?;
-    for (index, namespace) in namespaces.iter().enumerate() {
-        let field = format!("linux.namespaces[{index}]");
-        let namespace = object(namespace, &field)?;
-        reject_unimplemented_keys(namespace, &field, &["type", "path"])?;
-        let namespace_type = namespace
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| invalid(format!("{field}.type must be a string")))?;
-        if !matches!(
-            namespace_type,
-            "uts" | "mount" | "ipc" | "network" | "cgroup" | "pid" | "user" | "time"
-        ) {
-            return Err(unsupported(
-                &format!("{field}.type"),
-                "only Linux OCI namespace types are accepted",
-            ));
-        }
-        if namespace.get("path").is_some_and(|path| !path.is_string()) {
-            return Err(invalid(format!("{field}.path must be a string")));
+    if let Some(namespaces) = linux.get("namespaces") {
+        let namespaces = namespaces
+            .as_array()
+            .ok_or_else(|| invalid("linux.namespaces must be an array"))?;
+        for (index, namespace) in namespaces.iter().enumerate() {
+            let field = format!("linux.namespaces[{index}]");
+            let namespace = object(namespace, &field)?;
+            reject_unimplemented_keys(namespace, &field, &["type", "path"])?;
+            let namespace_type = namespace
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid(format!("{field}.type must be a string")))?;
+            if !matches!(
+                namespace_type,
+                "uts" | "mount" | "ipc" | "network" | "cgroup" | "pid" | "user" | "time"
+            ) {
+                return Err(unsupported(
+                    &format!("{field}.type"),
+                    "only Linux OCI namespace types are accepted",
+                ));
+            }
+            if namespace.get("path").is_some_and(|path| !path.is_string()) {
+                return Err(invalid(format!("{field}.path must be a string")));
+            }
         }
     }
     reject_unimplemented_keys(
         linux,
         "linux",
-        &["namespaces", "uidMappings", "gidMappings", "timeOffsets"],
+        &[
+            "namespaces",
+            "uidMappings",
+            "gidMappings",
+            "timeOffsets",
+            "rootfsPropagation",
+            "maskedPaths",
+            "readonlyPaths",
+        ],
     )
+}
+
+fn plan_restricted_paths(paths: Option<&[String]>, field: &str) -> Result<Vec<PathBuf>> {
+    let paths = paths.unwrap_or_default();
+    if paths.len() > MAX_RESTRICTED_PATHS {
+        return Err(invalid(format!(
+            "{field} contains {} entries; maximum is {MAX_RESTRICTED_PATHS}",
+            paths.len()
+        )));
+    }
+    let mut total_bytes = 0_usize;
+    let mut unique = BTreeSet::new();
+    let mut planned = Vec::new();
+    for path in paths {
+        total_bytes = total_bytes
+            .checked_add(path.len().saturating_add(1))
+            .ok_or_else(|| invalid(format!("{field} size overflow")))?;
+        if total_bytes > MAX_EXEC_BYTES {
+            return Err(invalid(format!(
+                "{field} exceeds the {MAX_EXEC_BYTES}-byte bootstrap limit"
+            )));
+        }
+        let normalized = normalize_container_path(path, field)?;
+        if unique.insert(normalized.clone()) {
+            planned.push(normalized);
+        }
+    }
+    Ok(planned)
+}
+
+fn normalize_container_path(path: &str, field: &str) -> Result<PathBuf> {
+    if path.is_empty()
+        || !path.starts_with('/')
+        || path.as_bytes().contains(&0)
+        || path.contains('\\')
+    {
+        return Err(invalid(format!(
+            "{field} entries must be absolute Linux paths without NUL bytes"
+        )));
+    }
+    let mut normalized = PathBuf::from("/");
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                normalized.pop();
+            }
+            component => normalized.push(component),
+        }
+    }
+    Ok(normalized)
 }
 
 fn validate_uts_name(field: &str, value: &str) -> Result<String> {

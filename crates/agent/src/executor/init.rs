@@ -231,9 +231,15 @@ fn prepare_create_environment(
     }
     verify_uts_names(plan)?;
     if plan.namespaces.new_mount() {
-        rootfs::prepare_pivot(rootfs)?;
+        rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
         mount::apply_all(&plan.mounts, bundle_directory, rootfs)?;
         rootfs::pivot_root(rootfs)?;
+        rootfs::finalize(
+            plan.rootfs_propagation,
+            &plan.readonly_paths,
+            &plan.masked_paths,
+            plan.root_readonly,
+        )?;
     }
     Ok(())
 }

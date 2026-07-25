@@ -1,3 +1,5 @@
+mod target;
+
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
@@ -234,8 +236,13 @@ impl MountPlan {
         })
     }
 
+    pub(super) fn prepare_target(&self, bundle_directory: &Path, rootfs: &Path) -> Result<PathBuf> {
+        target::prepare(self, bundle_directory, rootfs)
+    }
+
     fn apply(&self, bundle_directory: &Path, rootfs: &Path) -> Result<()> {
-        let target = resolve_target(self.index, rootfs, &self.destination)?;
+        let target = self.prepare_target(bundle_directory, rootfs)?;
+        let target = path_cstring(self.index, "destination", &target)?;
         let source = self
             .source
             .as_deref()
@@ -371,24 +378,16 @@ fn validate_option(index: usize, option: &str) -> Result<()> {
     }
 }
 
-fn resolve_target(index: usize, rootfs: &Path, destination: &Path) -> Result<CString> {
-    let relative = destination
-        .strip_prefix("/")
-        .map_err(|error| internal(format!("invalid normalized mount destination: {error}")))?;
-    let target = rootfs.join(relative).canonicalize().map_err(|error| {
-        invalid(format!(
-            "mounts[{index}].destination must already exist inside the rootfs: {error}"
-        ))
-    })?;
-    if target == rootfs || !target.starts_with(rootfs) {
-        return Err(permission_denied(format!(
-            "mounts[{index}].destination escapes the container rootfs"
-        )));
-    }
-    path_cstring(index, "destination", &target)
+fn resolve_bind_source(index: usize, bundle_directory: &Path, source: &Path) -> Result<CString> {
+    let source = resolve_bind_source_path(index, bundle_directory, source)?;
+    path_cstring(index, "source", &source)
 }
 
-fn resolve_bind_source(index: usize, bundle_directory: &Path, source: &Path) -> Result<CString> {
+fn resolve_bind_source_path(
+    index: usize,
+    bundle_directory: &Path,
+    source: &Path,
+) -> Result<PathBuf> {
     let source = if source.is_absolute() {
         source.to_path_buf()
     } else {
@@ -399,7 +398,7 @@ fn resolve_bind_source(index: usize, bundle_directory: &Path, source: &Path) -> 
             "mounts[{index}].source does not resolve in the runtime namespace: {error}"
         ))
     })?;
-    path_cstring(index, "source", &source)
+    Ok(source)
 }
 
 fn path_cstring(index: usize, field: &str, path: &Path) -> Result<CString> {

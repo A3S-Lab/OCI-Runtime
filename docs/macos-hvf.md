@@ -459,7 +459,7 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$asset_dir/oci-multi-container.log"
 ```
 
-The `a3s.oci.oci-vm-multi-container-smoke.v3` report also requires exact
+The `a3s.oci.oci-vm-multi-container-smoke.v4` report also requires exact
 mutation replay, exact repeated normal-exit results for A and B, independent
 wait/state progress, and an existing-namespace phase. That phase rejects a
 wrong-type descriptor before state, joins donor UTS, IPC, network, cgroup, PID,
@@ -467,7 +467,10 @@ user, and time namespaces while retaining a private mount namespace, then
 joins the donor mount namespace in a second workload. Both workloads must
 cross `exec`, remain running for a bounded observation window, stop with the
 expected status, leave the donor created record unchanged, and remove all
-state.
+state. A third workload must create missing directory and file mount targets
+before start and then prove shared rootfs propagation, a distinct read-only
+path, empty read-only masked file and directory replacements, read-only rootfs
+behavior, an exact normal exit, state removal, and host-side fixture cleanup.
 
 The complete report also requires both marker removals, no new guest runtime
 root, exact host endpoint removal, shim and direct VM-worker reap, and full
@@ -490,15 +493,17 @@ The fixed lifecycle, two-container lifecycle, and all three no-delete cleanup
 phases passed on Apple Silicon HVF only after the workload verified its exact
 UID/GID maps and monotonic/boottime offsets.
 
-The existing-namespace requalification used the 8,632,448-byte static arm64
-agent with SHA-256
-`4ffa237d74cd1578542f85f47b02f75c5a62c6386f75c573fe2acfe06425e39b`.
-The schema-v3 report rejected the wrong-type descriptor before state, joined
-all eight namespace types, kept both PID/time joiners running through the
-bounded observation, executed through the retained rootfs after the mount
-join, preserved the donor's created record, and removed every container state.
-The host descriptor inventory returned from 10 to 10, both shim processes were
-reaped, and the endpoint and guest runtime root were removed.
+The rootfs/mount requalification used the 8,664,104-byte static arm64 agent
+with SHA-256
+`cdb93b3322bbd4f4ae3969fbda8c6850dbafec2e2d1ff839664d4e40a20d9b63`.
+The schema-v4 report retained all lifecycle and eight-namespace join evidence,
+then created missing directory and file mount targets before start and proved
+shared rootfs propagation, `/proc/sys` read-only enforcement, private empty
+read-only replacements for `/proc/meminfo` and `/proc/irq`, and a read-only
+rootfs. The exact workload exited zero; all container state and fixture
+artifacts were removed. The host descriptor inventory returned from 10 to 10,
+the shim and VM worker were reaped, and the endpoint and guest runtime root
+were removed.
 
 ## Fault-injected shutdown cleanup
 

@@ -12,6 +12,7 @@ use crate::OciVmMultiContainerSmokeReport;
 
 mod lifecycle;
 mod namespace_join;
+mod rootfs_enforcement;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -136,29 +137,44 @@ pub(super) async fn run(
             return report;
         }
     };
+    let rootfs_fixture =
+        crate::rootfs_enforcement::RootfsEnforcementFixture::prepare(&bundle_b, &nonce).await;
 
-    let exercise = async {
-        exercise(
-            session.client(),
-            [&bundle_a, &bundle_b],
-            guest_bundles.clone(),
-            &nonce,
-            [&markers[0], &markers[1]],
-            &mut report,
-        )
-        .await?;
-        namespace_join::exercise(
-            session.client(),
-            &bundle_a,
-            &bundle_b,
-            guest_bundles,
-            &nonce,
-            [&markers[0], &markers[1]],
-            &mut report,
-        )
-        .await
-    }
-    .await;
+    let exercise = match &rootfs_fixture {
+        Ok(rootfs_fixture) => {
+            async {
+                exercise(
+                    session.client(),
+                    [&bundle_a, &bundle_b],
+                    guest_bundles.clone(),
+                    &nonce,
+                    [&markers[0], &markers[1]],
+                    &mut report,
+                )
+                .await?;
+                namespace_join::exercise(
+                    session.client(),
+                    &bundle_a,
+                    &bundle_b,
+                    guest_bundles.clone(),
+                    &nonce,
+                    [&markers[0], &markers[1]],
+                    &mut report,
+                )
+                .await?;
+                rootfs_enforcement::exercise(
+                    session.client(),
+                    rootfs_fixture,
+                    guest_bundles[1].clone(),
+                    &nonce,
+                    &mut report,
+                )
+                .await
+            }
+            .await
+        }
+        Err(reason) => Err(reason.clone()),
+    };
     if exercise.is_err() {
         best_effort_delete(session.client(), &nonce).await;
     }
@@ -168,6 +184,12 @@ pub(super) async fn run(
     };
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     cleanup.apply(&mut report.bridge).await;
+    if let Ok(rootfs_fixture) = &rootfs_fixture {
+        match rootfs_fixture.cleanup().await {
+            Ok(removed) => report.rootfs_mount.artifacts_removed = removed,
+            Err(reason) => append_reason(&mut report, reason),
+        }
+    }
 
     let mut markers_removed = true;
     for marker in &markers {

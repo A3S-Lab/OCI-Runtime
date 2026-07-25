@@ -14,6 +14,7 @@ use crate::{
 
 mod lifecycle;
 mod namespace_join;
+mod rootfs_enforcement;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -136,27 +137,35 @@ pub(super) async fn run(
         }
     };
     let client = RuntimeClient::new(service.clone());
+    let rootfs_fixture =
+        crate::rootfs_enforcement::RootfsEnforcementFixture::prepare(&bundle_b, &nonce).await;
 
-    let exercise = async {
-        exercise(
-            &client,
-            [&bundle_a, &bundle_b],
-            &nonce,
-            [&marker_a, &marker_b],
-            &mut report,
-        )
-        .await?;
-        namespace_join::exercise(
-            &client,
-            &bundle_a,
-            &bundle_b,
-            &nonce,
-            [&marker_a, &marker_b],
-            &mut report,
-        )
-        .await
-    }
-    .await;
+    let exercise = match &rootfs_fixture {
+        Ok(rootfs_fixture) => {
+            async {
+                exercise(
+                    &client,
+                    [&bundle_a, &bundle_b],
+                    &nonce,
+                    [&marker_a, &marker_b],
+                    &mut report,
+                )
+                .await?;
+                namespace_join::exercise(
+                    &client,
+                    &bundle_a,
+                    &bundle_b,
+                    &nonce,
+                    [&marker_a, &marker_b],
+                    &mut report,
+                )
+                .await?;
+                rootfs_enforcement::exercise(&client, rootfs_fixture, &nonce, &mut report).await
+            }
+            .await
+        }
+        Err(reason) => Err(reason.clone()),
+    };
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;
     }
@@ -171,6 +180,12 @@ pub(super) async fn run(
         &mut report,
     )
     .await;
+    if let Ok(rootfs_fixture) = &rootfs_fixture {
+        match rootfs_fixture.cleanup().await {
+            Ok(removed) => report.rootfs_mount.artifacts_removed = removed,
+            Err(reason) => append_reason(&mut report, reason),
+        }
+    }
     if let Err(reason) = exercise {
         append_reason(&mut report, reason);
     }

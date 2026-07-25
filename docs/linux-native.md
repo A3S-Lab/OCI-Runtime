@@ -170,7 +170,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
-The `a3s.oci.native-linux-multi-container-smoke.v3` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v4` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -186,6 +186,20 @@ create barrier and requires:
    window;
 5. both joiners to complete without changing the donor's created state;
 6. all donor, joiner, and negative-case state to be removed.
+
+The same report then runs an independent rootfs enforcement workload and
+requires:
+
+1. every missing directory and file mount destination to exist before start
+   while the evidence file remains absent;
+2. start to release the prepared workload;
+3. the root mount to belong to a new shared peer group;
+4. `/proc/sys` to be a distinct read-only mount, `/proc/meminfo` to be replaced
+   by a private empty read-only file, and `/proc/irq` by an empty read-only
+   directory;
+5. the rootfs to be read-only and reject a write;
+6. exact ordered evidence, a normal zero exit, deleted state, and removal of
+   all host-side fixture paths.
 
 GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
 with a present but unusable placeholder at that path.
