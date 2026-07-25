@@ -1,4 +1,5 @@
 mod attributes;
+mod idmap;
 mod target;
 
 use std::ffi::CString;
@@ -8,6 +9,10 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::oci_spec::runtime::Mount;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
+
+use super::namespace::{collect_mappings, IdmapPlan, NamespacePlan};
+
+pub(super) use idmap::IdmappedMountSources;
 
 const MAX_MOUNTS: usize = 1_024;
 const MAX_MOUNT_STRING_BYTES: usize = 64 * 1_024;
@@ -30,10 +35,14 @@ pub(super) struct MountPlan {
     pub(super) remount_bind: bool,
     pub(super) propagation: Option<libc::c_ulong>,
     pub(super) recursive_attributes: Option<attributes::RecursiveMountAttributes>,
+    pub(super) idmap: Option<IdmapPlan>,
     pub(super) data: Vec<String>,
 }
 
-pub(super) fn plan_all(mounts: Option<&[Mount]>) -> Result<Vec<MountPlan>> {
+pub(super) fn plan_all(
+    mounts: Option<&[Mount]>,
+    namespaces: &NamespacePlan,
+) -> Result<Vec<MountPlan>> {
     let mounts = mounts.unwrap_or_default();
     if mounts.len() > MAX_MOUNTS {
         return Err(invalid(format!(
@@ -44,26 +53,49 @@ pub(super) fn plan_all(mounts: Option<&[Mount]>) -> Result<Vec<MountPlan>> {
     mounts
         .iter()
         .enumerate()
-        .map(|(index, mount)| MountPlan::new(index, mount))
+        .map(|(index, mount)| MountPlan::new(index, mount, namespaces))
         .collect()
 }
 
-pub(super) fn apply_all(plans: &[MountPlan], bundle_directory: &Path, rootfs: &Path) -> Result<()> {
+pub(super) fn apply_all(
+    plans: &[MountPlan],
+    bundle_directory: &Path,
+    rootfs: &Path,
+    idmapped_sources: &mut IdmappedMountSources,
+) -> Result<()> {
     for plan in plans {
-        plan.apply(bundle_directory, rootfs)?;
+        plan.apply(bundle_directory, rootfs, idmapped_sources)?;
     }
-    Ok(())
+    idmapped_sources.ensure_consumed()
 }
 
 impl MountPlan {
-    fn new(index: usize, mount: &Mount) -> Result<Self> {
-        if mount.uid_mappings().is_some() || mount.gid_mappings().is_some() {
-            return Err(unsupported(
-                index,
-                "uidMappings/gidMappings",
-                "idmapped mounts are not implemented",
-            ));
+    fn new(index: usize, mount: &Mount, namespaces: &NamespacePlan) -> Result<Self> {
+        let uid_mappings_specified = mount.uid_mappings().is_some();
+        let gid_mappings_specified = mount.gid_mappings().is_some();
+        if uid_mappings_specified != gid_mappings_specified {
+            return Err(invalid(format!(
+                "mounts[{index}].uidMappings and gidMappings must be specified together"
+            )));
         }
+        let explicit_id_mappings = if uid_mappings_specified {
+            let uid_mappings = collect_mappings(
+                &format!("mounts[{index}].uidMappings"),
+                mount.uid_mappings().as_deref(),
+            )?;
+            let gid_mappings = collect_mappings(
+                &format!("mounts[{index}].gidMappings"),
+                mount.gid_mappings().as_deref(),
+            )?;
+            if uid_mappings.is_empty() || gid_mappings.is_empty() {
+                return Err(invalid(format!(
+                    "mounts[{index}].uidMappings and gidMappings must both contain mappings"
+                )));
+            }
+            Some((uid_mappings, gid_mappings))
+        } else {
+            None
+        };
         let destination = normalize_destination(index, mount.destination())?;
         if destination == Path::new("/") {
             return Err(unsupported(
@@ -91,6 +123,7 @@ impl MountPlan {
         let mut remount_bind = false;
         let mut propagation = None;
         let mut recursive_attributes = None;
+        let mut idmap_recursive = None;
         let mut data = Vec::new();
         let options = mount.options().as_deref().unwrap_or_default();
         if options.len() > MAX_MOUNT_OPTIONS {
@@ -178,13 +211,8 @@ impl MountPlan {
                 "runbindable" => {
                     set_propagation(index, &mut propagation, libc::MS_UNBINDABLE | libc::MS_REC)?
                 }
-                "idmap" | "ridmap" => {
-                    return Err(unsupported(
-                        index,
-                        "options",
-                        "idmapped mounts are not implemented",
-                    ));
-                }
+                "idmap" => set_idmap_mode(index, &mut idmap_recursive, false)?,
+                "ridmap" => set_idmap_mode(index, &mut idmap_recursive, true)?,
                 "tmpcopyup" => {
                     return Err(unsupported(
                         index,
@@ -223,7 +251,25 @@ impl MountPlan {
                 "filesystem auto-detection is not implemented",
             ));
         }
-
+        let idmap = match (explicit_id_mappings, idmap_recursive) {
+            (Some((uid_mappings, gid_mappings)), recursive) => Some(IdmapPlan::dedicated(
+                recursive.unwrap_or(false),
+                uid_mappings,
+                gid_mappings,
+            )),
+            (None, Some(recursive)) if namespaces.new_user() => Some(IdmapPlan::container(
+                recursive,
+                namespaces.uid_mappings(),
+                namespaces.gid_mappings(),
+            )),
+            (None, Some(_)) => {
+                return Err(invalid(format!(
+                    "mounts[{index}].options requires paired mount mappings or a newly created \
+                     container user namespace for idmap/ridmap"
+                )));
+            }
+            (None, None) => None,
+        };
         Ok(Self {
             index,
             destination,
@@ -234,6 +280,7 @@ impl MountPlan {
             remount_bind,
             propagation,
             recursive_attributes,
+            idmap,
             data,
         })
     }
@@ -242,20 +289,33 @@ impl MountPlan {
         target::prepare(self, bundle_directory, rootfs)
     }
 
-    fn apply(&self, bundle_directory: &Path, rootfs: &Path) -> Result<()> {
+    fn apply(
+        &self,
+        bundle_directory: &Path,
+        rootfs: &Path,
+        idmapped_sources: &mut IdmappedMountSources,
+    ) -> Result<()> {
         let target = self.prepare_target(bundle_directory, rootfs)?;
         let target = path_cstring(self.index, "destination", &target)?;
-        let source = self
-            .source
-            .as_deref()
-            .map(|source| {
-                if self.bind {
-                    resolve_bind_source(self.index, bundle_directory, source)
-                } else {
-                    path_cstring(self.index, "source", source)
-                }
-            })
+        let idmap_destination = self
+            .idmap
+            .as_ref()
+            .map(|_| idmapped_sources.open_destination(self.index, &target))
             .transpose()?;
+        let source = if self.idmap.is_some() {
+            None
+        } else {
+            self.source
+                .as_deref()
+                .map(|source| {
+                    if self.bind {
+                        resolve_bind_source(self.index, bundle_directory, source)
+                    } else {
+                        path_cstring(self.index, "source", source)
+                    }
+                })
+                .transpose()?
+        };
         let filesystem_type = self
             .filesystem_type
             .as_deref()
@@ -267,19 +327,23 @@ impl MountPlan {
             Some(string_cstring(self.index, "options", &self.data.join(","))?)
         };
 
-        mount_call(
-            self.index,
-            source.as_ref(),
-            &target,
-            if self.bind {
-                None
-            } else {
-                filesystem_type.as_ref()
-            },
-            self.flags,
-            data.as_ref(),
-            "apply",
-        )?;
+        if let Some(destination) = idmap_destination.as_ref() {
+            idmapped_sources.attach(self.index, destination)?;
+        } else {
+            mount_call(
+                self.index,
+                source.as_ref(),
+                &target,
+                if self.bind {
+                    None
+                } else {
+                    filesystem_type.as_ref()
+                },
+                self.flags,
+                data.as_ref(),
+                "apply",
+            )?;
+        }
         if self.bind && self.remount_bind {
             let remount_flags = (self.flags & !(libc::MS_REC | libc::MS_REMOUNT))
                 | libc::MS_BIND
@@ -334,6 +398,16 @@ fn set_propagation(
     if propagation.replace(value).is_some() {
         Err(invalid(format!(
             "mounts[{index}].options contains multiple propagation modes"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn set_idmap_mode(index: usize, idmap_recursive: &mut Option<bool>, recursive: bool) -> Result<()> {
+    if idmap_recursive.replace(recursive).is_some() {
+        Err(invalid(format!(
+            "mounts[{index}].options contains multiple idmap/ridmap modes"
         )))
     } else {
         Ok(())

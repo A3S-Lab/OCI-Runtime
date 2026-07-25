@@ -6,9 +6,9 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v5";
+    "a3s.oci.native-linux-multi-container-smoke.v7";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v5";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v6";
 
 /// Rootfs and mount enforcement evidence shared by native and utility-VM paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +29,21 @@ pub struct RootfsMountEvidence {
     pub masked_path_enforced: bool,
     /// Whether recursive VFS attributes reached a bind mount and its submount.
     pub recursive_mount_attributes_enforced: bool,
+    /// Whether explicit OCI ID mappings changed detached filesystem-mount
+    /// ownership to their exact requested UID/GID.
+    pub idmapped_mounts_enforced: bool,
+    /// Whether the original bind source and its nested submount retained their
+    /// exact UID/GID after mapped clones were attached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idmap_source_ownership_unchanged: Option<bool>,
+    /// Whether `idmap` changed only the top-level rbind mount and left its
+    /// nested submount unmapped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idmap_nonrecursive_enforced: Option<bool>,
+    /// Whether `ridmap` changed both the top-level rbind mount and its nested
+    /// submount.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ridmap_recursive_enforced: Option<bool>,
     /// Whether the root mount was read-only and rejected a write.
     pub readonly_rootfs_enforced: bool,
     /// Whether the workload emitted the exact ordered enforcement evidence.
@@ -54,6 +69,7 @@ impl RootfsMountEvidence {
             && self.readonly_path_enforced
             && self.masked_path_enforced
             && self.recursive_mount_attributes_enforced
+            && self.idmapped_mounts_enforced
             && self.readonly_rootfs_enforced
             && self.exact_evidence
             && self.wait_status
@@ -64,6 +80,15 @@ impl RootfsMountEvidence {
                 })
             && self.state_removed
             && self.artifacts_removed
+    }
+
+    /// Return whether native Linux proved bind/rbind ID-map recursion without
+    /// mutating the source mount tree.
+    #[must_use]
+    pub fn native_idmap_bind_is_success(&self) -> bool {
+        self.idmap_source_ownership_unchanged == Some(true)
+            && self.idmap_nonrecursive_enforced == Some(true)
+            && self.ridmap_recursive_enforced == Some(true)
     }
 }
 
@@ -344,6 +369,7 @@ impl NativeLinuxMultiContainerSmokeReport {
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
             && self.namespace_join.is_success()
             && self.rootfs_mount.is_success()
+            && self.rootfs_mount.native_idmap_bind_is_success()
             && self.markers_removed
             && self.executor_runtime_clean
             && self.session_root_clean
@@ -484,6 +510,10 @@ mod tests {
             readonly_path_enforced: true,
             masked_path_enforced: true,
             recursive_mount_attributes_enforced: true,
+            idmapped_mounts_enforced: true,
+            idmap_source_ownership_unchanged: Some(true),
+            idmap_nonrecursive_enforced: Some(true),
+            ridmap_recursive_enforced: Some(true),
             readonly_rootfs_enforced: true,
             exact_evidence: true,
             wait_status: Some(ExitStatus::exited(0).expect("zero exit")),
@@ -491,9 +521,12 @@ mod tests {
             artifacts_removed: true,
         };
         assert!(complete.is_success());
+        assert!(complete.native_idmap_bind_is_success());
 
         let mut incomplete = complete;
-        incomplete.recursive_mount_attributes_enforced = false;
+        incomplete.idmap_nonrecursive_enforced = Some(false);
+        assert!(!incomplete.native_idmap_bind_is_success());
+        incomplete.idmapped_mounts_enforced = false;
         assert!(!incomplete.is_success());
     }
 

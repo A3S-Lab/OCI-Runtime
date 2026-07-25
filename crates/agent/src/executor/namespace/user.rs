@@ -25,7 +25,12 @@ pub(in crate::executor) async fn install_user_mappings(
     let uid_mappings = plan.uid_mappings().to_vec();
     let gid_mappings = plan.gid_mappings().to_vec();
     tokio::task::spawn_blocking(move || {
-        install_user_mappings_blocking(pid, &uid_mappings, &gid_mappings)
+        install_user_mappings_blocking(
+            pid,
+            &uid_mappings,
+            &gid_mappings,
+            SetgroupsPolicy::RequireAllow,
+        )
     })
     .await
     .map_err(|join| {
@@ -40,6 +45,7 @@ fn install_user_mappings_blocking(
     pid: i32,
     uid_mappings: &[IdMapping],
     gid_mappings: &[IdMapping],
+    setgroups_policy: SetgroupsPolicy,
 ) -> Result<()> {
     let child_namespace = std::fs::read_link(format!("/proc/{pid}/ns/user")).map_err(|error| {
         namespace_error(
@@ -64,25 +70,92 @@ fn install_user_mappings_blocking(
     write_mapping_file(&Path::new(&proc_root).join("uid_map"), "UID", uid_mappings)?;
     verify_mapping_file(&Path::new(&proc_root).join("uid_map"), "UID", uid_mappings)?;
 
-    let setgroups_path = Path::new(&proc_root).join("setgroups");
-    let setgroups = std::fs::read_to_string(&setgroups_path).map_err(|error| {
-        namespace_error(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "failed to inspect user namespace setgroups policy {}: {error}",
-                setgroups_path.display()
-            ),
-        )
-    })?;
-    if setgroups.trim() != "allow" {
-        return Err(namespace_error(
-            ErrorCode::FailedPrecondition,
-            "new user namespace does not permit the required supplementary-group setup",
-        ));
-    }
+    apply_setgroups_policy(&Path::new(&proc_root).join("setgroups"), setgroups_policy)?;
 
     write_mapping_file(&Path::new(&proc_root).join("gid_map"), "GID", gid_mappings)?;
     verify_mapping_file(&Path::new(&proc_root).join("gid_map"), "GID", gid_mappings)
+}
+
+pub(super) fn install_idmap_user_mappings(
+    pid: i32,
+    uid_mappings: &[IdMapping],
+    gid_mappings: &[IdMapping],
+) -> Result<()> {
+    if pid <= 0 {
+        return Err(namespace_error(
+            ErrorCode::InvalidArgument,
+            format!("cannot map non-positive ID-mapping helper PID {pid}"),
+        ));
+    }
+    install_user_mappings_blocking(pid, uid_mappings, gid_mappings, SetgroupsPolicy::Deny)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetgroupsPolicy {
+    RequireAllow,
+    Deny,
+}
+
+fn apply_setgroups_policy(path: &Path, policy: SetgroupsPolicy) -> Result<()> {
+    let inspect = || {
+        std::fs::read_to_string(path).map_err(|error| {
+            namespace_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to inspect user namespace setgroups policy {}: {error}",
+                    path.display()
+                ),
+            )
+        })
+    };
+    let current = inspect()?;
+    match policy {
+        SetgroupsPolicy::RequireAllow if current.trim() == "allow" => Ok(()),
+        SetgroupsPolicy::RequireAllow => Err(namespace_error(
+            ErrorCode::FailedPrecondition,
+            "new container user namespace does not permit the required supplementary-group setup",
+        )),
+        SetgroupsPolicy::Deny => {
+            if current.trim() != "deny" {
+                let mut file = OpenOptions::new().write(true).open(path).map_err(|error| {
+                    namespace_error(
+                        ErrorCode::PermissionDenied,
+                        format!(
+                            "failed to open user namespace setgroups policy {}: {error}",
+                            path.display()
+                        ),
+                    )
+                })?;
+                let written = file.write(b"deny").map_err(|error| {
+                    namespace_error(
+                        ErrorCode::PermissionDenied,
+                        format!(
+                            "failed to deny setgroups for ID-mapping namespace {}: {error}",
+                            path.display()
+                        ),
+                    )
+                })?;
+                if written != b"deny".len() {
+                    return Err(namespace_error(
+                        ErrorCode::Internal,
+                        format!(
+                            "setgroups policy write to {} was partial: {written}/{} bytes",
+                            path.display(),
+                            b"deny".len()
+                        ),
+                    ));
+                }
+            }
+            if inspect()?.trim() == "deny" {
+                Ok(())
+            } else {
+                Err(namespace_error(
+                    ErrorCode::FailedPrecondition,
+                    "ID-mapping user namespace did not retain setgroups=deny",
+                ))
+            }
+        }
+    }
 }
 
 fn write_mapping_file(path: &Path, kind: &str, mappings: &[IdMapping]) -> Result<()> {

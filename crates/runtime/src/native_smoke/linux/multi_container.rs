@@ -138,7 +138,8 @@ pub(super) async fn run(
     };
     let client = RuntimeClient::new(service.clone());
     let rootfs_fixture =
-        crate::rootfs_enforcement::RootfsEnforcementFixture::prepare(&bundle_b, &nonce).await;
+        crate::rootfs_enforcement::RootfsEnforcementFixture::prepare_native(&bundle_b, &nonce)
+            .await;
 
     let exercise = match &rootfs_fixture {
         Ok(rootfs_fixture) => {

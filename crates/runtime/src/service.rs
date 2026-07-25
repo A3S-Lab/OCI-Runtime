@@ -4,7 +4,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use a3s_oci_core::{CapabilityStatus, DriverCapability, RuntimeFeatures};
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, FeaturesBuilder};
+use a3s_oci_sdk::oci_spec::runtime::{
+    ApparmorBuilder, Arch, CgroupBuilder, ContainerState, FeaturesBuilder, IDMapBuilder,
+    IntelRdtBuilder, LinuxFeature, LinuxFeatureBuilder, LinuxNamespaceType, LinuxSeccompAction,
+    MountExtensionsBuilder, NetDevicesBuilder, SeccompBuilder, SelinuxBuilder,
+};
 use a3s_oci_sdk::{
     async_trait, CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
     ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
@@ -23,6 +27,70 @@ use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
 };
 use crate::state::{DeletePreparation, DurableStateStore, RecordOperationPreparation};
+
+const RECOGNIZED_LINUX_MOUNT_OPTIONS: &[&str] = &[
+    "async",
+    "atime",
+    "bind",
+    "defaults",
+    "dev",
+    "diratime",
+    "dirsync",
+    "exec",
+    "idmap",
+    "iversion",
+    "lazytime",
+    "loud",
+    "mand",
+    "noatime",
+    "nodev",
+    "nodiratime",
+    "noexec",
+    "noiversion",
+    "nolazytime",
+    "nomand",
+    "norelatime",
+    "nostrictatime",
+    "nosuid",
+    "nosymfollow",
+    "private",
+    "ratime",
+    "rbind",
+    "rdev",
+    "rdiratime",
+    "relatime",
+    "remount",
+    "rexec",
+    "ridmap",
+    "rnoatime",
+    "rnodev",
+    "rnodiratime",
+    "rnoexec",
+    "rnorelatime",
+    "rnostrictatime",
+    "rnosuid",
+    "rnosymfollow",
+    "ro",
+    "rprivate",
+    "rrelatime",
+    "rro",
+    "rrw",
+    "rshared",
+    "rslave",
+    "rstrictatime",
+    "rsuid",
+    "rsymfollow",
+    "runbindable",
+    "rw",
+    "shared",
+    "silent",
+    "slave",
+    "strictatime",
+    "suid",
+    "symfollow",
+    "sync",
+    "unbindable",
+];
 
 /// In-process host implementation used by the CLI and A3S Box adapter.
 #[derive(Clone, Default)]
@@ -254,6 +322,81 @@ fn driver_state_error(
     .for_operation(operation)
 }
 
+fn compiled_linux_features() -> Result<LinuxFeature> {
+    let cgroup = CgroupBuilder::default()
+        .v1(false)
+        .v2(false)
+        .systemd(false)
+        .systemd_user(false)
+        .rdma(false)
+        .build()
+        .map_err(feature_build_error)?;
+    let seccomp = SeccompBuilder::default()
+        .enabled(false)
+        .actions(Vec::<LinuxSeccompAction>::new())
+        .operators(Vec::<String>::new())
+        .archs(Vec::<Arch>::new())
+        .known_flags(Vec::<String>::new())
+        .supported_flags(Vec::<String>::new())
+        .build()
+        .map_err(feature_build_error)?;
+    let apparmor = ApparmorBuilder::default()
+        .enabled(false)
+        .build()
+        .map_err(feature_build_error)?;
+    let selinux = SelinuxBuilder::default()
+        .enabled(false)
+        .build()
+        .map_err(feature_build_error)?;
+    let intel_rdt = IntelRdtBuilder::default()
+        .enabled(false)
+        .schemata(false)
+        .monitoring(false)
+        .build()
+        .map_err(feature_build_error)?;
+    let net_devices = NetDevicesBuilder::default()
+        .enabled(false)
+        .build()
+        .map_err(feature_build_error)?;
+    let idmap = IDMapBuilder::default()
+        .enabled(true)
+        .build()
+        .map_err(feature_build_error)?;
+    let mount_extensions = MountExtensionsBuilder::default()
+        .idmap(idmap)
+        .build()
+        .map_err(feature_build_error)?;
+    LinuxFeatureBuilder::default()
+        .namespaces(vec![
+            LinuxNamespaceType::Cgroup,
+            LinuxNamespaceType::Ipc,
+            LinuxNamespaceType::Mount,
+            LinuxNamespaceType::Network,
+            LinuxNamespaceType::Pid,
+            LinuxNamespaceType::Time,
+            LinuxNamespaceType::User,
+            LinuxNamespaceType::Uts,
+        ])
+        .capabilities(Vec::<String>::new())
+        .cgroup(cgroup)
+        .seccomp(seccomp)
+        .apparmor(apparmor)
+        .selinux(selinux)
+        .intel_rdt(intel_rdt)
+        .mount_extensions(mount_extensions)
+        .net_devices(net_devices)
+        .build()
+        .map_err(feature_build_error)
+}
+
+fn feature_build_error(error: impl fmt::Display) -> Error {
+    Error::new(
+        ErrorCode::Internal,
+        format!("failed to construct OCI feature report: {error}"),
+    )
+    .for_operation("features")
+}
+
 #[async_trait]
 impl OciRuntimeService for HostRuntimeService {
     async fn features(&self) -> Result<RuntimeInfo> {
@@ -276,16 +419,17 @@ impl OciRuntimeService for HostRuntimeService {
             .oci_version_min(OCI_RUNTIME_SPEC_VERSION_MIN)
             .oci_version_max(OCI_RUNTIME_SPEC_VERSION_MAX)
             .hooks(Vec::<String>::new())
-            .mount_options(Vec::<String>::new())
+            .mount_options(
+                RECOGNIZED_LINUX_MOUNT_OPTIONS
+                    .iter()
+                    .map(|option| (*option).to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .linux(compiled_linux_features()?)
             .annotations(annotations)
+            .potentially_unsafe_config_annotations(Vec::<String>::new())
             .build()
-            .map_err(|error| {
-                Error::new(
-                    ErrorCode::Internal,
-                    format!("failed to construct OCI feature report: {error}"),
-                )
-                .for_operation("features")
-            })?;
+            .map_err(feature_build_error)?;
 
         let mut operations = vec![RuntimeOperation::Features];
         if let Some(lifecycle) = &self.lifecycle {

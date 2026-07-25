@@ -74,6 +74,10 @@ Completed:
   and time namespaces, including retained rootfs execution after a mount join,
   three-pass user-namespace permission recovery, and shared native Linux/macOS
   utility-VM lifecycle evidence;
+- detached ID-mapped filesystem and bind mounts using exact dedicated or
+  container user-namespace mappings, including native `idmap` versus `ridmap`
+  recursion and unchanged source-ownership evidence plus shared native
+  Linux/macOS utility-VM lifecycle evidence;
 - real native Linux no-delete cleanup after create, start, and kill on x86_64
   and aarch64, including init-PID reap and executor, durable-state, marker, and
   session-root removal;
@@ -323,7 +327,11 @@ then may HVF become `experimental`.
 - [x] Apply all OCI recursive VFS mount attributes with `mount_setattr`,
   descriptor-pin each destination, and prove top-level and nested submount
   enforcement through native Linux and the macOS utility VM.
-- [ ] ID-mapped mounts.
+- [x] Apply ID-mapped filesystem and bind mounts through the Linux mount API,
+  use either exact per-mount mappings or the newly created container user
+  namespace, distinguish non-recursive `idmap` from recursive `ridmap`, and
+  prove filesystem ownership through native Linux and the macOS utility VM
+  plus unchanged bind sources and exact recursion through native Linux.
 - [ ] Rootless ID-mapping policy, remaining credentials, capabilities, rlimits,
   scheduler, I/O priority, affinity, LSMs, and seccomp.
 - [ ] cgroup v2 CPU, memory, pids, I/O, hugepage, RDMA, device, and unified

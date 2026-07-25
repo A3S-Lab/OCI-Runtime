@@ -54,6 +54,15 @@ fn null_io() -> ProcessIo {
     }
 }
 
+fn with_bind_source(config: &str) -> String {
+    config.replace(
+        r#""type": "tmpfs",
+      "source": "tmpfs""#,
+        r#""type": "none",
+      "source": "rootfs""#,
+    )
+}
+
 #[test]
 fn preserves_mount_order_and_normalizes_relative_destinations() {
     let plan = InitPlan::from_bundle(&bundle(MOUNT_CONFIG), &null_io())
@@ -171,6 +180,91 @@ fn recursive_mount_attribute_inverse_options_clear_prior_values() {
 }
 
 #[test]
+fn plans_explicit_idmapped_mounts_even_without_an_option_hint() {
+    let config = with_bind_source(&MOUNT_CONFIG.replace(
+        r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+        r#""options": ["rbind", "nosuid", "nodev"],
+      "uidMappings": [{"containerID": 1000, "hostID": 0, "size": 1}],
+      "gidMappings": [{"containerID": 2000, "hostID": 0, "size": 1}]"#,
+    ));
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("explicit mount mappings enable a non-recursive idmap");
+    let idmap = plan.mounts[1].idmap.as_ref().expect("idmap plan");
+
+    assert!(!idmap.recursive);
+    assert_eq!(idmap.uid_mappings.len(), 1);
+    assert_eq!(idmap.uid_mappings[0].container_id, 1000);
+    assert_eq!(idmap.uid_mappings[0].host_id, 0);
+    assert_eq!(idmap.gid_mappings.len(), 1);
+    assert_eq!(idmap.gid_mappings[0].container_id, 2000);
+    assert_eq!(idmap.gid_mappings[0].host_id, 0);
+}
+
+#[test]
+fn recursive_idmap_inherits_the_new_container_user_namespace_mappings() {
+    let config = with_bind_source(
+        &MOUNT_CONFIG
+            .replace(
+                r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+                r#""options": ["rbind", "nosuid", "nodev", "ridmap"]"#,
+            )
+            .replace(
+                r#""linux": {"namespaces": [{"type": "mount"}]}"#,
+                r#""linux": {
+    "namespaces": [{"type": "mount"}, {"type": "user"}],
+    "uidMappings": [{"containerID": 0, "hostID": 100000, "size": 65536}],
+    "gidMappings": [{"containerID": 0, "hostID": 100000, "size": 65536}]
+  }"#,
+            ),
+    );
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("ridmap inherits complete container mappings");
+    let idmap = plan.mounts[1].idmap.as_ref().expect("idmap plan");
+
+    assert!(idmap.recursive);
+    assert_eq!(idmap.uid_mappings, plan.namespaces.uid_mappings());
+    assert_eq!(idmap.gid_mappings, plan.namespaces.gid_mappings());
+}
+
+#[test]
+fn idmap_and_ridmap_select_non_recursive_and_recursive_enforcement() {
+    for (mode, recursive) in [("idmap", false), ("ridmap", true)] {
+        let replacement = format!(
+            r#""options": ["rbind", "nosuid", "nodev", "{mode}"],
+      "uidMappings": [{{"containerID": 1000, "hostID": 0, "size": 1}}],
+      "gidMappings": [{{"containerID": 1000, "hostID": 0, "size": 1}}]"#
+        );
+        let config = with_bind_source(&MOUNT_CONFIG.replace(
+            r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+            &replacement,
+        ));
+        let plan =
+            InitPlan::from_bundle(&bundle(&config), &null_io()).expect("explicit ID-mapping mode");
+        assert_eq!(
+            plan.mounts[1].idmap.as_ref().expect("idmap plan").recursive,
+            recursive
+        );
+    }
+}
+
+#[test]
+fn plans_idmapped_filesystems_for_the_detached_fsopen_path() {
+    let config = MOUNT_CONFIG.replace(
+        r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+        r#""options": ["nosuid", "nodev", "mode=1777", "size=16m", "idmap"],
+      "uidMappings": [{"containerID": 1000, "hostID": 0, "size": 1}],
+      "gidMappings": [{"containerID": 1000, "hostID": 0, "size": 1}]"#,
+    );
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io()).expect("ID-mapped tmpfs plan");
+    let mount = &plan.mounts[1];
+
+    assert!(!mount.bind);
+    assert_eq!(mount.filesystem_type.as_deref(), Some("tmpfs"));
+    assert_eq!(mount.data, ["mode=1777", "size=16m"]);
+    assert!(!mount.idmap.as_ref().expect("idmap plan").recursive);
+}
+
+#[test]
 fn rejects_mounts_without_isolating_the_runtime_mount_namespace() {
     let config = MOUNT_CONFIG.replace(
         r#",
@@ -198,14 +292,27 @@ fn rejects_unimplemented_or_ambiguous_mount_semantics() {
         assert!(error.message.contains(expected), "{error}");
     }
 
-    let idmapped = MOUNT_CONFIG.replace(
+    let duplicate_idmap = with_bind_source(&MOUNT_CONFIG.replace(
         r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
-        r#""options": ["nosuid", "nodev", "idmap"],
-      "uidMappings": [{"containerID": 0, "hostID": 0, "size": 1}],
-      "gidMappings": [{"containerID": 0, "hostID": 0, "size": 1}]"#,
-    );
-    let error = InitPlan::from_bundle(&bundle(&idmapped), &null_io()).expect_err("idmapped mount");
-    assert!(error.message.contains("idmapped mounts"), "{error}");
+        r#""options": ["rbind", "idmap", "idmap"],
+      "uidMappings": [{"containerID": 1000, "hostID": 0, "size": 1}],
+      "gidMappings": [{"containerID": 1000, "hostID": 0, "size": 1}]"#,
+    ));
+    let error = InitPlan::from_bundle(&bundle(&duplicate_idmap), &null_io())
+        .expect_err("duplicate ID-mapping modes");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("multiple idmap/ridmap modes"));
+
+    let empty_idmap = with_bind_source(&MOUNT_CONFIG.replace(
+        r#""options": ["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+        r#""options": ["rbind", "nosuid", "nodev"],
+      "uidMappings": [],
+      "gidMappings": []"#,
+    ));
+    let error =
+        InitPlan::from_bundle(&bundle(&empty_idmap), &null_io()).expect_err("empty ID mappings");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("must both contain mappings"));
 }
 
 #[test]

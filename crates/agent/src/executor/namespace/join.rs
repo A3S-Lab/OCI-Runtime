@@ -142,7 +142,7 @@ fn join_pass(
     Ok(())
 }
 
-fn validate_namespace_type(
+pub(super) fn validate_namespace_type(
     name: &str,
     path: &Path,
     file: &File,

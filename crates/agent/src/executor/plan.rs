@@ -133,7 +133,7 @@ impl InitPlan {
                 .and_then(|linux| linux.readonly_paths().as_deref()),
             "linux.readonlyPaths",
         )?;
-        let mounts = mount::plan_all(spec.mounts().as_deref())?;
+        let mounts = mount::plan_all(spec.mounts().as_deref(), &namespaces)?;
         if !mounts.is_empty() && !namespaces.new_mount() {
             return Err(unsupported(
                 "mounts",
