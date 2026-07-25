@@ -296,7 +296,7 @@ pub(super) async fn exercise(
     Ok(())
 }
 
-fn wait_request(target: ContainerTarget) -> WaitRequest {
+pub(super) fn wait_request(target: ContainerTarget) -> WaitRequest {
     WaitRequest {
         target,
         timeout_ms: Some(15_000),
@@ -340,7 +340,14 @@ async fn wait_does_not_block_state(
 }
 
 pub(super) async fn best_effort_delete(client: &RuntimeClient, nonce: &str) {
-    for label in ["a", "b"] {
+    for label in [
+        "a",
+        "b",
+        "namespace-donor",
+        "namespace-wrong-type",
+        "namespace-non-mount",
+        "namespace-mount",
+    ] {
         let (Ok(id), Ok(context)) = (
             container_id(nonce, label),
             operation(nonce, &format!("{label}-cleanup")),
@@ -359,7 +366,7 @@ pub(super) async fn best_effort_delete(client: &RuntimeClient, nonce: &str) {
     }
 }
 
-fn create_request(
+pub(super) fn create_request(
     nonce: &str,
     operation_name: &str,
     id: ContainerId,
@@ -374,7 +381,7 @@ fn create_request(
     })
 }
 
-fn kill_request(
+pub(super) fn kill_request(
     nonce: &str,
     operation_name: &str,
     target: ContainerTarget,
@@ -400,7 +407,7 @@ async fn assert_state(
     )
 }
 
-async fn state_equals(
+pub(super) async fn state_equals(
     client: &RuntimeClient,
     target: &ContainerTarget,
     expected: &ContainerRecord,
@@ -416,7 +423,7 @@ async fn state_equals(
     Ok(&observed == expected)
 }
 
-async fn wait_for_marker(
+pub(super) async fn wait_for_marker(
     client: &RuntimeClient,
     target: &ContainerTarget,
     marker: &Path,
@@ -450,7 +457,7 @@ async fn wait_for_marker(
     }
 }
 
-async fn wait_until_stopped(
+pub(super) async fn wait_until_stopped(
     client: &RuntimeClient,
     target: &ContainerTarget,
 ) -> Result<bool, String> {
@@ -478,7 +485,7 @@ async fn wait_until_stopped(
     }
 }
 
-async fn state_is_missing(
+pub(super) async fn state_is_missing(
     client: &RuntimeClient,
     target: &ContainerTarget,
     description: &str,
@@ -532,7 +539,7 @@ async fn operation_conflicts<T>(
     }
 }
 
-async fn native_call<T>(
+pub(super) async fn native_call<T>(
     operation_name: &str,
     future: impl Future<Output = a3s_oci_sdk::Result<T>>,
 ) -> Result<T, String> {
@@ -543,21 +550,24 @@ async fn native_call<T>(
     }
 }
 
-fn require_created(record: &ContainerRecord, description: &str) -> Result<(), String> {
+pub(super) fn require_created(record: &ContainerRecord, description: &str) -> Result<(), String> {
     require(
         *record.state.status() == ContainerState::Created,
         format!("{description} did not preserve the created barrier"),
     )
 }
 
-fn require_running(record: &ContainerRecord, description: &str) -> Result<(), String> {
+pub(super) fn require_running(record: &ContainerRecord, description: &str) -> Result<(), String> {
     require(
         *record.state.status() == ContainerState::Running,
         format!("{description} did not enter running"),
     )
 }
 
-fn require_kill_state(record: &ContainerRecord, description: &str) -> Result<(), String> {
+pub(super) fn require_kill_state(
+    record: &ContainerRecord,
+    description: &str,
+) -> Result<(), String> {
     require(
         matches!(
             *record.state.status(),
@@ -567,7 +577,7 @@ fn require_kill_state(record: &ContainerRecord, description: &str) -> Result<(),
     )
 }
 
-fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
+pub(super) fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
     if condition {
         Ok(())
     } else {
@@ -575,18 +585,18 @@ fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
     }
 }
 
-fn container_id(nonce: &str, label: &str) -> Result<ContainerId, String> {
+pub(super) fn container_id(nonce: &str, label: &str) -> Result<ContainerId, String> {
     ContainerId::new(format!("native-multi-{label}-{nonce}"))
         .map_err(|error| format!("failed to construct container {label} ID: {error}"))
 }
 
-fn operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
+pub(super) fn operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
     let id = OperationId::new(format!("native-multi-{nonce}-{name}"))
         .map_err(|error| format!("failed to construct {name} operation ID: {error}"))?;
     Ok(OperationContext::new(id))
 }
 
-fn null_io() -> ProcessIo {
+pub(super) fn null_io() -> ProcessIo {
     ProcessIo {
         stdin: a3s_oci_sdk::IoMode::Null,
         stdout: a3s_oci_sdk::IoMode::Null,

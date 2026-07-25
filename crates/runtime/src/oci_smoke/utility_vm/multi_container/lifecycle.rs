@@ -315,7 +315,7 @@ pub(super) async fn exercise<T: AgentStream>(
     Ok(())
 }
 
-fn wait_request(target: ContainerTarget) -> AgentWaitRequest {
+pub(super) fn wait_request(target: ContainerTarget) -> AgentWaitRequest {
     AgentWaitRequest {
         target,
         timeout_ms: Some(15_000),
@@ -359,41 +359,35 @@ async fn wait_does_not_block_state<T: AgentStream>(
 }
 
 pub(super) async fn best_effort_delete<T: AgentStream>(client: &AgentClient<T>, nonce: &str) {
-    for label in ["a", "b"] {
-        let (Ok(generation_two), Ok(context)) = (
-            target(nonce, label, 2),
-            operation(nonce, &format!("{label}-cleanup")),
-        ) else {
-            continue;
-        };
-        let _ = timeout(
-            CALL_TIMEOUT,
-            client.delete(AgentDeleteRequest {
-                context,
-                target: generation_two,
-                mode: DeleteMode::Force,
-            }),
-        )
-        .await;
-        let Ok(generation_one) = target(nonce, label, 1) else {
-            continue;
-        };
-        let Ok(context) = operation(nonce, &format!("{label}-cleanup-1")) else {
-            continue;
-        };
-        let _ = timeout(
-            CALL_TIMEOUT,
-            client.delete(AgentDeleteRequest {
-                context,
-                target: generation_one,
-                mode: DeleteMode::Force,
-            }),
-        )
-        .await;
+    for label in [
+        "a",
+        "b",
+        "namespace-donor",
+        "namespace-wrong-type",
+        "namespace-non-mount",
+        "namespace-mount",
+    ] {
+        for generation in [2, 1] {
+            let (Ok(target), Ok(context)) = (
+                target(nonce, label, generation),
+                operation(nonce, &format!("{label}-cleanup-{generation}")),
+            ) else {
+                continue;
+            };
+            let _ = timeout(
+                CALL_TIMEOUT,
+                client.delete(AgentDeleteRequest {
+                    context,
+                    target,
+                    mode: DeleteMode::Force,
+                }),
+            )
+            .await;
+        }
     }
 }
 
-fn create_request(
+pub(super) fn create_request(
     nonce: &str,
     operation_name: &str,
     target: ContainerTarget,
@@ -408,7 +402,7 @@ fn create_request(
     })
 }
 
-fn start_request(
+pub(super) fn start_request(
     nonce: &str,
     operation_name: &str,
     target: ContainerTarget,
@@ -421,7 +415,7 @@ fn start_request(
     })
 }
 
-fn kill_request(
+pub(super) fn kill_request(
     nonce: &str,
     operation_name: &str,
     target: ContainerTarget,
@@ -460,7 +454,7 @@ async fn assert_state<T: AgentStream>(
     )
 }
 
-async fn state_equals<T: AgentStream>(
+pub(super) async fn state_equals<T: AgentStream>(
     client: &AgentClient<T>,
     target: &ContainerTarget,
     expected: &AgentState,
@@ -476,7 +470,7 @@ async fn state_equals<T: AgentStream>(
     Ok(&observed == expected)
 }
 
-async fn wait_for_marker<T: AgentStream>(
+pub(super) async fn wait_for_marker<T: AgentStream>(
     client: &AgentClient<T>,
     target: &ContainerTarget,
     marker: &Path,
@@ -510,7 +504,7 @@ async fn wait_for_marker<T: AgentStream>(
     }
 }
 
-async fn wait_until_stopped<T: AgentStream>(
+pub(super) async fn wait_until_stopped<T: AgentStream>(
     client: &AgentClient<T>,
     target: &ContainerTarget,
 ) -> Result<bool, String> {
@@ -538,7 +532,7 @@ async fn wait_until_stopped<T: AgentStream>(
     }
 }
 
-async fn state_is_missing<T: AgentStream>(
+pub(super) async fn state_is_missing<T: AgentStream>(
     client: &AgentClient<T>,
     target: &ContainerTarget,
     description: &str,
@@ -577,7 +571,7 @@ async fn operation_conflicts<T>(
     }
 }
 
-async fn guest_call<T>(
+pub(super) async fn guest_call<T>(
     operation_name: &str,
     future: impl Future<Output = a3s_oci_sdk::Result<T>>,
 ) -> Result<T, String> {
@@ -588,21 +582,21 @@ async fn guest_call<T>(
     }
 }
 
-fn require_created(state: &AgentState, description: &str) -> Result<(), String> {
+pub(super) fn require_created(state: &AgentState, description: &str) -> Result<(), String> {
     require(
         state.status() == ContainerState::Created,
         format!("{description} did not preserve the created barrier"),
     )
 }
 
-fn require_running(state: &AgentState, description: &str) -> Result<(), String> {
+pub(super) fn require_running(state: &AgentState, description: &str) -> Result<(), String> {
     require(
         state.status() == ContainerState::Running,
         format!("{description} did not enter running"),
     )
 }
 
-fn require_kill_state(state: &AgentState, description: &str) -> Result<(), String> {
+pub(super) fn require_kill_state(state: &AgentState, description: &str) -> Result<(), String> {
     require(
         matches!(
             state.status(),
@@ -612,7 +606,7 @@ fn require_kill_state(state: &AgentState, description: &str) -> Result<(), Strin
     )
 }
 
-fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
+pub(super) fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
     if condition {
         Ok(())
     } else {
@@ -620,13 +614,13 @@ fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
     }
 }
 
-fn target(nonce: &str, label: &str, generation: u64) -> Result<ContainerTarget, String> {
+pub(super) fn target(nonce: &str, label: &str, generation: u64) -> Result<ContainerTarget, String> {
     let id = ContainerId::new(format!("smoke-multi-{label}-{nonce}"))
         .map_err(|error| format!("failed to construct container {label} ID: {error}"))?;
     Ok(ContainerTarget::exact(id, Generation(generation)))
 }
 
-fn operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
+pub(super) fn operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
     let id = OperationId::new(format!("smoke-multi-{nonce}-{name}"))
         .map_err(|error| format!("failed to construct {name} operation ID: {error}"))?;
     Ok(OperationContext::new(id))

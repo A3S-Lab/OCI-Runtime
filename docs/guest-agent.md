@@ -43,11 +43,12 @@ The accepted bootstrap profile requires:
 - numeric UID, GID, optional supplementary groups, and optional umask;
 - bounded arguments and environment with unique environment names.
 
-When `linux.namespaces` is present, it accepts unique, newly created UTS,
-mount, IPC, network, cgroup, PID, user, and time namespace entries in any
-order, with no join paths. Omitting a namespace inherits the runtime namespace
-of that type. Configured hostname and domainname values are bounded to the
-Linux kernel limit and require the new UTS namespace.
+When `linux.namespaces` is present, it accepts unique UTS, mount, IPC, network,
+cgroup, PID, user, and time namespace entries in any order. Omitting `path`
+creates a namespace; an absolute `path` joins an existing namespace; omitting
+the entry inherits the runtime namespace of that type. Configured hostname and
+domainname values are bounded to the Linux kernel limit and require a created
+or joined UTS namespace.
 
 The user-namespace profile is deliberately rootful. A new user namespace
 requires both `uidMappings` and `gidMappings`, each list is bounded to the
@@ -58,22 +59,32 @@ namespace, writes each `/proc/<pid>/{uid,gid}_map` exactly once, reads both
 maps back, and requires `/proc/<pid>/setgroups` to remain `allow`. Rootless
 `setgroups=deny` and subordinate-ID helper flows are not implemented.
 
-The wrapper then requests the configured UTS, mount, IPC, network, cgroup, PID,
+Before any namespace transition, the wrapper opens every join target and
+verifies its type with `NS_GET_NSTYPE`. It joins non-user namespaces, then the
+user namespace, switches all UID slots to root in that namespace, and retries
+non-user joins that initially lacked permission. A retained `/proc/self/ns`
+directory descriptor lets it verify each resulting namespace identity even
+after a joined mount namespace hides the original proc path.
+
+The wrapper then requests newly created UTS, mount, IPC, network, cgroup, PID,
 and time namespaces in one `unshare` call. Time offsets accept only normalized
 `monotonic` and `boottime` values; the wrapper writes and reads them back
 through `/proc/self/timens_offsets` before forking. A new PID or time namespace
-applies to the caller's next child, so the wrapper remains as a supervisor and
-forks the container init. With PID isolation that child is namespace PID 1.
-The child applies and reads back hostname and domainname with `uname`. When a
-mount namespace is requested, it then makes `/` recursively private,
+applies to the caller's next child; joined PID and time namespaces have the
+same next-child execution requirement. The wrapper therefore remains as a
+supervisor and forks the container init whenever either type is configured.
+With a newly created PID namespace that child is namespace PID 1. The child
+applies and reads back hostname and domainname with `uname`. When a new mount
+namespace is requested, it then makes `/` recursively private,
 recursively bind-mounts the rootfs onto itself, applies every configured mount
 in listed order, and uses
 `pivot_root(".", ".")` followed by a detached unmount of the old root. All of
 this succeeds before readiness is reported, so namespace, mount, and rootfs
-isolation are part of the create barrier. When a mount namespace is omitted,
-the wrapper preserves the inherited namespace and uses the compatible
-`chroot` path after start; mount entries are rejected on that path to prevent
-changes from escaping into the agent's runtime mount namespace.
+isolation are part of the create barrier. When the mount namespace is inherited
+or joined, the wrapper uses `fchdir` plus `chroot` through a rootfs directory
+descriptor retained before namespace entry. Mount entries are rejected on
+that path to prevent changes from escaping into a shared or donor mount
+namespace.
 
 The current mount slice:
 
@@ -131,12 +142,12 @@ closed host connection force-stops remaining init processes and removes the
 agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
-rejects mount-target creation, rootfs propagation overrides, idmapped and
-recursive-attribute mounts, all namespace joins, rootless user-mapping policy,
-cgroup resources, capabilities, seccomp, hooks, read-only rootfs, terminals,
-non-null I/O, process-group signals, and every other unimplemented OCI
-property. These are release blockers, not silently accepted compatibility
-gaps.
+rejects mount entries in inherited or joined mount namespaces, mount-target
+creation, rootfs propagation overrides, idmapped and recursive-attribute
+mounts, rootless user-mapping policy, cgroup resources, capabilities, seccomp,
+hooks, read-only rootfs, terminals, non-null I/O, process-group signals, and
+every other unimplemented OCI property. These are release blockers, not
+silently accepted compatibility gaps.
 
 ## Build And Evidence
 
@@ -161,7 +172,10 @@ wait, delete, recreation, stale generation, and replay conflicts do not alter
 or block B, then completes B independently. The macOS HVF gate sends both init
 signals through distinct retained pidfds and retains both exact repeated exit
 statuses and per-container markers together with guest-runtime and
-host-process cleanup evidence.
+host-process cleanup evidence. Schema v3 then retains a prepared donor and
+qualifies wrong-type rejection plus UTS, mount, IPC, network, cgroup, PID,
+user, and time joins. Both joiner workloads must cross `exec`, remain running
+for a bounded observation window, stop cleanly, and leave the donor unchanged.
 
 `a3s-oci oci-vm-fault-cleanup` stops after create, start, or kill, explicitly
 records that delete was not attempted, and requires guest executor shutdown to

@@ -70,6 +70,10 @@ Completed:
 - real native Linux create/state/start/kill/wait/delete SDK evidence on x86_64
   and aarch64, including exact repeated SIGKILL status and bounded running
   wait, repeated with `/dev/kvm` absent and present but unusable;
+- type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
+  and time namespaces, including retained rootfs execution after a mount join,
+  three-pass user-namespace permission recovery, and shared native Linux/macOS
+  utility-VM lifecycle evidence;
 - real native Linux no-delete cleanup after create, start, and kill on x86_64
   and aarch64, including init-PID reap and executor, durable-state, marker, and
   session-root removal;
@@ -305,7 +309,11 @@ then may HVF become `experimental`.
   UID/GID mappings through the authenticated parent, apply and verify
   monotonic/boottime offsets before the first child, and prove the path through
   native Linux and the macOS utility VM.
-- [ ] Join existing namespaces.
+- [x] Open and type-check all existing namespace descriptors before mutation,
+  join non-user namespaces around the user-namespace capability transition,
+  preserve PID/time next-child semantics, and prove UTS, mount, IPC, network,
+  cgroup, PID, user, and time joins through native Linux and the macOS
+  utility-VM path.
 - [ ] Mount-target creation, rootfs propagation overrides, idmapped and
   recursive-attribute mounts, masked paths, read-only paths, and read-only
   rootfs.

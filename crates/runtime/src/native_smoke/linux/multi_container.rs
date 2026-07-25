@@ -13,6 +13,7 @@ use crate::{
 };
 
 mod lifecycle;
+mod namespace_join;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -136,13 +137,25 @@ pub(super) async fn run(
     };
     let client = RuntimeClient::new(service.clone());
 
-    let exercise = exercise(
-        &client,
-        [&bundle_a, &bundle_b],
-        &nonce,
-        [&marker_a, &marker_b],
-        &mut report,
-    )
+    let exercise = async {
+        exercise(
+            &client,
+            [&bundle_a, &bundle_b],
+            &nonce,
+            [&marker_a, &marker_b],
+            &mut report,
+        )
+        .await?;
+        namespace_join::exercise(
+            &client,
+            &bundle_a,
+            &bundle_b,
+            &nonce,
+            [&marker_a, &marker_b],
+            &mut report,
+        )
+        .await
+    }
     .await;
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;

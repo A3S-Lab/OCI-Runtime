@@ -11,6 +11,7 @@ use crate::agent_session::AgentVmSession;
 use crate::OciVmMultiContainerSmokeReport;
 
 mod lifecycle;
+mod namespace_join;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -136,14 +137,27 @@ pub(super) async fn run(
         }
     };
 
-    let exercise = exercise(
-        session.client(),
-        [&bundle_a, &bundle_b],
-        guest_bundles,
-        &nonce,
-        [&markers[0], &markers[1]],
-        &mut report,
-    )
+    let exercise = async {
+        exercise(
+            session.client(),
+            [&bundle_a, &bundle_b],
+            guest_bundles.clone(),
+            &nonce,
+            [&markers[0], &markers[1]],
+            &mut report,
+        )
+        .await?;
+        namespace_join::exercise(
+            session.client(),
+            &bundle_a,
+            &bundle_b,
+            guest_bundles,
+            &nonce,
+            [&markers[0], &markers[1]],
+            &mut report,
+        )
+        .await
+    }
     .await;
     if exercise.is_err() {
         best_effort_delete(session.client(), &nonce).await;

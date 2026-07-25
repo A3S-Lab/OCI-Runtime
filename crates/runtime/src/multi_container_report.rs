@@ -6,9 +6,51 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v2";
+    "a3s.oci.native-linux-multi-container-smoke.v3";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v2";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v3";
+
+/// Existing-namespace join evidence shared by native and utility-VM paths.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamespaceJoinEvidence {
+    /// Positive runtime-visible PID of the prepared namespace donor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub donor_pid: Option<i32>,
+    /// Whether a path whose namespace type disagreed with `type` was rejected
+    /// before any container state became visible.
+    pub wrong_type_rejected_before_state: bool,
+    /// Whether one init joined the donor UTS, IPC, network, cgroup, PID, user,
+    /// and time namespaces while creating its own mount namespace.
+    pub joined_non_mount_namespaces: bool,
+    /// Whether the joined PID/time workload crossed start, reached exec, and
+    /// remained running for the bounded observation window.
+    pub joined_pid_time_workload_verified: bool,
+    /// Whether a second init joined the donor mount namespace.
+    pub joined_mount_namespace: bool,
+    /// Whether the rootfs retained before `setns` remained usable for exec
+    /// after the donor mount namespace made the original path unreachable.
+    pub retained_rootfs_verified: bool,
+    /// Whether both joiner lifecycles completed without changing the donor's
+    /// created state.
+    pub donor_unchanged_after_joins: bool,
+    /// Whether the donor, both joiners, and the negative case left no state.
+    pub all_state_removed: bool,
+}
+
+impl NamespaceJoinEvidence {
+    /// Return whether every existing-namespace join invariant was proven.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.donor_pid.is_some_and(|pid| pid > 0)
+            && self.wrong_type_rejected_before_state
+            && self.joined_non_mount_namespaces
+            && self.joined_pid_time_workload_verified
+            && self.joined_mount_namespace
+            && self.retained_rootfs_verified
+            && self.donor_unchanged_after_joins
+            && self.all_state_removed
+    }
+}
 
 /// Exact multi-container lifecycle and isolation evidence shared by both paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +215,8 @@ pub struct NativeLinuxMultiContainerSmokeReport {
     pub service_operations: Vec<RuntimeOperation>,
     /// Per-container generation, replay, isolation, and lifecycle evidence.
     pub lifecycle: MultiContainerLifecycleEvidence,
+    /// Existing-namespace type validation, joins, and lifecycle evidence.
+    pub namespace_join: NamespaceJoinEvidence,
     /// Whether both workload markers were removed.
     pub markers_removed: bool,
     /// Whether executor shutdown removed its private transient root.
@@ -194,6 +238,7 @@ impl NativeLinuxMultiContainerSmokeReport {
             bundles_loaded: false,
             service_operations: Vec::new(),
             lifecycle: MultiContainerLifecycleEvidence::default(),
+            namespace_join: NamespaceJoinEvidence::default(),
             markers_removed: false,
             executor_runtime_clean: false,
             session_root_clean: false,
@@ -237,6 +282,7 @@ impl NativeLinuxMultiContainerSmokeReport {
                     oom_killed: false,
                 })
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
+            && self.namespace_join.is_success()
             && self.markers_removed
             && self.executor_runtime_clean
             && self.session_root_clean
@@ -256,6 +302,8 @@ pub struct OciVmMultiContainerSmokeReport {
     pub bundles_loaded: bool,
     /// Per-container generation, replay, isolation, and lifecycle evidence.
     pub lifecycle: MultiContainerLifecycleEvidence,
+    /// Existing-namespace type validation, joins, and lifecycle evidence.
+    pub namespace_join: NamespaceJoinEvidence,
     /// Whether both workload markers were removed.
     pub markers_removed: bool,
     /// Whether VM shutdown left no new guest-agent runtime directory.
@@ -275,6 +323,7 @@ impl OciVmMultiContainerSmokeReport {
             status: CapabilityStatus::Unavailable,
             bundles_loaded: false,
             lifecycle: MultiContainerLifecycleEvidence::default(),
+            namespace_join: NamespaceJoinEvidence::default(),
             markers_removed: false,
             guest_runtime_clean: false,
             bridge: AgentVmSmokeReport::initial(platform),
@@ -317,6 +366,7 @@ impl OciVmMultiContainerSmokeReport {
                     oom_killed: false,
                 })
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
+            && self.namespace_join.is_success()
             && self.markers_removed
             && self.guest_runtime_clean
             && self.bridge.is_success()
@@ -327,7 +377,7 @@ impl OciVmMultiContainerSmokeReport {
 mod tests {
     use a3s_oci_sdk::ExitStatus;
 
-    use super::MultiContainerLifecycleEvidence;
+    use super::{MultiContainerLifecycleEvidence, NamespaceJoinEvidence};
 
     #[test]
     fn multi_container_success_requires_every_isolation_invariant() {
@@ -336,6 +386,25 @@ mod tests {
 
         let mut incomplete = complete;
         incomplete.b_unchanged_after_a_delete = false;
+        assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn namespace_join_success_requires_positive_negative_and_cleanup_evidence() {
+        let complete = NamespaceJoinEvidence {
+            donor_pid: Some(303),
+            wrong_type_rejected_before_state: true,
+            joined_non_mount_namespaces: true,
+            joined_pid_time_workload_verified: true,
+            joined_mount_namespace: true,
+            retained_rootfs_verified: true,
+            donor_unchanged_after_joins: true,
+            all_state_removed: true,
+        };
+        assert!(complete.is_success());
+
+        let mut incomplete = complete;
+        incomplete.wrong_type_rejected_before_state = false;
         assert!(!incomplete.is_success());
     }
 

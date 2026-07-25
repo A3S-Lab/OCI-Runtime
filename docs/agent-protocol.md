@@ -147,9 +147,12 @@ the same connection. It proves distinct runtime slots and PIDs, simultaneous
 create barriers, A/B transition isolation, session-local generation fencing,
 exact operation replay, rejection of cross-container operation-ID reuse, a
 bounded wait on A that does not block B state, exact repeated terminal results
-for both containers, and independent pidfd-backed cleanup. Native Linux runs
-the equivalent sequence through the durable SDK service around the same
-executor.
+for both containers, and independent pidfd-backed cleanup. Its schema-v3
+namespace phase retains a prepared donor, rejects a wrong-type namespace
+descriptor before state, joins all eight Linux namespace types across two
+workloads, proves retained-rootfs execution after the mount join, and removes
+all state without changing the donor's created record. Native Linux runs the
+equivalent sequence through the durable SDK service around the same executor.
 
 The `oci-vm-fault-cleanup` companion stops after a successful create, start, or
 kill request and never sends delete. Session EOF must still make the agent call
@@ -171,7 +174,7 @@ pathname socket.
 
 This is the first Linux executor vertical slice, not complete OCI
 enforcement. A pinned immutable system image, complete process I/O, rootless
-ID mapping, namespace joins, advanced mount semantics, resources, hooks,
-exhaustive recovery injection, negative isolation cases, and full
-platform-specific lifecycle evidence remain required before a utility-VM
-driver can advance beyond `probe-only`.
+ID mapping, advanced mount semantics, resources, hooks, exhaustive recovery
+injection, broader negative isolation cases, and full platform-specific
+lifecycle evidence remain required before a utility-VM driver can advance
+beyond `probe-only`.

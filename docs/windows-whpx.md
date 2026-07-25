@@ -157,15 +157,15 @@ onto `/tmp`. The workload verified both filesystem types through
 `/proc/self/mountinfo` and completed the full lifecycle after `pivot_root`. A
 companion bundle omitted the mount namespace; create retained the exact typed
 `Unsupported` rejection and left no guest runtime directory. A joined-mount
-namespace negative remains rejected as well.
+namespace negative was rejected by that historical agent.
 
 The namespace qualification combined that ordered mount sequence with new IPC,
 network, and cgroup namespaces. The workload compared
 `/proc/self/ns/{ipc,net,cgroup}` with guest PID 1 and produced its marker only
 after all three identities differed. The full lifecycle and cleanup report
 passed. A companion bundle supplied `/proc/1/ns/net` as a network namespace
-join path; create retained the exact typed `Unsupported` rejection and left no
-guest runtime directory.
+join path; the historical agent retained the exact typed `Unsupported`
+rejection and left no guest runtime directory.
 
 The PID qualification used the 6,371,704-byte static musl agent with SHA-256
 `45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.
@@ -201,9 +201,8 @@ The next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
-3. qualify the shared rootful user/time namespace slice on WHPX and add
-   namespace joins, advanced mount, capability, resource, seccomp, and hook
-   enforcement;
+3. qualify the shared rootful user/time and existing-namespace slices on WHPX
+   and add advanced mount, capability, resource, seccomp, and hook enforcement;
 4. return stdout, stderr, and arbitrary natural exit codes;
 5. reconcile stopped state after host runtime restart;
 6. add concurrent-container and negative isolation evidence;
