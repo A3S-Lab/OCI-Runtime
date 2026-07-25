@@ -5,9 +5,9 @@ use std::time::Duration;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
     ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, OciBundle,
-    OperationContext, OperationId, ProcessIo, ProcessTarget, ProcessesRequest, RuntimeClient,
-    Signal, StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitRequest,
+    DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, ListRequest,
+    OciBundle, OperationContext, OperationId, ProcessIo, ProcessTarget, ProcessesRequest,
+    RuntimeClient, Signal, StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -74,6 +74,26 @@ pub(super) async fn exercise(
     report.create_replayed = replayed == created;
     if !report.create_replayed {
         return Err("native runtime did not exactly replay create".into());
+    }
+    let listed = native_call("list after create", client.list(ListRequest::default())).await?;
+    let filtered = native_call(
+        "filtered list after create",
+        client.list(ListRequest {
+            isolation: Some(a3s_oci_sdk::IsolationClass::SharedHostKernel),
+        }),
+    )
+    .await?;
+    let excluded = native_call(
+        "excluded list after create",
+        client.list(ListRequest {
+            isolation: Some(a3s_oci_sdk::IsolationClass::DedicatedVm),
+        }),
+    )
+    .await?;
+    report.list_visible_after_create =
+        listed == [created.clone()] && filtered == [created.clone()] && excluded.is_empty();
+    if !report.list_visible_after_create {
+        return Err("native durable list did not return the exact created container".into());
     }
     report.marker_absent_after_create = !path_exists(marker).await?;
     if !report.marker_absent_after_create {
@@ -163,6 +183,13 @@ pub(super) async fn exercise(
     report.state_missing_after_delete = state_is_missing(client, target).await?;
     if !report.state_missing_after_delete {
         return Err("native state remained visible after delete".into());
+    }
+    report.list_empty_after_delete =
+        native_call("list after delete", client.list(ListRequest::default()))
+            .await?
+            .is_empty();
+    if !report.list_empty_after_delete {
+        return Err("native durable list retained a deleted container".into());
     }
     Ok(())
 }

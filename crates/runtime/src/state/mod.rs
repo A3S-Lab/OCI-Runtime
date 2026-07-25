@@ -4,6 +4,7 @@ mod failure;
 mod filesystem;
 mod freezer;
 mod kill;
+mod list;
 mod model;
 mod observe;
 mod oci_state;

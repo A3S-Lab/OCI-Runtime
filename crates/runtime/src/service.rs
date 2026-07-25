@@ -294,14 +294,15 @@ impl OciRuntimeService for HostRuntimeService {
     async fn features(&self) -> Result<RuntimeInfo> {
         let oci = feature_report::build(self.lifecycle.is_some())?;
 
-        let mut operations = vec![RuntimeOperation::Features];
+        let mut operations = BTreeSet::from([RuntimeOperation::Features]);
         if let Some(lifecycle) = &self.lifecycle {
+            operations.insert(RuntimeOperation::List);
             operations.extend(lifecycle.operations.iter().copied());
         }
         Ok(RuntimeInfo {
             oci,
             drivers: self.runtime_features(),
-            operations,
+            operations: operations.into_iter().collect(),
         })
     }
 
@@ -567,8 +568,8 @@ impl OciRuntimeService for HostRuntimeService {
         lifecycle.complete_process_wait(&target, status).await
     }
 
-    async fn list(&self, _request: ListRequest) -> Result<Vec<ContainerRecord>> {
-        Err(Error::unsupported("list"))
+    async fn list(&self, request: ListRequest) -> Result<Vec<ContainerRecord>> {
+        self.lifecycle("list")?.store.list(&request).await
     }
 
     async fn pause(&self, request: ContainerOperationRequest) -> Result<ContainerRecord> {

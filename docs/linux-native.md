@@ -89,11 +89,11 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v7` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v8` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
-   `kill`, `delete`, `exec`, `wait`, `pause`, `resume`, `update`, `processes`,
+   `kill`, `delete`, `exec`, `wait`, `list`, `pause`, `resume`, `update`, `processes`,
    `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
    `signal-process`, and `wait-process`;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
@@ -102,7 +102,8 @@ following:
    the exact OCI `created` state while a dedicated namespace PID 1 remains
    behind it;
 4. the workload marker is absent before start;
-5. retrying create replays its exact result;
+5. retrying create replays its exact result; unfiltered and shared-host-kernel
+   list return that exact record while a dedicated-VM filter returns none;
 6. start releases the prepared init; the workload verifies exact rootful
    UID/GID maps plus monotonic and boottime namespace offsets before the marker
    is observed;
@@ -139,7 +140,7 @@ following:
    the same terminal result;
 19. state reaches `stopped`;
 20. stopped-only delete and its exact retry succeed;
-21. state returns `NotFound` after delete;
+21. state returns `NotFound` and durable list is empty after delete;
 22. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
@@ -210,7 +211,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v11` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v12` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -274,9 +275,9 @@ for fault in after-create after-start after-kill; do
 done
 ```
 
-The versioned `a3s.oci.native-linux-fault-cleanup.v5` report requires:
+The versioned `a3s.oci.native-linux-fault-cleanup.v6` report requires:
 
-1. the exact 19-operation service inventory, requested prefix, and a positive
+1. the exact 20-operation service inventory, requested prefix, and a positive
    runtime-visible configured-process PID;
 2. marker absence behind create and exact marker contents after start;
 3. `normal_delete_attempted: false`;
