@@ -5,6 +5,7 @@ mod mount;
 mod mount_tests;
 mod namespace;
 mod pid;
+mod pid_supervisor;
 mod pidfd;
 mod plan;
 #[cfg(test)]

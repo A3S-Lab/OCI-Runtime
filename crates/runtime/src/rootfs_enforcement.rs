@@ -7,7 +7,7 @@ use a3s_oci_sdk::OciBundle;
 use serde_json::{json, Map, Value};
 use tokio::io::AsyncReadExt;
 
-use crate::RootfsMountEvidence;
+use crate::{PidSupervisionEvidence, RootfsMountEvidence};
 
 const EVIDENCE_FILE: &str = "evidence";
 const BIND_SOURCE_FILE: &str = "bind-source";
@@ -15,7 +15,10 @@ const IDMAP_BIND_SOURCE_DIRECTORY: &str = "idmap-bind-source";
 const BIND_SOURCE_CONTENTS: &[u8] = b"a3s-oci-bind-source-v1";
 const MAX_EVIDENCE_BYTES: u64 = 1_024;
 const IDMAP_VISIBLE_ID_RANGE: u32 = 65_536;
-const EXPECTED_COMMON_EVIDENCE: &[u8] = b"mount-target-created\n\
+const EXPECTED_COMMON_EVIDENCE: &[u8] = b"pid1-supervision-enforced\n\
+orphan-adopted-by-pid1\n\
+orphan-reaping-enforced\n\
+mount-target-created\n\
 mount-file-target-created\n\
 rootfs-propagation-shared\n\
 readonly-path-enforced\n\
@@ -26,7 +29,10 @@ recursive-mount-attributes-enforced\n\
 idmapped-mounts-enforced\n\
 readonly-rootfs-enforced\n";
 #[cfg(target_os = "linux")]
-const EXPECTED_NATIVE_EVIDENCE: &[u8] = b"mount-target-created\n\
+const EXPECTED_NATIVE_EVIDENCE: &[u8] = b"pid1-supervision-enforced\n\
+orphan-adopted-by-pid1\n\
+orphan-reaping-enforced\n\
+mount-target-created\n\
 mount-file-target-created\n\
 rootfs-propagation-shared\n\
 readonly-path-enforced\n\
@@ -198,26 +204,30 @@ impl RootfsEnforcementFixture {
 
     pub(crate) async fn collect_evidence(
         &self,
-        report: &mut RootfsMountEvidence,
+        rootfs_report: &mut RootfsMountEvidence,
+        pid_report: &mut PidSupervisionEvidence,
     ) -> Result<String, String> {
         let evidence = self.read_evidence().await?;
         let evidence_text = std::str::from_utf8(&evidence)
             .map_err(|error| format!("rootfs enforcement evidence is not UTF-8: {error}"))?;
         let lines = evidence_text.lines().collect::<Vec<_>>();
-        report.rootfs_propagation_shared = lines.contains(&"rootfs-propagation-shared");
-        report.readonly_path_enforced = lines.contains(&"readonly-path-enforced");
-        report.masked_path_enforced = lines.contains(&"masked-path-enforced");
-        report.recursive_mount_attributes_enforced =
+        pid_report.pid1_supervision_enforced = lines.contains(&"pid1-supervision-enforced");
+        pid_report.orphan_reaping_enforced = lines.contains(&"orphan-reaping-enforced");
+        rootfs_report.rootfs_propagation_shared = lines.contains(&"rootfs-propagation-shared");
+        rootfs_report.readonly_path_enforced = lines.contains(&"readonly-path-enforced");
+        rootfs_report.masked_path_enforced = lines.contains(&"masked-path-enforced");
+        rootfs_report.recursive_mount_attributes_enforced =
             lines.contains(&"recursive-mount-attributes-enforced");
-        report.idmapped_mounts_enforced = lines.contains(&"idmapped-mounts-enforced");
+        rootfs_report.idmapped_mounts_enforced = lines.contains(&"idmapped-mounts-enforced");
         if self.native_idmap_bind_expected {
-            report.idmap_source_ownership_unchanged =
+            rootfs_report.idmap_source_ownership_unchanged =
                 Some(lines.contains(&"idmap-source-ownership-unchanged"));
-            report.idmap_nonrecursive_enforced =
+            rootfs_report.idmap_nonrecursive_enforced =
                 Some(lines.contains(&"idmap-nonrecursive-enforced"));
-            report.ridmap_recursive_enforced = Some(lines.contains(&"ridmap-recursive-enforced"));
+            rootfs_report.ridmap_recursive_enforced =
+                Some(lines.contains(&"ridmap-recursive-enforced"));
         }
-        report.readonly_rootfs_enforced = lines.contains(&"readonly-rootfs-enforced");
+        rootfs_report.readonly_rootfs_enforced = lines.contains(&"readonly-rootfs-enforced");
         #[cfg(target_os = "linux")]
         let expected = if self.native_idmap_bind_expected {
             EXPECTED_NATIVE_EVIDENCE
@@ -226,7 +236,7 @@ impl RootfsEnforcementFixture {
         };
         #[cfg(not(target_os = "linux"))]
         let expected = EXPECTED_COMMON_EVIDENCE;
-        report.exact_evidence = evidence == expected;
+        rootfs_report.exact_evidence = evidence == expected;
         Ok(evidence_text.to_string())
     }
 
@@ -493,6 +503,65 @@ fn enforcement_command(
         "set -eu; \
          evidence='{evidence}'; \
          : > \"$evidence\"; \
+         self_pid=$$; \
+         test \"$self_pid\" -gt 1; \
+         test \"$(/bin/busybox awk '/^PPid:/ {{ print $2 }}' \
+           \"/proc/$self_pid/status\")\" = '1'; \
+         test \"$(/bin/busybox awk '/^NSpid:/ {{ print $NF }}' /proc/1/status)\" = '1'; \
+         test \"$(/bin/busybox awk '/^NSpid:/ {{ print $NF }}' \
+           \"/proc/$self_pid/status\")\" = \
+           \"$self_pid\"; \
+         test \"$(/bin/busybox readlink /proc/1/ns/pid)\" = \
+           \"$(/bin/busybox readlink /proc/self/ns/pid)\"; \
+         printf 'pid1-supervision-enforced\\n' >> \"$evidence\"; \
+         orphan_pid_file=\"${{evidence}}.orphan-pid\"; \
+         /bin/busybox rm -f \"$orphan_pid_file\"; \
+         /bin/busybox setsid /bin/busybox setsid /bin/busybox sh -c \
+           'set -eu; printf \"%s\\n\" \"$$\" > \"$1\"; \
+              exec /bin/busybox sleep 30' \
+           a3s-orphan-child \"$orphan_pid_file\"; \
+         attempt=0; \
+         while test ! -s \"$orphan_pid_file\" && test \"$attempt\" -lt 100; do \
+           /bin/busybox sleep 0.01; attempt=$((attempt + 1)); \
+         done; \
+         test -s \"$orphan_pid_file\"; \
+         orphan_pid=\"$(/bin/busybox cat \"$orphan_pid_file\")\"; \
+         if ! test \"$orphan_pid\" -gt 1; then \
+           printf 'invalid-orphan-pid=%s\\n' \"$orphan_pid\" >> \"$evidence\"; exit 45; \
+         fi; \
+         orphan_parent=''; attempt=0; \
+         while test \"$attempt\" -lt 100; do \
+           if test -e \"/proc/$orphan_pid/status\"; then \
+             orphan_parent=\"$(/bin/busybox awk '/^PPid:/ {{ print $2 }}' \
+               \"/proc/$orphan_pid/status\")\"; \
+             if test \"$orphan_parent\" = '1'; then break; fi; \
+           fi; \
+           /bin/busybox sleep 0.01; \
+           attempt=$((attempt + 1)); \
+         done; \
+         if test \"$orphan_parent\" != '1'; then \
+           printf 'unexpected-orphan-parent=%s pid=%s self=%s\\n' \
+             \"$orphan_parent\" \"$orphan_pid\" \"$self_pid\" >> \"$evidence\"; \
+           /bin/busybox ps -o pid,ppid,comm >> \"$evidence\"; \
+           exit 45; \
+         fi; \
+         printf 'orphan-adopted-by-pid1\\n' >> \"$evidence\"; \
+         /bin/busybox kill -TERM \"$orphan_pid\"; \
+         orphan_reaped=0; attempt=0; \
+         while test \"$attempt\" -lt 400; do \
+           if test ! -e \"/proc/$orphan_pid/status\"; then \
+             orphan_reaped=1; break; \
+           fi; \
+           /bin/busybox sleep 0.01; \
+           attempt=$((attempt + 1)); \
+         done; \
+         /bin/busybox rm -f \"$orphan_pid_file\"; \
+         if test \"$orphan_reaped\" != '1'; then \
+           /bin/busybox awk '/^(State|PPid|NSpid):/' \"/proc/$orphan_pid/status\" \
+             >> \"$evidence\"; \
+           exit 45; \
+         fi; \
+         printf 'orphan-reaping-enforced\\n' >> \"$evidence\"; \
          test -d '{tmpfs_target}'; \
          /bin/busybox awk '$5 == \"{tmpfs_target}\" {{ ok = 1 }} END {{ exit !ok }}' \
            /proc/self/mountinfo; \
@@ -875,6 +944,10 @@ mod tests {
             .as_str()
             .expect("enforcement command");
         for assertion in [
+            "/bin/busybox setsid /bin/busybox setsid",
+            "pid1-supervision-enforced",
+            "orphan-adopted-by-pid1",
+            "orphan-reaping-enforced",
             "mount-target-created",
             "mount-file-target-created",
             "rootfs-propagation-shared",

@@ -55,7 +55,9 @@ pub(super) async fn exercise(
     )
     .await?;
     report.rootfs_mount.wait_status = Some(waited.clone());
-    let evidence = fixture.collect_evidence(&mut report.rootfs_mount).await?;
+    let evidence = fixture
+        .collect_evidence(&mut report.rootfs_mount, &mut report.pid_supervision)
+        .await?;
     let expected = ExitStatus::exited(0)
         .map_err(|error| format!("failed to construct expected rootfs exit: {error}"))?;
     require(
@@ -68,6 +70,10 @@ pub(super) async fn exercise(
     require(
         report.rootfs_mount.exact_evidence,
         "rootfs enforcement workload did not emit exact complete evidence",
+    )?;
+    require(
+        report.pid_supervision.is_success(),
+        "rootfs enforcement workload did not prove PID 1 supervision and orphan reaping",
     )?;
     require(
         wait_until_stopped(client, &target).await?,

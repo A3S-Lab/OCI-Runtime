@@ -12,9 +12,10 @@ use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CO
 use super::control::{write_ready, write_rejection, START_BYTE};
 use super::mount::{self, IdmappedMountSources};
 use super::namespace::{self, IdmapNamespaceHandles};
-use super::pid::{self, ForkRole};
 use super::plan::InitPlan;
 use super::rootfs;
+
+mod supervision;
 
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let mut arguments = std::env::args_os().skip(1);
@@ -58,7 +59,7 @@ fn run_container_init(
             format!("failed to connect abstract prepared init control socket: {error}"),
         )
     })?;
-    let (plan, canonical_bundle, rootfs, rootfs_file) =
+    let (plan, canonical_bundle, rootfs, rootfs_file, host_proc) =
         match prepare_container_init(config_snapshot, bundle_directory) {
             Ok(prepared) => prepared,
             Err(error) => return reject_before_ready(&mut control, error),
@@ -79,11 +80,12 @@ fn run_container_init(
         return reject_before_ready(&mut control, error);
     }
     if plan.namespaces.requires_child_process() {
-        return run_namespaced_init(
+        return supervision::run_namespaced_init(
             &plan,
             &canonical_bundle,
             &rootfs,
             &rootfs_file,
+            &host_proc,
             idmapped_sources,
             control,
         );
@@ -96,7 +98,7 @@ fn run_container_init(
     // SAFETY: `getpid` has no preconditions and this wrapper has not entered a
     // PID namespace that changes the runtime-visible process.
     let pid = unsafe { libc::getpid() };
-    write_ready(&mut control, pid)?;
+    write_ready(&mut control, pid, None)?;
     wait_for_start_and_exec(&plan, &rootfs_file, control)
 }
 
@@ -118,34 +120,6 @@ fn wait_for_start_and_exec(plan: &InitPlan, rootfs: &File, mut control: UnixStre
     enter_rootfs_and_exec(plan, rootfs)
 }
 
-fn run_namespaced_init(
-    plan: &InitPlan,
-    bundle_directory: &Path,
-    rootfs: &Path,
-    rootfs_file: &File,
-    mut idmapped_sources: IdmappedMountSources,
-    mut control: UnixStream,
-) -> Result<()> {
-    match pid::fork_namespaced_init() {
-        Ok(ForkRole::Supervisor { child_pid }) => {
-            drop(control);
-            drop(idmapped_sources);
-            let outcome = pid::wait_for_child(child_pid)?;
-            pid::mirror_child_outcome(outcome)
-        }
-        Ok(ForkRole::Init { runtime_pid }) => {
-            if let Err(error) =
-                prepare_create_environment(plan, bundle_directory, rootfs, &mut idmapped_sources)
-            {
-                return reject_before_ready(&mut control, error);
-            }
-            write_ready(&mut control, runtime_pid)?;
-            wait_for_start_and_exec(plan, rootfs_file, control)
-        }
-        Err(error) => reject_before_ready(&mut control, error),
-    }
-}
-
 fn reject_before_ready(control: &mut UnixStream, error: Error) -> Result<()> {
     if let Err(report) = write_rejection(control, &error) {
         Err(init_error(
@@ -160,7 +134,7 @@ fn reject_before_ready(control: &mut UnixStream, error: Error) -> Result<()> {
 fn prepare_container_init(
     config_snapshot: PathBuf,
     bundle_directory: PathBuf,
-) -> Result<(InitPlan, PathBuf, PathBuf, File)> {
+) -> Result<(InitPlan, PathBuf, PathBuf, File, File)> {
     let config_json = read_bounded_config(&config_snapshot)?;
     let bundle = OciBundle::from_json(bundle_directory, config_json)?;
     let plan = InitPlan::from_bundle(&bundle, &null_io())?;
@@ -218,7 +192,28 @@ fn prepare_container_init(
             format!("container rootfs is not a directory: {}", rootfs.display()),
         ));
     }
-    Ok((plan, canonical_bundle, rootfs, rootfs_file))
+    let host_proc = File::open("/proc").map_err(|error| {
+        init_error(
+            ErrorCode::FailedPrecondition,
+            format!("failed to retain host procfs before PID namespace entry: {error}"),
+        )
+    })?;
+    if !host_proc
+        .metadata()
+        .map_err(|error| {
+            init_error(
+                ErrorCode::FailedPrecondition,
+                format!("failed to inspect retained host procfs: {error}"),
+            )
+        })?
+        .is_dir()
+    {
+        return Err(init_error(
+            ErrorCode::FailedPrecondition,
+            "retained host procfs path is not a directory",
+        ));
+    }
+    Ok((plan, canonical_bundle, rootfs, rootfs_file, host_proc))
 }
 
 fn prepare_create_environment(

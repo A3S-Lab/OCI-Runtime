@@ -113,12 +113,12 @@ A successful fixed OCI VM smoke additionally proves that:
   filesystem-specific data;
 - create atomically enters requested IPC, network, cgroup, and PID namespace
   setup before reporting ready;
-- create returns `created` and an authenticated host-visible init PID without
-  running the configured process; the init is PID 1 in a requested new PID
-  namespace;
+- create returns `created` and the authenticated host-visible configured
+  process PID without running it; a dedicated supervisor is PID 1 and the
+  configured process is PID 2+ in a requested new PID namespace;
 - state and an exact create retry match the original result;
 - start releases a randomly named abstract Unix socket only after the parent
-  verifies the exact init-wrapper PID;
+  verifies the launcher → PID 1 → configured-process identity chain;
 - the wrapper applies the accepted rootfs, credentials, umask, and
   `no_new_privileges`, then calls `execve`;
 - the host observes `running` and the exact workload marker;

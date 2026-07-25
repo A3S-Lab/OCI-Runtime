@@ -389,10 +389,11 @@ macOS-specific OCI profile. The checked-in
 cgroup, PID, user, and time namespaces. The parent-authenticated user mapping
 handshake installs exact rootful UID/GID maps before the remaining namespaces
 are created, and the time offsets are written and read back before the first
-namespace child is forked. Namespace PID 1 verifies the maps and offsets,
-installs an explicit `SIGTERM` handler, writes the known marker only after
-those checks and start, and remains running until the host delivers the
-lifecycle signal.
+namespace child is forked. A dedicated namespace PID 1 completes create-time
+setup and remains as the reaper. The configured process at PID 2+ verifies the
+maps and offsets, installs an explicit `SIGTERM` handler, writes the known
+marker only after those checks and start, and remains running until the host
+delivers the lifecycle signal.
 
 Prepare a contained bundle from the already verified Alpine archive:
 
@@ -426,10 +427,10 @@ The observed container PID must be positive, and the nested report must prove
 exact endpoint removal, complete current-process descriptor-inventory
 restoration, and disappearance of both shim/worker PIDs after exit.
 
-The guest opens a pidfd for the authenticated namespace PID 1 before returning
-created state. The lifecycle `SIGTERM` and all forced cleanup therefore target
-that retained kernel process reference instead of resolving its numeric PID
-again.
+The guest keeps a dedicated namespace PID 1 but opens a pidfd for the
+authenticated configured process at PID 2+ before returning created state.
+The lifecycle `SIGTERM` and all forced cleanup therefore target that retained
+kernel process reference instead of resolving its numeric PID again.
 
 The same command with an unsigned shim returned status `2` before protocol
 negotiation, retained the nested `krun_start_enter` failure, wrote no workload
@@ -440,8 +441,9 @@ pre-entry behavior.
 ## Multi-container lifecycle
 
 `oci-vm-multi-container-smoke` submits two distinct contained bundles over one
-authenticated guest-agent connection. Both init processes must remain behind
-their create barriers with distinct positive guest-visible PIDs. Starting,
+authenticated guest-agent connection. Both configured processes must remain
+behind their create barriers with distinct positive guest-visible PIDs.
+Starting,
 killing, waiting for, and deleting A must preserve B's exact created state and
 leave B's marker absent. A bounded wait on running A must return
 `DeadlineExceeded` without preventing a concurrent state query for B.
@@ -459,7 +461,7 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
   --console "$asset_dir/oci-multi-container.log"
 ```
 
-The `a3s.oci.oci-vm-multi-container-smoke.v6` report also requires exact
+The `a3s.oci.oci-vm-multi-container-smoke.v7` report also requires exact
 mutation replay, exact repeated normal-exit results for A and B, independent
 wait/state progress, and an existing-namespace phase. That phase rejects a
 wrong-type descriptor before state, joins donor UTS, IPC, network, cgroup, PID,
@@ -472,7 +474,9 @@ before start and then prove shared rootfs propagation, a distinct read-only
 path, empty read-only masked file and directory replacements, recursive VFS
 attributes across an rbind submount, explicit `idmap` and `ridmap` ownership
 on detached filesystem mounts, read-only rootfs behavior, an exact normal exit,
-state removal, and host-side fixture cleanup.
+state removal, and host-side fixture cleanup. That workload must also run as
+PID 2+ beneath a dedicated namespace PID 1 and prove that PID 1 reaps an
+adopted child while the workload remains alive.
 
 The complete report also requires both marker removals, no new guest runtime
 root, exact host endpoint removal, shim and direct VM-worker reap, and full
@@ -480,13 +484,15 @@ descriptor-inventory restoration. The Apple Silicon HVF qualification and
 macOS CI both run this gate; an unavailable-hypervisor branch must fail before
 negotiation while retaining the same host cleanup evidence.
 
-The pidfd requalification used the 8,493,136-byte static arm64 agent with
+The historical pidfd requalification used the 8,493,136-byte static arm64
+agent with
 SHA-256
 `28a283576a62fc36c02642638580ec9fbed29953b868bcb0705218cef50aaa3e`.
-Both retained init handles completed independently, the observed container
-PIDs were 205 and 207, the host descriptor inventory returned from 10 to 10,
-and the endpoint, both workload markers, shim, VM worker, and guest runtime
-root were removed.
+Both retained namespace-PID-1 handles completed independently, the observed
+container PIDs were 205 and 207, the host descriptor inventory returned from
+10 to 10, and the endpoint, both workload markers, shim, VM worker, and guest
+runtime root were removed. This evidence predates the dedicated PID 1
+supervisor.
 
 The rootful user/time namespace requalification used the 8,618,816-byte static
 arm64 agent with SHA-256
@@ -511,12 +517,24 @@ VM worker were reaped, and the endpoint and guest runtime root were removed.
 The ID-mapped mount requalification used the 8,734,336-byte static arm64 agent
 with SHA-256
 `f3e9eb482381b988deed1440383c772546558e39570921b100a071187e22e727`.
-The schema-v6 workload additionally created detached non-recursive `idmap` and
+The schema-v7 workload additionally created detached non-recursive `idmap` and
 recursive `ridmap` tmpfs mounts from exact dedicated UID/GID mappings and
 observed ownership `1000:1000` and `2000:2000`, respectively. The complete
 two-container, namespace-join, rootfs-enforcement, container-state, endpoint,
 descriptor, shim, VM-worker, and guest-runtime cleanup gate passed on Apple
 Silicon HVF.
+
+The PID 1 supervision requalification used the 8,751,064-byte static arm64
+agent with SHA-256
+`63867ded67df080173ab9baca1219d56868f51c9ee4fbec57eb6808ea449314c`.
+The schema-v7 report retained configured-process PIDs 206 and 209 plus donor
+PID 225, proved that the enforcement workload ran as PID 2+ beneath a
+dedicated namespace PID 1, and observed an orphan become a direct child of
+PID 1 before its terminated `/proc` entry disappeared. The complete
+two-container lifecycle, eight-namespace join, recursive and ID-mapped mount,
+exact exit-status, state and fixture cleanup gate passed. The host descriptor
+inventory returned from 10 to 10, the endpoint was removed, both the shim and
+direct VM worker were reaped, and no guest runtime root remained.
 
 ## Fault-injected shutdown cleanup
 
@@ -536,10 +554,11 @@ done
 ```
 
 Each `a3s.oci.oci-vm-fault-cleanup.v2` success retains the exact requested and
-injected boundary, a positive guest init PID, pre-start non-execution, and
-`normal_delete_attempted: false`. Closing the authenticated connection must
-then make the guest executor force-stop any live init and remove its runtime
-root before the agent and VM exit.
+injected boundary, a positive guest configured-process PID, pre-start
+non-execution, and `normal_delete_attempted: false`. Closing the authenticated
+connection must then make the guest executor force-stop any live configured
+process and its namespace supervisor, and remove its runtime root before the
+agent and VM exit.
 
 The nested `a3s.oci.agent-vm-smoke.v4` report independently requires exact
 endpoint removal, shim and direct VM-worker PID disappearance, and complete

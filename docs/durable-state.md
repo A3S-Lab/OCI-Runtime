@@ -82,9 +82,10 @@ Create uses two durable stages:
 1. `prepare_create` validates the complete request and deadline, checks the
    global operation journal, allocates the next generation, stores an exact
    configuration snapshot, and records OCI `creating`.
-2. The selected driver prepares a real init process without running the user
-   program. `complete_create` then requires its positive PID and atomically
-   records OCI `created` before storing the exact successful response.
+2. The selected driver prepares a real configured-process wrapper without
+   running the user program. `complete_create` then requires its positive PID
+   and atomically records OCI `created` before storing the exact successful
+   response.
 
 The create request digest excludes retry metadata but includes container ID,
 bundle, isolation request, and process I/O. Reusing an `OperationId` for a
