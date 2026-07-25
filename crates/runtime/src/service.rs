@@ -13,20 +13,24 @@ use a3s_oci_sdk::{
     async_trait, CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
     ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
     EventsRequest, ExecRequest, ExitStatus, KillRequest, ListRequest, OciRuntimeService,
-    OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest,
-    Result, RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest,
-    StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest, OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
+    OutputChunk, ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest,
+    ResizeRequest, RestoreRequest, Result, RuntimeInfo, RuntimeOperation, SignalProcessRequest,
+    StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest,
+    WaitRequest, WriteStdinRequest, OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 
 use crate::driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest,
-    DriverWaitRequest, RuntimeDriver,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest,
+    DriverSignalProcessRequest, DriverStartRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
 };
-use crate::state::{DeletePreparation, DurableStateStore, RecordOperationPreparation};
+use crate::state::{
+    DeletePreparation, DurableStateStore, ProcessOperationPreparation, ProcessWaitPreparation,
+    RecordOperationPreparation, SignalProcessPreparation,
+};
 
 const RECOGNIZED_LINUX_MOUNT_OPTIONS: &[&str] = &[
     "async",
@@ -257,6 +261,19 @@ impl LifecycleHost {
         self.store.fail_operation(operation_id, &error).await?;
         Err(error)
     }
+
+    async fn complete_process_wait(
+        &self,
+        target: &ProcessTarget,
+        status: ExitStatus,
+    ) -> Result<ExitStatus> {
+        if target.process_id.is_init() {
+            self.store
+                .observe_state(&target.container, ContainerState::Stopped, None)
+                .await?;
+        }
+        self.store.complete_process_wait(target, status).await
+    }
 }
 
 fn validate_driver_operations(
@@ -269,13 +286,16 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 6] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 9] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
         RuntimeOperation::Wait,
+        RuntimeOperation::Exec,
+        RuntimeOperation::SignalProcess,
+        RuntimeOperation::WaitProcess,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {
@@ -627,32 +647,76 @@ impl OciRuntimeService for HostRuntimeService {
             .await
     }
 
-    async fn exec(&self, _request: ExecRequest) -> Result<ProcessRecord> {
-        Err(Error::unsupported("exec"))
+    async fn exec(&self, request: ExecRequest) -> Result<ProcessRecord> {
+        let lifecycle = self.lifecycle("exec")?;
+        lifecycle.ensure_operation(RuntimeOperation::Exec, "exec")?;
+        let prepared = lifecycle.store.prepare_exec(&request).await?;
+        let durable = match prepared {
+            ProcessOperationPreparation::Replayed(record) => return Ok(record),
+            ProcessOperationPreparation::Prepared(record)
+            | ProcessOperationPreparation::Resume(record) => record,
+        };
+        let target = durable.target;
+        lifecycle.driver_boundary(DriverOperation::Exec, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .exec(DriverExecRequest {
+                context: request.context.clone(),
+                target,
+                process: request.process,
+                io: request.io,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Exec, DriverBoundaryStage::AfterCall)?;
+        let process = match result {
+            Ok(process) => process,
+            Err(error) => {
+                return lifecycle
+                    .fail_driver_operation(&request.context.operation_id, error)
+                    .await;
+            }
+        };
+        lifecycle
+            .store
+            .complete_exec(
+                &request.context.operation_id,
+                process.pid(),
+                process.terminal(),
+            )
+            .await
     }
 
     async fn wait(&self, request: WaitRequest) -> Result<ExitStatus> {
         let lifecycle = self.lifecycle("wait")?;
         lifecycle.ensure_operation(RuntimeOperation::Wait, "wait")?;
         request.validate()?;
-        let durable = lifecycle.store.state(&request.target).await?;
-        let target = ContainerTarget::exact(request.target.id, durable.generation);
+        let process_request = WaitProcessRequest {
+            process: ProcessTarget {
+                container: request.target,
+                process_id: ProcessId::init(),
+            },
+            timeout_ms: request.timeout_ms,
+        };
+        let target = match lifecycle
+            .store
+            .prepare_wait_process(&process_request)
+            .await?
+        {
+            ProcessWaitPreparation::Replayed(status) => return Ok(status),
+            ProcessWaitPreparation::Prepared(target) => target,
+        };
         lifecycle.driver_boundary(DriverOperation::Wait, DriverBoundaryStage::BeforeCall)?;
         let result = lifecycle
             .driver
             .wait(DriverWaitRequest {
-                target: target.clone(),
+                target: target.container.clone(),
                 timeout_ms: request.timeout_ms,
             })
             .await;
         lifecycle.driver_boundary(DriverOperation::Wait, DriverBoundaryStage::AfterCall)?;
         let status = result?;
         status.validate()?;
-        lifecycle
-            .store
-            .observe_state(&target, ContainerState::Stopped, None)
-            .await?;
-        Ok(status)
+        lifecycle.complete_process_wait(&target, status).await
     }
 
     async fn list(&self, _request: ListRequest) -> Result<Vec<ContainerRecord>> {
@@ -699,12 +763,63 @@ impl OciRuntimeService for HostRuntimeService {
         Err(Error::unsupported("resize"))
     }
 
-    async fn signal_process(&self, _request: SignalProcessRequest) -> Result<()> {
-        Err(Error::unsupported("signal-process"))
+    async fn signal_process(&self, request: SignalProcessRequest) -> Result<()> {
+        let lifecycle = self.lifecycle("signal-process")?;
+        lifecycle.ensure_operation(RuntimeOperation::SignalProcess, "signal-process")?;
+        let target = match lifecycle.store.prepare_signal_process(&request).await? {
+            SignalProcessPreparation::Replayed => return Ok(()),
+            SignalProcessPreparation::Prepared(target)
+            | SignalProcessPreparation::Resume(target) => target,
+        };
+        lifecycle.driver_boundary(
+            DriverOperation::SignalProcess,
+            DriverBoundaryStage::BeforeCall,
+        )?;
+        let result = lifecycle
+            .driver
+            .signal_process(DriverSignalProcessRequest {
+                context: request.context.clone(),
+                target,
+                signal: request.signal,
+            })
+            .await;
+        lifecycle.driver_boundary(
+            DriverOperation::SignalProcess,
+            DriverBoundaryStage::AfterCall,
+        )?;
+        if let Err(error) = result {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
+        lifecycle
+            .store
+            .complete_signal_process(&request.context.operation_id)
+            .await
     }
 
-    async fn wait_process(&self, _request: WaitProcessRequest) -> Result<ExitStatus> {
-        Err(Error::unsupported("wait-process"))
+    async fn wait_process(&self, request: WaitProcessRequest) -> Result<ExitStatus> {
+        let lifecycle = self.lifecycle("wait-process")?;
+        lifecycle.ensure_operation(RuntimeOperation::WaitProcess, "wait-process")?;
+        let target = match lifecycle.store.prepare_wait_process(&request).await? {
+            ProcessWaitPreparation::Replayed(status) => return Ok(status),
+            ProcessWaitPreparation::Prepared(target) => target,
+        };
+        lifecycle.driver_boundary(
+            DriverOperation::WaitProcess,
+            DriverBoundaryStage::BeforeCall,
+        )?;
+        let result = lifecycle
+            .driver
+            .wait_process(DriverWaitProcessRequest {
+                target: target.clone(),
+                timeout_ms: request.timeout_ms,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::WaitProcess, DriverBoundaryStage::AfterCall)?;
+        let status = result?;
+        status.validate()?;
+        lifecycle.complete_process_wait(&target, status).await
     }
 
     async fn checkpoint(&self, _request: CheckpointRequest) -> Result<ContainerRecord> {

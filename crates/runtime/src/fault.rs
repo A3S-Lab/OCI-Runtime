@@ -34,6 +34,19 @@ pub(crate) enum DurableMutation {
     ReconcileDeleteOperation,
     MoveDeleteTombstone,
     CompleteDeleteOperation,
+    PrepareExecOperation,
+    StoreExecutingProcess,
+    ClaimExecOperation,
+    ReconcileExecProcess,
+    ReconcileExecOperation,
+    CompleteExecProcess,
+    CompleteExecOperation,
+    PrepareSignalProcessOperation,
+    ClaimSignalProcessOperation,
+    CompleteSignalProcessRecord,
+    CompleteSignalProcessOperation,
+    CacheInitWait,
+    CacheProcessWait,
     RecordCreateFailure,
     MoveFailedCreateTombstone,
     ReleaseFailedStartClaim,
@@ -42,13 +55,17 @@ pub(crate) enum DurableMutation {
     RecordKillFailure,
     ReleaseFailedDeleteClaim,
     RecordDeleteFailure,
+    ReleaseFailedExecClaim,
+    RecordExecFailure,
+    ReleaseFailedSignalProcessClaim,
+    RecordSignalProcessFailure,
     ObserveContainer,
     CompleteObservedOperation,
 }
 
 impl DurableMutation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 35] = [
+    pub(crate) const ALL: [Self; 52] = [
         Self::RuntimeRootMarker,
         Self::AllocateGeneration,
         Self::PrepareCreateOperation,
@@ -74,6 +91,19 @@ impl DurableMutation {
         Self::ReconcileDeleteOperation,
         Self::MoveDeleteTombstone,
         Self::CompleteDeleteOperation,
+        Self::PrepareExecOperation,
+        Self::StoreExecutingProcess,
+        Self::ClaimExecOperation,
+        Self::ReconcileExecProcess,
+        Self::ReconcileExecOperation,
+        Self::CompleteExecProcess,
+        Self::CompleteExecOperation,
+        Self::PrepareSignalProcessOperation,
+        Self::ClaimSignalProcessOperation,
+        Self::CompleteSignalProcessRecord,
+        Self::CompleteSignalProcessOperation,
+        Self::CacheInitWait,
+        Self::CacheProcessWait,
         Self::RecordCreateFailure,
         Self::MoveFailedCreateTombstone,
         Self::ReleaseFailedStartClaim,
@@ -82,6 +112,10 @@ impl DurableMutation {
         Self::RecordKillFailure,
         Self::ReleaseFailedDeleteClaim,
         Self::RecordDeleteFailure,
+        Self::ReleaseFailedExecClaim,
+        Self::RecordExecFailure,
+        Self::ReleaseFailedSignalProcessClaim,
+        Self::RecordSignalProcessFailure,
         Self::ObserveContainer,
         Self::CompleteObservedOperation,
     ];
@@ -147,11 +181,14 @@ pub(crate) enum DriverOperation {
     Kill,
     Delete,
     Wait,
+    Exec,
+    SignalProcess,
+    WaitProcess,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::Capability,
         Self::Create,
         Self::State,
@@ -159,6 +196,9 @@ impl DriverOperation {
         Self::Kill,
         Self::Delete,
         Self::Wait,
+        Self::Exec,
+        Self::SignalProcess,
+        Self::WaitProcess,
     ];
 }
 

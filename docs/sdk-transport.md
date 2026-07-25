@@ -69,21 +69,21 @@ durable bundle at both create and start. Its mutating methods are async,
 protocol types remain behind that boundary.
 
 The host always requires the five core driver operations and advertises
-`wait` only when the selected driver implements it. `WaitRequest` targets one
-exact generation, accepts an optional millisecond timeout, and returns an
-`ExitStatus` containing either an exit code in `0..=255` or a positive signal.
-Repeated waits must return the same terminal result. The native Linux driver
-and the protocol-v3 utility-VM guest path implement this contract while
-retaining protocol-v2 init-wait compatibility; unsupported drivers fail before
-dispatch.
+`wait`, `exec`, `signal-process`, and `wait-process` only when the selected
+driver implements each one. `WaitRequest` targets one exact generation,
+accepts an optional millisecond timeout, and returns an `ExitStatus` containing
+either an exit code in `0..=255` or a positive signal. Repeated waits must
+return the same terminal result. The native Linux driver and the protocol-v3
+utility-VM guest path implement this contract while retaining protocol-v2
+init-wait compatibility; unsupported drivers fail before dispatch.
 
 The protocol-v3 shared Linux executor also implements exact-target exec,
-pidfd-backed per-process signal, and stable per-process wait. Those operations
-are deliberately not advertised by `HostRuntimeService` yet: the
-`RuntimeDriver` request types, durable process records and journals,
-generation-fenced restart reconciliation, and native/utility-VM driver
-adapters must land together before A3S Box can reach them through
-`RuntimeClient`.
+pidfd-backed per-process signal, and stable per-process wait. The public host
+path reserves process IDs before driver dispatch, persists generation-scoped
+process records, journals exec and signal mutations, and caches terminal
+results. Native Linux exposes that complete path through `RuntimeClient`.
+Utility-VM host drivers still need to opt into the three process operations
+before their host services may advertise them.
 
 ## Runtime Server
 

@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        14,
+        20,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -28,7 +28,7 @@ async fn exercise_driver_boundary(point: FaultPoint) {
     let bundle_directory = temporary.path().join("bundle");
     fs::create_dir(&bundle_directory).expect("bundle directory");
     let state_root = temporary.path().join("state");
-    let driver = Arc::new(RecordingDriver::supported());
+    let driver = Arc::new(RecordingDriver::with_process_operations());
     let create = create_request(&bundle_directory, "boundary-create");
 
     let target = if operation_requires_created_container(operation) {
@@ -43,7 +43,12 @@ async fn exercise_driver_boundary(point: FaultPoint) {
         let target = ContainerTarget::exact(create.id.clone(), created.generation);
         if matches!(
             operation,
-            DriverOperation::Kill | DriverOperation::Delete | DriverOperation::Wait
+            DriverOperation::Kill
+                | DriverOperation::Delete
+                | DriverOperation::Wait
+                | DriverOperation::Exec
+                | DriverOperation::SignalProcess
+                | DriverOperation::WaitProcess
         ) {
             setup
                 .start(StartRequest {
@@ -63,6 +68,32 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 })
                 .await
                 .expect("stop setup container");
+        }
+        if matches!(
+            operation,
+            DriverOperation::SignalProcess | DriverOperation::WaitProcess
+        ) {
+            setup
+                .exec(exec_request(
+                    target.clone(),
+                    "boundary-setup-exec",
+                    "boundary-worker",
+                ))
+                .await
+                .expect("exec setup process");
+        }
+        if operation == DriverOperation::WaitProcess {
+            setup
+                .signal_process(SignalProcessRequest {
+                    context: OperationContext::new(operation_id("boundary-setup-signal")),
+                    process: ProcessTarget {
+                        container: target.clone(),
+                        process_id: ProcessId::new("boundary-worker").expect("process ID"),
+                    },
+                    signal: Signal::new(9).expect("signal"),
+                })
+                .await
+                .expect("signal setup process");
         }
         drop(setup);
         Some(target)
@@ -134,6 +165,9 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::Kill
             | DriverOperation::Delete
             | DriverOperation::Wait
+            | DriverOperation::Exec
+            | DriverOperation::SignalProcess
+            | DriverOperation::WaitProcess
     )
 }
 
@@ -146,6 +180,9 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::Kill(_), DriverOperation::Kill)
             | (DriverCall::Delete(_), DriverOperation::Delete)
             | (DriverCall::Wait(_), DriverOperation::Wait)
+            | (DriverCall::Exec(_), DriverOperation::Exec)
+            | (DriverCall::SignalProcess(_), DriverOperation::SignalProcess)
+            | (DriverCall::WaitProcess(_), DriverOperation::WaitProcess)
     )
 }
 
@@ -202,6 +239,40 @@ async fn invoke_operation(
             service
                 .wait(WaitRequest {
                     target: target.expect("wait target").clone(),
+                    timeout_ms: Some(1_000),
+                })
+                .await?;
+            Ok(())
+        }
+        DriverOperation::Exec => {
+            service
+                .exec(exec_request(
+                    target.expect("exec target").clone(),
+                    "boundary-exec",
+                    "boundary-worker",
+                ))
+                .await?;
+            Ok(())
+        }
+        DriverOperation::SignalProcess => {
+            service
+                .signal_process(SignalProcessRequest {
+                    context: OperationContext::new(operation_id("boundary-signal-process")),
+                    process: ProcessTarget {
+                        container: target.expect("signal-process target").clone(),
+                        process_id: ProcessId::new("boundary-worker").expect("process ID"),
+                    },
+                    signal: Signal::new(9).expect("signal"),
+                })
+                .await
+        }
+        DriverOperation::WaitProcess => {
+            service
+                .wait_process(WaitProcessRequest {
+                    process: ProcessTarget {
+                        container: target.expect("wait-process target").clone(),
+                        process_id: ProcessId::new("boundary-worker").expect("process ID"),
+                    },
                     timeout_ms: Some(1_000),
                 })
                 .await?;

@@ -69,9 +69,9 @@ Completed:
   executor without linking or initializing libkrun;
 - real native Linux create/state/start/kill/wait/delete SDK evidence on x86_64
   and aarch64, including exact repeated SIGKILL status and bounded running
-  wait, plus direct shared-executor exec replay, duplicate process-ID
-  rejection, pidfd signal replay, stable per-process wait, and init-exit exec
-  cleanup, repeated with `/dev/kvm` absent and present but unusable;
+  wait, plus public SDK exec replay, duplicate process-ID rejection, durable
+  process journals, pidfd signal replay, stable per-process wait, and init-exit
+  exec cleanup, repeated with `/dev/kvm` absent and present but unusable;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
   and time namespaces, including retained rootfs execution after a mount join,
   three-pass user-namespace permission recovery, and shared native Linux/macOS
@@ -134,9 +134,13 @@ Completed:
   idempotent create/start/kill/delete journals, active-operation claims,
   terminal failure replay, crash reconciliation, and quarantine;
 - async `RuntimeDriver` integration plus a tested host implementation of
-  `create`, `state`, `start`, `kill`, `delete`, and driver-advertised `wait`;
-- typed, exhaustive recovery injection at all 237 registered durable commit
-  stages and all 14 before/after `RuntimeDriver` method boundaries;
+  `create`, `state`, `start`, `kill`, `delete`, and driver-advertised `wait`,
+  `exec`, `signal-process`, and `wait-process`;
+- generation-scoped durable process records, global exec and per-process
+  signal journals, terminal failure replay, active-operation claims, and
+  stable init/exec exit-status caching across host-service reopen;
+- typed, exhaustive recovery injection at all 356 registered durable commit
+  stages and all 20 before/after `RuntimeDriver` method boundaries;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -196,7 +200,10 @@ enforce it. No property is silently ignored.
   and monotonically increasing generations.
 - [x] Add a global idempotent create journal keyed by `OperationId`.
 - [x] Extend the operation journal to start, kill, and delete.
-- [ ] Extend idempotent journals to every remaining process mutation.
+- [x] Extend idempotent journals to exec and per-process signal, including
+  generation-scoped process claims and terminal failure replay.
+- [ ] Extend idempotent journals to remaining process-I/O and container
+  mutations.
 - [x] Reconcile interrupted core lifecycle operations and quarantine failed
   create/delete state.
 - [x] Implement driver-independent `create`, `state`, `start`, `kill`, and
@@ -373,8 +380,8 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Add the native Linux driver without linking or initializing libkrun.
 - [x] Reuse the R3 Linux executor directly.
 - [x] Prove runtime binary startup, feature inspection, Rust SDK loading, and
-  the rootful lifecycle including exact repeated init wait plus direct
-  executor exec/signal/wait without KVM on x86_64 and aarch64.
+  the rootful lifecycle including exact repeated init wait plus public SDK
+  exec/signal/wait without KVM on x86_64 and aarch64.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.

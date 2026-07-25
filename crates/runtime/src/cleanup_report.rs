@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::report::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux fault-cleanup diagnostic.
-pub const NATIVE_LINUX_FAULT_CLEANUP_SCHEMA_VERSION: &str = "a3s.oci.native-linux-fault-cleanup.v2";
+pub const NATIVE_LINUX_FAULT_CLEANUP_SCHEMA_VERSION: &str = "a3s.oci.native-linux-fault-cleanup.v3";
 /// Schema emitted by the utility-VM fault-cleanup diagnostic.
 pub const OCI_VM_FAULT_CLEANUP_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-fault-cleanup.v2";
 
@@ -172,7 +172,10 @@ impl NativeLinuxFaultCleanupReport {
                     RuntimeOperation::Start,
                     RuntimeOperation::Kill,
                     RuntimeOperation::Delete,
+                    RuntimeOperation::Exec,
                     RuntimeOperation::Wait,
+                    RuntimeOperation::SignalProcess,
+                    RuntimeOperation::WaitProcess,
                 ]
             && self.lifecycle.is_success()
             && self.executor_shutdown_succeeded
@@ -331,7 +334,10 @@ mod tests {
             RuntimeOperation::Start,
             RuntimeOperation::Kill,
             RuntimeOperation::Delete,
+            RuntimeOperation::Exec,
             RuntimeOperation::Wait,
+            RuntimeOperation::SignalProcess,
+            RuntimeOperation::WaitProcess,
         ];
         report.lifecycle = complete(LifecycleFaultPoint::AfterStart);
         report.executor_shutdown_succeeded = true;

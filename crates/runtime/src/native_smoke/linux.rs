@@ -115,15 +115,7 @@ pub(super) async fn run(
     };
     let client = RuntimeClient::new(service.clone());
 
-    let exercise = exercise(
-        &client,
-        driver.executor(),
-        &bundle,
-        &nonce,
-        &marker,
-        &mut report,
-    )
-    .await;
+    let exercise = exercise(&client, &bundle, &nonce, &marker, &mut report).await;
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;
     }

@@ -54,7 +54,9 @@ runtime-root/
 |-- containers/
 |   `-- <container-id>/
 |       |-- config.json
-|       `-- record.json
+|       |-- record.json
+|       `-- processes/
+|           `-- <process-id>.json
 |-- generations/
 |   `-- <container-id>.json
 |-- operations/
@@ -75,7 +77,7 @@ or configuration digests.
 accepted from the SDK. The typed bundle is reconstructed from that snapshot
 and its SHA-256 digest is checked against the container record.
 
-## Lifecycle Transactions
+## Lifecycle And Process Transactions
 
 Create uses two durable stages:
 
@@ -102,8 +104,24 @@ recursively deleting an unresolved path.
 
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
-exactly; it releases a start/kill/delete claim, while a failed create is moved
-out of the live namespace before its ID can be reused.
+exactly; it releases a start, kill, delete, exec, or per-process signal claim,
+while a failed create is moved out of the live namespace before its ID can be
+reused.
+
+Exec uses the same global operation journal. Preparation reserves the
+generation-scoped process ID before driver dispatch, so duplicate IDs fail
+without a driver side effect. Completion stores the authenticated PID and
+terminal flag in `processes/<process-id>.json`; the operation journal returns
+that exact `ProcessRecord` on replay. A terminal exec failure releases the
+process claim and is replayed exactly.
+
+Per-process signal also uses the global journal and claims the exact process
+record before driver dispatch. Its completion and terminal-failure paths both
+release that claim. Delete refuses to move a container while a process
+mutation is active. Init and exec wait are observations rather than operation
+journal entries, but their first terminal result is cached in the container or
+process record and returned unchanged after repeated calls and host-service
+reopen.
 
 Queries may target the current container generation or provide an exact
 generation fence. A stale fence fails with `conflict`.
@@ -123,6 +141,11 @@ handles these interrupted states:
 - an observed running/stopped driver state can finish an interrupted start or
   kill journal;
 - a moved delete tombstone completes an interrupted delete journal;
+- a process record created before its exec operation outcome is reconciled
+  into the exact successful process result;
+- an exec or per-process signal claim interrupted before driver dispatch is
+  resumed without allocating another process identity;
+- cached init and exec terminal results survive host-service reopen;
 - a terminal create failure completes quarantine before replaying its exact
   error;
 - malformed or digest-mismatched records fail closed.
@@ -130,7 +153,7 @@ handles these interrupted states:
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 35 semantic mutations. Thirty-three atomic
+The registry currently contains 52 semantic mutations. Fifty atomic
 file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
@@ -142,9 +165,9 @@ file replacements are exercised at all seven commit stages:
 7. parent-directory sync.
 
 The delete and failed-create quarantine moves are each exercised after the
-rename, source-parent sync, and destination-parent sync. This expands to 237
+rename, source-parent sync, and destination-parent sync. This expands to 356
 durable fault points. The host matrix separately injects before and after all
-six `RuntimeDriver` methods, including capability discovery, for another 12
+ten `RuntimeDriver` methods, including capability discovery, for another 20
 boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
@@ -160,7 +183,7 @@ journals, avoid duplicate live and quarantined generations, and remove every
 Production uses a non-configurable no-op injector.
 
 The remaining persistence gates are startup-wide orphan scanning,
-descriptor-relative path operations, exact process records and journals for
-exec/per-process signal, generation-fenced process recovery, journals for all
-remaining mutating SDK operations, and fault injection inside the utility-VM
-host/agent transport below the `RuntimeDriver` boundary.
+descriptor-relative path operations, real-driver reattachment across runtime
+process restart, journals for all remaining mutating SDK operations, and fault
+injection inside the utility-VM host/agent transport below the
+`RuntimeDriver` boundary.

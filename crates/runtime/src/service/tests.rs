@@ -5,21 +5,25 @@ use std::sync::{Arc, Mutex};
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
 };
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxNamespaceType};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxNamespaceType, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error,
-    ErrorCode, ExitStatus, Generation, IsolationRequest, KillRequest, ListRequest, OciBundle,
-    OciRuntimeService, OciSchemaValidator, OperationContext, OperationId, ProcessIo, Result,
-    RuntimeOperation, Signal, StartRequest, StateRequest, TrustDomainId, WaitRequest,
+    ErrorCode, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest,
+    ListRequest, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
+    ProcessId, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal,
+    SignalProcessRequest, StartRequest, StateRequest, TrustDomainId, WaitProcessRequest,
+    WaitRequest,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS};
 use crate::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
     DriverWaitRequest, RuntimeDriver,
 };
 
 mod fault_matrix;
+mod process_operations;
 
 const TEST_CONFIG: &str = concat!(
     "{\n",
@@ -42,7 +46,13 @@ enum DriverCall {
     Kill(DriverKillRequest),
     Delete(DriverDeleteRequest),
     Wait(DriverWaitRequest),
+    Exec(DriverExecRequest),
+    SignalProcess(DriverSignalProcessRequest),
+    WaitProcess(DriverWaitProcessRequest),
 }
+
+type DriverProcessKey = (ContainerId, Generation, ProcessId);
+type DriverProcessState = (DriverProcess, Option<ExitStatus>);
 
 #[derive(Debug)]
 struct RecordingDriver {
@@ -51,6 +61,9 @@ struct RecordingDriver {
     calls: Mutex<Vec<DriverCall>>,
     states: Mutex<HashMap<ContainerId, (Generation, DriverState)>>,
     exits: Mutex<HashMap<ContainerId, ExitStatus>>,
+    processes: Mutex<HashMap<DriverProcessKey, DriverProcessState>>,
+    exec_replays: Mutex<HashMap<OperationId, (DriverExecRequest, DriverProcess)>>,
+    signal_process_replays: Mutex<HashMap<OperationId, DriverSignalProcessRequest>>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
 }
 
@@ -76,6 +89,9 @@ impl RecordingDriver {
             calls: Mutex::new(Vec::new()),
             states: Mutex::new(HashMap::new()),
             exits: Mutex::new(HashMap::new()),
+            processes: Mutex::new(HashMap::new()),
+            exec_replays: Mutex::new(HashMap::new()),
+            signal_process_replays: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
         }
     }
@@ -89,6 +105,16 @@ impl RecordingDriver {
     fn without_wait() -> Self {
         let mut driver = Self::supported();
         driver.operations.pop();
+        driver
+    }
+
+    fn with_process_operations() -> Self {
+        let mut driver = Self::supported();
+        driver.operations.extend([
+            RuntimeOperation::Exec,
+            RuntimeOperation::SignalProcess,
+            RuntimeOperation::WaitProcess,
+        ]);
         driver
     }
 
@@ -122,6 +148,14 @@ impl RecordingDriver {
                 "driver requests must carry an exact generation",
             )
         })
+    }
+
+    fn process_key(target: &ProcessTarget) -> Result<(ContainerId, Generation, ProcessId)> {
+        Ok((
+            target.container.id.clone(),
+            Self::exact_generation(&target.container)?,
+            target.process_id.clone(),
+        ))
     }
 }
 
@@ -230,6 +264,10 @@ impl RuntimeDriver for RecordingDriver {
             .lock()
             .expect("driver exits lock")
             .remove(&request.target.id);
+        self.processes
+            .lock()
+            .expect("driver processes lock")
+            .retain(|(id, _, _), _| id != &request.target.id);
         Ok(())
     }
 
@@ -273,6 +311,212 @@ impl RuntimeDriver for RecordingDriver {
                     .for_operation("driver-wait")
             })
     }
+
+    async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Exec(request.clone()));
+        if let Some((recorded, response)) = self
+            .exec_replays
+            .lock()
+            .expect("driver exec replay lock")
+            .get(&request.context.operation_id)
+        {
+            if recorded != &request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver exec operation ID was reused for a different request",
+                )
+                .for_operation("driver-exec"));
+            }
+            return Ok(*response);
+        }
+        if let Some(error) = self.take_failure("exec") {
+            return Err(error);
+        }
+        let key = Self::process_key(&request.target)?;
+        let states = self.states.lock().expect("driver states lock");
+        let (generation, state) = states.get(&key.0).copied().ok_or_else(|| {
+            Error::new(ErrorCode::NotFound, "driver container does not exist")
+                .for_operation("driver-exec")
+        })?;
+        if generation != key.1 {
+            return Err(
+                Error::new(ErrorCode::Conflict, "driver container generation mismatch")
+                    .for_operation("driver-exec"),
+            );
+        }
+        if state.status() != ContainerState::Running {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "driver container is not running",
+            )
+            .for_operation("driver-exec"));
+        }
+        drop(states);
+
+        let mut processes = self.processes.lock().expect("driver processes lock");
+        if processes.contains_key(&key) {
+            return Err(
+                Error::new(ErrorCode::AlreadyExists, "driver process already exists")
+                    .for_operation("driver-exec"),
+            );
+        }
+        let pid = 5_000_i32
+            .checked_add(i32::try_from(processes.len()).map_err(|error| {
+                Error::new(
+                    ErrorCode::ResourceExhausted,
+                    format!("driver process count does not fit PID allocator: {error}"),
+                )
+                .for_operation("driver-exec")
+            })?)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ResourceExhausted,
+                    "driver process PID space exhausted",
+                )
+                .for_operation("driver-exec")
+            })?;
+        let process = DriverProcess::new(pid, request.process.terminal().unwrap_or(false))?;
+        processes.insert(key, (process, None));
+        self.exec_replays
+            .lock()
+            .expect("driver exec replay lock")
+            .insert(request.context.operation_id.clone(), (request, process));
+        Ok(process)
+    }
+
+    async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::SignalProcess(request.clone()));
+        if let Some(recorded) = self
+            .signal_process_replays
+            .lock()
+            .expect("driver signal replay lock")
+            .get(&request.context.operation_id)
+        {
+            if recorded != &request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver signal operation ID was reused for a different request",
+                )
+                .for_operation("driver-signal-process"));
+            }
+            return Ok(());
+        }
+        if let Some(error) = self.take_failure("signal-process") {
+            return Err(error);
+        }
+        let key = Self::process_key(&request.target)?;
+        if key.2.is_init() {
+            let mut states = self.states.lock().expect("driver states lock");
+            let (generation, state) = states.get_mut(&key.0).ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "driver container does not exist")
+                    .for_operation("driver-signal-process")
+            })?;
+            if *generation != key.1 {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    "driver container generation mismatch",
+                )
+                .for_operation("driver-signal-process"));
+            }
+            if state.status() == ContainerState::Stopped {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver init process already exited",
+                )
+                .for_operation("driver-signal-process"));
+            }
+            *state = DriverState::stopped();
+            self.exits
+                .lock()
+                .expect("driver exits lock")
+                .insert(key.0, ExitStatus::signaled(request.signal.get(), false)?);
+            self.signal_process_replays
+                .lock()
+                .expect("driver signal replay lock")
+                .insert(request.context.operation_id.clone(), request);
+            return Ok(());
+        }
+
+        let mut processes = self.processes.lock().expect("driver processes lock");
+        let (_, exit) = processes.get_mut(&key).ok_or_else(|| {
+            Error::new(ErrorCode::NotFound, "driver process does not exist")
+                .for_operation("driver-signal-process")
+        })?;
+        if exit.is_some() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "driver process already exited",
+            )
+            .for_operation("driver-signal-process"));
+        }
+        *exit = Some(ExitStatus::signaled(request.signal.get(), false)?);
+        self.signal_process_replays
+            .lock()
+            .expect("driver signal replay lock")
+            .insert(request.context.operation_id.clone(), request);
+        Ok(())
+    }
+
+    async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::WaitProcess(request.clone()));
+        if let Some(error) = self.take_failure("wait-process") {
+            return Err(error);
+        }
+        let key = Self::process_key(&request.target)?;
+        if key.2.is_init() {
+            let states = self.states.lock().expect("driver states lock");
+            let (generation, _) = states.get(&key.0).copied().ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "driver container does not exist")
+                    .for_operation("driver-wait-process")
+            })?;
+            if generation != key.1 {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    "driver container generation mismatch",
+                )
+                .for_operation("driver-wait-process"));
+            }
+            drop(states);
+            return self
+                .exits
+                .lock()
+                .expect("driver exits lock")
+                .get(&key.0)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::new(ErrorCode::DeadlineExceeded, "driver init is still running")
+                        .for_operation("driver-wait-process")
+                        .retryable(true)
+                });
+        }
+        self.processes
+            .lock()
+            .expect("driver processes lock")
+            .get(&key)
+            .ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "driver process does not exist")
+                    .for_operation("driver-wait-process")
+            })?
+            .1
+            .clone()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::DeadlineExceeded,
+                    "driver process is still running",
+                )
+                .for_operation("driver-wait-process")
+                .retryable(true)
+            })
+    }
 }
 
 fn identifier<T>(value: &str, constructor: impl FnOnce(String) -> a3s_oci_sdk::Result<T>) -> T {
@@ -295,6 +539,30 @@ fn create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
             .expect("valid OCI bundle"),
         isolation: IsolationRequest::DedicatedVm,
         io: ProcessIo::default(),
+    }
+}
+
+fn exec_request(container: ContainerTarget, operation: &str, process_id: &str) -> ExecRequest {
+    let process: Process = serde_json::from_value(serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0, "umask": 18},
+        "args": ["/bin/sh", "-c", "while :; do :; done"],
+        "env": ["PATH=/bin:/usr/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    }))
+    .expect("valid exec process");
+    ExecRequest {
+        context: OperationContext::new(operation_id(operation)),
+        container,
+        process_id: ProcessId::new(process_id).expect("process ID"),
+        process,
+        io: ProcessIo {
+            stdin: IoMode::Null,
+            stdout: IoMode::Null,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        },
     }
 }
 
@@ -394,7 +662,7 @@ async fn rejects_invalid_driver_operation_inventories_before_opening_state() {
                 RuntimeOperation::Start,
                 RuntimeOperation::Kill,
                 RuntimeOperation::Delete,
-                RuntimeOperation::Exec,
+                RuntimeOperation::List,
             ],
         ),
     ];
@@ -539,7 +807,7 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
             .iter()
             .filter(|call| matches!(call, DriverCall::Wait(_)))
             .count(),
-        2
+        1
     );
     let DriverCall::Create(driver_create) = &calls[0] else {
         panic!("create must be the first driver call");

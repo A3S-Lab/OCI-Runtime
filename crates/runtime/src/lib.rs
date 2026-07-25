@@ -44,7 +44,8 @@ pub use cleanup_report::{
     OciVmFaultCleanupReport,
 };
 pub use driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitProcessRequest,
     DriverWaitRequest, RuntimeDriver,
 };
 pub use multi_container_report::{

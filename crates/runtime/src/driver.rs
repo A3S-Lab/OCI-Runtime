@@ -1,8 +1,8 @@
 use a3s_oci_core::DriverCapability;
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IsolationRequest,
-    OciBundle, OperationContext, ProcessIo, Result, RuntimeOperation, Signal,
+    OciBundle, OperationContext, ProcessIo, ProcessTarget, Result, RuntimeOperation, Signal,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -127,6 +127,72 @@ pub struct DriverWaitRequest {
     pub timeout_ms: Option<u64>,
 }
 
+/// Exact exec input passed from durable host orchestration to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverExecRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Exact container generation and caller-selected process identity.
+    pub target: ProcessTarget,
+    /// Complete validated OCI process configuration.
+    pub process: Process,
+    /// Host-side standard-I/O disposition for the exec process.
+    pub io: ProcessIo,
+}
+
+/// Exact per-process signal input passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverSignalProcessRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Exact container generation and process identity.
+    pub target: ProcessTarget,
+    /// Positive Linux signal delivered unchanged.
+    pub signal: Signal,
+}
+
+/// Exact per-process wait input passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverWaitProcessRequest {
+    /// Exact container generation and process identity.
+    pub target: ProcessTarget,
+    /// Maximum wait duration. `None` waits until the process terminates.
+    pub timeout_ms: Option<u64>,
+}
+
+/// Driver-reported process identity returned after exec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DriverProcess {
+    pid: i32,
+    terminal: bool,
+}
+
+impl DriverProcess {
+    /// Construct one running process with a positive driver-visible PID.
+    pub fn new(pid: i32, terminal: bool) -> Result<Self> {
+        if pid <= 0 {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                format!("driver process PID must be positive; received {pid}"),
+            )
+            .for_operation("construct-driver-process"));
+        }
+        Ok(Self { pid, terminal })
+    }
+
+    /// Positive driver-visible process PID.
+    #[must_use]
+    pub const fn pid(self) -> i32 {
+        self.pid
+    }
+
+    /// Whether the driver allocated an OCI terminal for this process.
+    #[must_use]
+    pub const fn terminal(self) -> bool {
+        self.terminal
+    }
+}
+
 /// Platform executor behind durable OCI lifecycle orchestration.
 ///
 /// Mutating calls must be idempotent by `OperationContext::operation_id`.
@@ -170,5 +236,20 @@ pub trait RuntimeDriver: Send + Sync {
     /// Wait for the exact init process and return its stable terminal result.
     async fn wait(&self, _request: DriverWaitRequest) -> Result<ExitStatus> {
         Err(Error::unsupported("wait"))
+    }
+
+    /// Execute one exact additional process.
+    async fn exec(&self, _request: DriverExecRequest) -> Result<DriverProcess> {
+        Err(Error::unsupported("exec"))
+    }
+
+    /// Signal one exact init or exec process.
+    async fn signal_process(&self, _request: DriverSignalProcessRequest) -> Result<()> {
+        Err(Error::unsupported("signal-process"))
+    }
+
+    /// Wait for one exact init or exec process.
+    async fn wait_process(&self, _request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        Err(Error::unsupported("wait-process"))
     }
 }

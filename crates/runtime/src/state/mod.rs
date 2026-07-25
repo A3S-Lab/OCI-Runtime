@@ -7,6 +7,7 @@ mod model;
 mod observe;
 mod oci_state;
 mod operation;
+mod process;
 mod start;
 
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use a3s_oci_core::{DriverKind, LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode, Generation, OciBundle,
-    OciSchemaValidator, OperationId, Result, ValidateRequest,
+    OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget, Result, ValidateRequest,
 };
 use tokio::sync::Mutex;
 
@@ -59,6 +60,37 @@ pub(crate) enum DeletePreparation {
     Resume(ContainerRecord),
     /// A matching delete already completed.
     Replayed,
+}
+
+/// Result of preparing an idempotent exec operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProcessOperationPreparation {
+    /// This call durably created a new exec intent.
+    Prepared(ProcessRecord),
+    /// A matching exec intent exists and requires driver reconciliation.
+    Resume(ProcessRecord),
+    /// A matching exec already completed; this is its exact response.
+    Replayed(ProcessRecord),
+}
+
+/// Result of preparing an idempotent process signal operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SignalProcessPreparation {
+    /// This call durably created a new signal intent.
+    Prepared(ProcessTarget),
+    /// A matching signal intent exists and requires driver reconciliation.
+    Resume(ProcessTarget),
+    /// A matching signal already completed.
+    Replayed,
+}
+
+/// Durable process-wait lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProcessWaitPreparation {
+    /// The terminal result was already committed.
+    Replayed(a3s_oci_sdk::ExitStatus),
+    /// The exact process target must be waited through the driver.
+    Prepared(ProcessTarget),
 }
 
 /// Single-writer durable lifecycle store.
@@ -133,7 +165,8 @@ impl DurableStateStore {
                     self.reconcile_failed_create(&operation).await?;
                     Err(error.clone())
                 }
-                StoredOperationStatus::SucceededEmpty => Err(state_error(
+                StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-create",
                     format!(
@@ -161,6 +194,7 @@ impl DurableStateStore {
             kind: StoredOperationKind::Create,
             container_id: request.id.clone(),
             generation,
+            process_id: None,
             request_digest,
             outcome: StoredOperationStatus::Prepared,
         };
@@ -246,6 +280,7 @@ impl DurableStateStore {
             id: request.id.clone(),
             record,
             active_operation: Some(request.context.operation_id.clone()),
+            init_exit_status: None,
         };
         self.write_json(
             DurableMutation::StoreCreatingContainer,
@@ -282,7 +317,8 @@ impl DurableStateStore {
             StoredOperationStatus::Prepared => {}
             StoredOperationStatus::Succeeded { response } => return Ok(response.clone()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
-            StoredOperationStatus::SucceededEmpty => {
+            StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-create",
@@ -571,6 +607,15 @@ impl DurableStateStore {
         self.root
             .join("operations")
             .join(format!("{}.json", id.as_str()))
+    }
+
+    fn process_directory(&self, id: &ContainerId) -> PathBuf {
+        self.container_directory(id).join("processes")
+    }
+
+    fn process_path(&self, target: &ProcessTarget) -> PathBuf {
+        self.process_directory(&target.container.id)
+            .join(format!("{}.json", target.process_id.as_str()))
     }
 
     fn failed_create_tombstone(&self, operation_id: &OperationId) -> PathBuf {

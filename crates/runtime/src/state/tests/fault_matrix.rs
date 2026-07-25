@@ -5,12 +5,18 @@ use std::sync::Arc;
 
 use a3s_oci_sdk::ContainerRecord;
 
+mod process;
+
 use super::*;
 use crate::fault::testing::RecordingFaultInjector;
 use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
 use crate::state::model::{StoredContainer, StoredGeneration};
 use crate::state::oci_state::rebuild_state;
 use crate::state::DeletePreparation;
+use process::{
+    exercise_exec_claim_recovery, exercise_exec_failure, exercise_exec_reconcile,
+    exercise_process_success, exercise_signal_process_failure,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum Scenario {
@@ -25,6 +31,11 @@ enum Scenario {
     KillFailure,
     DeleteFailure,
     Observation,
+    ProcessSuccess,
+    ExecClaimRecovery,
+    ExecReconcile,
+    ExecFailure,
+    SignalProcessFailure,
 }
 
 struct Fixture {
@@ -56,7 +67,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        237,
+        356,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -97,6 +108,25 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         DurableMutation::ObserveContainer | DurableMutation::CompleteObservedOperation => {
             Scenario::Observation
         }
+        DurableMutation::PrepareExecOperation
+        | DurableMutation::StoreExecutingProcess
+        | DurableMutation::CompleteExecProcess
+        | DurableMutation::CompleteExecOperation
+        | DurableMutation::PrepareSignalProcessOperation
+        | DurableMutation::ClaimSignalProcessOperation
+        | DurableMutation::CompleteSignalProcessRecord
+        | DurableMutation::CompleteSignalProcessOperation
+        | DurableMutation::CacheInitWait
+        | DurableMutation::CacheProcessWait => Scenario::ProcessSuccess,
+        DurableMutation::ClaimExecOperation => Scenario::ExecClaimRecovery,
+        DurableMutation::ReconcileExecProcess | DurableMutation::ReconcileExecOperation => {
+            Scenario::ExecReconcile
+        }
+        DurableMutation::ReleaseFailedExecClaim | DurableMutation::RecordExecFailure => {
+            Scenario::ExecFailure
+        }
+        DurableMutation::ReleaseFailedSignalProcessClaim
+        | DurableMutation::RecordSignalProcessFailure => Scenario::SignalProcessFailure,
         DurableMutation::AllocateGeneration
         | DurableMutation::PrepareCreateOperation
         | DurableMutation::StoreCreateConfig
@@ -131,6 +161,11 @@ async fn exercise(scenario: Scenario, point: FaultPoint) {
         Scenario::KillFailure => exercise_kill_failure(point).await,
         Scenario::DeleteFailure => exercise_delete_failure(point).await,
         Scenario::Observation => exercise_observation(point).await,
+        Scenario::ProcessSuccess => exercise_process_success(point).await,
+        Scenario::ExecClaimRecovery => exercise_exec_claim_recovery(point).await,
+        Scenario::ExecReconcile => exercise_exec_reconcile(point).await,
+        Scenario::ExecFailure => exercise_exec_failure(point).await,
+        Scenario::SignalProcessFailure => exercise_signal_process_failure(point).await,
     }
 }
 
