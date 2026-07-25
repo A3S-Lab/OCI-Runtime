@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use a3s_oci_core::DriverKind;
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
     DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest,
     KillRequest, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget,
-    Signal, SignalProcessRequest, StartRequest, WaitProcessRequest,
+    Signal, SignalProcessRequest, StartRequest, UpdateRequest, WaitProcessRequest,
 };
 use tempfile::TempDir;
 

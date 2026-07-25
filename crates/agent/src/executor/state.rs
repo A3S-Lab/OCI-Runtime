@@ -2,13 +2,15 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use a3s_oci_agent_protocol::{AgentProcess, AgentState};
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
-    ErrorCode, ExitStatus, OperationId, ProcessId, ProcessRecord, ProcessTarget, Result,
+    ContainerStats, ErrorCode, ExitStatus, OperationId, ProcessId, ProcessRecord, ProcessTarget,
+    Result,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use super::cgroup::CgroupManager;
 use super::exec_process::ExecProcess;
 use super::process::PreparedProcess;
 use super::{executor_error, MAX_OPERATION_RECORDS};
@@ -19,6 +21,7 @@ pub(super) struct ExecutorState {
     pub(super) highest_generations: BTreeMap<String, u64>,
     operations: BTreeMap<OperationId, OperationRecord>,
     pub(super) next_slot: u64,
+    pub(super) cgroup_manager: Option<CgroupManager>,
 }
 
 impl ExecutorState {
@@ -184,6 +187,25 @@ impl ContainerRecord {
         Ok(())
     }
 
+    pub(super) async fn update_resources(&mut self, resources: &LinuxResources) -> Result<()> {
+        self.refresh()?;
+        if !matches!(
+            self.status,
+            ContainerState::Created | ContainerState::Running
+        ) {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                format!("container cannot update resources while {}", self.status),
+            ));
+        }
+        self.process.update_resources(resources).await
+    }
+
+    pub(super) async fn stats(&mut self) -> Result<ContainerStats> {
+        self.refresh()?;
+        self.process.stats(self.target.clone()).await
+    }
+
     pub(super) fn live_processes(&mut self) -> Result<Vec<ProcessRecord>> {
         self.refresh()?;
         let mut records = Vec::new();
@@ -242,6 +264,7 @@ pub(super) enum MutationKind {
     SignalProcess,
     Pause,
     Resume,
+    Update,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -192,17 +192,23 @@ issued—the same ownership mechanism proven by A3S Box's PID 1 reaper. Delete,
 shutdown, and session EOF also force-stop and reap every registered exec
 helper and process group before removing state.
 
-Init and exec join the same owned cgroup-v2 leaf. Pause writes `1` to
+The executor creates one private controller-enabled cgroup-v2 root and places
+each init and exec pair in the same owned leaf. This permits a later update
+even when create supplied no initial limits. Update preserves omitted fields,
+applies the supported memory, CPU, cpuset, and PID changes with exact
+read-back, and rolls earlier writes back in reverse order if a later write
+fails. Stats normalizes CPU counters to nanoseconds, memory counters to bytes,
+and includes PID plus memory/PID event counters. Pause writes `1` to
 `cgroup.freeze`, resume writes `0`, and neither operation returns until
-`cgroup.events` reports the exact `frozen` state. The process inventory refreshes
-the init and exec supervisors, excludes terminal processes, and returns only
-positive PIDs bound to the exact container generation. Exec is rejected while
-the leaf is frozen. Force cleanup thaws a paused leaf before signaling and
-reaping its processes.
+`cgroup.events` reports the exact `frozen` state. The process inventory
+refreshes the init and exec supervisors, excludes terminal processes, and
+returns only positive PIDs bound to the exact container generation. Exec is
+rejected while the leaf is frozen. Force cleanup thaws a paused leaf before
+signaling and reaping its processes.
 
 Exact request retries are fingerprinted by `OperationId`, and reused IDs with
-different requests fail. This includes pause and resume. Generation fences
-remain in memory after delete.
+different requests fail. This includes pause, resume, and resource update.
+Generation fences remain in memory after delete.
 
 All guest registry, generation, and idempotency state is session-local. A
 closed host connection force-stops remaining configured processes, exec
@@ -227,14 +233,15 @@ cargo zigbuild -p a3s-oci-agent --release `
 
 `a3s-oci agent-vm-smoke` proves the authenticated
 guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact
-twelve-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a
+fourteen-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a
 bundle below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, bounded running wait, exact
 repeated init status, exact-target exec replay, duplicate process-ID rejection,
 bounded and stable process wait, replayed process signal, exact live init/exec
-inventory, replayed pause/resume, a progress-producing exec that stops while
-frozen and advances after resume, init-exit exec cleanup, signal-driven stop,
-post-delete NotFound, marker cleanup, and nominal guest runtime cleanup.
+inventory, replay-safe live resource update, normalized cgroup-v2 statistics,
+replayed pause/resume, a progress-producing exec that stops while frozen and
+advances after resume, init-exit exec cleanup, signal-driven stop, post-delete
+NotFound, marker cleanup, and nominal guest runtime cleanup.
 
 `a3s-oci oci-vm-multi-container-smoke` keeps two distinct bundle rootfs and
 runtime slots live behind the create barrier, proves that A's start, kill,

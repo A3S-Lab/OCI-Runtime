@@ -1,0 +1,228 @@
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
+use a3s_oci_sdk::{
+    ContainerRecord, ContainerTarget, ErrorCode, OperationId, Result, UpdateRequest,
+    ValidateRequest,
+};
+use serde::Serialize;
+
+use crate::fault::DurableMutation;
+
+use super::filesystem::state_error;
+use super::model::{
+    StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
+};
+use super::oci_state::is_paused;
+use super::operation::{request_digest, validate_deadline, validate_retry};
+use super::{
+    claim_active_operation, ensure_active_operation, generation_conflict, DurableStateStore,
+    RecordOperationPreparation,
+};
+
+#[derive(Serialize)]
+struct UpdateFingerprint<'a> {
+    target: &'a ContainerTarget,
+    resources: &'a LinuxResources,
+}
+
+impl DurableStateStore {
+    pub(crate) async fn prepare_update(
+        &self,
+        request: &UpdateRequest,
+    ) -> Result<RecordOperationPreparation> {
+        request.validate()?;
+        let digest = request_digest(
+            &UpdateFingerprint {
+                target: &request.target,
+                resources: &request.resources,
+            },
+            "update",
+        )?;
+        let _guard = self.gate.lock().await;
+
+        if let Some(operation) = self
+            .load_operation_if_present(&request.context.operation_id)
+            .await?
+        {
+            validate_retry(
+                &operation,
+                &request.context.operation_id,
+                StoredOperationKind::Update,
+                &request.target.id,
+                &digest,
+                "update",
+            )?;
+            return match &operation.outcome {
+                StoredOperationStatus::Prepared => {
+                    let mut stored = self
+                        .load_stored_exact(&operation.container_id, operation.generation)
+                        .await?;
+                    claim_active_operation(
+                        self,
+                        &mut stored,
+                        &request.context.operation_id,
+                        DurableMutation::ClaimUpdateOperation,
+                        "update",
+                    )
+                    .await?;
+                    Ok(RecordOperationPreparation::Resume(stored.record))
+                }
+                StoredOperationStatus::Succeeded { response } => {
+                    Ok(RecordOperationPreparation::Replayed(response.clone()))
+                }
+                StoredOperationStatus::Failed { error } => Err(error.clone()),
+                StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededEmpty => Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    "update",
+                    format!(
+                        "update operation {} has an invalid outcome",
+                        request.context.operation_id
+                    ),
+                )),
+            };
+        }
+
+        validate_deadline(&request.context, "update")?;
+        let mut stored = self.load_stored_container(&request.target.id).await?;
+        if let Some(expected) = request.target.generation {
+            if stored.record.generation != expected {
+                return Err(generation_conflict(
+                    &request.target.id,
+                    expected,
+                    stored.record.generation,
+                    "update",
+                ));
+            }
+        }
+        if !matches!(
+            *stored.record.state.status(),
+            ContainerState::Created | ContainerState::Running
+        ) {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "update",
+                format!(
+                    "container {} generation {} cannot update resources while {}",
+                    stored.id,
+                    stored.record.generation.0,
+                    stored.record.state.status()
+                ),
+            ));
+        }
+
+        let operation = StoredOperation {
+            schema_version: OPERATION_SCHEMA_VERSION.to_string(),
+            operation_id: request.context.operation_id.clone(),
+            kind: StoredOperationKind::Update,
+            container_id: request.target.id.clone(),
+            generation: stored.record.generation,
+            process_id: None,
+            request_digest: digest,
+            outcome: StoredOperationStatus::Prepared,
+        };
+        self.write_json(
+            DurableMutation::PrepareUpdateOperation,
+            &self.operation_path(&request.context.operation_id),
+            &operation,
+        )
+        .await?;
+        claim_active_operation(
+            self,
+            &mut stored,
+            &request.context.operation_id,
+            DurableMutation::ClaimUpdateOperation,
+            "update",
+        )
+        .await?;
+        Ok(RecordOperationPreparation::Prepared(stored.record))
+    }
+
+    pub(crate) async fn complete_update(
+        &self,
+        operation_id: &OperationId,
+        status: ContainerState,
+        pid: Option<i32>,
+        paused: bool,
+    ) -> Result<ContainerRecord> {
+        if !matches!(status, ContainerState::Created | ContainerState::Running)
+            || pid.is_none_or(|pid| pid <= 0)
+            || (status == ContainerState::Created && paused)
+        {
+            return Err(state_error(
+                ErrorCode::InvalidArgument,
+                "update",
+                format!(
+                    "driver returned invalid update state {status} with PID {pid:?} and paused={paused}"
+                ),
+            ));
+        }
+
+        let _guard = self.gate.lock().await;
+        let mut operation = self.load_operation(operation_id).await?;
+        if operation.kind != StoredOperationKind::Update {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "update",
+                format!("operation {operation_id} is not an OCI update"),
+            ));
+        }
+        match &operation.outcome {
+            StoredOperationStatus::Prepared => {}
+            StoredOperationStatus::Succeeded { response } => return Ok(response.clone()),
+            StoredOperationStatus::Failed { error } => return Err(error.clone()),
+            StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededEmpty => {
+                return Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    "update",
+                    format!("update operation {operation_id} has an invalid outcome"),
+                ));
+            }
+        }
+
+        let mut stored = self.load_stored_container(&operation.container_id).await?;
+        if stored.record.generation != operation.generation {
+            return Err(generation_conflict(
+                &operation.container_id,
+                operation.generation,
+                stored.record.generation,
+                "update",
+            ));
+        }
+        if *stored.record.state.status() != status
+            || *stored.record.state.pid() != pid
+            || is_paused(&stored.record.state) != paused
+        {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "update",
+                format!(
+                    "container {} durable state does not match the driver update response",
+                    operation.container_id
+                ),
+            ));
+        }
+
+        ensure_active_operation(&stored, operation_id, "update")?;
+        stored.active_operation = None;
+        self.write_json(
+            DurableMutation::CompleteUpdateContainer,
+            &self
+                .container_directory(&operation.container_id)
+                .join(super::CONTAINER_RECORD_FILE),
+            &stored,
+        )
+        .await?;
+        let response = stored.record.clone();
+        operation.outcome = StoredOperationStatus::Succeeded {
+            response: response.clone(),
+        };
+        self.write_json(
+            DurableMutation::CompleteUpdateOperation,
+            &self.operation_path(operation_id),
+            &operation,
+        )
+        .await?;
+        Ok(response)
+    }
+}

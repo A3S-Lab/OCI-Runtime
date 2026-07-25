@@ -31,18 +31,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
     AgentExecRequest, AgentKillRequest, AgentProcess, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, DeleteMode, Error, ErrorCode, ExitStatus, OperationContext, ProcessRecord, Result,
+    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, OperationContext,
+    ProcessRecord, Result,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 
 use crate::AGENT_VERSION;
+use cgroup::CgroupManager;
 use pidfd::SignalOutcome;
 use plan::InitPlan;
 use process::PreparedProcess;
@@ -192,6 +194,11 @@ impl LinuxExecutor {
             }
         }
         state.containers.clear();
+        if let Some(manager) = state.cgroup_manager.take() {
+            if let Err(error) = manager.remove() {
+                first_error.get_or_insert(error);
+            }
+        }
         match tokio::fs::remove_dir_all(&self.runtime_root).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -246,6 +253,9 @@ impl LinuxExecutor {
 
         let bundle = request.bundle.to_guest_bundle()?;
         let plan = InitPlan::from_bundle(&bundle, &request.io)?;
+        if plan.cgroup.has_cgroup() && state.cgroup_manager.is_none() {
+            state.cgroup_manager = Some(CgroupManager::create()?);
+        }
         let slot = state.next_slot.checked_add(1).ok_or_else(|| {
             executor_error(
                 ErrorCode::ResourceExhausted,
@@ -262,8 +272,13 @@ impl LinuxExecutor {
             let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
             return Err(error);
         }
-        let process = match PreparedProcess::spawn(&plan, &config_snapshot, &self.init_executable)
-            .await
+        let process = match PreparedProcess::spawn(
+            &plan,
+            &config_snapshot,
+            &self.init_executable,
+            state.cgroup_manager.as_ref(),
+        )
+        .await
         {
             Ok(process) => process,
             Err(error) => {
@@ -378,6 +393,42 @@ impl LinuxExecutor {
             )
         })?;
         record.live_processes()
+    }
+
+    async fn update_new(
+        state: &mut ExecutorState,
+        request: &AgentUpdateRequest,
+    ) -> Result<AgentState> {
+        validate_deadline(&request.context)?;
+        let key = ContainerKey::from_target(&request.target)?;
+        let record = state.containers.get_mut(&key).ok_or_else(|| {
+            executor_error(
+                ErrorCode::NotFound,
+                format!(
+                    "container {} generation {} does not exist",
+                    key.id, key.generation
+                ),
+            )
+        })?;
+        record.update_resources(&request.resources).await?;
+        record.state()
+    }
+
+    async fn stats_new(
+        state: &mut ExecutorState,
+        request: &AgentStatsRequest,
+    ) -> Result<ContainerStats> {
+        let key = ContainerKey::from_target(&request.target)?;
+        let record = state.containers.get_mut(&key).ok_or_else(|| {
+            executor_error(
+                ErrorCode::NotFound,
+                format!(
+                    "container {} generation {} does not exist",
+                    key.id, key.generation
+                ),
+            )
+        })?;
+        record.stats().await
     }
 
     fn kill_new(state: &mut ExecutorState, request: &AgentKillRequest) -> Result<AgentState> {
@@ -626,6 +677,28 @@ impl GuestAgentService for LinuxExecutor {
     async fn processes(&self, request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
         let mut state = self.state.lock().await;
         Self::processes_new(&mut state, &request)
+    }
+
+    async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
+        let operation = RecordedRequest::new(MutationKind::Update, &request)?;
+        let operation_id = request.context.operation_id.clone();
+        let mut state = self.state.lock().await;
+        if let Some(result) = state.replay_state(&operation_id, &operation) {
+            return result;
+        }
+        state.reserve_operation(&operation_id)?;
+        let result = Self::update_new(&mut state, &request).await;
+        state.record(
+            operation_id,
+            operation,
+            RecordedOutcome::State(result.clone()),
+        );
+        result
+    }
+
+    async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
+        let mut state = self.state.lock().await;
+        Self::stats_new(&mut state, &request).await
     }
 }
 

@@ -5,10 +5,10 @@ use std::time::Duration;
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentStateRequest, AgentWaitProcessRequest,
-    AgentWaitRequest, GuestPath,
+    AgentSignalProcessRequest, AgentStartRequest, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
 };
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IoMode, OciBundle, OperationContext,
     OperationId, ProcessId, ProcessIo, ProcessTarget, Signal,
@@ -28,6 +28,7 @@ const LINUX_SIGTERM: i32 = 15;
 const LINUX_SIGKILL: i32 = 9;
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 const PROGRESS_PATH: &str = "/.a3s-oci-create-start-smoke";
+const UPDATED_MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
 
 pub(super) trait AgentStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -213,6 +214,38 @@ async fn exercise_control_plane<T: AgentStream>(
         );
     }
 
+    let update = AgentUpdateRequest {
+        context: operation(nonce, "update")?,
+        target: target.clone(),
+        resources: resource_profile()?,
+    };
+    let updated = guest_call("update resources", client.update(update.clone())).await?;
+    report.resources_updated = updated
+        == guest_call("replayed resource update", client.update(update)).await?
+        && updated.status() == ContainerState::Running
+        && !updated.paused();
+    if !report.resources_updated {
+        return Err("guest resource update was not exact or idempotent".into());
+    }
+    let first_stats = guest_call(
+        "resource stats",
+        client.stats(AgentStatsRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    let second_stats = guest_call(
+        "repeated resource stats",
+        client.stats(AgentStatsRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    report.stats_verified = resource_stats_are_exact(&first_stats, &second_stats, target);
+    if !report.stats_verified {
+        return Err("guest resource stats did not match the updated cgroup".into());
+    }
+
     let pause = AgentContainerOperationRequest {
         context: operation(nonce, "pause")?,
         target: target.clone(),
@@ -270,6 +303,48 @@ async fn exercise_control_plane<T: AgentStream>(
     wait_for_marker_change(marker, &frozen_progress).await?;
     report.resume_advanced_workload = true;
     Ok(())
+}
+
+fn resource_profile() -> Result<LinuxResources, String> {
+    serde_json::from_value(serde_json::json!({
+        "memory": {
+            "limit": UPDATED_MEMORY_LIMIT,
+            "reservation": 64 * 1024 * 1024,
+            "swap": 1024 * 1024 * 1024
+        },
+        "cpu": {
+            "shares": 512,
+            "quota": 50000,
+            "period": 100000,
+            "cpus": "0",
+            "mems": "0"
+        },
+        "pids": {"limit": 64}
+    }))
+    .map_err(|error| format!("failed to construct guest resource profile: {error}"))
+}
+
+fn resource_stats_are_exact(
+    first: &a3s_oci_sdk::ContainerStats,
+    second: &a3s_oci_sdk::ContainerStats,
+    target: &ContainerTarget,
+) -> bool {
+    first.target == *target
+        && second.target == *target
+        && first.timestamp_unix_ns > 0
+        && second.timestamp_unix_ns >= first.timestamp_unix_ns
+        && first.cpu.usage_ns > 0
+        && second.cpu.usage_ns >= first.cpu.usage_ns
+        && first.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
+        && second.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
+        && first.memory.usage_bytes <= UPDATED_MEMORY_LIMIT
+        && second.memory.usage_bytes <= UPDATED_MEMORY_LIMIT
+        && first.process_count >= 2
+        && second.process_count >= 2
+        && first.metrics.contains_key("memory.events.oom_kill")
+        && first.metrics.contains_key("pids.events.max")
+        && second.metrics.contains_key("memory.events.oom_kill")
+        && second.metrics.contains_key("pids.events.max")
 }
 
 fn process_inventory_is_exact(

@@ -84,17 +84,17 @@ create a VM.
 The `native-linux-smoke` command opens the native driver beneath isolated
 runtime-owned directories. It exercises the durable init and process
 lifecycle through `RuntimeClient`; `HostRuntimeService` journals exec and
-per-process signal plus pause/resume, caches init and process terminal results,
-and dispatches the exact generation through `NativeLinuxDriver` to the shared
-`LinuxExecutor`. The submitted bundle is strictly loaded before the lifecycle
-begins.
+per-process signal plus pause/resume/update, caches init and process terminal
+results, and dispatches the exact generation through `NativeLinuxDriver` to
+the shared `LinuxExecutor`. The submitted bundle is strictly loaded before the
+lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v4` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v5` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
-   `kill`, `delete`, `exec`, `wait`, `pause`, `resume`, `processes`,
-   `signal-process`, and `wait-process`;
+   `kill`, `delete`, `exec`, `wait`, `pause`, `resume`, `update`, `processes`,
+   `stats`, `signal-process`, and `wait-process`;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
 3. create returns the positive host-visible PID of the configured process in
@@ -111,22 +111,28 @@ following:
 8. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
 9. process inventory returns exactly the live init and second exec process;
-   pause and its replay expose a durable frozen state, the progress-producing
+10. one exact durable update changes memory limit/reservation/swap, CPU
+   shares/quota/period/cpuset, and the PID limit; retrying it returns the same
+   container record;
+11. two normalized stats snapshots remain generation-fenced, expose positive
+   CPU and process counters, retain the updated memory limit, and carry the
+   expected cgroup-v2 event metrics;
+12. pause and its replay expose a durable frozen state, the progress-producing
    exec remains unchanged for a bounded interval, resume and its replay expose
    a durable thawed state, and that same exec advances again;
-10. the second live exec is terminated and reaped automatically when init
+13. the second live exec is terminated and reaped automatically when init
    exits, while process ID `init` returns the same result as lifecycle wait;
-11. a 50-millisecond wait returns `DeadlineExceeded` while the configured
+14. a 50-millisecond wait returns `DeadlineExceeded` while the configured
    process is still running;
-12. `SIGKILL` reaches the configured process through its retained pidfd, and
+15. `SIGKILL` reaches the configured process through its retained pidfd, and
    both internal supervisors preserve the exact signal result while retrying
    kill replays its exact result;
-13. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
+16. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
    the same terminal result;
-14. state reaches `stopped`;
-15. stopped-only delete and its exact retry succeed;
-16. state returns `NotFound` after delete;
-17. the marker, executor root, and complete smoke session are removed.
+17. state reaches `stopped`;
+18. stopped-only delete and its exact retry succeed;
+19. state returns `NotFound` after delete;
+20. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID

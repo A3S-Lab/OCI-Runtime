@@ -10,11 +10,11 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v5";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v6";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
-pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v5";
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v6";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v4";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v5";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,6 +327,8 @@ impl AgentVmSmokeReport {
                     AgentOperation::Pause,
                     AgentOperation::Resume,
                     AgentOperation::Processes,
+                    AgentOperation::Update,
+                    AgentOperation::Stats,
                 ]
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)
@@ -368,6 +370,10 @@ pub struct NativeLinuxSmokeReport {
     pub running_observed: bool,
     /// Whether process inventory contained the exact live init and exec processes.
     pub processes_verified: bool,
+    /// Whether live OCI Linux resources were applied and exactly replayed.
+    pub resources_updated: bool,
+    /// Whether normalized cgroup counters were exact and generation-fenced.
+    pub stats_verified: bool,
     /// Whether a real progress-producing workload stopped while its cgroup was frozen.
     pub pause_froze_workload: bool,
     /// Whether the frozen workload advanced again after resume.
@@ -421,6 +427,8 @@ impl NativeLinuxSmokeReport {
             start_released: false,
             running_observed: false,
             processes_verified: false,
+            resources_updated: false,
+            stats_verified: false,
             pause_froze_workload: false,
             resume_advanced_workload: false,
             kill_delivered: false,
@@ -468,7 +476,9 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Wait,
                     RuntimeOperation::Pause,
                     RuntimeOperation::Resume,
+                    RuntimeOperation::Update,
                     RuntimeOperation::Processes,
+                    RuntimeOperation::Stats,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
                 ]
@@ -480,6 +490,8 @@ impl NativeLinuxSmokeReport {
             && self.start_released
             && self.running_observed
             && self.processes_verified
+            && self.resources_updated
+            && self.stats_verified
             && self.pause_froze_workload
             && self.resume_advanced_workload
             && self.kill_delivered
@@ -529,6 +541,10 @@ pub struct OciVmSmokeReport {
     pub running_observed: bool,
     /// Whether process inventory contained the exact live init and exec processes.
     pub processes_verified: bool,
+    /// Whether live OCI Linux resources were applied and exactly replayed.
+    pub resources_updated: bool,
+    /// Whether normalized cgroup counters were exact and generation-fenced.
+    pub stats_verified: bool,
     /// Whether a real progress-producing workload stopped while its cgroup was frozen.
     pub pause_froze_workload: bool,
     /// Whether the frozen workload advanced again after resume.
@@ -579,6 +595,8 @@ impl OciVmSmokeReport {
             start_released: false,
             running_observed: false,
             processes_verified: false,
+            resources_updated: false,
+            stats_verified: false,
             pause_froze_workload: false,
             resume_advanced_workload: false,
             kill_delivered: false,
@@ -627,6 +645,8 @@ impl OciVmSmokeReport {
             && self.start_released
             && self.running_observed
             && self.processes_verified
+            && self.resources_updated
+            && self.stats_verified
             && self.pause_froze_workload
             && self.resume_advanced_workload
             && self.kill_delivered

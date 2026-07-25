@@ -6,26 +6,28 @@ use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
 };
 use a3s_oci_sdk::oci_spec::runtime::{
-    Arch, ContainerState, LinuxNamespaceType, LinuxSeccompAction, Process,
+    Arch, ContainerState, LinuxNamespaceType, LinuxResources, LinuxSeccompAction, Process,
 };
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest,
-    DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, Generation, IoMode,
-    IsolationRequest, KillRequest, ListRequest, OciBundle, OciRuntimeService, OciSchemaValidator,
-    OperationContext, OperationId, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    ProcessesRequest, Result, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
-    StateRequest, TrustDomainId, WaitProcessRequest, WaitRequest,
+    async_trait, ContainerId, ContainerOperationRequest, ContainerStats, ContainerTarget, CpuStats,
+    CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus,
+    Generation, IoMode, IsolationRequest, KillRequest, ListRequest, MemoryStats, OciBundle,
+    OciRuntimeService, OciSchemaValidator, OperationContext, OperationId, ProcessId, ProcessIo,
+    ProcessRecord, ProcessTarget, ProcessesRequest, Result, RuntimeOperation, Signal,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TrustDomainId, UpdateRequest,
+    WaitProcessRequest, WaitRequest,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
 use crate::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 
 mod fault_matrix;
 mod process_operations;
+mod resource_operations;
 
 const TEST_CONFIG: &str = concat!(
     "{\n",
@@ -54,6 +56,8 @@ enum DriverCall {
     Pause(DriverContainerOperationRequest),
     Resume(DriverContainerOperationRequest),
     Processes(ContainerTarget),
+    Update(DriverUpdateRequest),
+    Stats(ContainerTarget),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -69,6 +73,7 @@ struct RecordingDriver {
     processes: Mutex<HashMap<DriverProcessKey, DriverProcessState>>,
     exec_replays: Mutex<HashMap<OperationId, (DriverExecRequest, DriverProcess)>>,
     signal_process_replays: Mutex<HashMap<OperationId, DriverSignalProcessRequest>>,
+    update_replays: Mutex<HashMap<OperationId, DriverUpdateRequest>>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
 }
 
@@ -97,6 +102,7 @@ impl RecordingDriver {
             processes: Mutex::new(HashMap::new()),
             exec_replays: Mutex::new(HashMap::new()),
             signal_process_replays: Mutex::new(HashMap::new()),
+            update_replays: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
         }
     }
@@ -129,6 +135,8 @@ impl RecordingDriver {
             RuntimeOperation::Pause,
             RuntimeOperation::Resume,
             RuntimeOperation::Processes,
+            RuntimeOperation::Update,
+            RuntimeOperation::Stats,
         ]);
         driver
     }
@@ -603,6 +611,96 @@ impl RuntimeDriver for RecordingDriver {
         }
         Ok(records)
     }
+
+    async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Update(request.clone()));
+        let recorded = self
+            .update_replays
+            .lock()
+            .expect("driver update replay lock")
+            .get(&request.context.operation_id)
+            .cloned();
+        if let Some(recorded) = recorded {
+            if recorded != request {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "driver update operation ID was reused for a different request",
+                )
+                .for_operation("driver-update"));
+            }
+        } else {
+            if let Some(error) = self.take_failure("update") {
+                return Err(error);
+            }
+            self.update_replays
+                .lock()
+                .expect("driver update replay lock")
+                .insert(request.context.operation_id.clone(), request.clone());
+        }
+        let generation = Self::exact_generation(&request.target)?;
+        let states = self.states.lock().expect("driver states lock");
+        let (actual_generation, state) =
+            states.get(&request.target.id).copied().ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "driver container does not exist")
+                    .for_operation("driver-update")
+            })?;
+        if generation != actual_generation {
+            return Err(
+                Error::new(ErrorCode::Conflict, "driver container generation mismatch")
+                    .for_operation("driver-update"),
+            );
+        }
+        if state.status() == ContainerState::Stopped {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "driver cannot update a stopped container",
+            )
+            .for_operation("driver-update"));
+        }
+        Ok(state)
+    }
+
+    async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Stats(target.clone()));
+        if let Some(error) = self.take_failure("stats") {
+            return Err(error);
+        }
+        let generation = Self::exact_generation(&target)?;
+        let states = self.states.lock().expect("driver states lock");
+        let (actual_generation, state) = states.get(&target.id).copied().ok_or_else(|| {
+            Error::new(ErrorCode::NotFound, "driver container does not exist")
+                .for_operation("driver-stats")
+        })?;
+        if generation != actual_generation {
+            return Err(
+                Error::new(ErrorCode::Conflict, "driver container generation mismatch")
+                    .for_operation("driver-stats"),
+            );
+        }
+        Ok(ContainerStats {
+            target,
+            timestamp_unix_ns: 1,
+            cpu: CpuStats {
+                usage_ns: 30,
+                user_ns: 10,
+                system_ns: 20,
+                throttled_ns: 0,
+            },
+            memory: MemoryStats {
+                usage_bytes: 1_024,
+                limit_bytes: Some(4_096),
+                peak_bytes: Some(2_048),
+            },
+            process_count: u64::from(state.status() != ContainerState::Stopped),
+            metrics: BTreeMap::from([("memory.events.oom_kill".to_string(), 0)]),
+        })
+    }
 }
 
 impl RecordingDriver {
@@ -675,6 +773,20 @@ fn exec_request(container: ContainerTarget, operation: &str, process_id: &str) -
             stderr: IoMode::Null,
             terminal_size: None,
         },
+    }
+}
+
+fn update_request(target: ContainerTarget, operation: &str) -> UpdateRequest {
+    let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+        "memory": {"limit": 4096},
+        "cpu": {"shares": 1024},
+        "pids": {"limit": 16}
+    }))
+    .expect("valid resource update");
+    UpdateRequest {
+        context: OperationContext::new(operation_id(operation)),
+        target,
+        resources,
     }
 }
 

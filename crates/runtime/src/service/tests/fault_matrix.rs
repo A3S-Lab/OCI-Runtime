@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        26,
+        30,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -52,6 +52,8 @@ async fn exercise_driver_boundary(point: FaultPoint) {
                 | DriverOperation::Pause
                 | DriverOperation::Resume
                 | DriverOperation::Processes
+                | DriverOperation::Update
+                | DriverOperation::Stats
         ) {
             setup
                 .start(StartRequest {
@@ -183,6 +185,8 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::Pause
             | DriverOperation::Resume
             | DriverOperation::Processes
+            | DriverOperation::Update
+            | DriverOperation::Stats
     )
 }
 
@@ -201,6 +205,8 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::Pause(_), DriverOperation::Pause)
             | (DriverCall::Resume(_), DriverOperation::Resume)
             | (DriverCall::Processes(_), DriverOperation::Processes)
+            | (DriverCall::Update(_), DriverOperation::Update)
+            | (DriverCall::Stats(_), DriverOperation::Stats)
     )
 }
 
@@ -318,6 +324,23 @@ async fn invoke_operation(
             service
                 .processes(ProcessesRequest {
                     target: target.expect("processes target").clone(),
+                })
+                .await?;
+            Ok(())
+        }
+        DriverOperation::Update => {
+            service
+                .update(update_request(
+                    target.expect("update target").clone(),
+                    "boundary-update",
+                ))
+                .await?;
+            Ok(())
+        }
+        DriverOperation::Stats => {
+            service
+                .stats(StatsRequest {
+                    target: target.expect("stats target").clone(),
                 })
                 .await?;
             Ok(())

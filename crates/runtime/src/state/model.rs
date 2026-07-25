@@ -66,6 +66,7 @@ pub(super) enum StoredOperationKind {
     SignalProcess,
     Pause,
     Resume,
+    Update,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

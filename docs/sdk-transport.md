@@ -70,22 +70,24 @@ protocol types remain behind that boundary.
 
 The host always requires the five core driver operations and advertises
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
-`processes` only when the selected driver implements each one. `WaitRequest`
-targets one exact generation, accepts an optional millisecond timeout, and
-returns an `ExitStatus` containing either an exit code in `0..=255` or a
-positive signal. Repeated waits must return the same terminal result. The
-native Linux driver and the protocol-v4 utility-VM guest path implement this
-contract while retaining protocol-v1 through protocol-v3 compatibility;
-unsupported drivers fail before dispatch.
+`processes`, `update`, and `stats` only when the selected driver implements
+each one. `WaitRequest` targets one exact generation, accepts an optional
+millisecond timeout, and returns an `ExitStatus` containing either an exit
+code in `0..=255` or a positive signal. Repeated waits must return the same
+terminal result. The native Linux driver and the protocol-v5 utility-VM guest
+path implement this contract while retaining protocol-v1 through protocol-v4
+compatibility; unsupported drivers fail before dispatch.
 
-The protocol-v4 shared Linux executor implements exact-target exec,
+The protocol-v5 shared Linux executor implements exact-target exec,
 pidfd-backed per-process signal, stable per-process wait, cgroup-v2
-pause/resume, and exact live process inventory. The public host path reserves
+pause/resume, exact live process inventory, partial live CPU/memory/cpuset/PID
+updates, and normalized resource statistics. The public host path reserves
 process IDs before driver dispatch, persists generation-scoped process
-records, journals exec, signal, pause, and resume mutations, and caches
-terminal results. Native Linux exposes that complete path through
-`RuntimeClient`. Utility-VM host drivers still need to opt into these process
-and control operations before their host services may advertise them.
+records, journals exec, signal, pause, resume, and update mutations, and
+caches terminal results. Native Linux exposes that complete path through
+`RuntimeClient`. Utility-VM host drivers still need to opt into these process,
+control, and resource operations before their host services may advertise
+them.
 
 ## Runtime Server
 

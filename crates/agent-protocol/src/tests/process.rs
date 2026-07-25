@@ -82,7 +82,7 @@ async fn protocol_v3_exec_signal_and_wait_are_exactly_process_scoped() {
 async fn protocol_v4_freezes_and_lists_one_exact_container_generation() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let server = spawn_server(guest, token(23));
-    let client = AgentClient::connect(host, token(23))
+    let client = AgentClient::connect_for_test(host, token(23), 4, 4)
         .await
         .expect("connect protocol-v4 client");
     assert_eq!(client.hello().selected_version(), 4);
@@ -110,6 +110,19 @@ async fn protocol_v4_freezes_and_lists_one_exact_container_generation() {
         })
         .await
         .expect("start control container");
+    let resources = serde_json::from_value(serde_json::json!({
+        "memory": {"limit": 4096}
+    }))
+    .expect("decode resource update");
+    let error = client
+        .update(AgentUpdateRequest {
+            context: OperationContext::new(operation_id("v4-update")),
+            target: target.clone(),
+            resources,
+        })
+        .await
+        .expect_err("protocol-v4 client must reject a v5 update locally");
+    assert_eq!(error.code, ErrorCode::Unsupported);
 
     let initial = client
         .processes(AgentProcessesRequest {
@@ -173,6 +186,71 @@ async fn protocol_v4_freezes_and_lists_one_exact_container_generation() {
         .await
         .expect("server task")
         .expect("clean protocol-v4 server shutdown");
+}
+
+#[tokio::test]
+async fn protocol_v5_updates_resources_and_returns_typed_stats() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let server = spawn_server(guest, token(24));
+    let client = AgentClient::connect(host, token(24))
+        .await
+        .expect("connect protocol-v5 client");
+    assert_eq!(client.hello().selected_version(), 5);
+    assert_eq!(
+        &client.hello().capabilities().operations()[12..],
+        &[crate::AgentOperation::Update, crate::AgentOperation::Stats,]
+    );
+
+    let create = create_request_for("resource-container", 8, "resource-create");
+    let target = create.target.clone();
+    let digest = create.bundle.config_digest().to_string();
+    client
+        .create(create)
+        .await
+        .expect("create resource container");
+    client
+        .start(AgentStartRequest {
+            context: OperationContext::new(operation_id("resource-start")),
+            target: target.clone(),
+            expected_config_digest: digest,
+        })
+        .await
+        .expect("start resource container");
+
+    let resources = serde_json::from_value(serde_json::json!({
+        "memory": {"limit": 4096},
+        "cpu": {"shares": 1024},
+        "pids": {"limit": 16}
+    }))
+    .expect("decode resource update");
+    let updated = client
+        .update(AgentUpdateRequest {
+            context: OperationContext::new(operation_id("resource-update")),
+            target: target.clone(),
+            resources,
+        })
+        .await
+        .expect("update resources");
+    assert_eq!(updated.target(), &target);
+    assert_eq!(updated.status(), ContainerState::Running);
+
+    let stats = client
+        .stats(AgentStatsRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("read resource stats");
+    assert_eq!(stats.target, target);
+    assert_eq!(stats.cpu.usage_ns, 30);
+    assert_eq!(stats.memory.limit_bytes, Some(4_096));
+    assert_eq!(stats.process_count, 1);
+    assert_eq!(stats.metrics["memory.events.oom_kill"], 0);
+
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean protocol-v5 server shutdown");
 }
 
 #[tokio::test]

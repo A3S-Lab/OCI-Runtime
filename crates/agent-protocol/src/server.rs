@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
-use a3s_oci_sdk::{async_trait, Error, ErrorCode, ExitStatus, ProcessRecord, Result};
+use a3s_oci_sdk::{
+    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, ProcessRecord, Result,
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::model::{
     protocol_error, AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess,
     AgentProcessExit, AgentProcessSignal, AgentProcessesRequest, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, RequestEnvelope,
-    ResponseEnvelope, ResponseOutcome, SessionToken,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello,
+    RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::validation::negotiate_protocol;
 use crate::wire::{read_frame, write_frame};
@@ -72,6 +74,16 @@ pub trait GuestAgentService: Send + Sync {
     /// List every live init and exec process in one exact generation.
     async fn processes(&self, _request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
         Err(Error::unsupported("agent-processes"))
+    }
+
+    /// Apply supported live OCI Linux resource changes.
+    async fn update(&self, _request: AgentUpdateRequest) -> Result<AgentState> {
+        Err(Error::unsupported("agent-update"))
+    }
+
+    /// Read normalized cgroup v2 resource counters.
+    async fn stats(&self, _request: AgentStatsRequest) -> Result<ContainerStats> {
+        Err(Error::unsupported("agent-stats"))
     }
 }
 
@@ -208,6 +220,8 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             .processes(request)
             .await
             .map(AgentResponse::Processes),
+        AgentRequest::Update(request) => service.update(*request).await.map(AgentResponse::State),
+        AgentRequest::Stats(request) => service.stats(request).await.map(AgentResponse::Stats),
     }
 }
 

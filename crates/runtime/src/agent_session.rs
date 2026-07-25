@@ -449,6 +449,8 @@ fn expected_operations() -> Vec<AgentOperation> {
         AgentOperation::Pause,
         AgentOperation::Resume,
         AgentOperation::Processes,
+        AgentOperation::Update,
+        AgentOperation::Stats,
     ]
 }
 

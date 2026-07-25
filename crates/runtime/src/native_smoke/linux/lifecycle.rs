@@ -2,12 +2,12 @@ use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
-use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
     ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
     DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, OciBundle,
     OperationContext, OperationId, ProcessIo, ProcessTarget, ProcessesRequest, RuntimeClient,
-    Signal, StartRequest, StateRequest, WaitRequest,
+    Signal, StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -20,6 +20,7 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const FREEZER_OBSERVATION_DELAY: Duration = Duration::from_millis(1_250);
 const PROGRESS_PATH: &str = "/.a3s-oci-native-smoke";
+const UPDATED_MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
 
 pub(super) async fn exercise(
     client: &RuntimeClient,
@@ -185,6 +186,38 @@ async fn exercise_control_plane(
         );
     }
 
+    let update = UpdateRequest {
+        context: operation(nonce, "update")?,
+        target: target.clone(),
+        resources: resource_profile()?,
+    };
+    let updated = native_call("update resources", client.update(update.clone())).await?;
+    report.resources_updated = updated
+        == native_call("replayed resource update", client.update(update)).await?
+        && *updated.state.status() == ContainerState::Running
+        && !updated.is_paused();
+    if !report.resources_updated {
+        return Err("native resource update was not exact or idempotent".into());
+    }
+    let first_stats = native_call(
+        "resource stats",
+        client.stats(StatsRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    let second_stats = native_call(
+        "repeated resource stats",
+        client.stats(StatsRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    report.stats_verified = resource_stats_are_exact(&first_stats, &second_stats, target);
+    if !report.stats_verified {
+        return Err("native resource stats did not match the updated cgroup".into());
+    }
+
     let pause = ContainerOperationRequest {
         context: operation(nonce, "pause")?,
         target: target.clone(),
@@ -242,6 +275,48 @@ async fn exercise_control_plane(
     wait_for_marker_change(marker, &frozen_progress).await?;
     report.resume_advanced_workload = true;
     Ok(())
+}
+
+fn resource_profile() -> Result<LinuxResources, String> {
+    serde_json::from_value(serde_json::json!({
+        "memory": {
+            "limit": UPDATED_MEMORY_LIMIT,
+            "reservation": 64 * 1024 * 1024,
+            "swap": 1024 * 1024 * 1024
+        },
+        "cpu": {
+            "shares": 512,
+            "quota": 50000,
+            "period": 100000,
+            "cpus": "0",
+            "mems": "0"
+        },
+        "pids": {"limit": 64}
+    }))
+    .map_err(|error| format!("failed to construct native resource profile: {error}"))
+}
+
+fn resource_stats_are_exact(
+    first: &a3s_oci_sdk::ContainerStats,
+    second: &a3s_oci_sdk::ContainerStats,
+    target: &ContainerTarget,
+) -> bool {
+    first.target == *target
+        && second.target == *target
+        && first.timestamp_unix_ns > 0
+        && second.timestamp_unix_ns >= first.timestamp_unix_ns
+        && first.cpu.usage_ns > 0
+        && second.cpu.usage_ns >= first.cpu.usage_ns
+        && first.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
+        && second.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
+        && first.memory.usage_bytes <= UPDATED_MEMORY_LIMIT
+        && second.memory.usage_bytes <= UPDATED_MEMORY_LIMIT
+        && first.process_count >= 2
+        && second.process_count >= 2
+        && first.metrics.contains_key("memory.events.oom_kill")
+        && first.metrics.contains_key("pids.events.max")
+        && second.metrics.contains_key("memory.events.oom_kill")
+        && second.metrics.contains_key("pids.events.max")
 }
 
 fn process_inventory_is_exact(
