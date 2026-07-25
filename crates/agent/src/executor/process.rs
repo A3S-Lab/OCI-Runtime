@@ -8,14 +8,15 @@ use std::process::{ExitStatus as ProcessExitStatus, Stdio};
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::AgentVsockEndpoint;
-use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, Result};
+use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
+use a3s_oci_sdk::{ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 use super::capability::CapabilityPlan;
-use super::cgroup::{self, CgroupHandle};
+use super::cgroup::{self, CgroupHandle, CgroupManager};
 use super::control::{acknowledge_user_mapping, read_outcome, InitOutcome, START_BYTE};
 use super::namespace::{self, RetainedExecutionContext};
 use super::pid;
@@ -43,9 +44,10 @@ impl PreparedProcess {
         plan: &InitPlan,
         config_snapshot: &Path,
         init_executable: &Path,
+        cgroup_manager: Option<&CgroupManager>,
     ) -> Result<Self> {
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
-        let cgroup = CgroupHandle::create(&plan.cgroup)?;
+        let cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
         let cgroup_procs = cgroup.as_ref().map(CgroupHandle::procs_descriptor);
         let (listener, control_name) = bind_control_listener()?;
         let mut command = Command::new(init_executable);
@@ -326,6 +328,32 @@ impl PreparedProcess {
                 )
             })?
             .set_frozen(frozen)
+            .await
+    }
+
+    pub(super) async fn update_resources(&self, resources: &LinuxResources) -> Result<()> {
+        self.cgroup
+            .as_ref()
+            .ok_or_else(|| {
+                process_error(
+                    ErrorCode::Unsupported,
+                    "container resource update requires an explicit cgroup v2 path",
+                )
+            })?
+            .update(resources)
+            .await
+    }
+
+    pub(super) async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        self.cgroup
+            .as_ref()
+            .ok_or_else(|| {
+                process_error(
+                    ErrorCode::Unsupported,
+                    "container stats require an explicit cgroup v2 path",
+                )
+            })?
+            .stats(target)
             .await
     }
 

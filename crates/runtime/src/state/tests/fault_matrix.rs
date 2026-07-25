@@ -34,6 +34,8 @@ enum Scenario {
     KillFailure,
     PauseFailure,
     ResumeFailure,
+    UpdateSuccess,
+    UpdateFailure,
     DeleteFailure,
     Observation,
     ProcessSuccess,
@@ -72,7 +74,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        468,
+        510,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -118,6 +120,9 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         }
         DurableMutation::ReleaseFailedResumeClaim | DurableMutation::RecordResumeFailure => {
             Scenario::ResumeFailure
+        }
+        DurableMutation::ReleaseFailedUpdateClaim | DurableMutation::RecordUpdateFailure => {
+            Scenario::UpdateFailure
         }
         DurableMutation::ReleaseFailedDeleteClaim | DurableMutation::RecordDeleteFailure => {
             Scenario::DeleteFailure
@@ -166,6 +171,10 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         | DurableMutation::ClaimResumeOperation
         | DurableMutation::CompleteResumeContainer
         | DurableMutation::CompleteResumeOperation
+        | DurableMutation::PrepareUpdateOperation
+        | DurableMutation::ClaimUpdateOperation
+        | DurableMutation::CompleteUpdateContainer
+        | DurableMutation::CompleteUpdateOperation
         | DurableMutation::PrepareDeleteOperation
         | DurableMutation::ClaimDeleteOperation
         | DurableMutation::MoveDeleteTombstone
@@ -182,6 +191,14 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
                     | DurableMutation::CompleteResumeOperation
             ) {
                 Scenario::FreezerSuccess
+            } else if matches!(
+                mutation,
+                DurableMutation::PrepareUpdateOperation
+                    | DurableMutation::ClaimUpdateOperation
+                    | DurableMutation::CompleteUpdateContainer
+                    | DurableMutation::CompleteUpdateOperation
+            ) {
+                Scenario::UpdateSuccess
             } else {
                 Scenario::SuccessfulLifecycle
             }
@@ -205,6 +222,8 @@ async fn exercise(scenario: Scenario, point: FaultPoint) {
         Scenario::KillFailure => exercise_kill_failure(point).await,
         Scenario::PauseFailure => exercise_pause_failure(point).await,
         Scenario::ResumeFailure => exercise_resume_failure(point).await,
+        Scenario::UpdateSuccess => exercise_update_success(point).await,
+        Scenario::UpdateFailure => exercise_update_failure(point).await,
         Scenario::DeleteFailure => exercise_delete_failure(point).await,
         Scenario::Observation => exercise_observation(point).await,
         Scenario::ProcessSuccess => exercise_process_success(point).await,
@@ -406,6 +425,38 @@ async fn exercise_freezer_success(point: FaultPoint) {
         drive_freezer_lifecycle(&recovered, &pause, &resume)
             .await
             .expect("replay recovered freezer lifecycle"),
+        running,
+        "{point}"
+    );
+    assert_consistent_layout(recovered.root());
+}
+
+async fn exercise_update_success(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("update-success-create");
+    let target = prepare_running_for_freezer(&fixture.root, &create).await;
+    let request = resource_update(target, "matrix-update");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open update lifecycle store");
+    let error = drive_update(&store, &request)
+        .await
+        .expect_err("selected update checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen update lifecycle");
+    let running = drive_update(&recovered, &request)
+        .await
+        .unwrap_or_else(|error| panic!("recover update lifecycle after {point}: {error}"));
+    assert_eq!(*running.state.status(), ContainerState::Running, "{point}");
+    assert_eq!(
+        drive_update(&recovered, &request)
+            .await
+            .expect("replay recovered update"),
         running,
         "{point}"
     );
@@ -676,6 +727,34 @@ async fn exercise_resume_failure(point: FaultPoint) {
     assert_consistent_layout(recovered.root());
 }
 
+async fn exercise_update_failure(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("update-failure-create");
+    let target = prepare_running_for_freezer(&fixture.root, &create).await;
+    let request = resource_update(target.clone(), "failure-update");
+    let failure = terminal_failure("update");
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let store = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open update failure store");
+    let error = drive_failed_update(&store, &request, &failure)
+        .await
+        .expect_err("update failure checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(store);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen update failure");
+    drive_failed_update(&recovered, &request, &failure)
+        .await
+        .unwrap_or_else(|error| panic!("recover update failure after {point}: {error}"));
+    drive_update(&recovered, &resource_update(target, "update-after-failure"))
+        .await
+        .expect("claim released after failed update");
+    assert_consistent_layout(recovered.root());
+}
+
 async fn exercise_delete_failure(point: FaultPoint) {
     let fixture = Fixture::new();
     let create = fixture.create("delete-failure-create");
@@ -881,6 +960,25 @@ async fn drive_resume(
     }
 }
 
+async fn drive_update(
+    store: &DurableStateStore,
+    request: &UpdateRequest,
+) -> a3s_oci_sdk::Result<ContainerRecord> {
+    match store.prepare_update(request).await? {
+        RecordOperationPreparation::Prepared(_) | RecordOperationPreparation::Resume(_) => {
+            store
+                .complete_update(
+                    &request.context.operation_id,
+                    ContainerState::Running,
+                    Some(4_242),
+                    false,
+                )
+                .await
+        }
+        RecordOperationPreparation::Replayed(record) => Ok(record),
+    }
+}
+
 async fn drive_kill(
     store: &DurableStateStore,
     request: &KillRequest,
@@ -1001,6 +1099,26 @@ async fn drive_failed_freezer(
     expect_failure(replayed, failure)
 }
 
+async fn drive_failed_update(
+    store: &DurableStateStore,
+    request: &UpdateRequest,
+    failure: &Error,
+) -> a3s_oci_sdk::Result<()> {
+    match store.prepare_update(request).await {
+        Ok(RecordOperationPreparation::Prepared(_)) | Ok(RecordOperationPreparation::Resume(_)) => {
+            store
+                .fail_operation(&request.context.operation_id, failure)
+                .await?;
+        }
+        Ok(RecordOperationPreparation::Replayed(_)) => {
+            panic!("failed update unexpectedly replayed success")
+        }
+        Err(error) if error == *failure => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    expect_failure(store.prepare_update(request).await, failure)
+}
+
 async fn drive_failed_delete(
     store: &DurableStateStore,
     request: &DeleteRequest,
@@ -1033,6 +1151,20 @@ fn terminal_failure(operation: &'static str) -> Error {
         format!("injected terminal {operation} failure"),
     )
     .for_operation(operation)
+}
+
+fn resource_update(target: ContainerTarget, operation: &str) -> UpdateRequest {
+    let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+        "memory": {"limit": 4096},
+        "cpu": {"shares": 1024},
+        "pids": {"limit": 16}
+    }))
+    .expect("valid resource update");
+    UpdateRequest {
+        context: OperationContext::new(operation_id(operation)),
+        target,
+        resources,
+    }
 }
 
 async fn prepare_created_for_start(

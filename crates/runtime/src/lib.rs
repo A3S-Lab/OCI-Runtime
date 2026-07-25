@@ -46,7 +46,7 @@ pub use cleanup_report::{
 pub use driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 pub use multi_container_report::{
     MultiContainerLifecycleEvidence, NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport,

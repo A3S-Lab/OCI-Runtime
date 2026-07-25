@@ -199,6 +199,7 @@ const fn process_failure_mutations(
         | StoredOperationKind::Kill
         | StoredOperationKind::Pause
         | StoredOperationKind::Resume
+        | StoredOperationKind::Update
         | StoredOperationKind::Delete => None,
     }
 }
@@ -223,6 +224,10 @@ const fn failure_mutations(
         StoredOperationKind::Resume => Some((
             DurableMutation::ReleaseFailedResumeClaim,
             DurableMutation::RecordResumeFailure,
+        )),
+        StoredOperationKind::Update => Some((
+            DurableMutation::ReleaseFailedUpdateClaim,
+            DurableMutation::RecordUpdateFailure,
         )),
         StoredOperationKind::Delete => Some((
             DurableMutation::ReleaseFailedDeleteClaim,

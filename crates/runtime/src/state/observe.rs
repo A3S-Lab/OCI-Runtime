@@ -155,7 +155,8 @@ impl DurableStateStore {
                 },
                 StoredOperationKind::Create
                 | StoredOperationKind::Delete
-                | StoredOperationKind::Exec => {
+                | StoredOperationKind::Exec
+                | StoredOperationKind::Update => {
                     return Err(state_error(
                         ErrorCode::Internal,
                         "observe-state",
@@ -207,9 +208,10 @@ fn observation_completes(kind: StoredOperationKind, status: ContainerState, paus
         }
         StoredOperationKind::Pause => status == ContainerState::Running && paused,
         StoredOperationKind::Resume => status == ContainerState::Running && !paused,
-        StoredOperationKind::Create | StoredOperationKind::Delete | StoredOperationKind::Exec => {
-            false
-        }
+        StoredOperationKind::Create
+        | StoredOperationKind::Delete
+        | StoredOperationKind::Exec
+        | StoredOperationKind::Update => false,
     }
 }
 

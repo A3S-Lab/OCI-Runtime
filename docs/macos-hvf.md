@@ -281,9 +281,10 @@ The host runtime establishes the trust chain in this order:
 8. remove the socket and private directory while retaining the accepted
    stream;
 9. send the token only after process identity verification, negotiate protocol
-   version 4, and require the static arm64 guest to advertise exactly
+   version 5, and require the static arm64 guest to advertise exactly
    `create`, `state`, `start`, `kill`, `delete`, `wait`, `exec`,
-   `signal-process`, `wait-process`, `pause`, `resume`, and `processes`.
+   `signal-process`, `wait-process`, `pause`, `resume`, `processes`, `update`,
+   and `stats`.
 
 The parent shim validates the rootfs, fixed
 `/usr/bin/a3s-oci-agent`, console, and protected socket before spawning the
@@ -321,12 +322,12 @@ target/debug/a3s-oci agent-vm-smoke \
   --console "$asset_dir/agent-console.log"
 ```
 
-The top-level report is `a3s.oci.agent-vm-smoke.v5`. A successful Apple Silicon
+The top-level report is `a3s.oci.agent-vm-smoke.v6`. A successful Apple Silicon
 qualification must retain the following contract:
 
 ```json
 {
-  "schema_version": "a3s.oci.agent-vm-smoke.v5",
+  "schema_version": "a3s.oci.agent-vm-smoke.v6",
   "platform": "macos",
   "status": "available",
   "endpoint_bound": true,
@@ -336,7 +337,7 @@ qualification must retain the following contract:
   "bridge_process_id": 12346,
   "shim_client_verified": true,
   "protocol_negotiated": true,
-  "selected_protocol": 4,
+  "selected_protocol": 5,
   "agent_version": "0.1.0",
   "guest_architecture": "aarch64",
   "advertised_operations": [
@@ -351,7 +352,9 @@ qualification must retain the following contract:
     "wait-process",
     "pause",
     "resume",
-    "processes"
+    "processes",
+    "update",
+    "stats"
   ],
   "shim_report_verified": true,
   "shim_exit_code": 0,
@@ -425,12 +428,13 @@ starts; otherwise APFS ownership such as ID 501 remains unmapped and the
 create barrier correctly fails instead of weakening filesystem checks.
 
 The signed Apple Silicon qualification contract is
-`a3s.oci.oci-vm-smoke.v5`: bundle loading, created state, exact create replay,
+`a3s.oci.oci-vm-smoke.v6`: bundle loading, created state, exact create replay,
 pre-start marker absence, start, running observation, a bounded wait that must
 time out while running, exact kill replay, exact normal exit status from the
 SIGTERM trap, repeated wait, exact-target exec replay, duplicate process-ID
 rejection, bounded process wait, replayed pidfd process signal, stable repeated
-process wait, exact init/exec inventory, replayed pause/resume, a
+process wait, exact init/exec inventory, replay-safe live CPU, memory, cpuset,
+and PID updates, normalized cgroup-v2 stats, replayed pause/resume, a
 progress-producing exec that remains unchanged while frozen and advances
 after resume, init-exit cleanup of another live exec, stopped observation,
 marker verification, stopped-only delete, exact delete replay, post-delete
@@ -580,7 +584,7 @@ connection must then make the guest executor force-stop any live configured
 process and its namespace supervisor, and remove its runtime root before the
 agent and VM exit.
 
-The nested `a3s.oci.agent-vm-smoke.v5` report independently requires exact
+The nested `a3s.oci.agent-vm-smoke.v6` report independently requires exact
 endpoint removal, shim and direct VM-worker PID disappearance, and complete
 `(fd, fd_type)` inventory restoration. The outer report additionally requires
 marker removal and no new `a3s-oci-agent-*` directory under the guest `/run`.

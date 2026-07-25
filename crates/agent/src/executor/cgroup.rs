@@ -3,14 +3,18 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
+mod stats;
+mod update;
+
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
 const CGROUP_PROCS: &str = "cgroup.procs";
+const SUPPORTED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CGROUP_PATH_BYTES: usize = 4_096;
@@ -92,6 +96,14 @@ impl CgroupPlan {
         }) {
             return Err(invalid(
                 "linux.resources.memory.swap must be -1 or at least the memory limit",
+            ));
+        }
+        if self
+            .memory_swap
+            .is_some_and(|value| value != -1 && self.memory_limit.is_none())
+        {
+            return Err(invalid(
+                "linux.resources.memory.swap requires memory.limit when it is finite",
             ));
         }
         if self
@@ -193,6 +205,94 @@ impl CgroupPlan {
     fn has_limits(&self) -> bool {
         !self.settings().is_empty()
     }
+
+    pub(super) fn has_cgroup(&self) -> bool {
+        self.relative_path.is_some()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct CgroupManager {
+    root: PathBuf,
+    controllers: BTreeSet<&'static str>,
+}
+
+impl CgroupManager {
+    pub(super) fn create() -> Result<Self> {
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").map_err(|error| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!("failed to read cgroup mount topology: {error}"),
+            )
+        })?;
+        let mountpoint = cgroup2_mountpoint(&mountinfo).ok_or_else(|| {
+            cgroup_error(
+                ErrorCode::Unsupported,
+                "a writable unified cgroup v2 mount is required",
+            )
+        })?;
+        ensure_real_directory(&mountpoint)?;
+        let controllers = available_supported_controllers(&mountpoint)?;
+        if let Some(missing) = SUPPORTED_CONTROLLERS
+            .iter()
+            .find(|controller| !controllers.contains(**controller))
+        {
+            return Err(cgroup_error(
+                ErrorCode::Unsupported,
+                format!(
+                    "the unified cgroup v2 hierarchy does not expose required controller `{missing}`"
+                ),
+            ));
+        }
+        enable_controllers(&mountpoint, &controllers)?;
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                cgroup_error(
+                    ErrorCode::Internal,
+                    format!("system clock is before the Unix epoch: {error}"),
+                )
+            })?
+            .as_nanos();
+        let root = mountpoint.join(format!("a3s-oci-{}-{timestamp:032x}", std::process::id()));
+        std::fs::create_dir(&root).map_err(|error| {
+            cgroup_error(
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    ErrorCode::Conflict
+                } else {
+                    ErrorCode::PermissionDenied
+                },
+                format!(
+                    "failed to create private cgroup manager {}: {error}",
+                    root.display()
+                ),
+            )
+        })?;
+        if let Err(error) = initialize_cpuset(&root).and_then(|()| {
+            let delegated = available_supported_controllers(&root)?;
+            if let Some(missing) = controllers
+                .iter()
+                .find(|controller| !delegated.contains(**controller))
+            {
+                return Err(cgroup_error(
+                    ErrorCode::Unsupported,
+                    format!(
+                        "cgroup v2 controller `{missing}` was not delegated to the runtime manager"
+                    ),
+                ));
+            }
+            enable_controllers(&root, &controllers)
+        }) {
+            let _ = std::fs::remove_dir(&root);
+            return Err(error);
+        }
+        Ok(Self { root, controllers })
+    }
+
+    pub(super) fn remove(self) -> Result<()> {
+        cleanup_cgroup_tree(&self.root)
+    }
 }
 
 #[derive(Debug)]
@@ -203,16 +303,35 @@ pub(super) struct CgroupHandle {
 }
 
 impl CgroupHandle {
-    pub(super) fn create(plan: &CgroupPlan) -> Result<Option<Self>> {
+    pub(super) fn create(
+        plan: &CgroupPlan,
+        manager: Option<&CgroupManager>,
+    ) -> Result<Option<Self>> {
         let Some(relative_path) = &plan.relative_path else {
             return Ok(None);
         };
-        let root = delegated_cgroup_root()?;
-        let controllers = plan.required_controllers();
-        let mut current = root;
+        let manager = manager.ok_or_else(|| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                "an explicit cgroup path requires a private cgroup manager",
+            )
+        })?;
+        let required = plan.required_controllers();
+        if let Some(missing) = required
+            .iter()
+            .find(|controller| !manager.controllers.contains(**controller))
+        {
+            return Err(cgroup_error(
+                ErrorCode::Unsupported,
+                format!("cgroup v2 controller `{missing}` is unavailable"),
+            ));
+        }
+        let controllers = &manager.controllers;
+        let mut current = manager.root.clone();
         let mut created = Vec::new();
         for (index, component) in relative_path.components().enumerate() {
-            enable_controllers(&current, &controllers)?;
+            initialize_cpuset(&current)?;
+            enable_controllers(&current, controllers)?;
             current.push(component.as_os_str());
             let is_leaf = index + 1 == relative_path.components().count();
             match std::fs::create_dir(&current) {
@@ -232,6 +351,10 @@ impl CgroupHandle {
                     ));
                 }
             }
+        }
+        if let Err(error) = initialize_cpuset(&current) {
+            cleanup_directories(&created);
+            return Err(error);
         }
         if let Err(error) = apply_settings(&current, plan) {
             cleanup_directories(&created);
@@ -394,12 +517,31 @@ fn enable_controllers(path: &Path, required: &BTreeSet<&str>) -> Result<()> {
             format!("delegated cgroup v2 controller `{missing}` is unavailable"),
         ));
     }
-    let value = required
+    let subtree_path = path.join("cgroup.subtree_control");
+    let current = std::fs::read_to_string(&subtree_path).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect delegated controller state {}: {error}",
+                subtree_path.display()
+            ),
+        )
+    })?;
+    let current = current.split_ascii_whitespace().collect::<BTreeSet<_>>();
+    let missing = required
+        .iter()
+        .filter(|controller| !current.contains(**controller))
+        .copied()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let value = missing
         .iter()
         .map(|controller| format!("+{controller}"))
         .collect::<Vec<_>>()
         .join(" ");
-    std::fs::write(path.join("cgroup.subtree_control"), value).map_err(|error| {
+    std::fs::write(&subtree_path, value).map_err(|error| {
         cgroup_error(
             ErrorCode::PermissionDenied,
             format!(
@@ -410,34 +552,63 @@ fn enable_controllers(path: &Path, required: &BTreeSet<&str>) -> Result<()> {
     })
 }
 
-fn delegated_cgroup_root() -> Result<PathBuf> {
-    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").map_err(|error| {
+fn available_supported_controllers(path: &Path) -> Result<BTreeSet<&'static str>> {
+    let available_path = path.join("cgroup.controllers");
+    let available = std::fs::read_to_string(&available_path).map_err(|error| {
         cgroup_error(
             ErrorCode::FailedPrecondition,
-            format!("failed to read cgroup mount topology: {error}"),
+            format!(
+                "failed to inspect supported controllers {}: {error}",
+                available_path.display()
+            ),
         )
     })?;
-    let mountpoint = cgroup2_mountpoint(&mountinfo).ok_or_else(|| {
-        cgroup_error(
-            ErrorCode::Unsupported,
-            "a writable unified cgroup v2 mount is required",
-        )
-    })?;
-    let membership = std::fs::read_to_string("/proc/self/cgroup").map_err(|error| {
-        cgroup_error(
-            ErrorCode::FailedPrecondition,
-            format!("failed to read current cgroup membership: {error}"),
-        )
-    })?;
-    let relative = unified_membership(&membership).ok_or_else(|| {
-        cgroup_error(
-            ErrorCode::Unsupported,
-            "current process has no unified cgroup v2 membership",
-        )
-    })?;
-    let root = mountpoint.join(relative.trim_start_matches('/'));
-    ensure_real_directory(&root)?;
-    Ok(root)
+    Ok(SUPPORTED_CONTROLLERS
+        .into_iter()
+        .filter(|controller| {
+            available
+                .split_ascii_whitespace()
+                .any(|candidate| candidate == *controller)
+        })
+        .collect())
+}
+
+fn initialize_cpuset(path: &Path) -> Result<()> {
+    for name in ["cpuset.cpus", "cpuset.mems"] {
+        let destination = path.join(name);
+        let Ok(current) = std::fs::read_to_string(&destination) else {
+            continue;
+        };
+        if !current.trim().is_empty() {
+            continue;
+        }
+        let effective_path = path.join(format!("{name}.effective"));
+        let effective = std::fs::read_to_string(&effective_path).map_err(|error| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to inspect effective cpuset {}: {error}",
+                    effective_path.display()
+                ),
+            )
+        })?;
+        if effective.trim().is_empty() {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!("effective cpuset is empty at {}", effective_path.display()),
+            ));
+        }
+        std::fs::write(&destination, effective.trim()).map_err(|error| {
+            cgroup_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "failed to initialize cpuset {}: {error}",
+                    destination.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn cgroup2_mountpoint(mountinfo: &str) -> Option<PathBuf> {
@@ -449,10 +620,6 @@ fn cgroup2_mountpoint(mountinfo: &str) -> Option<PathBuf> {
         let mountpoint = left.split_ascii_whitespace().nth(4)?;
         (!mountpoint.contains('\\')).then(|| PathBuf::from(mountpoint))
     })
-}
-
-fn unified_membership(cgroup: &str) -> Option<&str> {
-    cgroup.lines().find_map(|line| line.strip_prefix("0::"))
 }
 
 fn validate_cgroup_path(path: &Path) -> Result<PathBuf> {
@@ -546,6 +713,40 @@ fn normalize_cgroup_value(value: &str) -> String {
     value.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+async fn read_required(path: &Path, file: &str, operation: &str) -> Result<String> {
+    let source = path.join(file);
+    tokio::fs::read_to_string(&source).await.map_err(|error| {
+        let code = if error.kind() == io::ErrorKind::NotFound {
+            ErrorCode::Unsupported
+        } else {
+            ErrorCode::FailedPrecondition
+        };
+        let message = format!("failed to read cgroup file {}: {error}", source.display());
+        Error::new(code, message).for_operation(operation)
+    })
+}
+
+fn parse_u64_value(field: &str, value: &str) -> Result<u64> {
+    value.trim().parse::<u64>().map_err(|error| {
+        stats_error(format!(
+            "cgroup counter {field} is not a non-negative integer: {error}"
+        ))
+    })
+}
+
+fn parse_max_value(field: &str, value: &str) -> Result<Option<u64>> {
+    let value = value.trim();
+    if value == "max" {
+        Ok(None)
+    } else {
+        value.parse::<u64>().map(Some).map_err(|error| {
+            stats_error(format!(
+                "cgroup limit {field} is neither `max` nor a non-negative integer: {error}"
+            ))
+        })
+    }
+}
+
 fn cgroup_event_value(events: &str, key: &str) -> Option<u64> {
     events.lines().find_map(|line| {
         let mut fields = line.split_ascii_whitespace();
@@ -578,6 +779,32 @@ fn cleanup_directories(paths: &[PathBuf]) {
     }
 }
 
+fn cleanup_cgroup_tree(root: &Path) -> Result<()> {
+    fn remove_children(path: &Path) -> io::Result<()> {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() && !file_type.is_symlink() {
+                remove_children(&entry.path())?;
+                std::fs::remove_dir(entry.path())?;
+            }
+        }
+        Ok(())
+    }
+
+    remove_children(root)
+        .and_then(|()| std::fs::remove_dir(root))
+        .map_err(|error| {
+            cgroup_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to remove private cgroup manager {}: {error}",
+                    root.display()
+                ),
+            )
+        })
+}
+
 fn invalid(message: impl Into<String>) -> Error {
     cgroup_error(ErrorCode::InvalidArgument, message)
 }
@@ -590,13 +817,15 @@ fn cgroup_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("configure-container-cgroup")
 }
 
+fn stats_error(message: impl Into<String>) -> Error {
+    Error::new(ErrorCode::FailedPrecondition, message).for_operation("read-container-cgroup-stats")
+}
+
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::oci_spec::runtime::Linux;
 
-    use super::{
-        cgroup2_mountpoint, cgroup_event_value, shares_to_weight, unified_membership, CgroupPlan,
-    };
+    use super::{cgroup2_mountpoint, cgroup_event_value, shares_to_weight, CgroupPlan};
 
     fn fixture_linux() -> Linux {
         let config: serde_json::Value =
@@ -630,10 +859,6 @@ mod tests {
         assert_eq!(
             cgroup2_mountpoint(mountinfo).as_deref(),
             Some(std::path::Path::new("/sys/fs/cgroup"))
-        );
-        assert_eq!(
-            unified_membership("0::/user.slice/a3s.service\n"),
-            Some("/user.slice/a3s.service")
         );
     }
 

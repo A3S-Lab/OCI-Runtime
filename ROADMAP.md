@@ -53,14 +53,15 @@ Completed:
   host-visible marker verification, bounded worker reap, and marker cleanup;
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
-  one-time token authentication, protocol-v4 negotiation, exact
-  twelve-operation advertisement, process-group termination, exact endpoint removal,
-  observed PID reap, and in-process descriptor-inventory restoration;
+  one-time token authentication, protocol-v5 negotiation, exact
+  fourteen-operation advertisement, process-group termination, exact endpoint
+  removal, observed PID reap, and in-process descriptor-inventory restoration;
 - real macOS fixed-bundle create/state/start/kill/wait/delete evidence using
   the shared Windows lifecycle harness, including exact mutation retries,
   create/start separation, bounded running wait, exact repeated normal exit
   status, exact live process inventory, cgroup-v2 pause/resume with real
-  workload-progress evidence, running and stopped observation, post-delete
+  workload-progress evidence, replay-safe live CPU/memory/cpuset/PID update,
+  normalized cgroup-v2 stats, running and stopped observation, post-delete
   NotFound, and nominal process, endpoint, marker, and runtime-root cleanup;
 - real macOS no-delete cleanup after successful create, start, and kill
   boundaries, with exact fault identity, guest executor shutdown, endpoint and
@@ -73,8 +74,9 @@ Completed:
   wait, plus public SDK exec replay, duplicate process-ID rejection, durable
   process journals, pidfd signal replay, stable per-process wait, and init-exit
   exec cleanup, plus durable cgroup-v2 pause/resume and exact live process
-  inventory with real workload-progress evidence, repeated with `/dev/kvm`
-  absent and present but unusable;
+  inventory, replay-safe resource update, and normalized stats with real
+  workload-progress evidence, repeated with `/dev/kvm` absent and present but
+  unusable;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
   and time namespaces, including retained rootfs execution after a mount join,
   three-pass user-namespace permission recovery, and shared native Linux/macOS
@@ -114,9 +116,11 @@ Completed:
   capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
   mount normalization, and AArch64 seccomp policy;
 - Linux executor enforcement for exact capability sets and exec bounding
-  ceilings, memory/CPU/cpuset/PID cgroup v2 settings with read-back, exact
-  static device nodes within a bounded default-deny profile, and pure-Rust
-  x86_64/AArch64 seccomp BPF retained across init and exec;
+  ceilings, private controller-enabled cgroup-v2 management,
+  memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
+  normalized cgroup stats, exact static device nodes within a bounded
+  default-deny profile, and pure-Rust x86_64/AArch64 seccomp BPF retained
+  across init and exec;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -144,7 +148,7 @@ Completed:
   protocol-v2 stable init wait plus protocol-v3 exact-target exec, process
   signal, and process wait messages, all dispatched by the shared Linux
   executor with version-filtered capability advertisement, plus protocol-v4
-  pause, resume, and live process inventory;
+  pause, resume, and live process inventory plus protocol-v5 update and stats;
 - existing `features` CLI path routed through the Rust SDK;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
@@ -152,12 +156,14 @@ Completed:
   terminal failure replay, crash reconciliation, and quarantine;
 - async `RuntimeDriver` integration plus a tested host implementation of
   `create`, `state`, `start`, `kill`, `delete`, and driver-advertised `wait`,
-  `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and `processes`;
+  `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
+  `update`, and `stats`;
 - generation-scoped durable process records, global exec and per-process
-  signal journals, terminal failure replay, active-operation claims, and
-  stable init/exec exit-status caching across host-service reopen;
-- typed, exhaustive recovery injection at all 468 registered durable commit
-  stages and all 26 before/after `RuntimeDriver` method boundaries;
+  signal journals, durable update journals, terminal failure replay,
+  active-operation claims, and stable init/exec exit-status caching across
+  host-service reopen;
+- typed, exhaustive recovery injection at all 510 registered durable commit
+  stages and all 30 before/after `RuntimeDriver` method boundaries;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -221,8 +227,9 @@ enforce it. No property is silently ignored.
   generation-scoped process claims and terminal failure replay.
 - [x] Extend idempotent journals to pause and resume, including exact freezer
   observation, reconciliation, claim release, and terminal failure replay.
-- [ ] Extend idempotent journals to update and remaining process-I/O
-  mutations.
+- [x] Extend idempotent journals to update, including exact retry, terminal
+  failure replay, claim release, and fault-injected recovery.
+- [ ] Extend idempotent journals to remaining process-I/O mutations.
 - [x] Reconcile interrupted core lifecycle operations and quarantine failed
   create/delete state.
 - [x] Implement driver-independent `create`, `state`, `start`, `kill`, and
@@ -299,10 +306,10 @@ runtime-root leak. Only then may WHPX become `experimental`.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
-  authenticate protocol-v4 negotiation with a one-time token.
+  authenticate protocol-v5 negotiation with a one-time token.
 - [x] Run the same fixed create/state/start/kill/wait/delete OCI lifecycle used
   by WHPX, including bounded running wait, exact repeated exit status,
-  pause/resume, and live process inventory.
+  pause/resume, live process inventory, resource update, and normalized stats.
 - [x] Prove deterministic VM, process, descriptor, and filesystem cleanup
   without normal delete after successful create, start, and kill boundaries.
   Each phase requires exact endpoint removal, observed-PID reap, complete
@@ -379,6 +386,10 @@ then may HVF become `experimental`.
   shares/quota/period/cpuset, and PID limits; join init and exec to the same
   owned leaf; freeze and thaw that leaf through `cgroup.freeze` and verify the
   exact transition through `cgroup.events`.
+- [x] Create a private controller-enabled cgroup-v2 manager, apply
+  generation-fenced partial resource updates with exact read-back and
+  reverse-order rollback, and expose normalized CPU, memory, PID, and event
+  statistics through native Linux and the shared utility-VM lifecycle harness.
 - [x] Enforce the bounded A3S Box static device-node profile with
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   CAP_MKNOD exclusion, and verified device-node creation.
@@ -404,7 +415,8 @@ then may HVF become `experimental`.
 - [ ] Ordered hooks with OCI state on stdin.
 - [ ] Backpressured stdin/stdout/stderr, PTY, resize, signals, and output
   cursors.
-- [ ] Update, stats, and ordered events.
+- [x] Update and stats.
+- [ ] Ordered events.
 
 Exit gate: the same executor passes its lifecycle, configuration, security,
 and recovery suites in the Windows guest and on native Linux.
@@ -419,8 +431,8 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Reuse the R3 Linux executor directly.
 - [x] Prove runtime binary startup, feature inspection, Rust SDK loading, and
   the rootful lifecycle including exact repeated init wait plus public SDK
-  exec/signal/wait, pause/resume, and process inventory without KVM on x86_64
-  and aarch64.
+  exec/signal/wait, pause/resume, process inventory, resource update, and
+  normalized stats without KVM on x86_64 and aarch64.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.

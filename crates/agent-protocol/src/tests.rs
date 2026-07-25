@@ -1,21 +1,21 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
-    Generation, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessRecord,
-    ProcessTarget, Result, Signal,
+    async_trait, ContainerId, ContainerStats, ContainerTarget, CpuStats, DeleteMode, Error,
+    ErrorCode, ExitStatus, Generation, MemoryStats, OciBundle, OperationContext, OperationId,
+    ProcessId, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
 };
 use tokio::io::{AsyncWriteExt, DuplexStream};
 
 use crate::model::{
     AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
     AgentHello, AgentKillRequest, AgentProcess, AgentProcessesRequest, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange,
-    RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello,
+    ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
 };
 use crate::wire::{read_frame, read_frame_for_test, write_frame};
 use crate::{
@@ -74,6 +74,8 @@ impl GuestAgentService for TestAgent {
                 crate::AgentOperation::Pause,
                 crate::AgentOperation::Resume,
                 crate::AgentOperation::Processes,
+                crate::AgentOperation::Update,
+                crate::AgentOperation::Stats,
             ],
         )
         .expect("valid test capabilities")
@@ -339,6 +341,52 @@ impl GuestAgentService for TestAgent {
             }
         }
         Ok(records)
+    }
+
+    async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
+        let agent = self.state.lock().expect("agent state lock");
+        let state = agent
+            .states
+            .get(&request.target.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if state.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        Ok(state.clone())
+    }
+
+    async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
+        let agent = self.state.lock().expect("agent state lock");
+        let state = agent
+            .states
+            .get(&request.target.id)
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+        if state.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest container generation does not match",
+            ));
+        }
+        Ok(ContainerStats {
+            target: request.target,
+            timestamp_unix_ns: 1,
+            cpu: CpuStats {
+                usage_ns: 30,
+                user_ns: 10,
+                system_ns: 20,
+                throttled_ns: 0,
+            },
+            memory: MemoryStats {
+                usage_bytes: 1_024,
+                limit_bytes: Some(4_096),
+                peak_bytes: Some(2_048),
+            },
+            process_count: u64::from(state.pid().is_some()),
+            metrics: BTreeMap::from([("memory.events.oom_kill".to_string(), 0)]),
+        })
     }
 
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
@@ -819,7 +867,7 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 5, 5)
+    let error = AgentClient::connect_for_test(host, token(9), 6, 6)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);

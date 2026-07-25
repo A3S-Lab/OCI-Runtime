@@ -41,6 +41,10 @@ pub(crate) enum DurableMutation {
     ReconcileResumeOperation,
     CompleteResumeContainer,
     CompleteResumeOperation,
+    PrepareUpdateOperation,
+    ClaimUpdateOperation,
+    CompleteUpdateContainer,
+    CompleteUpdateOperation,
     PrepareDeleteOperation,
     ClaimDeleteOperation,
     ReconcileDeleteOperation,
@@ -69,6 +73,8 @@ pub(crate) enum DurableMutation {
     RecordPauseFailure,
     ReleaseFailedResumeClaim,
     RecordResumeFailure,
+    ReleaseFailedUpdateClaim,
+    RecordUpdateFailure,
     ReleaseFailedDeleteClaim,
     RecordDeleteFailure,
     ReleaseFailedExecClaim,
@@ -81,7 +87,7 @@ pub(crate) enum DurableMutation {
 
 impl DurableMutation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 68] = [
+    pub(crate) const ALL: [Self; 74] = [
         Self::RuntimeRootMarker,
         Self::AllocateGeneration,
         Self::PrepareCreateOperation,
@@ -114,6 +120,10 @@ impl DurableMutation {
         Self::ReconcileResumeOperation,
         Self::CompleteResumeContainer,
         Self::CompleteResumeOperation,
+        Self::PrepareUpdateOperation,
+        Self::ClaimUpdateOperation,
+        Self::CompleteUpdateContainer,
+        Self::CompleteUpdateOperation,
         Self::PrepareDeleteOperation,
         Self::ClaimDeleteOperation,
         Self::ReconcileDeleteOperation,
@@ -142,6 +152,8 @@ impl DurableMutation {
         Self::RecordPauseFailure,
         Self::ReleaseFailedResumeClaim,
         Self::RecordResumeFailure,
+        Self::ReleaseFailedUpdateClaim,
+        Self::RecordUpdateFailure,
         Self::ReleaseFailedDeleteClaim,
         Self::RecordDeleteFailure,
         Self::ReleaseFailedExecClaim,
@@ -219,11 +231,13 @@ pub(crate) enum DriverOperation {
     Pause,
     Resume,
     Processes,
+    Update,
+    Stats,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 13] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::Capability,
         Self::Create,
         Self::State,
@@ -237,6 +251,8 @@ impl DriverOperation {
         Self::Pause,
         Self::Resume,
         Self::Processes,
+        Self::Update,
+        Self::Stats,
     ];
 }
 

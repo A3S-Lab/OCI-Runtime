@@ -5,23 +5,23 @@ use a3s_oci_agent::LinuxExecutor;
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
     AgentExecRequest, AgentKillRequest, AgentProcessesRequest, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest,
-    GuestAgentService, GuestPath,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService, GuestPath,
 };
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerTarget, Error, ErrorCode, ExitStatus, ProcessRecord, Result,
-    RuntimeOperation,
+    async_trait, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, ProcessRecord,
+    Result, RuntimeOperation,
 };
 
 use crate::driver::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 
-const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 12] = [
+const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 14] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -34,6 +34,8 @@ const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 12] = [
     RuntimeOperation::Pause,
     RuntimeOperation::Resume,
     RuntimeOperation::Processes,
+    RuntimeOperation::Update,
+    RuntimeOperation::Stats,
 ];
 
 /// Explicitly opted-in native Linux runtime driver.
@@ -265,6 +267,37 @@ impl RuntimeDriver for NativeLinuxDriver {
         self.executor
             .processes(AgentProcessesRequest { target })
             .await
+    }
+
+    async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        let expected_target = request.target.clone();
+        let state = self
+            .executor
+            .update(AgentUpdateRequest {
+                context: request.context,
+                target: request.target,
+                resources: request.resources,
+            })
+            .await?;
+        driver_state(&expected_target, None, state)
+    }
+
+    async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        let stats = self
+            .executor
+            .stats(AgentStatsRequest {
+                target: target.clone(),
+            })
+            .await?;
+        if stats.target != target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "native Linux executor returned stats for a different container generation",
+            )
+            .for_operation("map-native-linux-stats"));
+        }
+        stats.validate()?;
+        Ok(stats)
     }
 }
 

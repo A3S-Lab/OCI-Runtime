@@ -10,6 +10,7 @@ mod oci_state;
 mod operation;
 mod process;
 mod start;
+mod update;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

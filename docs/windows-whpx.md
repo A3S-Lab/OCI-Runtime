@@ -29,12 +29,12 @@ The runtime:
    Linux rootfs, and verifies a guest-written marker through virtiofs;
 9. boots `/usr/bin/a3s-oci-agent`, carries its host-CID port 4093 connection
    through libkrun to the protected pipe, authenticates the exact shim PID and
-   one-time token, negotiates protocol version 4, and waits for zero
+   one-time token, negotiates protocol version 5, and waits for zero
    guest/shim exit;
 10. runs a fixed OCI bundle through distinct create, start, init signal/wait,
-    exact-target exec, process signal/wait, pause/resume, process inventory,
-    and delete calls, verifies replay and cleanup, and keeps the built-in
-    driver disabled;
+    exact-target exec, process signal/wait, live resource update and stats,
+    pause/resume, process inventory, and delete calls, verifies replay and
+    cleanup, and keeps the built-in driver disabled;
 11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
@@ -94,10 +94,10 @@ A successful end-to-end agent VM smoke additionally proves that:
 - guest AF_VSOCK reaches the protected Windows named pipe through libkrun;
 - only the exact spawned shim PID is accepted before the token is sent;
 - the real guest authenticates the one-time token and negotiates protocol
-  version 4;
+  version 5;
 - the agent version and `x86_64` guest architecture are reported;
 - the guest advertises exactly create, state, start, kill, delete, wait, exec,
-  signal-process, wait-process, pause, resume, and processes;
+  signal-process, wait-process, pause, resume, processes, update, and stats;
 - the shim reports every VM configuration stage and a zero guest exit;
 - the host rejects an existing console destination rather than overwriting
   it.
@@ -132,6 +132,9 @@ A successful fixed OCI VM smoke additionally proves that:
 - process inventory returns exactly the live init and exec; replayed pause
   freezes their shared cgroup and stops an observed progress counter, while
   replayed resume thaws it and the counter advances again;
+- an exact resource update and its retry apply memory, CPU, cpuset, and PID
+  controls, while repeated stats return normalized generation-fenced cgroup
+  counters;
 - another live exec is terminated and reaped automatically when init exits;
 - kill delivers `SIGTERM`, its exact retry replays the original result, wait
   returns and replays exit code zero, and state then observes `stopped`;

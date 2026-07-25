@@ -4,16 +4,16 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode, ExecRequest,
     IsolationRequest, OciBundle, ProcessRecord, ProcessTarget, ProcessesRequest, Result,
-    SignalProcessRequest, ValidateRequest, WaitProcessRequest,
+    SignalProcessRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest,
 };
 
 use crate::model::{
     protocol_error, AgentBundle, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess,
     AgentProcessExit, AgentProcessSignal, AgentProcessesRequest, AgentRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, ProtocolRange, RequestEnvelope, ResponseEnvelope,
-    ResponseOutcome, AGENT_MAX_FRAME_BYTES,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, ProtocolRange, RequestEnvelope,
+    ResponseEnvelope, ResponseOutcome, AGENT_MAX_FRAME_BYTES,
 };
 
 impl AgentBundle {
@@ -118,6 +118,28 @@ impl AgentProcessesRequest {
     }
 }
 
+impl AgentUpdateRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_target(&self.target)?;
+        UpdateRequest {
+            context: self.context.clone(),
+            target: self.target.clone(),
+            resources: self.resources.clone(),
+        }
+        .validate()
+    }
+}
+
+impl AgentStatsRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_exact_target(&self.target)?;
+        StatsRequest {
+            target: self.target.clone(),
+        }
+        .validate()
+    }
+}
+
 impl AgentStartRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(&self.target)?;
@@ -151,6 +173,8 @@ impl AgentRequest {
             Self::WaitProcess(request) => request.validate(),
             Self::Pause(request) | Self::Resume(request) => request.validate(),
             Self::Processes(request) => request.validate(),
+            Self::Update(request) => request.validate(),
+            Self::Stats(request) => request.validate(),
         }
     }
 
@@ -175,6 +199,7 @@ impl AgentRequest {
             Self::Wait(_) => 2,
             Self::Exec(_) | Self::SignalProcess(_) | Self::WaitProcess(_) => 3,
             Self::Pause(_) | Self::Resume(_) | Self::Processes(_) => 4,
+            Self::Update(_) | Self::Stats(_) => 5,
         }
     }
 }
@@ -239,6 +264,7 @@ impl AgentResponse {
             Self::ProcessSignaled(signal) => signal.validate(),
             Self::ProcessExit(exit) => exit.validate(),
             Self::Processes(processes) => validate_processes(processes),
+            Self::Stats(stats) => stats.validate(),
         }
     }
 
@@ -248,6 +274,7 @@ impl AgentResponse {
             Self::ExitStatus(_) => 2,
             Self::Process(_) | Self::ProcessSignaled(_) | Self::ProcessExit(_) => 3,
             Self::Processes(_) => 4,
+            Self::Stats(_) => 5,
         };
         if selected_version < minimum_version {
             return Err(protocol_error(

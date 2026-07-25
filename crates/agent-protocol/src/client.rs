@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{Error, ErrorCode, ExitStatus, ProcessRecord, Result};
+use a3s_oci_sdk::{ContainerStats, Error, ErrorCode, ExitStatus, ProcessRecord, Result};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
@@ -11,9 +11,9 @@ use crate::model::{
     protocol_error, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
     AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation, AgentProcess,
     AgentProcessesRequest, AgentRequest, AgentResponse, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest,
-    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
-    SessionToken,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, HelloOutcome, HostHello, ProtocolRange,
+    RequestEnvelope, ResponseEnvelope, ResponseOutcome, SessionToken,
 };
 use crate::wire::{read_frame, write_frame};
 
@@ -124,6 +124,25 @@ where
             _ => Err(protocol_error(
                 ErrorCode::Internal,
                 "guest returned the wrong response for a process inventory request",
+            )),
+        }
+    }
+
+    /// Apply supported live resource changes to one exact generation.
+    pub async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
+        expect_state(
+            self.call(AgentRequest::Update(Box::new(request))).await?,
+            "update",
+        )
+    }
+
+    /// Read normalized resource counters for one exact generation.
+    pub async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
+        match self.call(AgentRequest::Stats(request)).await? {
+            AgentResponse::Stats(stats) => Ok(stats),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a resource stats request",
             )),
         }
     }
@@ -332,6 +351,8 @@ fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> R
         AgentRequest::Pause(_) => AgentOperation::Pause,
         AgentRequest::Resume(_) => AgentOperation::Resume,
         AgentRequest::Processes(_) => AgentOperation::Processes,
+        AgentRequest::Update(_) => AgentOperation::Update,
+        AgentRequest::Stats(_) => AgentOperation::Stats,
     };
     if operations.contains(&required) {
         Ok(())
@@ -435,6 +456,22 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
                 Ok(())
             }
         }
+        (AgentRequest::Update(request), AgentResponse::State(state)) => {
+            validate_state_target(&request.target, state)
+        }
+        (AgentRequest::Stats(request), AgentResponse::Stats(stats)) => {
+            if stats.target == request.target {
+                stats.validate()
+            } else {
+                Err(protocol_error(
+                    ErrorCode::Conflict,
+                    format!(
+                        "guest stats target {:?} does not match request target {:?}",
+                        stats.target, request.target
+                    ),
+                ))
+            }
+        }
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
             format!(
@@ -514,6 +551,8 @@ const fn request_name(request: &AgentRequest) -> &'static str {
         AgentRequest::Pause(_) => "pause",
         AgentRequest::Resume(_) => "resume",
         AgentRequest::Processes(_) => "processes",
+        AgentRequest::Update(_) => "update",
+        AgentRequest::Stats(_) => "stats",
     }
 }
 

@@ -1,9 +1,9 @@
 use a3s_oci_core::DriverCapability;
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    async_trait, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IsolationRequest,
-    OciBundle, OperationContext, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation,
-    Signal,
+    async_trait, ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
+    IsolationRequest, OciBundle, OperationContext, ProcessIo, ProcessRecord, ProcessTarget, Result,
+    RuntimeOperation, Signal,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -192,6 +192,17 @@ pub struct DriverContainerOperationRequest {
     pub target: ContainerTarget,
 }
 
+/// Exact live resource update passed to one driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverUpdateRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Container ID plus its exact generation.
+    pub target: ContainerTarget,
+    /// Supported OCI Linux resource fields; omitted fields remain unchanged.
+    pub resources: LinuxResources,
+}
+
 /// Driver-reported process identity returned after exec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriverProcess {
@@ -298,5 +309,15 @@ pub trait RuntimeDriver: Send + Sync {
     /// List every live init and exec process in one exact generation.
     async fn processes(&self, _target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
         Err(Error::unsupported("processes"))
+    }
+
+    /// Apply supported live OCI Linux resource changes.
+    async fn update(&self, _request: DriverUpdateRequest) -> Result<DriverState> {
+        Err(Error::unsupported("update"))
+    }
+
+    /// Read normalized resource counters for one exact generation.
+    async fn stats(&self, _target: ContainerTarget) -> Result<ContainerStats> {
+        Err(Error::unsupported("stats"))
     }
 }

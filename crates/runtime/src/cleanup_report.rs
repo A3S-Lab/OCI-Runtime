@@ -176,7 +176,9 @@ impl NativeLinuxFaultCleanupReport {
                     RuntimeOperation::Wait,
                     RuntimeOperation::Pause,
                     RuntimeOperation::Resume,
+                    RuntimeOperation::Update,
                     RuntimeOperation::Processes,
+                    RuntimeOperation::Stats,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
                 ]
@@ -341,7 +343,9 @@ mod tests {
             RuntimeOperation::Wait,
             RuntimeOperation::Pause,
             RuntimeOperation::Resume,
+            RuntimeOperation::Update,
             RuntimeOperation::Processes,
+            RuntimeOperation::Stats,
             RuntimeOperation::SignalProcess,
             RuntimeOperation::WaitProcess,
         ];
@@ -399,6 +403,8 @@ mod tests {
             AgentOperation::Pause,
             AgentOperation::Resume,
             AgentOperation::Processes,
+            AgentOperation::Update,
+            AgentOperation::Stats,
         ];
         report.shim_report_verified = true;
         report.shim_exit_code = Some(0);

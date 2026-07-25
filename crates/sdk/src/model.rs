@@ -543,6 +543,62 @@ pub struct ContainerStats {
     pub metrics: BTreeMap<String, u64>,
 }
 
+impl ContainerStats {
+    /// Validate normalized counters returned by a runtime driver.
+    pub fn validate(&self) -> Result<()> {
+        if self.timestamp_unix_ns == 0 {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "container stats timestamp must be a positive Unix nanosecond value",
+            )
+            .for_operation("validate-container-stats"));
+        }
+        let accounted = self
+            .cpu
+            .user_ns
+            .checked_add(self.cpu.system_ns)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::InvalidArgument,
+                    "container CPU user and system counters overflow",
+                )
+                .for_operation("validate-container-stats")
+            })?;
+        if accounted > self.cpu.usage_ns {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "container CPU user and system counters exceed total usage",
+            )
+            .for_operation("validate-container-stats"));
+        }
+        if self
+            .memory
+            .peak_bytes
+            .is_some_and(|peak| peak < self.memory.usage_bytes)
+        {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "container memory peak is below current usage",
+            )
+            .for_operation("validate-container-stats"));
+        }
+        if let Some(name) = self.metrics.keys().find(|name| {
+            name.is_empty()
+                || name.len() > 256
+                || name
+                    .chars()
+                    .any(|character| character.is_control() || character.is_whitespace())
+        }) {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                format!("container metric name is invalid: {name:?}"),
+            )
+            .for_operation("validate-container-stats"));
+        }
+        Ok(())
+    }
+}
+
 /// Ordered lifecycle or process event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -584,7 +640,12 @@ pub struct EventBatch {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExitStatus, Signal};
+    use std::collections::BTreeMap;
+
+    use super::{
+        ContainerId, ContainerStats, ContainerTarget, CpuStats, ExitStatus, Generation,
+        MemoryStats, Signal,
+    };
 
     #[test]
     fn signal_deserialization_cannot_bypass_validation() {
@@ -644,5 +705,39 @@ mod tests {
             r#"{"exit_code":0,"signal":9,"oom_killed":false}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn container_stats_reject_inconsistent_normalized_counters() {
+        let mut stats = ContainerStats {
+            target: ContainerTarget::exact(
+                ContainerId::new("stats-test").expect("container ID"),
+                Generation(1),
+            ),
+            timestamp_unix_ns: 1,
+            cpu: CpuStats {
+                usage_ns: 30,
+                user_ns: 10,
+                system_ns: 20,
+                throttled_ns: 0,
+            },
+            memory: MemoryStats {
+                usage_bytes: 1_024,
+                limit_bytes: Some(4_096),
+                peak_bytes: Some(2_048),
+            },
+            process_count: 1,
+            metrics: BTreeMap::from([("memory.events.oom_kill".to_string(), 0)]),
+        };
+        stats.validate().expect("valid stats");
+
+        stats.cpu.system_ns = 21;
+        assert!(stats.validate().is_err());
+        stats.cpu.system_ns = 20;
+        stats.memory.peak_bytes = Some(1_023);
+        assert!(stats.validate().is_err());
+        stats.memory.peak_bytes = Some(2_048);
+        stats.metrics.insert("invalid metric".into(), 1);
+        assert!(stats.validate().is_err());
     }
 }

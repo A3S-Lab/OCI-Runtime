@@ -1,10 +1,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, OciBundle, OperationContext,
-    ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
+    ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, OciBundle,
+    OperationContext, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 4;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 5;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Required session-token entropy supplied by the host.
@@ -261,6 +261,10 @@ pub enum AgentOperation {
     Resume,
     /// List the live init and exec processes. Available from protocol version 4.
     Processes,
+    /// Apply live OCI Linux resource changes. Available from protocol version 5.
+    Update,
+    /// Read normalized cgroup v2 counters. Available from protocol version 5.
+    Stats,
 }
 
 impl AgentOperation {
@@ -270,6 +274,7 @@ impl AgentOperation {
             Self::Wait => 2,
             Self::Exec | Self::SignalProcess | Self::WaitProcess => 3,
             Self::Pause | Self::Resume | Self::Processes => 4,
+            Self::Update | Self::Stats => 5,
         }
     }
 }
@@ -332,6 +337,8 @@ impl AgentCapabilities {
                 AgentOperation::Pause,
                 AgentOperation::Resume,
                 AgentOperation::Processes,
+                AgentOperation::Update,
+                AgentOperation::Stats,
             ],
         )
     }
@@ -544,6 +551,26 @@ pub struct AgentProcessesRequest {
     pub target: ContainerTarget,
 }
 
+/// Apply live resource changes to one exact container generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentUpdateRequest {
+    /// Stable idempotency and deadline metadata.
+    pub context: OperationContext,
+    /// Container ID plus a positive exact generation.
+    pub target: ContainerTarget,
+    /// Supported OCI Linux resource fields; omitted fields remain unchanged.
+    pub resources: LinuxResources,
+}
+
+/// Query normalized resource counters for one exact container generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentStatsRequest {
+    /// Container ID plus a positive exact generation.
+    pub target: ContainerTarget,
+}
+
 /// OCI start input sent to the guest executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -598,6 +625,8 @@ pub enum AgentRequest {
     Pause(AgentContainerOperationRequest),
     Resume(AgentContainerOperationRequest),
     Processes(AgentProcessesRequest),
+    Update(Box<AgentUpdateRequest>),
+    Stats(AgentStatsRequest),
 }
 
 /// Guest-observed init-process state for one exact generation.
@@ -778,6 +807,7 @@ pub enum AgentResponse {
     ProcessSignaled(AgentProcessSignal),
     ProcessExit(AgentProcessExit),
     Processes(Vec<ProcessRecord>),
+    Stats(ContainerStats),
 }
 
 const fn is_false(value: &bool) -> bool {
