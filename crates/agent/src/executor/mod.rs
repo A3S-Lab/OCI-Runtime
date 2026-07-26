@@ -4,6 +4,7 @@ mod control;
 mod device;
 mod exec;
 mod exec_process;
+mod hook;
 mod init;
 mod io;
 mod mount;
@@ -49,6 +50,7 @@ use tokio::time::{sleep, Instant};
 
 use crate::AGENT_VERSION;
 use cgroup::CgroupManager;
+use hook::HookStateTemplate;
 use pidfd::SignalOutcome;
 use plan::InitPlan;
 use process::PreparedProcess;
@@ -192,10 +194,12 @@ impl LinuxExecutor {
     pub async fn shutdown(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         let mut first_error = None;
+        let mut poststop = Vec::new();
         for record in state.containers.values_mut() {
             if let Err(error) = record.force_stop_all().await {
                 first_error.get_or_insert(error);
             }
+            poststop.push(record.process.poststop_plan());
         }
         state.containers.clear();
         if let Some(manager) = state.cgroup_manager.take() {
@@ -216,6 +220,14 @@ impl LinuxExecutor {
                         ),
                     )
                 });
+            }
+        }
+        for plan in poststop {
+            match plan {
+                Ok((hooks, hook_state)) => hooks.run_poststop(&hook_state).await,
+                Err(error) => {
+                    eprintln!("a3s-oci-agent: shutdown poststop hook state warning: {error}");
+                }
             }
         }
         match first_error {
@@ -257,6 +269,12 @@ impl LinuxExecutor {
 
         let bundle = request.bundle.to_guest_bundle()?;
         let plan = InitPlan::from_bundle(&bundle, &request.io)?;
+        let hook_state = HookStateTemplate::new(
+            plan.oci_version.clone(),
+            key.id.clone(),
+            plan.bundle_directory.clone(),
+            plan.annotations.clone(),
+        )?;
         if plan.cgroup.has_cgroup() && state.cgroup_manager.is_none() {
             state.cgroup_manager = Some(CgroupManager::create()?);
         }
@@ -282,6 +300,7 @@ impl LinuxExecutor {
             &self.init_executable,
             state.cgroup_manager.as_ref(),
             &request.io,
+            &hook_state,
         )
         .await
         {
@@ -343,7 +362,10 @@ impl LinuxExecutor {
                 format!("container cannot start from {}", record.status),
             ));
         }
-        record.process.release().await?;
+        if let Err(error) = record.process.release().await {
+            record.status = ContainerState::Stopped;
+            return Err(error);
+        }
         record.status = ContainerState::Running;
         record.state()
     }
@@ -475,7 +497,7 @@ impl LinuxExecutor {
     ) -> Result<()> {
         validate_deadline(&request.context)?;
         let key = ContainerKey::from_target(&request.target)?;
-        let runtime_directory = {
+        let (runtime_directory, poststop) = {
             let record = state.containers.get_mut(&key).ok_or_else(|| {
                 executor_error(
                     ErrorCode::NotFound,
@@ -497,10 +519,17 @@ impl LinuxExecutor {
             // wrapper before releasing the runtime directory.
             record.force_stop_all().await?;
             record.status = ContainerState::Stopped;
-            record.runtime_directory.clone()
+            (
+                record.runtime_directory.clone(),
+                record.process.poststop_plan(),
+            )
         };
         remove_container_directory(&self.runtime_root, &runtime_directory).await?;
         state.containers.remove(&key);
+        match poststop {
+            Ok((hooks, hook_state)) => hooks.run_poststop(&hook_state).await,
+            Err(error) => eprintln!("a3s-oci-agent: poststop hook state warning: {error}"),
+        }
         Ok(())
     }
 

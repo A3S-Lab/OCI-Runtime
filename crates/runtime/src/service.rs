@@ -19,7 +19,8 @@ use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverReadOutputRequest,
     DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest, DriverUpdateRequest,
-    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
+    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase,
+    RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
@@ -45,6 +46,7 @@ struct LifecycleHost {
     driver: Arc<dyn RuntimeDriver>,
     capability: DriverCapability,
     operations: BTreeSet<RuntimeOperation>,
+    hooks: Vec<OciHookPhase>,
     faults: Arc<dyn FaultInjector>,
 }
 
@@ -118,6 +120,7 @@ impl HostRuntimeService {
             .for_operation("open-host-runtime"));
         }
         let operations = validate_driver_operations(driver.operations())?;
+        let hooks = validate_driver_hooks(driver.hooks())?;
         let store =
             DurableStateStore::open_with_fault_injector(state_root, Arc::clone(&faults)).await?;
         Ok(Self {
@@ -126,6 +129,7 @@ impl HostRuntimeService {
                 driver,
                 capability,
                 operations,
+                hooks,
                 faults,
             })),
         })
@@ -275,6 +279,21 @@ fn validate_driver_operations(
     Ok(reported)
 }
 
+fn validate_driver_hooks(hooks: &[OciHookPhase]) -> Result<Vec<OciHookPhase>> {
+    let reported = hooks.iter().copied().collect::<BTreeSet<_>>();
+    if reported.len() != hooks.len() {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            "runtime driver advertises duplicate OCI hook phases",
+        )
+        .for_operation("open-host-runtime"));
+    }
+    Ok(OciHookPhase::ALL
+        .into_iter()
+        .filter(|phase| reported.contains(phase))
+        .collect())
+}
+
 fn driver_state_error(
     operation: &'static str,
     expected: ContainerState,
@@ -292,7 +311,11 @@ fn driver_state_error(
 #[async_trait]
 impl OciRuntimeService for HostRuntimeService {
     async fn features(&self) -> Result<RuntimeInfo> {
-        let oci = feature_report::build(self.lifecycle.is_some())?;
+        let hooks = self
+            .lifecycle
+            .as_deref()
+            .map_or([].as_slice(), |lifecycle| lifecycle.hooks.as_slice());
+        let oci = feature_report::build(self.lifecycle.is_some(), hooks)?;
 
         let mut operations = BTreeSet::from([RuntimeOperation::Features]);
         if let Some(lifecycle) = &self.lifecycle {

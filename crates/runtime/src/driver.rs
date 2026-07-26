@@ -14,6 +14,48 @@ const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
     RuntimeOperation::Delete,
 ];
 
+/// OCI hook phases implemented by one exact runtime driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OciHookPhase {
+    /// Deprecated runtime-namespace create hook retained by OCI 1.x.
+    Prestart,
+    /// Runtime-namespace hook after the environment is created.
+    CreateRuntime,
+    /// Container-namespace hook before pivoting into the root filesystem.
+    CreateContainer,
+    /// Container-namespace hook before the configured process executes.
+    StartContainer,
+    /// Runtime-namespace hook after the configured process executes.
+    Poststart,
+    /// Runtime-namespace warning-only hook after container destruction.
+    Poststop,
+}
+
+impl OciHookPhase {
+    /// Every standardized phase in normative lifecycle order.
+    pub const ALL: [Self; 6] = [
+        Self::Prestart,
+        Self::CreateRuntime,
+        Self::CreateContainer,
+        Self::StartContainer,
+        Self::Poststart,
+        Self::Poststop,
+    ];
+
+    /// Exact spelling used by the OCI features document.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Prestart => "prestart",
+            Self::CreateRuntime => "createRuntime",
+            Self::CreateContainer => "createContainer",
+            Self::StartContainer => "startContainer",
+            Self::Poststart => "poststart",
+            Self::Poststop => "poststop",
+        }
+    }
+}
+
 /// Driver-reported init-process state at one exact container generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriverState {
@@ -303,6 +345,11 @@ pub trait RuntimeDriver: Send + Sync {
     /// exposes or dispatches them.
     fn operations(&self) -> &[RuntimeOperation] {
         &CORE_DRIVER_OPERATIONS
+    }
+
+    /// OCI lifecycle hook phases enforced by this exact driver.
+    fn hooks(&self) -> &[OciHookPhase] {
+        &[]
     }
 
     /// Prepare all OCI create-time resources and return the blocked init PID.

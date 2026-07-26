@@ -75,6 +75,30 @@ done
 jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
   "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
 mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
+hook_trace="$bundle/rootfs/.a3s-oci-hook-trace"
+hook_command='IFS= read -r A3S_HOOK_STATE || :; printf "%s %s\n" "$A3S_HOOK_PHASE" "$A3S_HOOK_STATE" >> "$A3S_HOOK_TRACE"'
+jq \
+  --arg command "$hook_command" \
+  --arg host_trace "$hook_trace" \
+  '
+    def hook($phase; $trace): {
+      path: "/bin/sh",
+      args: ["sh", "-c", $command],
+      env: ["A3S_HOOK_PHASE=" + $phase, "A3S_HOOK_TRACE=" + $trace],
+      timeout: 5
+    };
+    .annotations["dev.a3s.oci.hook-smoke"] = "ordered-v1"
+    | .hooks = {
+        prestart: [hook("prestart"; $host_trace)],
+        createRuntime: [hook("createRuntime"; $host_trace)],
+        createContainer: [hook("createContainer"; $host_trace)],
+        startContainer: [hook("startContainer"; "/.a3s-oci-hook-trace")],
+        poststart: [hook("poststart"; $host_trace)],
+        poststop: [hook("poststop"; $host_trace)]
+      }
+  ' \
+  "$bundle/config.json" >"$bundle/config.json.tmp"
+mv "$bundle/config.json.tmp" "$bundle/config.json"
 for candidate in "$bundle" "$bundle_b"; do
   jq --exit-status \
     '.linux.uidMappings
@@ -84,6 +108,9 @@ for candidate in "$bundle" "$bundle_b"; do
     "$candidate/config.json" >/dev/null
 done
 sudo chown -R 100000:200000 "$bundle/rootfs" "$bundle_b/rootfs"
+sudo touch "$hook_trace"
+sudo chown 100000:200000 "$hook_trace"
+sudo chmod 0666 "$hook_trace"
 sudo chmod 0755 "$qualification_root"
 test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
@@ -136,6 +163,7 @@ run_smoke() {
   local expected_kvm_present="$1"
   local output
   local status
+  sudo truncate --size 0 "$hook_trace"
   if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
       --agent "$PWD/target/debug/a3s-oci-agent" \
       --bundle "$bundle" \
@@ -151,7 +179,7 @@ run_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v8"
+    '.schema_version == "a3s.oci.native-linux-smoke.v9"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
@@ -164,6 +192,10 @@ run_smoke() {
      and .create_returned_created
      and .create_replayed
      and .list_visible_after_create
+     and .hook_phases
+         == ["prestart", "createRuntime", "createContainer", "startContainer",
+             "poststart", "poststop"]
+     and .hooks_verified
      and (.created_pid > 0)
      and .marker_absent_after_create
      and .start_released

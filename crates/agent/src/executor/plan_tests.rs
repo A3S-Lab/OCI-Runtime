@@ -1,6 +1,7 @@
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize};
 
+use super::hook::HookSet;
 use super::plan::{InitPlan, ProcessPlan};
 
 const FIXED_CONFIG: &str = r#"{
@@ -67,6 +68,23 @@ fn accepts_the_exact_bootstrap_profile() {
     assert!(!plan.namespaces.new_pid());
     assert!(!plan.namespaces.new_user());
     assert!(!plan.namespaces.new_time());
+}
+
+#[test]
+fn plans_all_oci_hook_phases_instead_of_rejecting_the_configuration() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["hooks"] = serde_json::json!({
+        "prestart": [{"path": "/bin/true"}],
+        "createRuntime": [{"path": "/bin/true"}],
+        "createContainer": [{"path": "/bin/true"}],
+        "startContainer": [{"path": "/bin/true"}],
+        "poststart": [{"path": "/bin/true"}],
+        "poststop": [{"path": "/bin/true"}]
+    });
+    let config = serde_json::to_string(&config).expect("encode hook configuration");
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io()).expect("complete hook plan");
+    assert_ne!(plan.hooks, HookSet::default());
 }
 
 #[test]

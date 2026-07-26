@@ -16,7 +16,7 @@ use filesystem::{
     canonical_directory, create_private_directory, fixed_rootfs, path_exists, remove_marker,
     unique_nonce, MARKER_NAME,
 };
-use lifecycle::{best_effort_delete, exercise};
+use lifecycle::{best_effort_delete, exercise, HOOK_TRACE_NAME};
 
 pub(super) async fn run_fault_cleanup(
     init_executable: &Path,
@@ -64,6 +64,7 @@ pub(super) async fn run(
         Err(reason) => return failed(report, reason),
     };
     let marker = rootfs.join(MARKER_NAME);
+    let hook_trace = rootfs.join(HOOK_TRACE_NAME);
     match path_exists(&marker).await {
         Ok(false) => {}
         Ok(true) => {
@@ -115,7 +116,7 @@ pub(super) async fn run(
     };
     let client = RuntimeClient::new(service.clone());
 
-    let exercise = exercise(&client, &bundle, &nonce, &marker, &mut report).await;
+    let exercise = exercise(&client, &bundle, &nonce, &marker, &hook_trace, &mut report).await;
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;
     }

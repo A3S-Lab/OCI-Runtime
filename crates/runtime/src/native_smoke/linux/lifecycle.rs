@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, State};
 use a3s_oci_sdk::{
     ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
     DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, ListRequest,
@@ -20,6 +20,7 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const FREEZER_OBSERVATION_DELAY: Duration = Duration::from_millis(1_250);
 const PROGRESS_PATH: &str = "/.a3s-oci-native-smoke";
+pub(super) const HOOK_TRACE_NAME: &str = ".a3s-oci-hook-trace";
 const UPDATED_MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
 
 pub(super) async fn exercise(
@@ -27,9 +28,12 @@ pub(super) async fn exercise(
     bundle: &OciBundle,
     nonce: &str,
     marker: &Path,
+    hook_trace: &Path,
     report: &mut NativeLinuxSmokeReport,
 ) -> Result<(), String> {
-    report.service_operations = native_call("features", client.features()).await?.operations;
+    let features = native_call("features", client.features()).await?;
+    report.service_operations = features.operations;
+    report.hook_phases = features.oci.hooks().clone().unwrap_or_default();
 
     let id = ContainerId::new(format!("native-{nonce}"))
         .map_err(|error| format!("failed to construct native smoke container ID: {error}"))?;
@@ -180,6 +184,11 @@ pub(super) async fn exercise(
     report.delete_succeeded = true;
     native_call("replayed delete", client.delete(delete)).await?;
     report.delete_replayed = true;
+    report.hooks_verified =
+        verify_hook_trace(hook_trace, bundle, target.id.as_str(), report.created_pid).await?;
+    if !report.hooks_verified {
+        return Err("native OCI hooks did not preserve exact order and state".into());
+    }
     report.state_missing_after_delete = state_is_missing(client, target).await?;
     if !report.state_missing_after_delete {
         return Err("native state remained visible after delete".into());
@@ -192,6 +201,53 @@ pub(super) async fn exercise(
         return Err("native durable list retained a deleted container".into());
     }
     Ok(())
+}
+
+async fn verify_hook_trace(
+    path: &Path,
+    bundle: &OciBundle,
+    container_id: &str,
+    pid: Option<i32>,
+) -> Result<bool, String> {
+    let pid = pid.ok_or_else(|| "native hook verification requires the created PID".to_string())?;
+    let trace = tokio::fs::read_to_string(path).await.map_err(|error| {
+        format!(
+            "failed to read native OCI hook trace {}: {error}",
+            path.display()
+        )
+    })?;
+    let expected = [
+        ("prestart", ContainerState::Creating, Some(pid)),
+        ("createRuntime", ContainerState::Creating, Some(pid)),
+        ("createContainer", ContainerState::Creating, Some(pid)),
+        ("startContainer", ContainerState::Created, Some(pid)),
+        ("poststart", ContainerState::Running, Some(pid)),
+        ("poststop", ContainerState::Stopped, None),
+    ];
+    let lines = trace.lines().collect::<Vec<_>>();
+    if lines.len() != expected.len() {
+        return Ok(false);
+    }
+    for (line, (phase, status, expected_pid)) in lines.iter().zip(expected) {
+        let Some((actual_phase, encoded_state)) = line.split_once(' ') else {
+            return Ok(false);
+        };
+        if actual_phase != phase {
+            return Ok(false);
+        }
+        let state: State = serde_json::from_str(encoded_state)
+            .map_err(|error| format!("native {phase} hook emitted invalid OCI state: {error}"))?;
+        if state.version() != bundle.spec().version()
+            || state.id() != container_id
+            || *state.status() != status
+            || *state.pid() != expected_pid
+            || state.bundle() != bundle.directory()
+            || state.annotations() != bundle.spec().annotations()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn exercise_control_plane(

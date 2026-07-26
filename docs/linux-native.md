@@ -89,13 +89,15 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v8` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v9` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
    `kill`, `delete`, `exec`, `wait`, `list`, `pause`, `resume`, `update`, `processes`,
    `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
-   `signal-process`, and `wait-process`;
+   `signal-process`, and `wait-process`, plus `prestart`, `createRuntime`,
+   `createContainer`, `startContainer`, `poststart`, and `poststop` in the OCI
+   feature document's normative order;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
 3. create returns the positive host-visible PID of the configured process in
@@ -104,7 +106,8 @@ following:
 4. the workload marker is absent before start;
 5. retrying create replays its exact result; unfiltered and shared-host-kernel
    list return that exact record while a dedicated-VM filter returns none;
-6. start releases the prepared init; the workload verifies exact rootful
+6. start releases `startContainer`, confirms the configured process crossed
+   `execve`, runs `poststart`, and returns; the workload verifies exact rootful
    UID/GID maps plus monotonic and boottime namespace offsets before the marker
    is observed;
 7. exact-target exec and its retry return the same positive authenticated PID,
@@ -140,8 +143,12 @@ following:
    the same terminal result;
 19. state reaches `stopped`;
 20. stopped-only delete and its exact retry succeed;
-21. state returns `NotFound` and durable list is empty after delete;
-22. the marker, executor root, and complete smoke session are removed.
+21. a six-line trace proves exact hook order, `creating`, `created`, `running`,
+    and `stopped` state, the exact container ID, OCI version, bundle path,
+    annotations, and positive init PID for every live phase, with no PID in
+    `poststop`;
+22. state returns `NotFound` and durable list is empty after delete;
+23. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -172,9 +179,10 @@ bash .github/scripts/native-linux-smoke.sh
 
 The script installs `busybox-static` and `jq`, builds the matching
 `a3s-oci-agent` and CLI binaries, constructs the checked-in fixture with a
-100000:200000-owned, searchable rootfs and `/proc` mount target, checks that
-the on-disk ownership and OCI mappings match, executes both KVM-independent
-cases, and removes its qualification directory on exit.
+100000:200000-owned, searchable rootfs, `/proc` mount target, and writable hook
+trace, injects one hook for every OCI phase, checks that the on-disk ownership
+and OCI mappings match, executes both KVM-independent cases, and removes its
+qualification directory on exit.
 
 ## Multi-container generation gate
 
@@ -304,9 +312,9 @@ The default driver must remain `probe-only` until at least the following pass:
   enforcement;
 - real-driver reattachment after runtime-process restart, plus
   inherited-descriptor I/O handling;
-- hooks, durable recovery for the remaining mutating operations,
-  descriptor-relative path handling, transport-level fault injection, and
-  adversarial cleanup;
+- hook rollback/recovery/security-negative and soak suites, durable recovery
+  for the remaining mutating operations, descriptor-relative path handling,
+  transport-level fault injection, and adversarial cleanup;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
   x86_64 and aarch64 without KVM.
 

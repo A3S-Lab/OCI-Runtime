@@ -35,8 +35,8 @@ than the final OCI executor and rejects every property it cannot enforce.
 The accepted bootstrap profile requires:
 
 - only `ociVersion`, `root`, `process`, optional `hostname`, optional
-  `domainname`, optional `mounts`, and optional `linux` at the configuration
-  root;
+  `domainname`, optional `mounts`, optional `hooks`, optional `annotations`,
+  and optional `linux` at the configuration root;
 - a writable normalized relative `root.path` equal to `rootfs`;
 - either `terminal: false` with null or piped stdin, null or captured stdout
   and stderr, and no terminal size; or `terminal: true` with terminal mode on
@@ -132,28 +132,44 @@ Create snapshots the exact digest-bound configuration, starts an internal
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
 accepts only the exact kernel-reported launcher PID. The wrapper revalidates
 the bundle, resolves a contained rootfs, and returns either a bounded typed
-error or readiness with the runtime-visible configured-process PID and, for a
-new PID namespace, its namespace-init PID before blocking. The
-authenticated parent permits exactly one expected user-mapping request. It
-rejects readiness that bypasses that request, a repeated request, or a request
-without a configured user namespace. For a new PID namespace, the agent
-verifies the complete launcher → namespace PID 1 → configured-process parent
-chain, the init's `NSpid` mapping to 1, the configured process's mapping above
-1, and both PID namespace links. It also verifies new user and time namespace
-identities against the authenticated launcher's intended namespace links.
-Create therefore preserves the exact rejection or returns `created` before the
-configured process runs. Before returning `created`, the executor opens a
-pidfd for that authenticated configured-process PID—the PID exposed through
-OCI state. Failure to open the descriptor terminates the wrapper and fails
-create. Start sends the one-byte release signal directly to that process; it
-applies the inherited-namespace `chroot` when needed, then working directory,
-groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and calls `execve`.
+error or one of two readiness barriers. The first barrier is reached after the
+container environment and mounts exist but before `pivot_root`; it carries the
+runtime-visible configured-process PID and, for a new PID namespace, its
+namespace-init PID. The authenticated parent permits exactly one expected
+user-mapping request and rejects a bypass, repeat, or request without a
+configured user namespace. Before releasing any runtime hook, it verifies the
+complete launcher → namespace PID 1 → configured-process parent chain, the
+init's `NSpid` mapping to 1, the configured process's mapping above 1, both PID
+namespace links, and the requested user/time namespace identities.
+
+At that first barrier the parent runs `prestart` and `createRuntime` in the
+runtime namespace with `creating` OCI state. It then releases the wrapper to
+run `createContainer` in the container namespace before pivoting. The wrapper
+reports the same authenticated PIDs at the second barrier only after final
+rootfs setup. A mismatch is rejected. Create therefore preserves the exact
+rejection or returns `created` before the configured process runs. Before
+returning `created`, the executor opens a pidfd for that exact PID—the PID
+exposed through OCI state. Failure to open the descriptor terminates the
+wrapper and fails create.
+
+Start sends the one-byte release signal directly to the prepared process. The
+wrapper enters the retained root when needed, runs `startContainer` with
+`created` state, applies working directory, groups, GID, UID, umask,
+capabilities, `PR_SET_NO_NEW_PRIVS`, and seccomp, and calls `execve`. Its
+control descriptor is close-on-exec, so EOF confirms that the configured
+program crossed `execve`; a pre-exec failure instead returns a bounded typed
+error. The parent then runs `poststart` in the runtime namespace with
+`running` state before start returns.
 
 State observes the configured process, kill delivers one positive Linux signal
 through its retained pidfd, and delete supports stopped-only and force cleanup.
 Cleanup also signals through the pidfd and always reaps the authenticated
-launcher before removing its runtime directory. Numeric PID reuse can
-therefore never redirect a lifecycle signal to an unrelated process.
+launcher before removing its runtime directory. After the container record,
+retained namespaces/rootfs, cgroup leaf, and runtime directory are gone,
+`poststop` receives `stopped` state without a PID. A failed poststop hook logs
+a warning and does not prevent later hooks or successful cleanup. Session
+shutdown uses the same ordering. Numeric PID reuse can therefore never
+redirect a lifecycle signal to an unrelated process.
 
 Namespace PID 1 continuously calls `waitpid(-1)` so exited descendants and
 adopted orphans cannot remain as zombies. After the configured process exits,
@@ -245,9 +261,10 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless user-mapping policy, unsupported cgroup I/O, hugetlb,
-RDMA, and unified resources, hooks, inherited process I/O,
-process-group signals, and every other unimplemented OCI property. These are
-release blockers, not silently accepted compatibility gaps.
+RDMA, and unified resources, inherited process I/O, process-group signals,
+and every other unimplemented OCI property. Hook rollback/recovery,
+security-negative, and soak certification remain release blockers rather than
+silently accepted compatibility gaps.
 
 ## Build And Evidence
 

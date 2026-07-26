@@ -19,7 +19,11 @@ use tokio::time::timeout;
 
 use super::capability::CapabilityPlan;
 use super::cgroup::{self, CgroupHandle, CgroupManager};
-use super::control::{acknowledge_user_mapping, read_outcome, InitOutcome, START_BYTE};
+use super::control::{
+    acknowledge_user_mapping, continue_create, read_outcome, read_start_result, InitOutcome,
+    START_BYTE,
+};
+use super::hook::{HookPhase, HookSet, HookStateTemplate};
 use super::io::ProcessIoHandle;
 use super::namespace::{self, RetainedExecutionContext};
 use super::pid;
@@ -41,6 +45,8 @@ pub(super) struct PreparedProcess {
     cgroup: Option<CgroupHandle>,
     io: ProcessIoHandle,
     exit_status: Option<ExitStatus>,
+    hooks: HookSet,
+    hook_state: HookStateTemplate,
 }
 
 impl PreparedProcess {
@@ -50,9 +56,10 @@ impl PreparedProcess {
         init_executable: &Path,
         cgroup_manager: Option<&CgroupManager>,
         io: &ProcessIo,
+        hook_state: &HookStateTemplate,
     ) -> Result<Self> {
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
-        let cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
+        let mut cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
         let cgroup_procs = cgroup.as_ref().map(CgroupHandle::procs_descriptor);
         let (listener, control_name) = bind_control_listener()?;
         let mut command = Command::new(init_executable);
@@ -61,6 +68,7 @@ impl PreparedProcess {
             .arg(config_snapshot)
             .arg(&plan.bundle_directory)
             .arg(&control_name)
+            .arg(hook_state.id())
             .env_clear()
             .kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
@@ -168,10 +176,14 @@ impl PreparedProcess {
             ));
         }
         let mut user_mapping_installed = false;
+        let mut create_hooks_ready = None;
         let runtime_pid = loop {
             match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
                 Ok(Ok(InitOutcome::UserMappingRequired)) => {
-                    if !plan.namespaces.new_user() || user_mapping_installed {
+                    if !plan.namespaces.new_user()
+                        || user_mapping_installed
+                        || create_hooks_ready.is_some()
+                    {
                         terminate(&mut child).await;
                         return Err(process_error(
                             ErrorCode::PermissionDenied,
@@ -203,12 +215,60 @@ impl PreparedProcess {
                     }
                     user_mapping_installed = true;
                 }
+                Ok(Ok(InitOutcome::CreateHooksReady {
+                    pid: runtime_pid,
+                    namespace_init_pid,
+                })) => {
+                    if create_hooks_ready.is_some()
+                        || (plan.namespaces.new_user() && !user_mapping_installed)
+                    {
+                        let error = process_error(
+                            ErrorCode::PermissionDenied,
+                            "container init reported an invalid create-hook barrier",
+                        );
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
+                        return Err(error);
+                    }
+                    if let Err(error) =
+                        pid::validate_runtime_pid(plan, pid, runtime_pid, namespace_init_pid).await
+                    {
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
+                        return Err(error);
+                    }
+                    let creating = match hook_state.encode(
+                        a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating,
+                        Some(runtime_pid),
+                    ) {
+                        Ok(state) => state,
+                        Err(error) => {
+                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                                .await;
+                            return Err(error);
+                        }
+                    };
+                    for phase in [HookPhase::Prestart, HookPhase::CreateRuntime] {
+                        if let Err(error) = plan.hooks.run(phase, &creating).await {
+                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                                .await;
+                            return Err(error);
+                        }
+                    }
+                    if let Err(error) = continue_create(&mut control).await {
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
+                        return Err(error);
+                    }
+                    create_hooks_ready = Some((runtime_pid, namespace_init_pid));
+                }
                 Ok(Ok(InitOutcome::Ready {
                     pid: runtime_pid,
                     namespace_init_pid,
                 })) => {
                     if plan.namespaces.new_user() && !user_mapping_installed {
-                        terminate(&mut child).await;
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
                         return Err(process_error(
                             ErrorCode::PermissionDenied,
                             "container init bypassed required user namespace mappings",
@@ -217,21 +277,46 @@ impl PreparedProcess {
                     if let Err(error) =
                         pid::validate_runtime_pid(plan, pid, runtime_pid, namespace_init_pid).await
                     {
-                        terminate(&mut child).await;
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
+                        return Err(error);
+                    }
+                    if create_hooks_ready != Some((runtime_pid, namespace_init_pid)) {
+                        let error = process_error(
+                            ErrorCode::PermissionDenied,
+                            "container init final readiness did not match its create-hook barrier",
+                        );
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
                         return Err(error);
                     }
                     break runtime_pid;
                 }
                 Ok(Ok(InitOutcome::Rejected(error))) => {
-                    terminate(&mut child).await;
+                    if create_hooks_ready.is_some() {
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
+                    } else {
+                        terminate(&mut child).await;
+                    }
                     return Err(error);
                 }
                 Ok(Err(error)) => {
-                    terminate(&mut child).await;
+                    if create_hooks_ready.is_some() {
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
+                    } else {
+                        terminate(&mut child).await;
+                    }
                     return Err(error);
                 }
                 Err(_) => {
-                    terminate(&mut child).await;
+                    if create_hooks_ready.is_some() {
+                        cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                            .await;
+                    } else {
+                        terminate(&mut child).await;
+                    }
                     return Err(process_error(
                         ErrorCode::DeadlineExceeded,
                         "timed out reading prepared container init readiness",
@@ -242,7 +327,7 @@ impl PreparedProcess {
         let pidfd = match PidFd::open(runtime_pid) {
             Ok(pidfd) => pidfd,
             Err(error) => {
-                terminate(&mut child).await;
+                cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
                 return Err(error);
             }
         };
@@ -252,7 +337,7 @@ impl PreparedProcess {
             {
                 Ok(context) => context,
                 Err(error) => {
-                    terminate(&mut child).await;
+                    cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
                     return Err(error);
                 }
             };
@@ -269,6 +354,8 @@ impl PreparedProcess {
             cgroup,
             io: process_io,
             exit_status: None,
+            hooks: plan.hooks.clone(),
+            hook_state: hook_state.clone(),
         })
     }
 
@@ -289,9 +376,35 @@ impl PreparedProcess {
                 format!("failed to release prepared container init: {error}"),
             )
         })?;
-        let control = self.control.take();
-        drop(control);
+        let started = match timeout(INIT_READY_TIMEOUT, read_start_result(control)).await {
+            Ok(result) => result,
+            Err(_) => Err(process_error(
+                ErrorCode::DeadlineExceeded,
+                "timed out waiting for the configured process to cross exec",
+            )),
+        };
+        drop(self.control.take());
+        if let Err(error) = started {
+            let _ = self.force_stop().await;
+            return Err(error);
+        }
+        let state = self.hook_state.encode(
+            a3s_oci_sdk::oci_spec::runtime::ContainerState::Running,
+            Some(self.pid),
+        )?;
+        if let Err(error) = self.hooks.run(HookPhase::Poststart, &state).await {
+            let _ = self.force_stop().await;
+            return Err(error);
+        }
         Ok(())
+    }
+
+    pub(super) fn poststop_plan(&self) -> Result<(HookSet, Vec<u8>)> {
+        let state = self.hook_state.encode(
+            a3s_oci_sdk::oci_spec::runtime::ContainerState::Stopped,
+            None,
+        )?;
+        Ok((self.hooks.clone(), state))
     }
 
     pub(super) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
@@ -473,6 +586,23 @@ pub(super) fn bind_control_listener() -> Result<(UnixListener, String)> {
 pub(super) async fn terminate(child: &mut Child) {
     let _ = child.kill().await;
     let _ = child.wait().await;
+}
+
+async fn cleanup_failed_create(
+    child: &mut Child,
+    cgroup: &mut Option<CgroupHandle>,
+    hooks: &HookSet,
+    hook_state: &HookStateTemplate,
+) {
+    terminate(child).await;
+    drop(cgroup.take());
+    match hook_state.encode(
+        a3s_oci_sdk::oci_spec::runtime::ContainerState::Stopped,
+        None,
+    ) {
+        Ok(state) => hooks.run_poststop(&state).await,
+        Err(error) => eprintln!("a3s-oci-agent: failed-create poststop state warning: {error}"),
+    }
 }
 
 fn process_error(code: ErrorCode, message: impl Into<String>) -> Error {

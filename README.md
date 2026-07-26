@@ -42,8 +42,9 @@ The runtime has two execution paths:
   bootstrap slice now enforces its bounded cgroup v2, seccomp, capability, and
   device profile, including live CPU, memory, cpuset, and PID updates plus
   normalized resource statistics, piped stdin, and bounded captured
-  stdout/stderr plus interactive PTYs and terminal resize; broader OCI
-  controls and hooks remain release gates.
+  stdout/stderr plus interactive PTYs, terminal resize, and all six OCI hook
+  phases; broader OCI controls and hook recovery/security certification
+  remain release gates.
 - **Utility VM** hosts the same Linux executor behind an authenticated guest
   agent, using KVM on Linux, HVF on macOS, or WHPX on Windows.
 
@@ -95,6 +96,10 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   stable per-process exit-status, and cleanup implementation directly on
   Linux and through the guest agent, with independently fenced per-container
   generations
+- **Ordered OCI Hooks**: Execute `prestart`, `createRuntime`,
+  `createContainer`, `startContainer`, `poststart`, and `poststop` in their
+  required namespaces and order, pass bounded OCI state JSON on stdin, apply
+  timeout and process-group cleanup, and keep poststop failures warning-only
 - **Bounded Process I/O**: Stream piped stdin with backpressure and poll
   globally ordered captured stdout/stderr through byte-accurate cursors, EOF
   frames, long polling, and an 8 MiB retained-output ceiling
@@ -458,6 +463,21 @@ running  ── process exited   ──▶ stopped
 executing the configured program. Only `start` releases that process. Invalid
 transitions fail without weakening the barrier.
 
+The shared Linux executor preserves the OCI hook boundaries explicitly:
+
+```text
+create:  prestart → createRuntime → createContainer → created
+start:   startContainer → execve → poststart → running
+delete:  destroy container resources → poststop
+```
+
+Runtime-namespace hooks execute in the agent, while `createContainer` and
+`startContainer` execute inside the container namespaces. Every hook receives
+the exact bounded OCI `State` document on stdin. A configured timeout covers
+state delivery and the complete hook process group. Failed create/start hooks
+return typed errors; poststop logs warnings, continues the remaining hooks,
+and never reverses cleanup.
+
 The host lifecycle stores:
 
 - the exact validated OCI configuration and digest;
@@ -516,7 +536,13 @@ The current executor implements a reviewed bootstrap vertical slice:
 - architecture-bound seccomp BPF for x86_64 and AArch64, including OCI
   argument comparisons, distinct errno actions, and the same retained policy
   on init and exec;
-- PID- and namespace-authenticated create/start barrier;
+- PID- and namespace-authenticated create barrier with a distinct
+  pre-pivot hook release, plus close-on-exec confirmation at the start
+  barrier;
+- ordered `prestart`, `createRuntime`, `createContainer`, `startContainer`,
+  `poststart`, and `poststop` hooks with exact OCI state on stdin, bounded
+  plans, optional environments, timeout enforcement, process-group cleanup,
+  typed failure propagation, and warning-only poststop continuation;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
   signaling, exact normal-or-signal exit status, repeated wait, observation,
   and scoped cleanup;
@@ -542,10 +568,10 @@ unsupported when joining or inheriting a mount namespace. Other unimplemented
 OCI fields are rejected instead of ignored. Rootless mapping policy, cgroup
 I/O/hugetlb/RDMA/unified resources and cgroup v2 device-access filtering,
 broader device policies, multi-architecture seccomp and notification
-listeners, rlimits, schedulers, LSMs, hooks, inherited I/O, A3S
-Box listener/log descriptor handoff, real-driver reattachment after
-runtime-process restart, events, checkpoint, and restore are still release
-gates.
+listeners, rlimits, schedulers, LSMs, inherited I/O, A3S Box listener/log
+descriptor handoff, real-driver reattachment after runtime-process restart,
+hook rollback/recovery/security-negative certification, events, checkpoint,
+and restore are still release gates.
 
 ### SDK and protocols
 
@@ -576,10 +602,11 @@ The OCI `Features` document validates against the pinned 1.3.0 schema. It
 reports the 61 recognized mount options in sorted order, all eight implemented
 Linux namespace types, all 41 recognized capabilities, cgroup v2, the
 implemented x86_64/AArch64 seccomp actions and operators, and
-`linux.mountExtensions.idmap.enabled=true`. Unsupported seccomp flags, cgroup
-v1/systemd/RDMA, LSMs, Intel RDT, and network-device configuration remain
-explicitly empty or disabled, and no potentially unsafe configuration
-annotation is advertised.
+`linux.mountExtensions.idmap.enabled=true`. A configured native Linux driver
+also reports all six hook phases in normative order. Unsupported seccomp
+flags, cgroup v1/systemd/RDMA, LSMs, Intel RDT, and network-device
+configuration remain explicitly empty or disabled, and no potentially unsafe
+configuration annotation is advertised.
 
 The local IPC and guest-agent protocols are versioned, length-delimited, and
 64 MiB bounded. Every untrusted request is revalidated at the receiving
@@ -589,7 +616,7 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping, exact init and exec SIGKILL status, exec/signal/update/process-I/O replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping, exact six-phase OCI hook order/state trace, exact init and exec SIGKILL status, exec/signal/update/process-I/O replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
@@ -642,7 +669,7 @@ flowchart TB
         shim --> hypervisor --> bridge --> agent
     end
 
-    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts<br/>recursive attributes · PID 1 supervision · pidfds<br/>exec/signal/wait · update/stats · pause/resume/processes · scoped cleanup"]
+    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts · hooks<br/>recursive attributes · PID 1 supervision · pidfds<br/>exec/signal/wait · update/stats · pause/resume/processes · scoped cleanup"]
 
     client --> service
     selection -->|"shared-host-kernel"| native_driver
@@ -695,10 +722,10 @@ RFC 2119 keyword occurrences from the normative specification. CI verifies:
 - SDK, IPC, and guest boundaries reject malformed or oversized input.
 
 This is not yet a claim of full OCI conformance. Remaining normative entries,
-complete enforcement, hooks, descriptor-relative filesystem operations,
-utility-VM host/agent transition fault injection, upstream lifecycle suites,
-and platform security certification must pass before a driver becomes
-`supported`.
+complete enforcement, hook rollback/recovery/security-negative suites,
+descriptor-relative filesystem operations, utility-VM host/agent transition
+fault injection, upstream lifecycle suites, and platform security
+certification must pass before a driver becomes `supported`.
 
 Security-sensitive platform controls include:
 

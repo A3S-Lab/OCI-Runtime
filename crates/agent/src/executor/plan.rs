@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use super::capability::CapabilityPlan;
 use super::cgroup::CgroupPlan;
 use super::device::DevicePlan;
+use super::hook::HookSet;
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
 use super::rootfs::RootfsPropagation;
@@ -100,6 +101,7 @@ impl ProcessPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitPlan {
+    pub(super) oci_version: String,
     pub(super) bundle_directory: PathBuf,
     pub(super) rootfs: PathBuf,
     pub(super) args: Vec<String>,
@@ -124,6 +126,7 @@ pub(super) struct InitPlan {
     pub(super) hostname: Option<String>,
     pub(super) domainname: Option<String>,
     pub(super) annotations: BTreeMap<String, String>,
+    pub(super) hooks: HookSet,
 }
 
 impl InitPlan {
@@ -228,8 +231,10 @@ impl InitPlan {
             ));
         }
         let annotations = plan_annotations(spec.annotations().as_ref())?;
+        let hooks = HookSet::from_oci(spec.hooks().as_ref())?;
 
         Ok(Self {
+            oci_version: spec.version().clone(),
             bundle_directory: bundle.directory().to_path_buf(),
             rootfs: root_path,
             args: process_plan.args,
@@ -254,6 +259,7 @@ impl InitPlan {
             hostname,
             domainname,
             annotations,
+            hooks,
         })
     }
 }
@@ -306,6 +312,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "hostname",
             "domainname",
             "annotations",
+            "hooks",
             "linux",
         ],
     )?;

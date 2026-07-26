@@ -2,6 +2,7 @@ use std::ffi::{CString, OsStr};
 use std::fs::File;
 use std::io::{self, Read};
 use std::mem::MaybeUninit;
+use std::os::fd::AsRawFd;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixStream};
@@ -9,7 +10,10 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
-use super::control::{write_ready, write_rejection, START_BYTE};
+use super::control::{
+    write_create_hooks_ready, write_ready, write_rejection, CREATE_CONTINUE_BYTE, START_BYTE,
+};
+use super::hook::{HookPhase, HookStateTemplate};
 use super::mount::{self, IdmappedMountSources};
 use super::namespace::{self, IdmapNamespaceHandles};
 use super::plan::InitPlan;
@@ -25,19 +29,41 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let config_snapshot = arguments.next().map(PathBuf::from);
     let bundle_directory = arguments.next().map(PathBuf::from);
     let control_name = arguments.next();
+    let container_id = arguments.next();
     let extra = arguments.next();
-    let (Some(config_snapshot), Some(bundle_directory), Some(control_name), None) =
-        (config_snapshot, bundle_directory, control_name, extra)
+    let (
+        Some(config_snapshot),
+        Some(bundle_directory),
+        Some(control_name),
+        Some(container_id),
+        None,
+    ) = (
+        config_snapshot,
+        bundle_directory,
+        control_name,
+        container_id,
+        extra,
+    )
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID and no extra arguments",
         )));
+    };
+    let container_id = match container_id.into_string() {
+        Ok(container_id) if !container_id.is_empty() => container_id,
+        _ => {
+            return Some(Err(init_error(
+                ErrorCode::InvalidArgument,
+                "container-init requires a non-empty UTF-8 container ID",
+            )));
+        }
     };
     Some(run_container_init(
         config_snapshot,
         bundle_directory,
         control_name,
+        container_id,
     ))
 }
 
@@ -45,6 +71,7 @@ fn run_container_init(
     config_snapshot: PathBuf,
     bundle_directory: PathBuf,
     control_name: std::ffi::OsString,
+    container_id: String,
 ) -> Result<()> {
     let control_address =
         StdSocketAddr::from_abstract_name(control_name.as_bytes()).map_err(|error| {
@@ -59,6 +86,7 @@ fn run_container_init(
             format!("failed to connect abstract prepared init control socket: {error}"),
         )
     })?;
+    ensure_close_on_exec(&control)?;
     let (plan, canonical_bundle, rootfs, rootfs_file, host_proc) =
         match prepare_container_init(config_snapshot, bundle_directory) {
             Ok(prepared) => prepared,
@@ -70,39 +98,117 @@ fn run_container_init(
         Ok(namespaces) => namespaces,
         Err(error) => return reject_before_ready(&mut control, error),
     };
-    let mut idmapped_sources =
+    let idmapped_sources =
         match IdmappedMountSources::prepare(&plan.mounts, &canonical_bundle, &idmap_namespaces) {
             Ok(sources) => sources,
             Err(error) => return reject_before_ready(&mut control, error),
         };
     drop(idmap_namespaces);
+    let hook_state = HookStateTemplate::new(
+        plan.oci_version.clone(),
+        container_id,
+        plan.bundle_directory.clone(),
+        plan.annotations.clone(),
+    )?;
     if let Err(error) = namespace::enter_new_namespaces(&plan.namespaces, &mut control) {
         return reject_before_ready(&mut control, error);
     }
+    let create = CreateContext {
+        plan: &plan,
+        bundle_directory: &canonical_bundle,
+        rootfs: &rootfs,
+        rootfs_file: &rootfs_file,
+        hook_state: &hook_state,
+    };
     if plan.namespaces.requires_child_process() {
-        return supervision::run_namespaced_init(
-            &plan,
-            &canonical_bundle,
-            &rootfs,
-            &rootfs_file,
-            &host_proc,
-            idmapped_sources,
-            control,
-        );
-    }
-    if let Err(error) =
-        prepare_create_environment(&plan, &canonical_bundle, &rootfs, &mut idmapped_sources)
-    {
-        return reject_before_ready(&mut control, error);
+        return supervision::run_namespaced_init(&create, &host_proc, idmapped_sources, control);
     }
     // SAFETY: `getpid` has no preconditions and this wrapper has not entered a
     // PID namespace that changes the runtime-visible process.
     let pid = unsafe { libc::getpid() };
-    write_ready(&mut control, pid, None)?;
-    wait_for_start_and_exec(&plan, &rootfs_file, control)
+    complete_create_and_wait_for_start(&create, idmapped_sources, pid, None, control)
 }
 
-fn wait_for_start_and_exec(plan: &InitPlan, rootfs: &File, mut control: UnixStream) -> Result<()> {
+pub(super) struct CreateContext<'a> {
+    plan: &'a InitPlan,
+    bundle_directory: &'a Path,
+    rootfs: &'a Path,
+    rootfs_file: &'a File,
+    hook_state: &'a HookStateTemplate,
+}
+
+pub(super) fn complete_create_and_wait_for_start(
+    create: &CreateContext<'_>,
+    mut idmapped_sources: IdmappedMountSources,
+    runtime_pid: i32,
+    namespace_init_pid: Option<i32>,
+    mut control: UnixStream,
+) -> Result<()> {
+    if let Err(error) = prepare_create_environment_before_pivot(
+        create.plan,
+        create.bundle_directory,
+        create.rootfs,
+        &mut idmapped_sources,
+    ) {
+        return reject_before_ready(&mut control, error);
+    }
+    drop(idmapped_sources);
+    let creating = match create.hook_state.encode(
+        a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating,
+        Some(runtime_pid),
+    ) {
+        Ok(state) => state,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
+    write_create_hooks_ready(&mut control, runtime_pid, namespace_init_pid)?;
+    if let Err(error) = wait_for_create_continue(&mut control) {
+        return reject_before_ready(&mut control, error);
+    }
+    if let Err(error) = create
+        .plan
+        .hooks
+        .run_sync(HookPhase::CreateContainer, &creating)
+    {
+        return reject_before_ready(&mut control, error);
+    }
+    if let Err(error) = finish_create_environment(create.plan, create.rootfs) {
+        return reject_before_ready(&mut control, error);
+    }
+    write_ready(&mut control, runtime_pid, namespace_init_pid)?;
+    wait_for_start_and_exec(
+        create.plan,
+        create.rootfs_file,
+        runtime_pid,
+        control,
+        create.hook_state,
+    )
+}
+
+fn wait_for_create_continue(control: &mut UnixStream) -> Result<()> {
+    let mut release = [0_u8; 1];
+    control.read_exact(&mut release).map_err(|error| {
+        init_error(
+            ErrorCode::Unavailable,
+            format!("prepared create-hook barrier closed: {error}"),
+        )
+    })?;
+    if release[0] == CREATE_CONTINUE_BYTE {
+        Ok(())
+    } else {
+        Err(init_error(
+            ErrorCode::FailedPrecondition,
+            "prepared init received an invalid create-hook release byte",
+        ))
+    }
+}
+
+fn wait_for_start_and_exec(
+    plan: &InitPlan,
+    rootfs: &File,
+    runtime_pid: i32,
+    mut control: UnixStream,
+    hook_state: &HookStateTemplate,
+) -> Result<()> {
     let mut start = [0_u8; 1];
     control.read_exact(&mut start).map_err(|error| {
         init_error(
@@ -116,8 +222,11 @@ fn wait_for_start_and_exec(plan: &InitPlan, rootfs: &File, mut control: UnixStre
             "prepared init received an invalid start byte",
         ));
     }
-    drop(control);
-    enter_rootfs_and_exec(plan, rootfs)
+    let result = enter_rootfs_run_start_hooks_and_exec(plan, rootfs, runtime_pid, hook_state);
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => reject_before_ready(&mut control, error),
+    }
 }
 
 fn reject_before_ready(control: &mut UnixStream, error: Error) -> Result<()> {
@@ -216,7 +325,7 @@ fn prepare_container_init(
     Ok((plan, canonical_bundle, rootfs, rootfs_file, host_proc))
 }
 
-fn prepare_create_environment(
+fn prepare_create_environment_before_pivot(
     plan: &InitPlan,
     bundle_directory: &Path,
     rootfs: &Path,
@@ -255,6 +364,12 @@ fn prepare_create_environment(
         plan.devices.validate_rootfs(rootfs)?;
         rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
         mount::apply_all(&plan.mounts, bundle_directory, rootfs, idmapped_sources)?;
+    }
+    Ok(())
+}
+
+fn finish_create_environment(plan: &InitPlan, rootfs: &Path) -> Result<()> {
+    if plan.namespaces.new_mount() {
         rootfs::pivot_root(rootfs)?;
         plan.devices.create_all()?;
         rootfs::finalize(
@@ -357,7 +472,24 @@ fn read_bounded_config(path: &Path) -> Result<String> {
     })
 }
 
-fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &File) -> Result<()> {
+fn enter_rootfs_run_start_hooks_and_exec(
+    plan: &InitPlan,
+    rootfs: &File,
+    runtime_pid: i32,
+    hook_state: &HookStateTemplate,
+) -> Result<()> {
+    if !plan.namespaces.new_mount() {
+        rootfs::chroot(rootfs)?;
+    }
+    let created = hook_state.encode(
+        a3s_oci_sdk::oci_spec::runtime::ContainerState::Created,
+        Some(runtime_pid),
+    )?;
+    plan.hooks.run_sync(HookPhase::StartContainer, &created)?;
+    exec_configured_process(plan)
+}
+
+fn exec_configured_process(plan: &InitPlan) -> Result<()> {
     let cwd = CString::new(plan.cwd.as_bytes()).map_err(|error| {
         init_error(
             ErrorCode::InvalidArgument,
@@ -379,10 +511,6 @@ fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &File) -> Result<()> {
         .map(|value| value.as_ptr())
         .collect::<Vec<_>>();
     environment_pointers.push(std::ptr::null());
-
-    if !plan.namespaces.new_mount() {
-        rootfs::chroot(rootfs)?;
-    }
 
     plan.capabilities.prepare_for_credentials(plan.uid)?;
     // SAFETY: every pointer below references a live, NUL-terminated buffer.
@@ -423,6 +551,19 @@ fn enter_rootfs_and_exec(plan: &InitPlan, rootfs: &File) -> Result<()> {
         );
     }
     Err(last_os_error("execute configured init process"))
+}
+
+fn ensure_close_on_exec(control: &UnixStream) -> Result<()> {
+    let descriptor = control.as_raw_fd();
+    // SAFETY: `descriptor` is owned by the live control stream. `F_GETFD` and
+    // `F_SETFD` only inspect and update its descriptor flags.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+    if flags < 0 || unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
+    {
+        Err(last_os_error("mark init control descriptor close-on-exec"))
+    } else {
+        Ok(())
+    }
 }
 
 fn cstring_vector(values: &[String], field: &str) -> Result<Vec<CString>> {

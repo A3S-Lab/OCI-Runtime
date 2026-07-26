@@ -7,6 +7,8 @@ use tokio::net::UnixStream;
 
 pub(super) const READY_BYTE: u8 = 0xA3;
 pub(super) const START_BYTE: u8 = 0x5A;
+const CREATE_HOOKS_READY_BYTE: u8 = 0xC1;
+pub(super) const CREATE_CONTINUE_BYTE: u8 = 0xC2;
 const USER_MAPPING_REQUIRED_BYTE: u8 = 0xB1;
 const USER_MAPPING_APPLIED_BYTE: u8 = 0xB2;
 const REJECTED_BYTE: u8 = 0xE1;
@@ -15,11 +17,29 @@ const MAX_REJECTION_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InitOutcome {
     UserMappingRequired,
+    CreateHooksReady {
+        pid: i32,
+        namespace_init_pid: Option<i32>,
+    },
     Ready {
         pid: i32,
         namespace_init_pid: Option<i32>,
     },
     Rejected(Error),
+}
+
+pub(super) fn write_create_hooks_ready(
+    stream: &mut StdUnixStream,
+    pid: i32,
+    namespace_init_pid: Option<i32>,
+) -> Result<()> {
+    write_pids(
+        stream,
+        CREATE_HOOKS_READY_BYTE,
+        pid,
+        namespace_init_pid,
+        "create-hook readiness",
+    )
 }
 
 pub(super) fn request_user_mapping(stream: &mut StdUnixStream) -> Result<()> {
@@ -70,6 +90,16 @@ pub(super) fn write_ready(
     pid: i32,
     namespace_init_pid: Option<i32>,
 ) -> Result<()> {
+    write_pids(stream, READY_BYTE, pid, namespace_init_pid, "readiness")
+}
+
+fn write_pids(
+    stream: &mut StdUnixStream,
+    discriminator: u8,
+    pid: i32,
+    namespace_init_pid: Option<i32>,
+    description: &str,
+) -> Result<()> {
     if pid <= 0 {
         return Err(control_error(
             ErrorCode::InvalidArgument,
@@ -84,13 +114,13 @@ pub(super) fn write_ready(
         ));
     }
     stream
-        .write_all(&[READY_BYTE])
+        .write_all(&[discriminator])
         .and_then(|()| stream.write_all(&pid.to_be_bytes()))
         .and_then(|()| stream.write_all(&namespace_init_pid.to_be_bytes()))
         .map_err(|write| {
             control_error(
                 ErrorCode::Unavailable,
-                format!("failed to report prepared container payload readiness: {write}"),
+                format!("failed to report prepared container payload {description}: {write}"),
             )
         })
 }
@@ -142,6 +172,14 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
         })?;
     match discriminator[0] {
         USER_MAPPING_REQUIRED_BYTE => Ok(InitOutcome::UserMappingRequired),
+        CREATE_HOOKS_READY_BYTE => {
+            read_ready_pids(stream)
+                .await
+                .map(|(pid, namespace_init_pid)| InitOutcome::CreateHooksReady {
+                    pid,
+                    namespace_init_pid,
+                })
+        }
         READY_BYTE => read_ready_pids(stream)
             .await
             .map(|(pid, namespace_init_pid)| InitOutcome::Ready {
@@ -152,6 +190,42 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
         other => Err(control_error(
             ErrorCode::FailedPrecondition,
             format!("prepared container init returned unknown outcome byte {other:#04x}"),
+        )),
+    }
+}
+
+pub(super) async fn continue_create(stream: &mut UnixStream) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    stream
+        .write_all(&[CREATE_CONTINUE_BYTE])
+        .await
+        .map_err(|error| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to release prepared create hooks: {error}"),
+            )
+        })
+}
+
+/// Wait until exec closes the close-on-exec control descriptor or reports an
+/// exact start-time rejection.
+pub(super) async fn read_start_result(stream: &mut UnixStream) -> Result<()> {
+    let mut discriminator = [0_u8; 1];
+    match stream.read(&mut discriminator).await {
+        Ok(0) => Ok(()),
+        Ok(1) if discriminator[0] == REJECTED_BYTE => read_rejection(stream).await.and_then(Err),
+        Ok(1) => Err(control_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "prepared container start returned unknown outcome byte {:#04x}",
+                discriminator[0]
+            ),
+        )),
+        Ok(_) => unreachable!("one-byte control read returned more than one byte"),
+        Err(error) => Err(control_error(
+            ErrorCode::Unavailable,
+            format!("failed to read prepared container start outcome: {error}"),
         )),
     }
 }
@@ -238,8 +312,8 @@ mod tests {
     use a3s_oci_sdk::{Error, ErrorCode};
 
     use super::{
-        acknowledge_user_mapping, read_outcome, request_user_mapping, write_ready, write_rejection,
-        InitOutcome,
+        acknowledge_user_mapping, read_outcome, read_start_result, request_user_mapping,
+        write_create_hooks_ready, write_ready, write_rejection, InitOutcome,
     };
 
     #[tokio::test(flavor = "current_thread")]
@@ -287,6 +361,30 @@ mod tests {
             );
             writer.await.expect("control writer task");
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_hook_barrier_is_distinct_from_final_readiness() {
+        let (mut writer, reader) = StdUnixStream::pair().expect("create control socket pair");
+        reader
+            .set_nonblocking(true)
+            .expect("make control reader nonblocking");
+        let writer = tokio::task::spawn_blocking(move || {
+            write_create_hooks_ready(&mut writer, 42_001, Some(41_999))
+                .expect("write create-hook readiness");
+        });
+        let mut reader = tokio::net::UnixStream::from_std(reader).expect("register control reader");
+
+        assert_eq!(
+            read_outcome(&mut reader)
+                .await
+                .expect("read create-hook readiness"),
+            InitOutcome::CreateHooksReady {
+                pid: 42_001,
+                namespace_init_pid: Some(41_999),
+            }
+        );
+        writer.await.expect("control writer task");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -338,6 +436,38 @@ mod tests {
             InitOutcome::Rejected(expected)
         );
         writer.await.expect("control writer task");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_result_distinguishes_exec_close_from_typed_rejection() {
+        let (writer, reader) = StdUnixStream::pair().expect("create exec-close socket pair");
+        reader
+            .set_nonblocking(true)
+            .expect("make exec-close reader nonblocking");
+        drop(writer);
+        let mut reader = tokio::net::UnixStream::from_std(reader).expect("register close reader");
+        read_start_result(&mut reader)
+            .await
+            .expect("control close proves successful exec");
+
+        let (mut writer, reader) = StdUnixStream::pair().expect("create rejection socket pair");
+        reader
+            .set_nonblocking(true)
+            .expect("make rejection reader nonblocking");
+        let expected = Error::new(ErrorCode::FailedPrecondition, "start hook failed")
+            .for_operation("run-oci-hook");
+        let reported = expected.clone();
+        let writer = tokio::task::spawn_blocking(move || {
+            write_rejection(&mut writer, &reported).expect("write start rejection");
+        });
+        let mut reader = tokio::net::UnixStream::from_std(reader).expect("register reject reader");
+        assert_eq!(
+            read_start_result(&mut reader)
+                .await
+                .expect_err("typed start rejection must fail"),
+            expected
+        );
+        writer.await.expect("start rejection writer");
     }
 
     #[tokio::test(flavor = "current_thread")]
