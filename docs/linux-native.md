@@ -89,12 +89,12 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v10` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v11` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
    `kill`, `delete`, `exec`, `wait`, `list`, `pause`, `resume`, `update`, `processes`,
-   `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
+   `stats`, `events`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
    `signal-process`, and `wait-process`, plus `prestart`, `createRuntime`,
    `createContainer`, `startContainer`, `poststart`, and `poststop` in the OCI
    feature document's normative order;
@@ -154,12 +154,16 @@ following:
 20. state reaches `stopped`;
 21. stopped-only delete and its exact retry succeed, and both inherited socket
     paths reject new connections afterward;
-22. a six-line trace proves exact hook order, `creating`, `created`, `running`,
+22. the host-owned event journal contains one ordered creating, created,
+    started, paused, resumed, resources-updated, stopped, and deleted event,
+    balanced exec create/start/exit events, the init exit, exact generation
+    identity, a monotonic cursor, and an empty replay-safe tail poll;
+23. a six-line trace proves exact hook order, `creating`, `created`, `running`,
     and `stopped` state, the exact container ID, OCI version, bundle path,
     annotations, and positive init PID for every live phase, with no PID in
     `poststop`;
-23. state returns `NotFound` and durable list is empty after delete;
-24. the marker, executor root, and complete smoke session are removed.
+24. state returns `NotFound` and durable list is empty after delete;
+25. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -298,7 +302,7 @@ done
 
 The versioned `a3s.oci.native-linux-fault-cleanup.v6` report requires:
 
-1. the exact 20-operation service inventory, requested prefix, and a positive
+1. the exact 21-operation service inventory, requested prefix, and a positive
    runtime-visible configured-process PID;
 2. marker absence behind create and exact marker contents after start;
 3. `normal_delete_attempted: false`;

@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use a3s_oci_core::{LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerRecord, ContainerTarget, ErrorCode, KillRequest, OciSchemaValidator, OperationId,
-    Result, ValidateRequest,
+    Result, RuntimeEventKind, ValidateRequest,
 };
 use serde::Serialize;
 
@@ -76,6 +78,16 @@ impl DurableStateStore {
                             )
                             .await?;
                         }
+                        self.append_container_event(
+                            "stopped",
+                            &ContainerTarget::exact(
+                                operation.container_id.clone(),
+                                operation.generation,
+                            ),
+                            RuntimeEventKind::ContainerStopped,
+                            BTreeMap::new(),
+                        )
+                        .await?;
                         operation.outcome = StoredOperationStatus::Succeeded {
                             response: stored.record.clone(),
                         };
@@ -248,6 +260,15 @@ impl DurableStateStore {
         )
         .await?;
         let response = stored.record.clone();
+        if *response.state.status() == ContainerState::Stopped {
+            self.append_container_event(
+                "stopped",
+                &ContainerTarget::exact(operation.container_id.clone(), operation.generation),
+                RuntimeEventKind::ContainerStopped,
+                BTreeMap::new(),
+            )
+            .await?;
+        }
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
         };

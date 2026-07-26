@@ -1,6 +1,6 @@
 use a3s_oci_sdk::{
     ContainerId, ContainerRecord, Error, ExitStatus, Generation, OperationId, ProcessId,
-    ProcessRecord,
+    ProcessRecord, RuntimeEvent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +9,9 @@ pub(super) const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.container-record.v1";
 pub(super) const GENERATION_SCHEMA_VERSION: &str = "a3s.oci.generation.v1";
 pub(super) const OPERATION_SCHEMA_VERSION: &str = "a3s.oci.operation.v1";
 pub(super) const PROCESS_SCHEMA_VERSION: &str = "a3s.oci.process-record.v1";
+pub(super) const EVENT_CURSOR_SCHEMA_VERSION: &str = "a3s.oci.event-cursor.v1";
+pub(super) const EVENT_CLAIM_SCHEMA_VERSION: &str = "a3s.oci.event-claim.v1";
+pub(super) const EVENT_RECORD_SCHEMA_VERSION: &str = "a3s.oci.event-record.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -53,6 +56,28 @@ pub(super) struct StoredProcess {
     pub active_operation: Option<OperationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_status: Option<ExitStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct StoredEventCursor {
+    pub schema_version: String,
+    pub last_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct StoredEventClaim {
+    pub schema_version: String,
+    pub identity: String,
+    pub event: RuntimeEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct StoredEventRecord {
+    pub schema_version: String,
+    pub event: RuntimeEvent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

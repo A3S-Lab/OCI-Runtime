@@ -128,10 +128,25 @@ async fn initialize_layout(root: &Path, faults: &dyn FaultInjector) -> Result<()
         .await?;
     }
 
-    for directory in ["containers", "generations", "operations", "quarantine"] {
+    for directory in [
+        "containers",
+        "generations",
+        "operations",
+        "quarantine",
+        "events",
+    ] {
         let path = root.join(directory);
         if path_exists(&path).await? {
             ensure_plain_directory(&path, directory).await?;
+            set_private_directory_permissions(&path).await?;
+        } else {
+            create_private_directory(&path).await?;
+        }
+    }
+    for directory in ["records", "keys"] {
+        let path = root.join("events").join(directory);
+        if path_exists(&path).await? {
+            ensure_plain_directory(&path, "runtime event directory").await?;
             set_private_directory_permissions(&path).await?;
         } else {
             create_private_directory(&path).await?;

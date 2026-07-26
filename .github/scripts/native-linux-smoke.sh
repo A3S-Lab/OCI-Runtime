@@ -179,7 +179,7 @@ run_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v10"
+    '.schema_version == "a3s.oci.native-linux-smoke.v11"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
@@ -187,13 +187,14 @@ run_smoke() {
      and .service_operations
          == ["features", "create", "state", "start", "kill", "delete",
              "exec", "wait", "list", "pause", "resume", "update", "processes",
-             "stats", "read-output", "write-stdin", "close-stdin", "resize",
+             "stats", "events", "read-output", "write-stdin", "close-stdin", "resize",
              "signal-process", "wait-process"]
      and .dedicated_vm_rejected_before_create
      and .create_returned_created
      and .create_replayed
      and .create_without_control_descriptors_rejected
      and .list_visible_after_create
+     and .events_verified
      and .hook_phases
          == ["prestart", "createRuntime", "createContainer", "startContainer",
              "poststart", "poststop"]
@@ -258,7 +259,7 @@ run_multi_container_smoke() {
      and .service_operations
          == ["features", "create", "state", "start", "kill", "delete",
              "exec", "wait", "list", "pause", "resume", "update", "processes",
-             "stats", "read-output", "write-stdin", "close-stdin", "resize",
+             "stats", "events", "read-output", "write-stdin", "close-stdin", "resize",
              "signal-process", "wait-process"]
      and .lifecycle.distinct_bundle_directories
      and .lifecycle.distinct_rootfs_directories
@@ -364,7 +365,7 @@ run_fault_cleanup() {
        and .service_operations
            == ["features", "create", "state", "start", "kill", "delete",
                "exec", "wait", "list", "pause", "resume", "update", "processes",
-               "stats", "read-output", "write-stdin", "close-stdin", "resize",
+               "stats", "events", "read-output", "write-stdin", "close-stdin", "resize",
                "signal-process", "wait-process"]
        and .lifecycle.requested_fault == $phase
        and .lifecycle.injected_fault == $phase

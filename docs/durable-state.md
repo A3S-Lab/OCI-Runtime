@@ -61,6 +61,12 @@ runtime-root/
 |   `-- <container-id>.json
 |-- operations/
 |   `-- <operation-id>.json
+|-- events/
+|   |-- sequence.json
+|   |-- keys/
+|   |   `-- <sha256-event-identity>.json
+|   `-- records/
+|       `-- <20-digit-sequence>.json
 `-- quarantine/
     |-- <operation-id>.deleted/
     `-- <operation-id>.failed-create/
@@ -148,6 +154,30 @@ optional exact isolation-class filter, and sorts the result by container ID.
 It never dispatches the driver. A malformed or unexpected entry fails the
 whole snapshot instead of being hidden from recovery callers.
 
+## Ordered Runtime Events
+
+The configured host also owns the runtime event stream; polling it never
+dispatches a driver or guest operation. Lifecycle, freezer, resource, exec,
+and wait reconciliation append exact-generation events under one global,
+nonzero sequence. A deterministic identity binds each logical event to its
+first sequence and contents, so retrying an operation or reopening the host
+cannot duplicate it.
+
+An append advances `events/sequence.json`, persists the identity claim under
+`events/keys/`, and then persists the sequence record under
+`events/records/`. This order permits a sequence gap after an interrupted
+cursor advance. A retained claim whose record is missing is repaired before
+polling, while an unclaimed record, duplicate claimed sequence, invalid event
+kind/process pairing, or conflicting replay fails closed. The operation
+outcome is committed only after its required events exist.
+
+`EventsRequest.after_sequence` is an exclusive cursor. Polling returns at
+most the requested bounded number of matching events and a `next_sequence`
+that can advance across events excluded by a container filter. A target
+without a generation matches all retained generations for that container ID;
+an exact target matches only that generation. An optional timeout enables
+long polling without changing cursor or replay semantics.
+
 ## Crash Boundary
 
 Each record replacement is individually crash durable. Core reconciliation
@@ -167,6 +197,8 @@ handles these interrupted states:
 - an interrupted update resumes the exact resource request, while a completed
   or failed update replays its exact durable outcome;
 - a moved delete tombstone completes an interrupted delete journal;
+- a claimed runtime event with a missing sequence record is reconstructed,
+  while a cursor-only advance remains an intentional permanent gap;
 - a process record created before its exec operation outcome is reconciled
   into the exact successful process result;
 - an exec or per-process signal claim interrupted before driver dispatch is
@@ -181,7 +213,7 @@ handles these interrupted states:
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 92 semantic mutations. Ninety atomic
+The registry currently contains 95 semantic mutations. Ninety-three atomic
 file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
@@ -193,7 +225,7 @@ file replacements are exercised at all seven commit stages:
 7. parent-directory sync.
 
 The delete and failed-create quarantine moves are each exercised after the
-rename, source-parent sync, and destination-parent sync. This expands to 636
+rename, source-parent sync, and destination-parent sync. This expands to 657
 durable fault points. The host matrix separately injects before and after all
 19 `RuntimeDriver` methods, including capability discovery, for another 38
 boundaries.

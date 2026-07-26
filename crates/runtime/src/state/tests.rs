@@ -16,6 +16,7 @@ use super::{
     RecordOperationPreparation, SignalProcessPreparation,
 };
 
+mod events;
 mod fault_matrix;
 
 const TEST_CONFIG: &str = concat!(
@@ -104,9 +105,12 @@ async fn initializes_and_exclusively_locks_an_absolute_root() {
         "generations",
         "operations",
         "quarantine",
+        "events",
     ] {
         assert!(store.root().join(entry).exists(), "{entry} must exist");
     }
+    assert!(store.root().join("events/records").is_dir());
+    assert!(store.root().join("events/keys").is_dir());
 
     let lock_error = DurableStateStore::open(&root)
         .await

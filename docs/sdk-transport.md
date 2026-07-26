@@ -109,11 +109,15 @@ start/wait failure paths. This makes foreground ownership and error cleanup
 deterministic while preserving the durable replay contract of every
 constituent mutation.
 
-The configured host always implements `list` directly from its durable state,
-without requiring or dispatching a driver operation. Results are sorted by
-container ID, may be filtered by exact `IsolationClass`, and fail closed if
-any live record, identity, schema, OCI state, or configuration digest is
-invalid. The host also requires the five core driver operations and advertises
+The configured host always implements `list` and `events` directly from its
+durable state, without requiring or dispatching driver operations. Container
+results are sorted by ID, may be filtered by exact `IsolationClass`, and fail
+closed if any live record, identity, schema, OCI state, or configuration
+digest is invalid. Event results use an exclusive global sequence cursor,
+support container-ID-wide or exact-generation filtering, bounded pagination,
+and optional long polling, and survive host-service reopen without
+duplication.
+The host also requires the five core driver operations and advertises
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
 `processes`, `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`,
 and `resize` only when the selected driver implements each one. `WaitRequest`
@@ -123,6 +127,35 @@ code in `0..=255` or a positive signal. Repeated waits must return the same
 terminal result. The native Linux driver and the protocol-v8 utility-VM guest
 path implement this contract while retaining agent protocol-v1 through protocol-v7
 compatibility; unsupported drivers fail before dispatch.
+
+Poll from the beginning with cursor zero, then pass each returned
+`next_sequence` to the next request. A filter without a generation follows
+all retained generations of that container ID:
+
+```rust,no_run
+use a3s_oci_sdk::{ContainerTarget, EventsRequest, RuntimeClient};
+
+async fn poll_events(
+    client: &RuntimeClient,
+    container: ContainerTarget,
+) -> a3s_oci_sdk::Result<()> {
+    let mut cursor = 0;
+    let batch = client
+        .events(EventsRequest {
+            container: Some(container),
+            after_sequence: cursor,
+            limit: 256,
+            wait_timeout_ms: Some(30_000),
+        })
+        .await?;
+    for event in &batch.events {
+        println!("{} {:?}", event.sequence, event.kind);
+    }
+    cursor = batch.next_sequence;
+    let _ = cursor;
+    Ok(())
+}
+```
 
 The protocol-v8 shared Linux executor implements exact-target exec,
 pidfd-backed per-process signal, stable per-process wait, cgroup-v2

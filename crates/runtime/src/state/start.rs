@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use a3s_oci_core::{LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerTarget, ErrorCode, OciSchemaValidator, OciSemanticPhase, OperationId, Result,
-    StartRequest, ValidateRequest,
+    RuntimeEventKind, StartRequest, ValidateRequest,
 };
 use serde::Serialize;
 
@@ -81,6 +83,26 @@ impl DurableStateStore {
                                         .container_directory(&operation.container_id)
                                         .join(super::CONTAINER_RECORD_FILE),
                                     &stored,
+                                )
+                                .await?;
+                            }
+                            let target = ContainerTarget::exact(
+                                operation.container_id.clone(),
+                                operation.generation,
+                            );
+                            self.append_container_event(
+                                "started",
+                                &target,
+                                RuntimeEventKind::ContainerStarted,
+                                BTreeMap::new(),
+                            )
+                            .await?;
+                            if *stored.record.state.status() == ContainerState::Stopped {
+                                self.append_container_event(
+                                    "stopped",
+                                    &target,
+                                    RuntimeEventKind::ContainerStopped,
+                                    BTreeMap::new(),
                                 )
                                 .await?;
                             }
@@ -296,6 +318,23 @@ impl DurableStateStore {
         )
         .await?;
         let response = stored.record.clone();
+        let target = ContainerTarget::exact(operation.container_id.clone(), operation.generation);
+        self.append_container_event(
+            "started",
+            &target,
+            RuntimeEventKind::ContainerStarted,
+            BTreeMap::new(),
+        )
+        .await?;
+        if *response.state.status() == ContainerState::Stopped {
+            self.append_container_event(
+                "stopped",
+                &target,
+                RuntimeEventKind::ContainerStopped,
+                BTreeMap::new(),
+            )
+            .await?;
+        }
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
         };

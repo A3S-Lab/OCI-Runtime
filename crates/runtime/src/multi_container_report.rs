@@ -387,6 +387,7 @@ impl NativeLinuxMultiContainerSmokeReport {
                     RuntimeOperation::Update,
                     RuntimeOperation::Processes,
                     RuntimeOperation::Stats,
+                    RuntimeOperation::Events,
                     RuntimeOperation::ReadOutput,
                     RuntimeOperation::WriteStdin,
                     RuntimeOperation::CloseStdin,

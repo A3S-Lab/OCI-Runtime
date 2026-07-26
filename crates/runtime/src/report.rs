@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v8";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v10";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v11";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -369,6 +369,8 @@ pub struct NativeLinuxSmokeReport {
     pub create_without_control_descriptors_rejected: bool,
     /// Whether unfiltered and isolation-filtered list returned the exact created record.
     pub list_visible_after_create: bool,
+    /// Whether the durable lifecycle and process event stream was exact and ordered.
+    pub events_verified: bool,
     /// OCI hook phases advertised by the configured native driver.
     pub hook_phases: Vec<String>,
     /// Whether all six hook phases received exact state in normative order.
@@ -451,6 +453,7 @@ impl NativeLinuxSmokeReport {
             create_replayed: false,
             create_without_control_descriptors_rejected: false,
             list_visible_after_create: false,
+            events_verified: false,
             hook_phases: Vec::new(),
             hooks_verified: false,
             created_pid: None,
@@ -518,6 +521,7 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Update,
                     RuntimeOperation::Processes,
                     RuntimeOperation::Stats,
+                    RuntimeOperation::Events,
                     RuntimeOperation::ReadOutput,
                     RuntimeOperation::WriteStdin,
                     RuntimeOperation::CloseStdin,
@@ -530,6 +534,7 @@ impl NativeLinuxSmokeReport {
             && self.create_replayed
             && self.create_without_control_descriptors_rejected
             && self.list_visible_after_create
+            && self.events_verified
             && self.hook_phases
                 == [
                     "prestart",

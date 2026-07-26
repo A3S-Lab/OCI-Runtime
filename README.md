@@ -91,6 +91,9 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   replay, fencing, reconciliation, and quarantine; cache stable init and
   exec-process exit status across host-service reopen, and enumerate a
   deterministic isolation-filtered snapshot without driver dispatch
+- **Ordered Runtime Events**: Persist exact-generation lifecycle and process
+  events behind a global nonzero sequence, with replay-safe identities,
+  bounded pagination, filtering, long polling, and crash repair
 - **Shared Linux Executor**: Reuse one fail-closed namespace, mount, pidfd
   init/exec process-control, cgroup-v2 pause/resume, live process inventory,
   stable per-process exit-status, and cleanup implementation directly on
@@ -604,8 +607,7 @@ I/O/hugetlb/RDMA/unified resources and cgroup v2 device-access filtering,
 broader device policies, multi-architecture seccomp and notification
 listeners, schedulers, LSMs, generic inherited process I/O beyond the fixed
 A3S Box control profile, real-driver reattachment after runtime-process
-restart,
-hook rollback/recovery/security-negative certification, events, checkpoint,
+restart, hook rollback/recovery/security-negative certification, checkpoint,
 and restore are still release gates.
 
 ### SDK and protocols
@@ -619,8 +621,9 @@ and restore are still release gates.
 - typed IDs, operation IDs, deadlines, generations, and isolation requests.
 
 The durable host implements the five core lifecycle operations plus sorted,
-isolation-filtered container enumeration around an injected `RuntimeDriver`.
-It conditionally exposes init wait, exact-target
+isolation-filtered container enumeration and ordered runtime events around an
+injected `RuntimeDriver`. Both queries are host-owned and never dispatch the
+driver. It conditionally exposes init wait, exact-target
 exec, per-process signal/wait, pause/resume, live resource update, process
 inventory, statistics, captured output, stdin write/close, and terminal resize
 only when that exact driver implements them. The native Linux driver maps all
@@ -818,7 +821,7 @@ cargo clippy \
 
 Platform CI covers:
 
-- the 636-point durable commit matrix and all 38 `RuntimeDriver` call
+- the 657-point durable commit matrix and all 38 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
   existing-namespace and rootfs/mount isolation, and three-phase no-delete

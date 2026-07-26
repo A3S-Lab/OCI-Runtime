@@ -414,6 +414,7 @@ impl OciRuntimeService for HostRuntimeService {
 
         let mut operations = BTreeSet::from([RuntimeOperation::Features]);
         if let Some(lifecycle) = &self.lifecycle {
+            operations.insert(RuntimeOperation::Events);
             operations.insert(RuntimeOperation::List);
             operations.extend(lifecycle.operations.iter().copied());
         }
@@ -826,8 +827,8 @@ impl OciRuntimeService for HostRuntimeService {
         Ok(stats)
     }
 
-    async fn events(&self, _request: EventsRequest) -> Result<EventBatch> {
-        Err(Error::unsupported("events"))
+    async fn events(&self, request: EventsRequest) -> Result<EventBatch> {
+        self.lifecycle("events")?.store.events(&request).await
     }
 
     async fn read_output(&self, request: ReadOutputRequest) -> Result<Vec<OutputChunk>> {
