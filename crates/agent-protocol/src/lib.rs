@@ -5,6 +5,7 @@
 //! negotiation, framing, validation, correlation, and typed dispatch.
 
 mod client;
+mod inherited_descriptor;
 mod model;
 mod server;
 mod transport;
@@ -12,6 +13,10 @@ mod validation;
 mod wire;
 
 pub use client::AgentClient;
+pub use inherited_descriptor::{
+    AgentInheritedDescriptorRole, AgentInheritedDescriptorSchema, AgentInheritedDescriptorSlot,
+    AgentInheritedDescriptorType,
+};
 pub use model::{
     AgentBundle, AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest,
     AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,

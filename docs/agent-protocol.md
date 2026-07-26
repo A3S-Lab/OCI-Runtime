@@ -328,8 +328,17 @@ proves the successful exec transition, while any pre-exec or start-hook error
 is returned as the exact bounded rejection. Create/start failures therefore
 retain their error class and context without trusting a pathname socket.
 
+Native Linux additionally exposes an in-process create method for A3S Box
+control descriptors. The host validates two listening Unix stream sockets and
+one writable regular file, duplicates collision-safe close-on-exec sources
+above targets 3/4/5, and installs those exact targets in the prepared child
+with `dup2`. Only the stable logical role/type/target schema participates in
+host and executor idempotency fingerprints. Raw FD and inode identities are
+never serialized into `AgentCreateRequest` or any protocol frame; the ordinary
+wire-service `create` always uses an empty descriptor plan.
+
 This is the first Linux executor vertical slice, not complete OCI
-enforcement. A pinned immutable system image, inherited-descriptor I/O,
+enforcement. A pinned immutable system image, generic inherited process I/O,
 rootless ID mapping, advanced mount semantics and resources, hook
 rollback/recovery/security-negative suites, exhaustive recovery injection,
 broader negative isolation cases, and full platform-specific lifecycle

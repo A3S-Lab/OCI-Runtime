@@ -2,6 +2,13 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_os = "linux")]
+use std::fs::OpenOptions;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixListener;
+
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
 };
@@ -20,6 +27,8 @@ use a3s_oci_sdk::{
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
+#[cfg(target_os = "linux")]
+use crate::DriverCreateAttachments;
 use crate::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
@@ -129,6 +138,14 @@ impl RecordingDriver {
     fn probe_only() -> Self {
         let mut driver = Self::supported();
         driver.capability.readiness = DriverReadiness::ProbeOnly;
+        driver
+    }
+
+    #[cfg(target_os = "linux")]
+    fn native_supported() -> Self {
+        let mut driver = Self::supported();
+        driver.capability.driver = DriverKind::NativeLinux;
+        driver.capability.isolation_classes = vec![IsolationClass::SharedHostKernel];
         driver
     }
 
@@ -912,6 +929,29 @@ fn create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn native_create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
+    let mut request = create_request(bundle_directory, operation);
+    request.isolation = IsolationRequest::SharedHostKernel;
+    request
+}
+
+#[cfg(target_os = "linux")]
+fn native_control_descriptors(directory: &Path, name: &str) -> crate::NativeControlDescriptors {
+    std::fs::create_dir_all(directory).expect("control descriptor directory");
+    let exec =
+        UnixListener::bind(directory.join(format!("{name}-exec.sock"))).expect("exec listener");
+    let pty = UnixListener::bind(directory.join(format!("{name}-pty.sock"))).expect("PTY listener");
+    let log = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(directory.join(format!("{name}-init.log")))
+        .expect("init log");
+    crate::NativeControlDescriptors::new(exec, pty, log).expect("native control descriptors")
+}
+
 fn exec_request(container: ContainerTarget, operation: &str, process_id: &str) -> ExecRequest {
     let process: Process = serde_json::from_value(serde_json::json!({
         "terminal": false,
@@ -1354,6 +1394,101 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
         .await
         .expect_err("deleted state must not remain visible");
     assert_eq!(error.code, ErrorCode::NotFound);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn native_control_create_is_forwarded_durable_and_reopened_by_logical_schema() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::native_supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+    let create = native_create_request(&bundle_directory, "native-control-create");
+    let descriptors = native_control_descriptors(&temporary.path().join("control"), "first");
+
+    let created = service
+        .create_with_native_control_descriptors(create.clone(), descriptors.clone())
+        .await
+        .expect("native control create");
+    assert_eq!(
+        service
+            .create_with_native_control_descriptors(create.clone(), descriptors)
+            .await
+            .expect("replay native control create"),
+        created
+    );
+    let calls = driver.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Create(_)))
+            .count(),
+        1
+    );
+    let DriverCall::Create(driver_create) = calls
+        .iter()
+        .find(|call| matches!(call, DriverCall::Create(_)))
+        .expect("driver create call")
+    else {
+        unreachable!("matched create call")
+    };
+    assert!(matches!(
+        driver_create.attachments,
+        DriverCreateAttachments::NativeControl(_)
+    ));
+
+    let error = service
+        .create(create.clone())
+        .await
+        .expect_err("retry without native descriptors must conflict");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    drop(service);
+
+    let reopened = open_service(&temporary, Arc::clone(&driver)).await;
+    let reopened_descriptors =
+        native_control_descriptors(&temporary.path().join("control"), "reopened");
+    assert_eq!(
+        reopened
+            .create_with_native_control_descriptors(create, reopened_descriptors)
+            .await
+            .expect("replay with reopened equivalent resources"),
+        created
+    );
+    assert_eq!(driver.calls(), calls);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn non_native_driver_rejects_control_descriptors_without_claiming_operation() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+    let create = create_request(&bundle_directory, "non-native-control-create");
+    let descriptors = native_control_descriptors(&temporary.path().join("control"), "rejected");
+
+    let error = service
+        .create_with_native_control_descriptors(create.clone(), descriptors)
+        .await
+        .expect_err("non-native driver must reject control descriptors");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("does not accept"));
+    assert!(driver.calls().is_empty());
+
+    service
+        .create(create)
+        .await
+        .expect("rejected attachment must not claim operation ID");
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Create(_)))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

@@ -90,10 +90,15 @@ Create uses two durable stages:
    response.
 
 The create request digest excludes retry metadata but includes container ID,
-bundle, isolation request, and process I/O. Reusing an `OperationId` for a
-different request fails with `failed-precondition`. A matching prepared
-operation resumes the original generation; a matching completed operation
-returns its exact recorded response.
+bundle, isolation request, process I/O, and the optional stable inherited
+descriptor schema. The A3S Box schema records the exec-listener, PTY-listener,
+and init-log roles, kernel-object types, and targets 3/4/5; it deliberately
+excludes ephemeral source FD numbers and inode identities so an exact retry
+after host restart may reopen equivalent resources. Reusing an `OperationId`
+for a different request or omitting a previously attached schema fails with
+`failed-precondition`. A matching prepared operation resumes the original
+generation; a matching completed operation returns its exact recorded
+response.
 
 Start, kill, pause, resume, update, and delete use the same global journal and
 request fingerprinting. Each accepted mutation claims the target record so a

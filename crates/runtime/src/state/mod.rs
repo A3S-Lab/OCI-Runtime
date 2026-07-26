@@ -144,13 +144,25 @@ impl DurableStateStore {
     }
 
     /// Durably reserve an OCI create before invoking a driver.
+    #[cfg(test)]
     pub(crate) async fn prepare_create(
         &self,
         request: &CreateRequest,
         driver: DriverKind,
     ) -> Result<RecordOperationPreparation> {
+        self.prepare_create_with_inherited_descriptors(request, driver, None)
+            .await
+    }
+
+    /// Durably reserve a create with its stable process-local attachment schema.
+    pub(crate) async fn prepare_create_with_inherited_descriptors(
+        &self,
+        request: &CreateRequest,
+        driver: DriverKind,
+        inherited_descriptors: Option<&a3s_oci_agent_protocol::AgentInheritedDescriptorSchema>,
+    ) -> Result<RecordOperationPreparation> {
         request.validate()?;
-        let request_digest = create_request_digest(request)?;
+        let request_digest = create_request_digest(request, inherited_descriptors)?;
         let _guard = self.gate.lock().await;
 
         if let Some(operation) = self

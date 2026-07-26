@@ -438,7 +438,10 @@ then may HVF become `experimental`.
 - [x] Backpressured piped stdin, bounded captured stdout/stderr, controlling
   PTYs, initial terminal dimensions, resize, merged terminal output, VEOF
   close, signals, and byte-accurate output cursors.
-- [ ] Inherited host/guest descriptor handoff and listener/log integration.
+- [x] Native inherited descriptor handoff for the A3S Box exec listener on FD
+  3, PTY listener on FD 4, and dedicated init log on FD 5, with type/role/count
+  validation, collision-safe child `dup2`, stable host/agent replay schemas,
+  non-native rejection, exact listener/log lifecycle evidence, and cleanup.
 - [x] Update and stats.
 - [ ] Ordered events.
 

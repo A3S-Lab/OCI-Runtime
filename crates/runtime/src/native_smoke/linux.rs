@@ -6,12 +6,14 @@ use a3s_oci_sdk::{OciBundle, RuntimeClient};
 
 use crate::{HostRuntimeService, NativeLinuxDriver, NativeLinuxSmokeReport, RuntimeDriver};
 
+mod control_descriptors;
 mod fault_cleanup;
 mod filesystem;
 mod lifecycle;
 mod multi_container;
 mod process;
 
+use control_descriptors::{enable_workload_verification, ControlDescriptorFixture};
 use filesystem::{
     canonical_directory, create_private_directory, fixed_rootfs, path_exists, remove_marker,
     unique_nonce, MARKER_NAME,
@@ -59,6 +61,10 @@ pub(super) async fn run(
         }
         Err(error) => return failed(report, format!("failed to load OCI bundle: {error}")),
     };
+    let bundle = match enable_workload_verification(&bundle) {
+        Ok(bundle) => bundle,
+        Err(reason) => return failed(report, reason),
+    };
     let rootfs = match fixed_rootfs(&bundle).await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
@@ -91,6 +97,13 @@ pub(super) async fn run(
     if let Err(reason) = create_private_directory(&executor_parent).await {
         return cleanup_session(report, &session_root, reason).await;
     }
+    let mut control_descriptors = match ControlDescriptorFixture::create(&session_root).await {
+        Ok(fixture) => {
+            report.control_descriptors_prepared = true;
+            fixture
+        }
+        Err(reason) => return cleanup_session(report, &session_root, reason).await,
+    };
 
     let driver = match NativeLinuxDriver::open_experimental(&executor_parent, init_executable).await
     {
@@ -116,7 +129,16 @@ pub(super) async fn run(
     };
     let client = RuntimeClient::new(service.clone());
 
-    let exercise = exercise(&client, &bundle, &nonce, &marker, &hook_trace, &mut report).await;
+    let exercise = exercise(
+        &service,
+        &bundle,
+        &nonce,
+        &marker,
+        &hook_trace,
+        &mut control_descriptors,
+        &mut report,
+    )
+    .await;
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;
     }

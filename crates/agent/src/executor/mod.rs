@@ -5,6 +5,7 @@ mod device;
 mod exec;
 mod exec_process;
 mod hook;
+mod inherited_descriptor;
 mod init;
 mod io;
 mod mount;
@@ -59,6 +60,7 @@ use state::{
     ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
 };
 
+pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
@@ -241,6 +243,7 @@ impl LinuxExecutor {
         &self,
         state: &mut ExecutorState,
         request: &AgentCreateRequest,
+        inherited_descriptors: InheritedDescriptorPlan,
     ) -> Result<AgentState> {
         validate_deadline(&request.context)?;
         let key = ContainerKey::from_target(&request.target)?;
@@ -302,6 +305,7 @@ impl LinuxExecutor {
             state.cgroup_manager.as_ref(),
             &request.io,
             &hook_state,
+            inherited_descriptors,
         )
         .await
         {
@@ -333,6 +337,31 @@ impl LinuxExecutor {
             },
         );
         Ok(response)
+    }
+
+    /// Create through the native in-process path with validated inherited
+    /// workload descriptors. Raw descriptors never enter an agent frame.
+    pub async fn create_with_inherited_descriptors(
+        &self,
+        request: AgentCreateRequest,
+        inherited_descriptors: InheritedDescriptorPlan,
+    ) -> Result<AgentState> {
+        let operation = RecordedRequest::create(&request, inherited_descriptors.schema())?;
+        let operation_id = request.context.operation_id.clone();
+        let mut state = self.state.lock().await;
+        if let Some(result) = state.replay_state(&operation_id, &operation) {
+            return result;
+        }
+        state.reserve_operation(&operation_id)?;
+        let result = self
+            .create_new(&mut state, &request, inherited_descriptors)
+            .await;
+        state.record(
+            operation_id,
+            operation,
+            RecordedOutcome::State(result.clone()),
+        );
+        result
     }
 
     async fn start_new(
@@ -587,20 +616,8 @@ impl GuestAgentService for LinuxExecutor {
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
-        let operation = RecordedRequest::new(MutationKind::Create, &request)?;
-        let operation_id = request.context.operation_id.clone();
-        let mut state = self.state.lock().await;
-        if let Some(result) = state.replay_state(&operation_id, &operation) {
-            return result;
-        }
-        state.reserve_operation(&operation_id)?;
-        let result = self.create_new(&mut state, &request).await;
-        state.record(
-            operation_id,
-            operation,
-            RecordedOutcome::State(result.clone()),
-        );
-        result
+        self.create_with_inherited_descriptors(request, InheritedDescriptorPlan::empty())
+            .await
     }
 
     async fn state(&self, request: AgentStateRequest) -> Result<AgentState> {

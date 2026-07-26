@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverKind;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
@@ -195,6 +196,54 @@ async fn create_is_durable_idempotent_and_generation_fenced() {
             .expect("state must survive reopen"),
         completed
     );
+}
+
+#[tokio::test]
+async fn descriptor_bearing_create_is_durable_and_replays_after_reopen() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let request = create_request(
+        &bundle_directory,
+        "descriptor-container",
+        "descriptor-create",
+    );
+    let schema = AgentInheritedDescriptorSchema::a3s_box_control_v1();
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    let prepared = store
+        .prepare_create_with_inherited_descriptors(&request, DriverKind::NativeLinux, Some(&schema))
+        .await
+        .expect("prepare descriptor create");
+    assert!(matches!(prepared, RecordOperationPreparation::Prepared(_)));
+    let created = store
+        .complete_create(&request.context.operation_id, 4_242)
+        .await
+        .expect("complete descriptor create");
+    drop(store);
+
+    let reopened = DurableStateStore::open(&root)
+        .await
+        .expect("reopen state root");
+    let equivalent_schema = AgentInheritedDescriptorSchema::a3s_box_control_v1();
+    assert_eq!(
+        reopened
+            .prepare_create_with_inherited_descriptors(
+                &request,
+                DriverKind::NativeLinux,
+                Some(&equivalent_schema),
+            )
+            .await
+            .expect("replay descriptor create"),
+        RecordOperationPreparation::Replayed(created)
+    );
+    let error = reopened
+        .prepare_create_with_inherited_descriptors(&request, DriverKind::NativeLinux, None)
+        .await
+        .expect_err("retry without descriptors must conflict");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
 }
 
 #[tokio::test]

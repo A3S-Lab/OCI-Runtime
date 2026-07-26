@@ -6,14 +6,18 @@ use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, State};
 use a3s_oci_sdk::{
     ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
     DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, ListRequest,
-    OciBundle, OperationContext, OperationId, ProcessIo, ProcessTarget, ProcessesRequest,
-    RuntimeClient, Signal, StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitRequest,
+    OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo, ProcessTarget,
+    ProcessesRequest, RuntimeClient, Signal, StartRequest, StateRequest, StatsRequest,
+    UpdateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
+use super::control_descriptors::ControlDescriptorFixture;
 use super::filesystem::{path_exists, read_marker, MARKER_CONTENTS};
 use super::process;
-use crate::{FaultInjectionEvidence, LifecycleFaultPoint, NativeLinuxSmokeReport};
+use crate::{
+    FaultInjectionEvidence, HostRuntimeService, LifecycleFaultPoint, NativeLinuxSmokeReport,
+};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -24,13 +28,15 @@ pub(super) const HOOK_TRACE_NAME: &str = ".a3s-oci-hook-trace";
 const UPDATED_MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
 
 pub(super) async fn exercise(
-    client: &RuntimeClient,
+    service: &HostRuntimeService,
     bundle: &OciBundle,
     nonce: &str,
     marker: &Path,
     hook_trace: &Path,
+    control_descriptors: &mut ControlDescriptorFixture,
     report: &mut NativeLinuxSmokeReport,
 ) -> Result<(), String> {
+    let client = RuntimeClient::new(service.clone());
     let features = native_call("features", client.features()).await?;
     report.service_operations = features.operations;
     report.hook_phases = features.oci.hooks().clone().unwrap_or_default();
@@ -52,12 +58,17 @@ pub(super) async fn exercise(
     let mut dedicated = create.clone();
     dedicated.isolation = IsolationRequest::DedicatedVm;
     report.dedicated_vm_rejected_before_create =
-        dedicated_vm_is_rejected(client, dedicated).await?;
+        dedicated_vm_is_rejected(&client, dedicated).await?;
     if !report.dedicated_vm_rejected_before_create {
         return Err("native runtime accepted dedicated-VM isolation".into());
     }
 
-    let created = native_call("create", client.create(create.clone())).await?;
+    let descriptors = control_descriptors.take_descriptors()?;
+    let created = native_call(
+        "create with native control descriptors",
+        service.create_with_native_control_descriptors(create.clone(), descriptors.clone()),
+    )
+    .await?;
     report.create_returned_created = *created.state.status() == ContainerState::Created;
     report.created_pid = *created.state.pid();
     if !report.create_returned_created {
@@ -74,10 +85,19 @@ pub(super) async fn exercise(
     if observed != created {
         return Err("native state after create did not match the created response".into());
     }
-    let replayed = native_call("replayed create", client.create(create)).await?;
+    let replayed = native_call(
+        "replayed create with native control descriptors",
+        service.create_with_native_control_descriptors(create.clone(), descriptors),
+    )
+    .await?;
     report.create_replayed = replayed == created;
     if !report.create_replayed {
         return Err("native runtime did not exactly replay create".into());
+    }
+    report.create_without_control_descriptors_rejected =
+        create_without_descriptors_is_rejected(service, create).await?;
+    if !report.create_without_control_descriptors_rejected {
+        return Err("descriptor-bearing create replayed without its logical schema".into());
     }
     let listed = native_call("list after create", client.list(ListRequest::default())).await?;
     let filtered = native_call(
@@ -116,15 +136,19 @@ pub(super) async fn exercise(
     if !report.start_released {
         return Err("native start did not leave the workload running".into());
     }
-    wait_for_marker(client, &target, marker, report).await?;
-    process::exercise_process_io(client, &target, nonce).await?;
+    wait_for_marker(&client, &target, marker, report).await?;
+    control_descriptors.verify_listeners().await?;
+    report.control_listener_connectivity_verified = true;
+    control_descriptors.verify_init_log().await?;
+    report.control_init_log_verified = true;
+    process::exercise_process_io(&client, &target, nonce).await?;
     report.process_io_verified = true;
-    process::exercise_terminal_io(client, &target, nonce).await?;
+    process::exercise_terminal_io(&client, &target, nonce).await?;
     report.terminal_io_verified = true;
     let cleanup_process =
-        process::exercise_before_init_exit(client, &target, nonce, PROGRESS_PATH).await?;
-    exercise_control_plane(client, &target, &cleanup_process, nonce, marker, report).await?;
-    report.wait_timeout_enforced = wait_times_out_while_running(client, &target).await?;
+        process::exercise_before_init_exit(&client, &target, nonce, PROGRESS_PATH).await?;
+    exercise_control_plane(&client, &target, &cleanup_process, nonce, marker, report).await?;
+    report.wait_timeout_enforced = wait_times_out_while_running(&client, &target).await?;
     if !report.wait_timeout_enforced {
         return Err("native wait returned before the running init process exited".into());
     }
@@ -172,8 +196,8 @@ pub(super) async fn exercise(
     if !report.wait_replayed {
         return Err("native repeated wait returned a different exit status".into());
     }
-    process::verify_after_init_exit(client, &target, cleanup_process, &waited).await?;
-    report.stopped_observed = wait_until_stopped(client, &target).await?;
+    process::verify_after_init_exit(&client, &target, cleanup_process, &waited).await?;
+    report.stopped_observed = wait_until_stopped(&client, &target).await?;
 
     let delete = DeleteRequest {
         context: operation(nonce, "delete")?,
@@ -189,7 +213,7 @@ pub(super) async fn exercise(
     if !report.hooks_verified {
         return Err("native OCI hooks did not preserve exact order and state".into());
     }
-    report.state_missing_after_delete = state_is_missing(client, target).await?;
+    report.state_missing_after_delete = state_is_missing(&client, target).await?;
     if !report.state_missing_after_delete {
         return Err("native state remained visible after delete".into());
     }
@@ -200,7 +224,23 @@ pub(super) async fn exercise(
     if !report.list_empty_after_delete {
         return Err("native durable list retained a deleted container".into());
     }
+    control_descriptors.verify_closed().await?;
+    report.control_descriptors_closed_after_delete = true;
     Ok(())
+}
+
+async fn create_without_descriptors_is_rejected(
+    service: &HostRuntimeService,
+    request: CreateRequest,
+) -> Result<bool, String> {
+    match service.create(request).await {
+        Err(error) if error.code == ErrorCode::FailedPrecondition => Ok(true),
+        Err(error) => Err(native_error(
+            "retry descriptor-bearing create without descriptors",
+            &error,
+        )),
+        Ok(_) => Ok(false),
+    }
 }
 
 async fn verify_hook_trace(

@@ -16,7 +16,7 @@ mod executor;
 mod vsock;
 
 #[cfg(target_os = "linux")]
-pub use executor::LinuxExecutor;
+pub use executor::{InheritedDescriptorPlan, LinuxExecutor};
 
 /// Verify that the Linux kernel supports PID-reuse-safe pidfd signaling.
 #[cfg(target_os = "linux")]

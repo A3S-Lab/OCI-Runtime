@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use a3s_oci_agent_protocol::{AgentProcess, AgentState};
+use a3s_oci_agent_protocol::{AgentInheritedDescriptorSchema, AgentProcess, AgentState};
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
     ContainerStats, ErrorCode, ExitStatus, OperationId, ProcessId, ProcessRecord, ProcessTarget,
@@ -289,6 +289,26 @@ impl RecordedRequest {
             digest: Sha256::digest(encoded).into(),
         })
     }
+
+    pub(super) fn create(
+        request: &impl Serialize,
+        inherited_descriptors: Option<&AgentInheritedDescriptorSchema>,
+    ) -> Result<Self> {
+        #[derive(Serialize)]
+        struct CreateFingerprint<'a, T> {
+            request: &'a T,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            inherited_descriptors: Option<&'a AgentInheritedDescriptorSchema>,
+        }
+
+        Self::new(
+            MutationKind::Create,
+            &CreateFingerprint {
+                request,
+                inherited_descriptors,
+            },
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +374,7 @@ fn process_record(
 
 #[cfg(test)]
 mod tests {
+    use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
     use a3s_oci_sdk::{ErrorCode, OperationId};
     use serde_json::json;
 
@@ -403,5 +424,26 @@ mod tests {
             .expect("operation exists")
             .expect_err("cross-kind reuse must fail");
         assert_eq!(error.code, ErrorCode::Conflict);
+    }
+
+    #[test]
+    fn create_fingerprint_includes_only_the_stable_descriptor_schema() {
+        let request = json!({"target": "container-1"});
+        let first_schema = AgentInheritedDescriptorSchema::a3s_box_control_v1();
+        let reopened_equivalent = AgentInheritedDescriptorSchema::a3s_box_control_v1();
+        let first = RecordedRequest::create(&request, Some(&first_schema))
+            .expect("fingerprint descriptor create");
+        let retry = RecordedRequest::create(&request, Some(&reopened_equivalent))
+            .expect("fingerprint equivalent descriptor create");
+        let without_descriptors =
+            RecordedRequest::create(&request, None).expect("fingerprint ordinary create");
+        assert_eq!(first, retry);
+        assert_ne!(first, without_descriptors);
+
+        let mut changed_schema = reopened_equivalent;
+        changed_schema.slots[0].target = 6;
+        let changed = RecordedRequest::create(&request, Some(&changed_schema))
+            .expect("fingerprint changed descriptor schema");
+        assert_ne!(first, changed);
     }
 }

@@ -179,10 +179,11 @@ run_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v9"
+    '.schema_version == "a3s.oci.native-linux-smoke.v10"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
+     and .control_descriptors_prepared
      and .service_operations
          == ["features", "create", "state", "start", "kill", "delete",
              "exec", "wait", "list", "pause", "resume", "update", "processes",
@@ -191,6 +192,7 @@ run_smoke() {
      and .dedicated_vm_rejected_before_create
      and .create_returned_created
      and .create_replayed
+     and .create_without_control_descriptors_rejected
      and .list_visible_after_create
      and .hook_phases
          == ["prestart", "createRuntime", "createContainer", "startContainer",
@@ -214,10 +216,13 @@ run_smoke() {
      and .wait_replayed
      and .stopped_observed
      and .marker_verified
+     and .control_listener_connectivity_verified
+     and .control_init_log_verified
      and .delete_succeeded
      and .delete_replayed
      and .state_missing_after_delete
      and .list_empty_after_delete
+     and .control_descriptors_closed_after_delete
      and .marker_removed
      and .executor_runtime_clean
      and .session_root_clean

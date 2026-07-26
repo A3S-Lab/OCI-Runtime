@@ -89,7 +89,7 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v9` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v10` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
@@ -100,56 +100,66 @@ following:
    feature document's normative order;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
-3. create returns the positive host-visible PID of the configured process in
+3. the process-local native create validates the A3S Box exec listener, PTY
+   listener, and writable init log, duplicates collision-safe sources above
+   every target, and exposes them only as descriptors 3, 4, and 5;
+4. create returns the positive host-visible PID of the configured process in
    the exact OCI `created` state while a dedicated namespace PID 1 remains
    behind it;
-4. the workload marker is absent before start;
-5. retrying create replays its exact result; unfiltered and shared-host-kernel
-   list return that exact record while a dedicated-VM filter returns none;
-6. start releases `startContainer`, confirms the configured process crossed
+5. the workload marker is absent before start;
+6. retrying create with equivalent resources replays its exact result, while
+   retrying without the stable attachment schema fails; source FD numbers and
+   inode identities never enter the fingerprint; unfiltered and
+   shared-host-kernel list return the exact record while a dedicated-VM filter
+   returns none;
+7. start releases `startContainer`, confirms the configured process crossed
    `execve`, runs `poststart`, and returns; the workload verifies exact rootful
    UID/GID maps, monotonic and boottime namespace offsets, and an applied
-   `RLIMIT_NOFILE` soft/hard value of 64 before the marker is observed;
-7. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48;
+   `RLIMIT_NOFILE` soft/hard value of 64, verifies FD 3 and FD 4 are sockets,
+   and writes the exact `a3s-box-native-control-v1\n` bytes through FD 5
+   before the marker is observed; the host connects to both inherited
+   listeners and reads back the exact log;
+8. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48;
    exec and its retry return the same positive authenticated PID, a duplicate
    process ID is rejected, and a 50-millisecond process wait returns
    `DeadlineExceeded`;
-8. per-process `SIGKILL` and its exact retry succeed through the retained
+9. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
-9. process inventory returns exactly the live init and second exec process;
-10. one exact durable update changes memory limit/reservation/swap, CPU
+10. process inventory returns exactly the live init and second exec process;
+11. one exact durable update changes memory limit/reservation/swap, CPU
    shares/quota/period/cpuset, and the PID limit; retrying it returns the same
    container record;
-11. two normalized stats snapshots remain generation-fenced, expose positive
+12. two normalized stats snapshots remain generation-fenced, expose positive
    CPU and process counters, retain the updated memory limit, and carry the
    expected cgroup-v2 event metrics;
-12. an exact-target process accepts piped stdin, returns captured stdout and
+13. an exact-target process accepts piped stdin, returns captured stdout and
    stderr through byte-accurate partial pagination, emits EOF for both streams,
    accepts repeated stdin close, and rejects writes after close or exit;
-13. a terminal process starts with a controlling 80x24 PTY, reports the initial
+14. a terminal process starts with a controlling 80x24 PTY, reports the initial
     and resized 120x40 dimensions, accepts interactive input through merged
     output, advances one byte cursor through EOF, and accepts repeated close
     while delivering `VEOF` to a live terminal reader;
-14. pause and its replay expose a durable frozen state, the progress-producing
+15. pause and its replay expose a durable frozen state, the progress-producing
    exec remains unchanged for a bounded interval, resume and its replay expose
    a durable thawed state, and that same exec advances again;
-15. the second live exec is terminated and reaped automatically when init
+16. the second live exec is terminated and reaped automatically when init
    exits, while process ID `init` returns the same result as lifecycle wait;
-16. a 50-millisecond wait returns `DeadlineExceeded` while the configured
+17. a 50-millisecond wait returns `DeadlineExceeded` while the configured
    process is still running;
-17. `SIGKILL` reaches the configured process through its retained pidfd, and
+18. `SIGKILL` reaches the configured process through its retained pidfd, and
    both internal supervisors preserve the exact signal result while retrying
    kill replays its exact result;
-18. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
+19. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
    the same terminal result;
-19. state reaches `stopped`;
-20. stopped-only delete and its exact retry succeed;
-21. a six-line trace proves exact hook order, `creating`, `created`, `running`,
+20. state reaches `stopped`;
+21. stopped-only delete and its exact retry succeed, and both inherited socket
+    paths reject new connections afterward;
+22. a six-line trace proves exact hook order, `creating`, `created`, `running`,
     and `stopped` state, the exact container ID, OCI version, bundle path,
     annotations, and positive init PID for every live phase, with no PID in
     `poststop`;
-22. state returns `NotFound` and durable list is empty after delete;
-23. the marker, executor root, and complete smoke session are removed.
+23. state returns `NotFound` and durable list is empty after delete;
+24. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -183,7 +193,8 @@ The script installs `busybox-static` and `jq`, builds the matching
 100000:200000-owned, searchable rootfs, `/proc` mount target, and writable hook
 trace, injects one hook for every OCI phase, checks that the on-disk ownership
 and OCI mappings match, requires the workload to read back its file-descriptor
-limit, executes both KVM-independent cases, and removes its qualification
+limit, binds the two host-visible Unix listeners and dedicated init log before
+create, executes both KVM-independent cases, and removes its qualification
 directory on exit.
 
 ## Multi-container generation gate
@@ -312,8 +323,8 @@ The default driver must remain `probe-only` until at least the following pass:
 - remaining mount and credential controls, broader cgroup v2 policies and
   device-access BPF, multi-architecture/notification seccomp, and LSM
   enforcement;
-- real-driver reattachment after runtime-process restart, plus
-  inherited-descriptor I/O handling;
+- real-driver reattachment after runtime-process restart, plus generic SDK
+  inherited process-I/O modes beyond the fixed A3S Box init-control profile;
 - hook rollback/recovery/security-negative and soak suites, durable recovery
   for the remaining mutating operations, descriptor-relative path handling,
   transport-level fault injection, and adversarial cleanup;
