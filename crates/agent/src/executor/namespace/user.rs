@@ -173,33 +173,57 @@ pub(in crate::executor) fn apply_supplementary_groups(
     groups: &[u32],
     operation: &str,
 ) -> Result<()> {
-    let policy = std::fs::read_to_string("/proc/self/setgroups").map_err(|error| {
-        namespace_error(
-            ErrorCode::FailedPrecondition,
-            format!("failed to inspect user namespace setgroups policy: {error}"),
-        )
-    })?;
-    match policy.trim() {
-        "allow" => {
-            // SAFETY: `groups` is a live bounded slice of Linux gid_t values.
-            if unsafe { libc::setgroups(groups.len(), groups.as_ptr().cast()) } == 0 {
-                Ok(())
-            } else {
-                Err(namespace_error(
-                    ErrorCode::PermissionDenied,
-                    format!("failed to {operation}: {}", std::io::Error::last_os_error()),
-                ))
-            }
+    let policy = match std::fs::read_to_string("/proc/self/setgroups") {
+        Ok(policy) => Some(policy),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return apply_supplementary_groups_without_proc(groups, operation, Some(error));
         }
-        "deny" if groups.is_empty() => ensure_no_supplementary_groups(operation),
-        "deny" => Err(namespace_error(
+    };
+    match policy.as_deref().map(str::trim) {
+        Some("allow") => set_supplementary_groups(groups, operation),
+        Some("deny") if groups.is_empty() => ensure_no_supplementary_groups(operation),
+        Some("deny") => Err(namespace_error(
             ErrorCode::Unsupported,
             format!("cannot {operation} because this rootless user namespace has setgroups=deny"),
         )),
-        value => Err(namespace_error(
+        Some(value) => Err(namespace_error(
             ErrorCode::FailedPrecondition,
             format!("user namespace exposes unknown setgroups policy {value:?}"),
         )),
+        None => apply_supplementary_groups_without_proc(groups, operation, None),
+    }
+}
+
+fn apply_supplementary_groups_without_proc(
+    groups: &[u32],
+    operation: &str,
+    policy_error: Option<io::Error>,
+) -> Result<()> {
+    match set_supplementary_groups(groups, operation) {
+        Ok(()) => Ok(()),
+        Err(_) if groups.is_empty() => ensure_no_supplementary_groups(operation),
+        Err(error) => {
+            let detail = policy_error.map_or_else(String::new, |policy_error| {
+                format!("; setgroups policy could not be inspected: {policy_error}")
+            });
+            Err(namespace_error(
+                error.code,
+                format!("{}{detail}", error.message),
+            ))
+        }
+    }
+}
+
+fn set_supplementary_groups(groups: &[u32], operation: &str) -> Result<()> {
+    // SAFETY: `groups` is a live bounded slice of Linux gid_t values.
+    if unsafe { libc::setgroups(groups.len(), groups.as_ptr().cast()) } == 0 {
+        Ok(())
+    } else {
+        Err(namespace_error(
+            ErrorCode::PermissionDenied,
+            format!("failed to {operation}: {}", io::Error::last_os_error()),
+        ))
     }
 }
 
