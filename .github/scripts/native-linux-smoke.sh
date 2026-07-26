@@ -107,13 +107,14 @@ qualification_root="$(mktemp -d /var/tmp/a3s-oci-native.XXXXXXXX)"
 bundle="$qualification_root/bundle"
 bundle_b="$qualification_root/bundle-b"
 rootless_bundle="$qualification_root/rootless-bundle"
+rootless_bin="$qualification_root/rootless-bin"
 work_parent="$qualification_root/work"
 rootless_work_parent="$qualification_root/rootless-work"
 mkdir -p \
   "$bundle/rootfs/bin" "$bundle/rootfs/proc" \
   "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
   "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/proc" \
-  "$work_parent" "$rootless_work_parent"
+  "$rootless_bin" "$work_parent" "$rootless_work_parent"
 for candidate in "$bundle" "$bundle_b"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
@@ -233,7 +234,14 @@ jq \
   "$rootless_bundle/config.json" >"$rootless_bundle/config.json.tmp"
 mv "$rootless_bundle/config.json.tmp" "$rootless_bundle/config.json"
 sudo chown -R "$rootless_uid:$rootless_gid" \
-  "$rootless_bundle" "$rootless_work_parent"
+  "$rootless_bin" "$rootless_bundle" "$rootless_work_parent"
+sudo install \
+  --owner="$rootless_uid" \
+  --group="$rootless_gid" \
+  --mode=0755 \
+  "$PWD/target/debug/a3s-oci" \
+  "$PWD/target/debug/a3s-oci-agent" \
+  "$rootless_bin/"
 sudo touch "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate"
 sudo chown 300000:400000 \
   "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate"
@@ -535,8 +543,8 @@ run_rootless_smoke() {
       --regid="$rootless_gid" \
       --clear-groups \
       -- \
-      "$PWD/target/debug/a3s-oci" native-linux-rootless-smoke \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
+      "$rootless_bin/a3s-oci" native-linux-rootless-smoke \
+      --agent "$rootless_bin/a3s-oci-agent" \
       --bundle "$rootless_bundle" \
       --work-parent "$rootless_work_parent")"; then
     status=0
