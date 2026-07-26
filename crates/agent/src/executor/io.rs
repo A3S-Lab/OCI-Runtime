@@ -70,16 +70,19 @@ impl ProcessIoHandle {
         command.stdin(match io.stdin {
             IoMode::Null => std::process::Stdio::null(),
             IoMode::Pipe => std::process::Stdio::piped(),
+            IoMode::Inherit => std::process::Stdio::inherit(),
             mode => return Err(unsupported_mode("stdin", mode)),
         });
         command.stdout(match io.stdout {
             IoMode::Null => std::process::Stdio::null(),
             IoMode::Capture => std::process::Stdio::piped(),
+            IoMode::Inherit => std::process::Stdio::inherit(),
             mode => return Err(unsupported_mode("stdout", mode)),
         });
         command.stderr(match io.stderr {
             IoMode::Null => std::process::Stdio::null(),
             IoMode::Capture => std::process::Stdio::piped(),
+            IoMode::Inherit => std::process::Stdio::inherit(),
             mode => return Err(unsupported_mode("stderr", mode)),
         });
         Ok(ProcessIoSetup { terminal: None })
@@ -108,7 +111,7 @@ impl ProcessIoHandle {
                     "spawned process did not expose its configured stdin pipe",
                 )
             })?)),
-            IoMode::Null => None,
+            IoMode::Null | IoMode::Inherit => None,
             mode => return Err(unsupported_mode("stdin", mode)),
         };
         let stdout = match io.stdout {
@@ -118,7 +121,7 @@ impl ProcessIoHandle {
                     "spawned process did not expose its configured stdout pipe",
                 )
             })?),
-            IoMode::Null => None,
+            IoMode::Null | IoMode::Inherit => None,
             mode => return Err(unsupported_mode("stdout", mode)),
         };
         let stderr = match io.stderr {
@@ -128,7 +131,7 @@ impl ProcessIoHandle {
                     "spawned process did not expose its configured stderr pipe",
                 )
             })?),
-            IoMode::Null => None,
+            IoMode::Null | IoMode::Inherit => None,
             mode => return Err(unsupported_mode("stderr", mode)),
         };
 
@@ -548,9 +551,44 @@ fn io_error(code: ErrorCode, message: impl Into<String>) -> Error {
 mod tests {
     use std::sync::Arc;
 
-    use a3s_oci_sdk::{ErrorCode, OutputStream};
+    use a3s_oci_sdk::{ErrorCode, IoMode, OutputStream, ProcessIo};
 
-    use super::{OutputBuffer, OUTPUT_BUFFER_BYTES};
+    use super::{OutputBuffer, ProcessIoHandle, OUTPUT_BUFFER_BYTES};
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn inherited_descriptors_need_no_runtime_owned_pipe() {
+        let io = ProcessIo {
+            stdin: IoMode::Inherit,
+            stdout: IoMode::Inherit,
+            stderr: IoMode::Inherit,
+            terminal_size: None,
+        };
+        let mut command = tokio::process::Command::new("true");
+        let setup = ProcessIoHandle::configure(&mut command, &io)
+            .expect("configure inherited process descriptors");
+        let mut child = command.spawn().expect("spawn inherited-I/O process");
+        let handle = ProcessIoHandle::attach(setup, &mut child, &io)
+            .expect("attach inherited process descriptors");
+
+        assert!(child.wait().await.expect("wait for process").success());
+        assert_eq!(
+            handle
+                .read_output(0, 1, None)
+                .await
+                .expect_err("inherited output is not SDK-captured")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+        assert_eq!(
+            handle
+                .write_stdin(b"x")
+                .await
+                .expect_err("inherited stdin is not SDK-writable")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+    }
 
     #[tokio::test]
     async fn output_cursor_splits_frames_without_exceeding_byte_limit() {

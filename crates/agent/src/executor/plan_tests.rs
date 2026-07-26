@@ -297,17 +297,17 @@ fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
 }
 
 #[test]
-fn accepts_capture_and_pipe_but_rejects_unimplemented_process_io() {
+fn accepts_capture_pipe_and_inherited_process_io() {
     let mut io = null_io();
     io.stdin = IoMode::Pipe;
     io.stdout = IoMode::Capture;
     io.stderr = IoMode::Capture;
     InitPlan::from_bundle(&bundle(FIXED_CONFIG), &io).expect("captured process I/O");
 
+    io.stdin = IoMode::Inherit;
     io.stdout = IoMode::Inherit;
-    let error = InitPlan::from_bundle(&bundle(FIXED_CONFIG), &io)
-        .expect_err("inherited output remains unsupported");
-    assert_eq!(error.code, ErrorCode::Unsupported);
+    io.stderr = IoMode::Inherit;
+    InitPlan::from_bundle(&bundle(FIXED_CONFIG), &io).expect("inherited process I/O");
 }
 
 #[test]
