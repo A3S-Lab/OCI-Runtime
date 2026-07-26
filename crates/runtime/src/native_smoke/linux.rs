@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -117,7 +117,7 @@ pub(super) async fn run_service(
         Ok(nonce) => nonce,
         Err(reason) => return failed(report, reason),
     };
-    let session_root = work_parent.join(format!("a3s-oci-native-service-smoke-{nonce}"));
+    let session_root = service_smoke_session_root(&work_parent);
     if let Err(reason) = create_private_directory(&session_root).await {
         return failed(report, reason);
     }
@@ -296,6 +296,13 @@ async fn directory_is_empty(path: &Path) -> Result<bool, String> {
                 path.display()
             )
         })
+}
+
+fn service_smoke_session_root(work_parent: &Path) -> PathBuf {
+    // Keep the service-owned suffix bounded for Unix-domain socket paths. The
+    // process ID is unique among active CLI smoke sessions; stale sessions
+    // still fail closed at create_private_directory.
+    work_parent.join(format!("svc-{}", std::process::id()))
 }
 
 pub(super) async fn run(
@@ -480,4 +487,28 @@ fn append_reason(report: &mut NativeLinuxSmokeReport, reason: impl Into<String>)
 fn failed(mut report: NativeLinuxSmokeReport, reason: impl Into<String>) -> NativeLinuxSmokeReport {
     append_reason(&mut report, reason);
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::ffi::OsStrExt;
+
+    use super::*;
+
+    #[test]
+    fn qualification_service_socket_paths_fit_linux_sockaddr_un() {
+        const LINUX_SUN_PATH_BYTES: usize = 108;
+        let root = service_smoke_session_root(Path::new("/var/tmp/a3s-oci-native.XXXXXXXX/work"));
+        for path in [
+            root.join("control/exec.sock"),
+            root.join("control/pty.sock"),
+            root.join("service/runtime.sock"),
+        ] {
+            assert!(
+                path.as_os_str().as_bytes().len() < LINUX_SUN_PATH_BYTES,
+                "qualification socket path exceeds sockaddr_un.sun_path: {}",
+                path.display()
+            );
+        }
+    }
 }
