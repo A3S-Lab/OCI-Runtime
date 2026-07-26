@@ -76,7 +76,7 @@ jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
   "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
 mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
 hook_trace="$bundle/rootfs/.a3s-oci-hook-trace"
-hook_command='printf "%s " "$A3S_HOOK_PHASE" >> "$A3S_HOOK_TRACE"; cat >> "$A3S_HOOK_TRACE"; printf "\n" >> "$A3S_HOOK_TRACE"'
+hook_command='IFS= read -r A3S_HOOK_STATE || :; printf "%s %s\n" "$A3S_HOOK_PHASE" "$A3S_HOOK_STATE" >> "$A3S_HOOK_TRACE"'
 jq \
   --arg command "$hook_command" \
   --arg host_trace "$hook_trace" \
