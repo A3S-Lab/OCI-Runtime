@@ -67,8 +67,8 @@ Completed:
   boundaries, with exact fault identity, guest executor shutdown, endpoint and
   marker removal, shim/worker reap, descriptor-inventory restoration, and no
   new guest runtime root;
-- explicit rootful native Linux driver integration that reuses the shared
-  executor without linking or initializing libkrun;
+- explicit native Linux driver integration that reuses the shared executor
+  without linking or initializing libkrun;
 - real native Linux create/state/start/kill/wait/delete SDK evidence on x86_64
   and aarch64, including exact repeated SIGKILL status and bounded running
   wait, plus public SDK exec replay, duplicate process-ID rejection, durable
@@ -98,7 +98,7 @@ Completed:
 - real WHPX guest-agent boot through AF_VSOCK and the protected Windows pipe,
   with exact shim-PID authentication, protocol-v1 negotiation, and retained
   host/shim evidence;
-- root-only Linux guest bootstrap executor for an exact fail-closed OCI
+- Linux guest bootstrap executor for an exact fail-closed OCI
   profile, with a PID-authenticated abstract Unix create/start barrier,
   create-time UTS, mount, IPC, network, cgroup, PID, user, and time namespaces,
   parent-installed UID/GID maps, verified time offsets, hostname and domainname,
@@ -111,6 +111,11 @@ Completed:
   and namespace descriptors, per-process pidfds and replay journals, stable
   process wait, cgroup-v2 pause/resume, live process inventory, init-exit
   supervision, and complete session cleanup;
+- helper-backed rootless native Linux create/start/exec/signal/wait/kill/delete
+  evidence on x86_64 and aarch64, with container root mapped exactly to the
+  nonzero effective host UID/GID, subordinate UID/GID ranges installed through
+  verified setuid-root `newuidmap`/`newgidmap`, `setgroups=deny`, exact map and
+  ownership read-back, ordered durable events, and complete cleanup;
 - shared Linux executor support for all six OCI hook phases in normative order,
   with runtime/container namespace placement, exact OCI state on stdin,
   bounded configuration, timeout and process-group cleanup, typed
@@ -380,6 +385,11 @@ then may HVF become `experimental`.
   monotonic/boottime offsets, switch to mapped namespace-root credentials
   before rootfs mutation, and prove the path through native Linux and the
   macOS utility VM.
+- [x] Create a new rootless user namespace from a non-root native executor,
+  require exact size-1 effective-UID/GID mappings for container root, install
+  subordinate ranges through fixed root-owned setuid mapping helpers, deny
+  supplementary groups, read back both maps and `setgroups=deny`, and prove
+  the core lifecycle plus exec and ordered events on x86_64 and aarch64.
 - [x] Open and type-check all existing namespace descriptors before mutation,
   join non-user namespaces around the user-namespace capability transition,
   preserve PID/time next-child semantics, and prove UTS, mount, IPC, network,
@@ -468,6 +478,9 @@ and recovery suites in the Windows guest and on native Linux.
   exec/signal/wait, pause/resume, process inventory, resource update, and
   normalized stats plus PTY allocation, resize, interactive I/O, and VEOF
   without KVM on x86_64 and aarch64.
+- [x] Prove the helper-backed non-root core lifecycle with subordinate
+  UID/GID ownership and `setgroups=deny` on x86_64 and aarch64; rootless
+  cgroup-v2 delegation remains a separate release gate.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.

@@ -55,7 +55,7 @@ use cgroup::CgroupManager;
 use hook::HookStateTemplate;
 use pidfd::SignalOutcome;
 use plan::InitPlan;
-use process::PreparedProcess;
+use process::{PreparedProcess, ProcessSpawnContext};
 use state::{
     ContainerKey, ContainerRecord, ExecutorState, MutationKind, RecordedOutcome, RecordedRequest,
 };
@@ -77,6 +77,7 @@ pub struct LinuxExecutor {
     capabilities: AgentCapabilities,
     init_executable: PathBuf,
     runtime_root: PathBuf,
+    user_mapping_runtime: namespace::UserMappingRuntime,
     state: Mutex<ExecutorState>,
 }
 
@@ -99,13 +100,6 @@ impl LinuxExecutor {
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
     ) -> Result<Self> {
-        // SAFETY: `geteuid` has no preconditions.
-        if unsafe { libc::geteuid() } != 0 {
-            return Err(executor_error(
-                ErrorCode::PermissionDenied,
-                "the Linux executor must run as root",
-            ));
-        }
         pidfd::verify_support()?;
         let parent = runtime_parent.as_ref();
         if !parent.is_absolute() {
@@ -166,6 +160,7 @@ impl LinuxExecutor {
                 ),
             ));
         }
+        let user_mapping_runtime = namespace::UserMappingRuntime::detect()?;
         let runtime_root = parent.join(format!("a3s-oci-agent-{}", std::process::id()));
         let mut builder = tokio::fs::DirBuilder::new();
         builder.mode(0o700);
@@ -183,6 +178,7 @@ impl LinuxExecutor {
             capabilities: AgentCapabilities::linux_executor(AGENT_VERSION, std::env::consts::ARCH)?,
             init_executable,
             runtime_root,
+            user_mapping_runtime,
             state: Mutex::new(ExecutorState::default()),
         })
     }
@@ -273,6 +269,26 @@ impl LinuxExecutor {
 
         let bundle = request.bundle.to_guest_bundle()?;
         let plan = InitPlan::from_bundle(&bundle, &request.io)?;
+        if self.user_mapping_runtime.is_rootless() {
+            if !plan.namespaces.new_user() {
+                return Err(executor_error(
+                    ErrorCode::Unsupported,
+                    "rootless native execution requires a newly created user namespace",
+                ));
+            }
+            if !plan.additional_gids.is_empty() {
+                return Err(executor_error(
+                    ErrorCode::Unsupported,
+                    "rootless native execution cannot apply process.user.additionalGids after setgroups=deny",
+                ));
+            }
+            if plan.cgroup.has_cgroup() {
+                return Err(executor_error(
+                    ErrorCode::Unsupported,
+                    "rootless cgroup-v2 delegation is not implemented; omit linux.cgroupsPath",
+                ));
+            }
+        }
         let hook_state = HookStateTemplate::new(
             plan.oci_version.clone(),
             key.id.clone(),
@@ -305,7 +321,10 @@ impl LinuxExecutor {
             state.cgroup_manager.as_ref(),
             &request.io,
             &hook_state,
-            inherited_descriptors,
+            ProcessSpawnContext {
+                inherited_descriptors,
+                user_mapping_runtime: &self.user_mapping_runtime,
+            },
         )
         .await
         {

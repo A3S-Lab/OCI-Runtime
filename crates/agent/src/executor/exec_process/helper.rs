@@ -12,7 +12,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result, MAX_CONFIG_BYTES};
 
 use super::{exec_error, EXEC_MODE};
 use crate::executor::control::{write_ready, write_rejection, START_BYTE};
-use crate::executor::namespace::become_user_namespace_root;
+use crate::executor::namespace::{apply_supplementary_groups, become_user_namespace_root};
 use crate::executor::pid;
 use crate::executor::pid_supervisor;
 use crate::executor::plan::ProcessPlan;
@@ -316,16 +316,10 @@ fn prepare_exec_root(plan: &ProcessPlan, rootfs: &File) -> Result<()> {
 fn apply_exec_credentials(plan: &ProcessPlan) -> Result<()> {
     plan.rlimits.apply()?;
     plan.capabilities.prepare_for_credentials(plan.uid)?;
+    apply_supplementary_groups(&plan.additional_gids, "apply exec supplementary groups")?;
     // SAFETY: the plan was validated and this is a dedicated single-threaded
     // payload before untrusted code runs.
     unsafe {
-        if libc::setgroups(
-            plan.additional_gids.len(),
-            plan.additional_gids.as_ptr().cast(),
-        ) != 0
-        {
-            return Err(last_exec_os_error("apply exec supplementary groups"));
-        }
         if libc::setgid(plan.gid) != 0 {
             return Err(last_exec_os_error("apply exec process GID"));
         }

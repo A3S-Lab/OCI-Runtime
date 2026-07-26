@@ -15,6 +15,9 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v8";
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
 pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v11";
+/// Schema emitted by the native Linux rootless lifecycle smoke.
+pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
+    "a3s.oci.native-linux-rootless-smoke.v1";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -578,6 +581,173 @@ impl NativeLinuxSmokeReport {
             && self.marker_removed
             && self.executor_runtime_clean
             && self.session_root_clean
+    }
+}
+
+/// End-to-end evidence for the helper-backed native Linux rootless lifecycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeLinuxRootlessSmokeReport {
+    /// Version of this JSON-compatible schema.
+    pub schema_version: String,
+    /// Host on which the smoke was attempted.
+    pub platform: HostPlatform,
+    /// End-to-end availability of the rootless lifecycle path.
+    pub status: CapabilityStatus,
+    /// Effective host UID used for container-root mapping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_uid: Option<u32>,
+    /// Effective host GID used for container-root mapping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_gid: Option<u32>,
+    /// Whether the host loaded and validated the submitted OCI bundle.
+    pub bundle_loaded: bool,
+    /// Whether the bundle selected exact root and subordinate ID mappings.
+    pub mapping_plan_verified: bool,
+    /// Operations advertised by the explicitly opened native service.
+    pub service_operations: Vec<RuntimeOperation>,
+    /// Whether create returned the OCI `created` barrier.
+    pub create_returned_created: bool,
+    /// Whether retrying create replayed its exact original result.
+    pub create_replayed: bool,
+    /// Host-visible init PID returned while the container was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_pid: Option<i32>,
+    /// Whether `/proc/<pid>/uid_map` exactly matched the OCI request.
+    pub uid_map_verified: bool,
+    /// Whether `/proc/<pid>/gid_map` exactly matched the OCI request.
+    pub gid_map_verified: bool,
+    /// Whether the created namespace exposed `setgroups=deny`.
+    pub setgroups_denied: bool,
+    /// Whether start ran the rootless ownership and credential assertions.
+    pub workload_verified: bool,
+    /// Whether exec create and replay remained exact.
+    pub exec_replayed: bool,
+    /// Whether exec signal and replay completed successfully.
+    pub exec_signal_replayed: bool,
+    /// Exact terminal result returned for the signaled exec process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exec_wait_status: Option<ExitStatus>,
+    /// Whether init kill and replay completed successfully.
+    pub init_kill_replayed: bool,
+    /// Exact terminal result returned for the killed init process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub init_wait_status: Option<ExitStatus>,
+    /// Whether the durable rootless lifecycle event stream was exact and ordered.
+    pub events_verified: bool,
+    /// Whether delete and replay completed successfully.
+    pub delete_replayed: bool,
+    /// Whether state and list were empty after delete.
+    pub durable_state_removed: bool,
+    /// Whether executor shutdown removed its private transient root.
+    pub executor_runtime_clean: bool,
+    /// Whether the smoke removed its isolated durable and transient workspace.
+    pub session_root_clean: bool,
+    /// Whether the rootless workload marker was removed.
+    pub marker_removed: bool,
+    /// Diagnostic reason when the smoke was not successful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl NativeLinuxRootlessSmokeReport {
+    pub(crate) fn initial(platform: HostPlatform) -> Self {
+        Self {
+            schema_version: NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION.to_string(),
+            platform,
+            status: CapabilityStatus::Unavailable,
+            effective_uid: None,
+            effective_gid: None,
+            bundle_loaded: false,
+            mapping_plan_verified: false,
+            service_operations: Vec::new(),
+            create_returned_created: false,
+            create_replayed: false,
+            created_pid: None,
+            uid_map_verified: false,
+            gid_map_verified: false,
+            setgroups_denied: false,
+            workload_verified: false,
+            exec_replayed: false,
+            exec_signal_replayed: false,
+            exec_wait_status: None,
+            init_kill_replayed: false,
+            init_wait_status: None,
+            events_verified: false,
+            delete_replayed: false,
+            durable_state_removed: false,
+            executor_runtime_clean: false,
+            session_root_clean: false,
+            marker_removed: false,
+            reason: None,
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn unsupported(platform: HostPlatform) -> Self {
+        let mut report = Self::initial(platform);
+        report.status = CapabilityStatus::Unsupported;
+        report.reason = Some("the rootless lifecycle smoke requires a Linux host".into());
+        report
+    }
+
+    /// Return whether the complete helper-backed rootless lifecycle passed.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        matches!(self.status, CapabilityStatus::Available) && self.lifecycle_succeeded()
+    }
+
+    pub(crate) fn lifecycle_succeeded(&self) -> bool {
+        let signaled = ExitStatus {
+            exit_code: None,
+            signal: Some(9),
+            oom_killed: false,
+        };
+        self.effective_uid.is_some_and(|uid| uid > 0)
+            && self.effective_gid.is_some_and(|gid| gid > 0)
+            && self.bundle_loaded
+            && self.mapping_plan_verified
+            && self.service_operations
+                == [
+                    RuntimeOperation::Features,
+                    RuntimeOperation::Create,
+                    RuntimeOperation::State,
+                    RuntimeOperation::Start,
+                    RuntimeOperation::Kill,
+                    RuntimeOperation::Delete,
+                    RuntimeOperation::Exec,
+                    RuntimeOperation::Wait,
+                    RuntimeOperation::List,
+                    RuntimeOperation::Pause,
+                    RuntimeOperation::Resume,
+                    RuntimeOperation::Update,
+                    RuntimeOperation::Processes,
+                    RuntimeOperation::Stats,
+                    RuntimeOperation::Events,
+                    RuntimeOperation::ReadOutput,
+                    RuntimeOperation::WriteStdin,
+                    RuntimeOperation::CloseStdin,
+                    RuntimeOperation::Resize,
+                    RuntimeOperation::SignalProcess,
+                    RuntimeOperation::WaitProcess,
+                ]
+            && self.create_returned_created
+            && self.create_replayed
+            && self.created_pid.is_some_and(|pid| pid > 0)
+            && self.uid_map_verified
+            && self.gid_map_verified
+            && self.setgroups_denied
+            && self.workload_verified
+            && self.exec_replayed
+            && self.exec_signal_replayed
+            && self.exec_wait_status == Some(signaled.clone())
+            && self.init_kill_replayed
+            && self.init_wait_status == Some(signaled)
+            && self.events_verified
+            && self.delete_replayed
+            && self.durable_state_removed
+            && self.executor_runtime_clean
+            && self.session_root_clean
+            && self.marker_removed
     }
 }
 

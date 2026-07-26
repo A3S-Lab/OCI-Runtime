@@ -63,12 +63,13 @@ pub use native_control::{
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
 pub use native_smoke::{
-    native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_smoke,
+    native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_rootless_smoke,
+    native_linux_smoke,
 };
 pub use oci_smoke::{oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke};
 pub use report::{
-    AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxSmokeReport,
-    OciVmSmokeReport, WhpxSmokeReport,
+    AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxRootlessSmokeReport,
+    NativeLinuxSmokeReport, OciVmSmokeReport, WhpxSmokeReport,
 };
 pub use service::HostRuntimeService;
 

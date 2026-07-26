@@ -26,7 +26,7 @@ use super::control::{
 use super::hook::{HookPhase, HookSet, HookStateTemplate};
 use super::inherited_descriptor::InheritedDescriptorPlan;
 use super::io::ProcessIoHandle;
-use super::namespace::{self, RetainedExecutionContext};
+use super::namespace::{self, RetainedExecutionContext, UserMappingRuntime};
 use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
@@ -50,6 +50,11 @@ pub(super) struct PreparedProcess {
     hook_state: HookStateTemplate,
 }
 
+pub(super) struct ProcessSpawnContext<'a> {
+    pub(super) inherited_descriptors: InheritedDescriptorPlan,
+    pub(super) user_mapping_runtime: &'a UserMappingRuntime,
+}
+
 impl PreparedProcess {
     pub(super) async fn spawn(
         plan: &InitPlan,
@@ -58,8 +63,12 @@ impl PreparedProcess {
         cgroup_manager: Option<&CgroupManager>,
         io: &ProcessIo,
         hook_state: &HookStateTemplate,
-        inherited_descriptors: InheritedDescriptorPlan,
+        context: ProcessSpawnContext<'_>,
     ) -> Result<Self> {
+        let ProcessSpawnContext {
+            inherited_descriptors,
+            user_mapping_runtime,
+        } = context;
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
         let mut cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
         let cgroup_procs = cgroup.as_ref().map(CgroupHandle::procs_descriptor);
@@ -196,7 +205,12 @@ impl PreparedProcess {
                     }
                     match timeout(
                         INIT_READY_TIMEOUT,
-                        namespace::install_user_mappings(&plan.namespaces, pid),
+                        namespace::install_user_mappings(
+                            &plan.namespaces,
+                            pid,
+                            user_mapping_runtime,
+                            &plan.additional_gids,
+                        ),
                     )
                     .await
                     {

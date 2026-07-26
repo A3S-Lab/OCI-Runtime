@@ -16,7 +16,7 @@ mod user;
 
 pub(super) use mount_idmap::{IdmapNamespaceHandles, IdmapPlan};
 pub(super) use retained::{RetainedExecutionContext, RetainedNamespaceArgument};
-pub(super) use user::install_user_mappings;
+pub(super) use user::{apply_supplementary_groups, install_user_mappings, UserMappingRuntime};
 
 const MAX_ID_MAPPINGS: usize = 340;
 const NANOSECONDS_PER_SECOND: u32 = 1_000_000_000;
@@ -320,16 +320,14 @@ pub(super) fn enter_new_namespaces(plan: &NamespacePlan, control: &mut UnixStrea
 }
 
 pub(super) fn become_user_namespace_root(kind: &str) -> Result<()> {
+    apply_supplementary_groups(
+        &[],
+        &format!("clear supplementary groups in the {kind} user namespace"),
+    )?;
     // SAFETY: the dedicated init wrapper is single-threaded. A successful new
     // or joined user-namespace transition grants the capabilities required to
-    // clear supplementary groups and select mapped namespace-root IDs.
+    // select mapped namespace-root IDs.
     unsafe {
-        if libc::setgroups(0, std::ptr::null()) != 0 {
-            return Err(namespace_credential_error(
-                format!("clear supplementary groups in the {kind} user namespace"),
-                io::Error::last_os_error(),
-            ));
-        }
         if libc::setresgid(0, 0, 0) != 0 {
             return Err(namespace_credential_error(
                 format!("become root GID in the {kind} user namespace"),
