@@ -116,6 +116,11 @@ Completed:
   nonzero effective host UID/GID, subordinate UID/GID ranges installed through
   verified setuid-root `newuidmap`/`newgidmap`, `setgroups=deny`, exact map and
   ownership read-back, ordered durable events, and complete cleanup;
+- single-container native Linux runtime ownership behind a private `0600`
+  same-UID Unix SDK endpoint, with an owner-only root, automatic A3S Box FD
+  3/4/5 binding for one exact container ID, full transported lifecycle evidence,
+  `SIGINT`/`SIGTERM` driver shutdown, inode-scoped socket removal, and empty
+  executor-root evidence on x86_64 and aarch64 without KVM;
 - shared Linux executor support for all six OCI hook phases in normative order,
   with runtime/container namespace placement, exact OCI state on stdin,
   bounded configuration, timeout and process-group cleanup, typed
@@ -483,7 +488,7 @@ and recovery suites in the Windows guest and on native Linux.
   cgroup-v2 delegation remains a separate release gate.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
-- [ ] Add the Sandbox-scoped native runtime owner, bind its protected Unix SDK
+- [x] Add the Sandbox-scoped native runtime owner, bind its protected Unix SDK
   endpoint, route the complete lifecycle through `a3s-oci-sdk`, fence inherited
   Box descriptors to one container ID, and prove signal-driven cleanup on
   x86_64 and aarch64 without KVM.
