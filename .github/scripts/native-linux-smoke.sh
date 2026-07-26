@@ -628,7 +628,8 @@ run_rootless_smoke() {
 }
 
 run_service_signal_cleanup() {
-  python3 - \
+  # Match the root-owned A3S Box profile qualified by the transported lifecycle.
+  sudo python3 - \
     "$PWD/target/debug/a3s-oci" \
     "$PWD/target/debug/a3s-oci-agent" \
     "$qualification_root/native-service-owner" \
