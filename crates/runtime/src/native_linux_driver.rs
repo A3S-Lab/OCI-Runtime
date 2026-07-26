@@ -95,7 +95,10 @@ impl NativeLinuxDriver {
 
         Ok(Self {
             capability,
-            executor: Arc::new(LinuxExecutor::open(runtime_parent, init_executable).await?),
+            executor: Arc::new(
+                LinuxExecutor::open_native_with_absolute_rootfs(runtime_parent, init_executable)
+                    .await?,
+            ),
         })
     }
 

@@ -7,12 +7,14 @@ use a3s_oci_sdk::{
     serve_transport_connection, ContainerId, Error, ErrorCode, OciRuntimeService, Result,
 };
 use tokio::net::{UnixListener, UnixStream};
+use tokio::task::JoinSet;
 
 use crate::{HostRuntimeService, NativeControlDescriptors, NativeLinuxDriver, RuntimeDriver};
 
 const SERVICE_SOCKET_NAME: &str = "runtime.sock";
 const STATE_DIRECTORY_NAME: &str = "state";
 const EXECUTOR_DIRECTORY_NAME: &str = "executor";
+const MAX_CLIENT_CONNECTIONS: usize = 32;
 
 /// Filesystem and identity contract for one native Linux runtime owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,54 +156,96 @@ impl NativeLinuxService {
     where
         F: Future<Output = ()> + Send,
     {
-        tokio::pin!(shutdown);
-        loop {
-            let stream = tokio::select! {
-                _ = &mut shutdown => return Ok(()),
-                accepted = self.listener.accept() => {
-                    let (stream, _) = accepted.map_err(|error| {
-                        service_error(
-                            ErrorCode::Unavailable,
-                            "accept-native-service-client",
-                            format!(
-                                "failed to accept native SDK client on {}: {error}",
-                                self.config.socket_path().display()
-                            ),
-                        )
-                    })?;
-                    stream
+        let socket_path = self.config.socket_path();
+        serve_authenticated_connections(
+            &self.listener,
+            &socket_path,
+            self.service.clone(),
+            self.effective_uid,
+            shutdown,
+        )
+        .await
+    }
+}
+
+async fn serve_authenticated_connections<F>(
+    listener: &UnixListener,
+    socket_path: &Path,
+    service: Arc<dyn OciRuntimeService>,
+    effective_uid: u32,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send,
+{
+    tokio::pin!(shutdown);
+    let mut connections = JoinSet::new();
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
+                return Ok(());
+            }
+            completed = connections.join_next(), if !connections.is_empty() => {
+                match completed {
+                    Some(Ok(Ok(()))) => {}
+                    Some(Ok(Err(error))) => {
+                        connections.abort_all();
+                        while connections.join_next().await.is_some() {}
+                        return Err(error);
+                    }
+                    Some(Err(error)) => {
+                        connections.abort_all();
+                        while connections.join_next().await.is_some() {}
+                        return Err(service_error(
+                            ErrorCode::Internal,
+                            "serve-native-service-client",
+                            format!("native SDK client task failed: {error}"),
+                        ));
+                    }
+                    None => {}
                 }
-            };
-            self.verify_peer(&stream)?;
-            let service: Arc<dyn OciRuntimeService> = self.service.clone();
-            tokio::select! {
-                _ = &mut shutdown => return Ok(()),
-                result = serve_transport_connection(service, stream) => result?,
+            }
+            accepted = listener.accept(),
+                if connections.len() < MAX_CLIENT_CONNECTIONS => {
+                let (stream, _) = accepted.map_err(|error| {
+                    service_error(
+                        ErrorCode::Unavailable,
+                        "accept-native-service-client",
+                        format!(
+                            "failed to accept native SDK client on {}: {error}",
+                            socket_path.display()
+                        ),
+                    )
+                })?;
+                verify_peer(&stream, effective_uid)?;
+                connections.spawn(serve_transport_connection(service.clone(), stream));
             }
         }
     }
+}
 
-    fn verify_peer(&self, stream: &UnixStream) -> Result<()> {
-        let credentials = stream.peer_cred().map_err(|error| {
-            service_error(
-                ErrorCode::PermissionDenied,
-                "authenticate-native-service-client",
-                format!("failed to inspect native SDK peer credentials: {error}"),
-            )
-        })?;
-        if credentials.uid() == self.effective_uid {
-            Ok(())
-        } else {
-            Err(service_error(
-                ErrorCode::PermissionDenied,
-                "authenticate-native-service-client",
-                format!(
-                    "native SDK peer UID {} does not match service UID {}",
-                    credentials.uid(),
-                    self.effective_uid
-                ),
-            ))
-        }
+fn verify_peer(stream: &UnixStream, effective_uid: u32) -> Result<()> {
+    let credentials = stream.peer_cred().map_err(|error| {
+        service_error(
+            ErrorCode::PermissionDenied,
+            "authenticate-native-service-client",
+            format!("failed to inspect native SDK peer credentials: {error}"),
+        )
+    })?;
+    if credentials.uid() == effective_uid {
+        Ok(())
+    } else {
+        Err(service_error(
+            ErrorCode::PermissionDenied,
+            "authenticate-native-service-client",
+            format!(
+                "native SDK peer UID {} does not match service UID {}",
+                credentials.uid(),
+                effective_uid
+            ),
+        ))
     }
 }
 
@@ -428,6 +472,48 @@ fn service_error(code: ErrorCode, operation: &'static str, message: impl Into<St
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct UnsupportedService;
+
+    #[a3s_oci_sdk::async_trait]
+    impl OciRuntimeService for UnsupportedService {
+        async fn features(&self) -> Result<a3s_oci_sdk::RuntimeInfo> {
+            Err(Error::unsupported("features-test"))
+        }
+
+        async fn create(
+            &self,
+            _request: a3s_oci_sdk::CreateRequest,
+        ) -> Result<a3s_oci_sdk::ContainerRecord> {
+            Err(Error::unsupported("create-test"))
+        }
+
+        async fn state(
+            &self,
+            _request: a3s_oci_sdk::StateRequest,
+        ) -> Result<a3s_oci_sdk::ContainerRecord> {
+            Err(Error::unsupported("state-test"))
+        }
+
+        async fn start(
+            &self,
+            _request: a3s_oci_sdk::StartRequest,
+        ) -> Result<a3s_oci_sdk::ContainerRecord> {
+            Err(Error::unsupported("start-test"))
+        }
+
+        async fn kill(
+            &self,
+            _request: a3s_oci_sdk::KillRequest,
+        ) -> Result<a3s_oci_sdk::ContainerRecord> {
+            Err(Error::unsupported("kill-test"))
+        }
+
+        async fn delete(&self, _request: a3s_oci_sdk::DeleteRequest) -> Result<()> {
+            Err(Error::unsupported("delete-test"))
+        }
+    }
+
     #[test]
     fn config_rejects_relative_and_ambiguous_paths() {
         let id = ContainerId::new("service-test").expect("container ID");
@@ -465,6 +551,75 @@ mod tests {
         drop(socket);
         assert!(!socket_path.exists());
         drop(listener);
+    }
+
+    #[tokio::test]
+    async fn service_negotiates_multiple_live_sdk_clients() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket_path = temporary.path().join(SERVICE_SOCKET_NAME);
+        let (listener, socket) = bind_private_socket(&socket_path)
+            .await
+            .expect("private socket");
+        let endpoint =
+            a3s_oci_sdk::LocalIpcEndpoint::unix_socket(&socket_path).expect("local SDK endpoint");
+        let service: Arc<dyn OciRuntimeService> = Arc::new(UnsupportedService);
+        // SAFETY: geteuid has no preconditions or failure result.
+        let effective_uid = unsafe { libc::geteuid() };
+        let server_socket_path = socket_path.clone();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            serve_authenticated_connections(
+                &listener,
+                &server_socket_path,
+                service,
+                effective_uid,
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+            )
+            .await
+        });
+
+        let first = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            a3s_oci_sdk::RuntimeClient::connect(&endpoint),
+        )
+        .await
+        .expect("first SDK client negotiation timed out")
+        .expect("first SDK client");
+        let second = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            a3s_oci_sdk::RuntimeClient::connect(&endpoint),
+        )
+        .await
+        .expect("second SDK client negotiation timed out while first remained live")
+        .expect("second SDK client");
+
+        let (first_result, second_result) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                tokio::join!(first.features(), second.features())
+            })
+            .await
+            .expect("concurrent SDK requests timed out");
+        assert_eq!(
+            first_result
+                .expect_err("test service rejects features")
+                .code,
+            ErrorCode::Unsupported
+        );
+        assert_eq!(
+            second_result
+                .expect_err("test service rejects features")
+                .code,
+            ErrorCode::Unsupported
+        );
+
+        shutdown_tx.send(()).expect("request service shutdown");
+        server
+            .await
+            .expect("service task")
+            .expect("clean service shutdown");
+        drop(socket);
     }
 
     #[tokio::test]

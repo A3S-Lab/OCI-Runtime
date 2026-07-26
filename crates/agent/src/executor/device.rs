@@ -1,13 +1,17 @@
 use std::collections::BTreeSet;
-use std::fs;
+use std::ffi::CString;
+use std::fs::{self, OpenOptions};
 use std::io;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxDevice, LinuxDeviceCgroup, LinuxDeviceType};
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::mount::MountPlan;
+use super::namespace::NamespacePlan;
 
 const MAX_DEVICES: usize = 256;
 const MAX_SCANNED_ROOTFS_ENTRIES: usize = 1_000_000;
@@ -16,6 +20,11 @@ const MAX_SCANNED_ROOTFS_ENTRIES: usize = 1_000_000;
 pub(super) struct DevicePlan {
     nodes: Vec<DeviceNode>,
     enforce_allowlist: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct PreparedDeviceSources {
+    mounts: Option<Vec<OwnedFd>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -162,11 +171,85 @@ impl DevicePlan {
         Ok(())
     }
 
+    pub(super) fn prepare_sources(
+        &self,
+        namespaces: &NamespacePlan,
+        runtime_directory: &Path,
+    ) -> Result<PreparedDeviceSources> {
+        if !namespaces.has_user() {
+            return Ok(PreparedDeviceSources { mounts: None });
+        }
+        if !namespaces.new_user() && !self.nodes.is_empty() {
+            return Err(unsupported(
+                "linux.devices",
+                "devices in a joined user namespace require externally prepared mount sources",
+            ));
+        }
+        if self.nodes.is_empty() {
+            return Ok(PreparedDeviceSources {
+                mounts: Some(Vec::new()),
+            });
+        }
+
+        let directory = runtime_directory.join("devices");
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&directory).map_err(|error| {
+            device_error(
+                ErrorCode::Conflict,
+                format!(
+                    "failed to create private device source directory {}: {error}",
+                    directory.display()
+                ),
+            )
+        })?;
+
+        let prepared = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| node.prepare_source(index, &directory, namespaces))
+            .collect::<Result<Vec<_>>>();
+        match prepared {
+            Ok(mounts) => Ok(PreparedDeviceSources {
+                mounts: Some(mounts),
+            }),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&directory);
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn bind_prepared_sources(
+        &self,
+        rootfs: &Path,
+        prepared: &PreparedDeviceSources,
+    ) -> Result<()> {
+        let Some(mounts) = prepared.mounts.as_ref() else {
+            return Ok(());
+        };
+        if mounts.len() != self.nodes.len() {
+            return Err(device_error(
+                ErrorCode::Internal,
+                "prepared device source count does not match the OCI device plan",
+            ));
+        }
+        for (node, source) in self.nodes.iter().zip(mounts) {
+            node.bind_source(rootfs, source)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn create_all(&self) -> Result<()> {
         for node in &self.nodes {
             node.create()?;
         }
         Ok(())
+    }
+
+    pub(super) const fn uses_prepared_sources(prepared: &PreparedDeviceSources) -> bool {
+        prepared.mounts.is_some()
     }
 
     pub(super) fn requires_setup(&self) -> bool {
@@ -210,6 +293,109 @@ impl DeviceNode {
         })
     }
 
+    fn prepare_source(
+        &self,
+        index: usize,
+        directory: &Path,
+        namespaces: &NamespacePlan,
+    ) -> Result<OwnedFd> {
+        let host_uid = namespaces.host_uid(self.uid).ok_or_else(|| {
+            invalid(format!(
+                "linux.devices[{index}].uid {} is not covered by linux.uidMappings",
+                self.uid
+            ))
+        })?;
+        let host_gid = namespaces.host_gid(self.gid).ok_or_else(|| {
+            invalid(format!(
+                "linux.devices[{index}].gid {} is not covered by linux.gidMappings",
+                self.gid
+            ))
+        })?;
+        let path = directory.join(format!("device-{index:04}"));
+        let path_cstring = path_cstring(&path, "prepared device source")?;
+        let file_type = self.file_type();
+        let device = libc::makedev(self.major, self.minor);
+        // SAFETY: the path is a live NUL-terminated string in an exclusive
+        // runtime directory and the mode and device numbers were validated.
+        if unsafe { libc::mknod(path_cstring.as_ptr(), file_type | self.mode, device) } != 0 {
+            return Err(last_os_error(format!(
+                "precreate OCI device source for {}",
+                self.path.display()
+            )));
+        }
+        // SAFETY: the source path remains live and is still owned exclusively
+        // by this create operation.
+        if unsafe { libc::chown(path_cstring.as_ptr(), host_uid, host_gid) } != 0 {
+            return Err(last_os_error(format!(
+                "set mapped ownership on OCI device source for {}",
+                self.path.display()
+            )));
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(self.mode)).map_err(|error| {
+            device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "failed to set mode on OCI device source for {}: {error}",
+                    self.path.display()
+                ),
+            )
+        })?;
+        self.verify_at(&path, host_uid, host_gid)?;
+        clone_device_mount(&path)
+    }
+
+    fn bind_source(&self, rootfs: &Path, source: &OwnedFd) -> Result<()> {
+        let canonical_rootfs = rootfs.canonicalize().map_err(|error| {
+            invalid(format!(
+                "failed to resolve the container rootfs while binding {}: {error}",
+                self.path.display()
+            ))
+        })?;
+        let relative = self.path.strip_prefix("/").map_err(|error| {
+            device_error(
+                ErrorCode::Internal,
+                format!("invalid normalized OCI device path: {error}"),
+            )
+        })?;
+        let target = canonical_rootfs.join(relative);
+        let parent = target.parent().ok_or_else(|| {
+            device_error(
+                ErrorCode::Internal,
+                format!("OCI device path has no parent: {}", target.display()),
+            )
+        })?;
+        let canonical_parent = parent.canonicalize().map_err(|error| {
+            invalid(format!(
+                "failed to resolve OCI device parent {}: {error}",
+                parent.display()
+            ))
+        })?;
+        if canonical_parent != canonical_rootfs && !canonical_parent.starts_with(&canonical_rootfs)
+        {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "OCI device path escapes the container rootfs: {}",
+                    self.path.display()
+                ),
+            ));
+        }
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&target)
+            .map_err(|error| {
+                invalid(format!(
+                    "failed to create OCI device bind target {}: {error}",
+                    self.path.display()
+                ))
+            })?;
+
+        attach_device_mount(source, &target, &self.path)?;
+        self.verify_at(&target, self.uid, self.gid)
+    }
+
     fn create(&self) -> Result<()> {
         let parent = self.path.parent().ok_or_else(|| {
             invalid(format!(
@@ -242,11 +428,7 @@ impl DeviceNode {
                     self.path.display()
                 ))
             })?;
-        let file_type = match self.kind {
-            DeviceKind::Block => libc::S_IFBLK,
-            DeviceKind::Character => libc::S_IFCHR,
-            DeviceKind::Fifo => libc::S_IFIFO,
-        };
+        let file_type = self.file_type();
         let device = libc::makedev(self.major, self.minor);
         // SAFETY: the path is a live NUL-terminated string and the mode and
         // device numbers were fully validated.
@@ -274,11 +456,19 @@ impl DeviceNode {
                 )
             },
         )?;
-        self.verify()
+        self.verify_at(&self.path, self.uid, self.gid)
     }
 
-    fn verify(&self) -> Result<()> {
-        let metadata = fs::symlink_metadata(&self.path).map_err(|error| {
+    const fn file_type(&self) -> libc::mode_t {
+        match self.kind {
+            DeviceKind::Block => libc::S_IFBLK,
+            DeviceKind::Character => libc::S_IFCHR,
+            DeviceKind::Fifo => libc::S_IFIFO,
+        }
+    }
+
+    fn verify_at(&self, path: &Path, uid: u32, gid: u32) -> Result<()> {
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
             device_error(
                 ErrorCode::FailedPrecondition,
                 format!(
@@ -296,8 +486,8 @@ impl DeviceNode {
             || libc::major(metadata.rdev()) != self.major
             || libc::minor(metadata.rdev()) != self.minor
             || metadata.mode() & 0o7777 != self.mode
-            || metadata.uid() != self.uid
-            || metadata.gid() != self.gid
+            || metadata.uid() != uid
+            || metadata.gid() != gid
         {
             return Err(device_error(
                 ErrorCode::FailedPrecondition,
@@ -393,6 +583,102 @@ fn validate_bind_mounts_are_nodev(mounts: &[MountPlan]) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn clone_device_mount(path: &Path) -> Result<OwnedFd> {
+    let path = path_cstring(path, "prepared device source")?;
+    // SAFETY: the path is NUL-terminated and open_tree does not retain it.
+    // OPEN_TREE_CLONE returns a detached mount owned by the returned fd.
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_open_tree,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(last_os_error("clone prepared OCI device source mount"));
+    }
+    let descriptor = libc::c_int::try_from(descriptor).map_err(|error| {
+        device_error(
+            ErrorCode::Internal,
+            format!("open_tree returned an invalid device mount descriptor: {error}"),
+        )
+    })?;
+    // SAFETY: `descriptor` is a fresh owned descriptor returned by open_tree.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn attach_device_mount(source: &OwnedFd, target: &Path, container_path: &Path) -> Result<()> {
+    let target_descriptor = open_path_descriptor(target)?;
+    let empty = c"";
+    let flags = libc::MOVE_MOUNT_F_EMPTY_PATH | libc::MOVE_MOUNT_T_EMPTY_PATH;
+    // SAFETY: both descriptors are live detached/source and target mount
+    // references, both empty paths are NUL-terminated, and the EMPTY_PATH
+    // flags select the descriptors directly.
+    let moved = unsafe {
+        libc::syscall(
+            libc::SYS_move_mount,
+            source.as_raw_fd(),
+            empty.as_ptr(),
+            target_descriptor.as_raw_fd(),
+            empty.as_ptr(),
+            flags,
+        )
+    };
+    if moved != 0 {
+        return Err(last_os_error(format!(
+            "attach prepared OCI device {}",
+            container_path.display()
+        )));
+    }
+
+    let target = path_cstring(target, "OCI device bind target")?;
+    let null = std::ptr::null::<libc::c_char>();
+    let null_data = std::ptr::null::<libc::c_void>();
+    // SAFETY: the bind target was created and mounted by this operation.
+    if unsafe {
+        libc::mount(
+            null,
+            target.as_ptr(),
+            null,
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_NOSUID | libc::MS_NOEXEC,
+            null_data,
+        )
+    } != 0
+    {
+        return Err(last_os_error(format!(
+            "apply safe bind flags to OCI device {}",
+            container_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn open_path_descriptor(path: &Path) -> Result<OwnedFd> {
+    let path = path_cstring(path, "OCI device bind target")?;
+    // SAFETY: the target is NUL-terminated and open does not retain it.
+    let descriptor = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        return Err(last_os_error("retain OCI device bind target"));
+    }
+    // SAFETY: `descriptor` is a fresh owned descriptor returned by open.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn path_cstring(path: &Path, label: &str) -> Result<CString> {
+    CString::new(path.as_os_str().as_bytes()).map_err(|error| {
+        invalid(format!(
+            "{label} path {} contains NUL: {error}",
+            path.display()
+        ))
+    })
 }
 
 fn normalize_device_path(index: usize, path: &Path) -> Result<PathBuf> {

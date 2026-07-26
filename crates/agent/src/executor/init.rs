@@ -13,11 +13,13 @@ use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CO
 use super::control::{
     write_create_hooks_ready, write_ready, write_rejection, CREATE_CONTINUE_BYTE, START_BYTE,
 };
+use super::device::{DevicePlan, PreparedDeviceSources};
 use super::hook::{HookPhase, HookStateTemplate};
 use super::mount::{self, IdmappedMountSources};
 use super::namespace::{self, IdmapNamespaceHandles};
 use super::plan::InitPlan;
 use super::rootfs;
+use super::RootfsScope;
 
 mod supervision;
 
@@ -30,24 +32,27 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let bundle_directory = arguments.next().map(PathBuf::from);
     let control_name = arguments.next();
     let container_id = arguments.next();
+    let rootfs_scope = arguments.next();
     let extra = arguments.next();
     let (
         Some(config_snapshot),
         Some(bundle_directory),
         Some(control_name),
         Some(container_id),
+        Some(rootfs_scope),
         None,
     ) = (
         config_snapshot,
         bundle_directory,
         control_name,
         container_id,
+        rootfs_scope,
         extra,
     )
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL ID and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE and no extra arguments",
         )));
     };
     let container_id = match container_id.into_string() {
@@ -59,11 +64,18 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
             )));
         }
     };
+    let Some(rootfs_scope) = RootfsScope::from_internal_argument(&rootfs_scope) else {
+        return Some(Err(init_error(
+            ErrorCode::InvalidArgument,
+            "container-init received an invalid rootfs scope",
+        )));
+    };
     Some(run_container_init(
         config_snapshot,
         bundle_directory,
         control_name,
         container_id,
+        rootfs_scope,
     ))
 }
 
@@ -72,7 +84,17 @@ fn run_container_init(
     bundle_directory: PathBuf,
     control_name: std::ffi::OsString,
     container_id: String,
+    rootfs_scope: RootfsScope,
 ) -> Result<()> {
+    let runtime_directory = config_snapshot
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            init_error(
+                ErrorCode::InvalidArgument,
+                "container init configuration has no runtime directory",
+            )
+        })?;
     let control_address =
         StdSocketAddr::from_abstract_name(control_name.as_bytes()).map_err(|error| {
             init_error(
@@ -88,10 +110,17 @@ fn run_container_init(
     })?;
     ensure_close_on_exec(&control)?;
     let (plan, canonical_bundle, rootfs, rootfs_file, host_proc) =
-        match prepare_container_init(config_snapshot, bundle_directory) {
+        match prepare_container_init(config_snapshot, bundle_directory, rootfs_scope) {
             Ok(prepared) => prepared,
             Err(error) => return reject_before_ready(&mut control, error),
         };
+    let prepared_devices = match plan
+        .devices
+        .prepare_sources(&plan.namespaces, &runtime_directory)
+    {
+        Ok(prepared) => prepared,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
     let idmap_namespaces = match IdmapNamespaceHandles::prepare(
         plan.mounts.iter().filter_map(|mount| mount.idmap.as_ref()),
     ) {
@@ -118,6 +147,7 @@ fn run_container_init(
         bundle_directory: &canonical_bundle,
         rootfs: &rootfs,
         rootfs_file: &rootfs_file,
+        prepared_devices: &prepared_devices,
         hook_state: &hook_state,
     };
     if plan.namespaces.requires_child_process() {
@@ -134,6 +164,7 @@ pub(super) struct CreateContext<'a> {
     bundle_directory: &'a Path,
     rootfs: &'a Path,
     rootfs_file: &'a File,
+    prepared_devices: &'a PreparedDeviceSources,
     hook_state: &'a HookStateTemplate,
 }
 
@@ -148,6 +179,7 @@ pub(super) fn complete_create_and_wait_for_start(
         create.plan,
         create.bundle_directory,
         create.rootfs,
+        create.prepared_devices,
         &mut idmapped_sources,
     ) {
         return reject_before_ready(&mut control, error);
@@ -171,7 +203,9 @@ pub(super) fn complete_create_and_wait_for_start(
     {
         return reject_before_ready(&mut control, error);
     }
-    if let Err(error) = finish_create_environment(create.plan, create.rootfs) {
+    if let Err(error) =
+        finish_create_environment(create.plan, create.rootfs, create.prepared_devices)
+    {
         return reject_before_ready(&mut control, error);
     }
     write_ready(&mut control, runtime_pid, namespace_init_pid)?;
@@ -243,9 +277,15 @@ fn reject_before_ready(control: &mut UnixStream, error: Error) -> Result<()> {
 fn prepare_container_init(
     config_snapshot: PathBuf,
     bundle_directory: PathBuf,
+    rootfs_scope: RootfsScope,
 ) -> Result<(InitPlan, PathBuf, PathBuf, File, File)> {
     let config_json = read_bounded_config(&config_snapshot)?;
     let bundle = OciBundle::from_json(bundle_directory, config_json)?;
+    let root_path_is_absolute = bundle
+        .spec()
+        .root()
+        .as_ref()
+        .is_some_and(|root| root.path().is_absolute());
     let plan = InitPlan::from_bundle(&bundle, &null_io())?;
     let canonical_bundle = plan.bundle_directory.canonicalize().map_err(|error| {
         init_error(
@@ -265,7 +305,17 @@ fn prepare_container_init(
             ),
         )
     })?;
-    if rootfs == canonical_bundle || !rootfs.starts_with(&canonical_bundle) || !rootfs.is_dir() {
+    if !rootfs.is_dir() {
+        return Err(init_error(
+            ErrorCode::InvalidArgument,
+            format!("container rootfs is not a directory: {}", rootfs.display()),
+        ));
+    }
+    let rootfs_is_in_bundle = rootfs != canonical_bundle && rootfs.starts_with(&canonical_bundle);
+    if rootfs == canonical_bundle
+        || (!rootfs_is_in_bundle
+            && (rootfs_scope == RootfsScope::BundleOnly || !root_path_is_absolute))
+    {
         return Err(init_error(
             ErrorCode::PermissionDenied,
             format!(
@@ -329,6 +379,7 @@ fn prepare_create_environment_before_pivot(
     plan: &InitPlan,
     bundle_directory: &Path,
     rootfs: &Path,
+    prepared_devices: &PreparedDeviceSources,
     idmapped_sources: &mut IdmappedMountSources,
 ) -> Result<()> {
     if let Some(hostname) = &plan.hostname {
@@ -364,14 +415,22 @@ fn prepare_create_environment_before_pivot(
         plan.devices.validate_rootfs(rootfs)?;
         rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
         mount::apply_all(&plan.mounts, bundle_directory, rootfs, idmapped_sources)?;
+        plan.devices
+            .bind_prepared_sources(rootfs, prepared_devices)?;
     }
     Ok(())
 }
 
-fn finish_create_environment(plan: &InitPlan, rootfs: &Path) -> Result<()> {
+fn finish_create_environment(
+    plan: &InitPlan,
+    rootfs: &Path,
+    prepared_devices: &PreparedDeviceSources,
+) -> Result<()> {
     if plan.namespaces.new_mount() {
         rootfs::pivot_root(rootfs)?;
-        plan.devices.create_all()?;
+        if !DevicePlan::uses_prepared_sources(prepared_devices) {
+            plan.devices.create_all()?;
+        }
         rootfs::finalize(
             plan.rootfs_propagation,
             &plan.readonly_paths,
@@ -599,4 +658,95 @@ fn last_os_error(operation: &str) -> Error {
 
 fn init_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("run-container-init")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use a3s_oci_sdk::ErrorCode;
+    use tempfile::tempdir;
+
+    use super::{prepare_container_init, RootfsScope};
+
+    fn configuration(rootfs: &Path) -> String {
+        serde_json::json!({
+            "ociVersion": "1.3.0",
+            "root": {
+                "path": rootfs.to_str().expect("UTF-8 test rootfs"),
+                "readonly": false
+            },
+            "process": {
+                "terminal": false,
+                "user": {"uid": 0, "gid": 0},
+                "args": ["/bin/true"],
+                "cwd": "/",
+                "noNewPrivileges": true
+            }
+        })
+        .to_string()
+    }
+
+    fn write_configuration(directory: &Path, rootfs: &Path) -> std::path::PathBuf {
+        let path = directory.join("config.json");
+        std::fs::write(&path, configuration(rootfs)).expect("write test configuration");
+        path
+    }
+
+    #[test]
+    fn native_scope_accepts_an_explicit_absolute_rootfs_outside_the_bundle() {
+        let temporary = tempdir().expect("temporary rootfs fixture");
+        let bundle = temporary.path().join("sandbox/bundle");
+        let rootfs = temporary.path().join("rootfs");
+        std::fs::create_dir_all(&bundle).expect("bundle directory");
+        std::fs::create_dir(&rootfs).expect("external rootfs directory");
+        let config = write_configuration(temporary.path(), &rootfs);
+
+        let (_, canonical_bundle, canonical_rootfs, _, _) =
+            prepare_container_init(config, bundle.clone(), RootfsScope::NativeAbsolute)
+                .expect("native absolute rootfs");
+
+        assert_eq!(
+            canonical_bundle,
+            bundle.canonicalize().expect("canonical bundle")
+        );
+        assert_eq!(
+            canonical_rootfs,
+            rootfs.canonicalize().expect("canonical rootfs")
+        );
+    }
+
+    #[test]
+    fn bundle_scope_rejects_the_same_external_absolute_rootfs() {
+        let temporary = tempdir().expect("temporary rootfs fixture");
+        let bundle = temporary.path().join("sandbox/bundle");
+        let rootfs = temporary.path().join("rootfs");
+        std::fs::create_dir_all(&bundle).expect("bundle directory");
+        std::fs::create_dir(&rootfs).expect("external rootfs directory");
+        let config = write_configuration(temporary.path(), &rootfs);
+
+        let error = prepare_container_init(config, bundle, RootfsScope::BundleOnly)
+            .expect_err("guest rootfs must remain bundle-confined");
+
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("escapes its guest bundle"));
+    }
+
+    #[test]
+    fn native_scope_does_not_let_a_relative_symlink_escape_the_bundle() {
+        let temporary = tempdir().expect("temporary rootfs fixture");
+        let bundle = temporary.path().join("sandbox/bundle");
+        let external = temporary.path().join("rootfs");
+        std::fs::create_dir_all(&bundle).expect("bundle directory");
+        std::fs::create_dir(&external).expect("external rootfs directory");
+        std::os::unix::fs::symlink(&external, bundle.join("rootfs"))
+            .expect("escaping rootfs symlink");
+        let config = write_configuration(temporary.path(), Path::new("rootfs"));
+
+        let error = prepare_container_init(config, bundle, RootfsScope::NativeAbsolute)
+            .expect_err("relative rootfs must remain bundle-confined");
+
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("escapes its guest bundle"));
+    }
 }

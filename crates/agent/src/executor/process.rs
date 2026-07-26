@@ -31,6 +31,7 @@ use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
 use super::seccomp::SeccompPlan;
+use super::RootfsScope;
 
 const INIT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -52,6 +53,7 @@ pub(super) struct PreparedProcess {
 
 pub(super) struct ProcessSpawnContext<'a> {
     pub(super) inherited_descriptors: InheritedDescriptorPlan,
+    pub(super) rootfs_scope: RootfsScope,
     pub(super) user_mapping_runtime: &'a UserMappingRuntime,
 }
 
@@ -67,6 +69,7 @@ impl PreparedProcess {
     ) -> Result<Self> {
         let ProcessSpawnContext {
             inherited_descriptors,
+            rootfs_scope,
             user_mapping_runtime,
         } = context;
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
@@ -80,6 +83,7 @@ impl PreparedProcess {
             .arg(&plan.bundle_directory)
             .arg(&control_name)
             .arg(hook_state.id())
+            .arg(rootfs_scope.internal_argument())
             .env_clear()
             .kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
