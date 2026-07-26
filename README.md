@@ -530,6 +530,9 @@ The current executor implements a reviewed bootstrap vertical slice:
   create;
 - exact process bounding/effective/permitted/inheritable/ambient capability
   sets, including an init capability ceiling for later exec processes;
+- all 16 OCI `process.rlimits` types, with bounded unique planning,
+  soft/hard validation, architecture-correct libc resources, and identical
+  pre-credential enforcement for init and exec;
 - bounded OCI device profiles with default-deny policy-shape validation,
   exact device-node creation and read-back, rootfs scans, `nodev` bind
   enforcement, and CAP_MKNOD exclusion;
@@ -568,7 +571,7 @@ unsupported when joining or inheriting a mount namespace. Other unimplemented
 OCI fields are rejected instead of ignored. Rootless mapping policy, cgroup
 I/O/hugetlb/RDMA/unified resources and cgroup v2 device-access filtering,
 broader device policies, multi-architecture seccomp and notification
-listeners, rlimits, schedulers, LSMs, inherited I/O, A3S Box listener/log
+listeners, schedulers, LSMs, inherited I/O, A3S Box listener/log
 descriptor handoff, real-driver reattachment after runtime-process restart,
 hook rollback/recovery/security-negative certification, events, checkpoint,
 and restore are still release gates.

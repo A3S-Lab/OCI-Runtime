@@ -139,6 +139,84 @@ fn builds_the_same_fail_closed_plan_for_an_exec_process() {
 }
 
 #[test]
+fn plans_and_serializes_every_oci_process_rlimit() {
+    let rlimits = serde_json::json!([
+        {"type": "RLIMIT_CPU", "hard": 101, "soft": 100},
+        {"type": "RLIMIT_FSIZE", "hard": 201, "soft": 200},
+        {"type": "RLIMIT_DATA", "hard": 301, "soft": 300},
+        {"type": "RLIMIT_STACK", "hard": 401, "soft": 400},
+        {"type": "RLIMIT_CORE", "hard": 501, "soft": 500},
+        {"type": "RLIMIT_RSS", "hard": 601, "soft": 600},
+        {"type": "RLIMIT_NPROC", "hard": 701, "soft": 700},
+        {"type": "RLIMIT_NOFILE", "hard": 801, "soft": 800},
+        {"type": "RLIMIT_MEMLOCK", "hard": 901, "soft": 900},
+        {"type": "RLIMIT_AS", "hard": 1001, "soft": 1000},
+        {"type": "RLIMIT_LOCKS", "hard": 1101, "soft": 1100},
+        {"type": "RLIMIT_SIGPENDING", "hard": 1201, "soft": 1200},
+        {"type": "RLIMIT_MSGQUEUE", "hard": 1301, "soft": 1300},
+        {"type": "RLIMIT_NICE", "hard": 1401, "soft": 1400},
+        {"type": "RLIMIT_RTPRIO", "hard": 1501, "soft": 1500},
+        {"type": "RLIMIT_RTTIME", "hard": 1601, "soft": 1600}
+    ]);
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["process"]["rlimits"] = rlimits;
+    let encoded_config = serde_json::to_string(&config).expect("encode rlimit configuration");
+
+    let init = InitPlan::from_bundle(&bundle(&encoded_config), &null_io())
+        .expect("plan every OCI rlimit for init");
+    assert_eq!(init.rlimits.len(), 16);
+
+    let process: Process =
+        serde_json::from_value(config["process"].clone()).expect("decode rlimit process");
+    let exec =
+        ProcessPlan::from_process(&process, &null_io()).expect("plan every OCI rlimit for exec");
+    assert_eq!(exec.rlimits.len(), 16);
+    let encoded = serde_json::to_vec(&exec).expect("encode exec process plan");
+    assert_eq!(
+        serde_json::from_slice::<ProcessPlan>(&encoded).expect("decode exec process plan"),
+        exec
+    );
+}
+
+#[test]
+fn rejects_invalid_or_unbounded_process_rlimits() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["process"]["rlimits"] = serde_json::json!([
+        {"type": "RLIMIT_NOFILE", "hard": 64, "soft": 32},
+        {"type": "RLIMIT_NOFILE", "hard": 128, "soft": 64}
+    ]);
+    let duplicate: Process = serde_json::from_value(config["process"].clone())
+        .expect("decode duplicate process rlimits");
+    let error = ProcessPlan::from_process(&duplicate, &null_io())
+        .expect_err("duplicate rlimit types must fail");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("duplicate RLIMIT_NOFILE"));
+
+    config["process"]["rlimits"] =
+        serde_json::json!([{"type": "RLIMIT_NOFILE", "hard": 31, "soft": 32}]);
+    let inverted: Process =
+        serde_json::from_value(config["process"].clone()).expect("decode inverted process rlimit");
+    let error = ProcessPlan::from_process(&inverted, &null_io())
+        .expect_err("rlimit soft above hard must fail");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("soft must not exceed hard"));
+
+    config["process"]["rlimits"] = serde_json::Value::Array(
+        (0..17)
+            .map(|_| serde_json::json!({"type": "RLIMIT_CPU", "hard": 1, "soft": 1}))
+            .collect(),
+    );
+    let excessive: Process = serde_json::from_value(config["process"].clone())
+        .expect("decode excessive process rlimits");
+    let error = ProcessPlan::from_process(&excessive, &null_io())
+        .expect_err("rlimit count must remain bounded");
+    assert_eq!(error.code, ErrorCode::ResourceExhausted);
+    assert!(error.message.contains("maximum is 16"));
+}
+
+#[test]
 fn exec_process_planning_enforces_capabilities_and_rejects_unsupported_io() {
     let mut value = serde_json::from_str::<serde_json::Value>(FIXED_CONFIG)
         .expect("decode fixed config")["process"]

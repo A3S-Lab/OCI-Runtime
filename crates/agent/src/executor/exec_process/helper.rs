@@ -314,6 +314,7 @@ fn prepare_exec_root(plan: &ProcessPlan, rootfs: &File) -> Result<()> {
 }
 
 fn apply_exec_credentials(plan: &ProcessPlan) -> Result<()> {
+    plan.rlimits.apply()?;
     plan.capabilities.prepare_for_credentials(plan.uid)?;
     // SAFETY: the plan was validated and this is a dedicated single-threaded
     // payload before untrusted code runs.

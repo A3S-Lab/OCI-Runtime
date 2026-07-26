@@ -23,7 +23,8 @@ pub(super) async fn exercise_process_io(
         nonce,
         "io",
         "exec-io",
-        "IFS= read -r first; IFS= read -r second; \
+        "test \"$(ulimit -n)\" = 48; \
+         IFS= read -r first; IFS= read -r second; \
          printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
          printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
     )?;
@@ -539,6 +540,7 @@ fn exec_request(
         "args": ["/bin/sh", "-c", command],
         "env": ["PATH=/bin:/usr/bin"],
         "cwd": "/",
+        "rlimits": [{"type": "RLIMIT_NOFILE", "hard": 48, "soft": 48}],
         "noNewPrivileges": true
     }))
     .map_err(|error| format!("failed to construct native exec process: {error}"))?;
@@ -572,6 +574,7 @@ fn terminal_exec_request(
         "args": ["/bin/sh", "-c", command],
         "env": ["PATH=/bin:/usr/bin"],
         "cwd": "/",
+        "rlimits": [{"type": "RLIMIT_NOFILE", "hard": 48, "soft": 48}],
         "noNewPrivileges": true
     }))
     .map_err(|error| format!("failed to construct native terminal process: {error}"))?;

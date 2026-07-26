@@ -108,11 +108,12 @@ following:
    list return that exact record while a dedicated-VM filter returns none;
 6. start releases `startContainer`, confirms the configured process crossed
    `execve`, runs `poststart`, and returns; the workload verifies exact rootful
-   UID/GID maps plus monotonic and boottime namespace offsets before the marker
-   is observed;
-7. exact-target exec and its retry return the same positive authenticated PID,
-   a duplicate process ID is rejected, and a 50-millisecond process wait
-   returns `DeadlineExceeded`;
+   UID/GID maps, monotonic and boottime namespace offsets, and an applied
+   `RLIMIT_NOFILE` soft/hard value of 64 before the marker is observed;
+7. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48;
+   exec and its retry return the same positive authenticated PID, a duplicate
+   process ID is rejected, and a 50-millisecond process wait returns
+   `DeadlineExceeded`;
 8. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
 9. process inventory returns exactly the live init and second exec process;
@@ -181,8 +182,9 @@ The script installs `busybox-static` and `jq`, builds the matching
 `a3s-oci-agent` and CLI binaries, constructs the checked-in fixture with a
 100000:200000-owned, searchable rootfs, `/proc` mount target, and writable hook
 trace, injects one hook for every OCI phase, checks that the on-disk ownership
-and OCI mappings match, executes both KVM-independent cases, and removes its
-qualification directory on exit.
+and OCI mappings match, requires the workload to read back its file-descriptor
+limit, executes both KVM-independent cases, and removes its qualification
+directory on exit.
 
 ## Multi-container generation gate
 
