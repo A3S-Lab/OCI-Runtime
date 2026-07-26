@@ -27,6 +27,13 @@ const PROGRESS_PATH: &str = "/.a3s-oci-native-smoke";
 pub(super) const HOOK_TRACE_NAME: &str = ".a3s-oci-hook-trace";
 const UPDATED_MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
 
+struct ExerciseInput<'a> {
+    bundle: &'a OciBundle,
+    nonce: &'a str,
+    marker: &'a Path,
+    hook_trace: &'a Path,
+}
+
 pub(super) async fn exercise(
     service: &HostRuntimeService,
     bundle: &OciBundle,
@@ -37,6 +44,58 @@ pub(super) async fn exercise(
     report: &mut NativeLinuxSmokeReport,
 ) -> Result<(), String> {
     let client = RuntimeClient::new(service.clone());
+    exercise_client(
+        &client,
+        Some(service),
+        ExerciseInput {
+            bundle,
+            nonce,
+            marker,
+            hook_trace,
+        },
+        control_descriptors,
+        report,
+    )
+    .await
+}
+
+pub(super) async fn exercise_bound_service(
+    client: &RuntimeClient,
+    bundle: &OciBundle,
+    nonce: &str,
+    marker: &Path,
+    hook_trace: &Path,
+    control_descriptors: &mut ControlDescriptorFixture,
+    report: &mut NativeLinuxSmokeReport,
+) -> Result<(), String> {
+    exercise_client(
+        client,
+        None,
+        ExerciseInput {
+            bundle,
+            nonce,
+            marker,
+            hook_trace,
+        },
+        control_descriptors,
+        report,
+    )
+    .await
+}
+
+async fn exercise_client(
+    client: &RuntimeClient,
+    direct_service: Option<&HostRuntimeService>,
+    input: ExerciseInput<'_>,
+    control_descriptors: &mut ControlDescriptorFixture,
+    report: &mut NativeLinuxSmokeReport,
+) -> Result<(), String> {
+    let ExerciseInput {
+        bundle,
+        nonce,
+        marker,
+        hook_trace,
+    } = input;
     let features = native_call("features", client.features()).await?;
     report.service_operations = features.operations;
     report.hook_phases = features.oci.hooks().clone().unwrap_or_default();
@@ -58,17 +117,37 @@ pub(super) async fn exercise(
     let mut dedicated = create.clone();
     dedicated.isolation = IsolationRequest::DedicatedVm;
     report.dedicated_vm_rejected_before_create =
-        dedicated_vm_is_rejected(&client, dedicated).await?;
+        dedicated_vm_is_rejected(client, dedicated).await?;
     if !report.dedicated_vm_rejected_before_create {
         return Err("native runtime accepted dedicated-VM isolation".into());
     }
 
-    let descriptors = control_descriptors.take_descriptors()?;
-    let created = native_call(
-        "create with native control descriptors",
-        service.create_with_native_control_descriptors(create.clone(), descriptors.clone()),
-    )
-    .await?;
+    let (created, replayed) = if let Some(service) = direct_service {
+        let descriptors = control_descriptors.take_descriptors()?;
+        let created = native_call(
+            "create with native control descriptors",
+            service.create_with_native_control_descriptors(create.clone(), descriptors.clone()),
+        )
+        .await?;
+        let replayed = native_call(
+            "replayed create with native control descriptors",
+            service.create_with_native_control_descriptors(create.clone(), descriptors),
+        )
+        .await?;
+        (created, replayed)
+    } else {
+        let created = native_call(
+            "create over native service transport",
+            client.create(create.clone()),
+        )
+        .await?;
+        let replayed = native_call(
+            "replayed create over native service transport",
+            client.create(create.clone()),
+        )
+        .await?;
+        (created, replayed)
+    };
     report.create_returned_created = *created.state.status() == ContainerState::Created;
     report.created_pid = *created.state.pid();
     if !report.create_returned_created {
@@ -85,17 +164,14 @@ pub(super) async fn exercise(
     if observed != created {
         return Err("native state after create did not match the created response".into());
     }
-    let replayed = native_call(
-        "replayed create with native control descriptors",
-        service.create_with_native_control_descriptors(create.clone(), descriptors),
-    )
-    .await?;
     report.create_replayed = replayed == created;
     if !report.create_replayed {
         return Err("native runtime did not exactly replay create".into());
     }
-    report.create_without_control_descriptors_rejected =
-        create_without_descriptors_is_rejected(service, create).await?;
+    report.create_without_control_descriptors_rejected = match direct_service {
+        Some(service) => create_without_descriptors_is_rejected(service, create).await?,
+        None => bound_service_rejects_other_container(client, create, nonce).await?,
+    };
     if !report.create_without_control_descriptors_rejected {
         return Err("descriptor-bearing create replayed without its logical schema".into());
     }
@@ -136,19 +212,19 @@ pub(super) async fn exercise(
     if !report.start_released {
         return Err("native start did not leave the workload running".into());
     }
-    wait_for_marker(&client, &target, marker, report).await?;
+    wait_for_marker(client, &target, marker, report).await?;
     control_descriptors.verify_listeners().await?;
     report.control_listener_connectivity_verified = true;
     control_descriptors.verify_init_log().await?;
     report.control_init_log_verified = true;
-    process::exercise_process_io(&client, &target, nonce).await?;
+    process::exercise_process_io(client, &target, nonce).await?;
     report.process_io_verified = true;
-    process::exercise_terminal_io(&client, &target, nonce).await?;
+    process::exercise_terminal_io(client, &target, nonce).await?;
     report.terminal_io_verified = true;
     let cleanup_process =
-        process::exercise_before_init_exit(&client, &target, nonce, PROGRESS_PATH).await?;
-    exercise_control_plane(&client, &target, &cleanup_process, nonce, marker, report).await?;
-    report.wait_timeout_enforced = wait_times_out_while_running(&client, &target).await?;
+        process::exercise_before_init_exit(client, &target, nonce, PROGRESS_PATH).await?;
+    exercise_control_plane(client, &target, &cleanup_process, nonce, marker, report).await?;
+    report.wait_timeout_enforced = wait_times_out_while_running(client, &target).await?;
     if !report.wait_timeout_enforced {
         return Err("native wait returned before the running init process exited".into());
     }
@@ -196,8 +272,8 @@ pub(super) async fn exercise(
     if !report.wait_replayed {
         return Err("native repeated wait returned a different exit status".into());
     }
-    process::verify_after_init_exit(&client, &target, cleanup_process, &waited).await?;
-    report.stopped_observed = wait_until_stopped(&client, &target).await?;
+    process::verify_after_init_exit(client, &target, cleanup_process, &waited).await?;
+    report.stopped_observed = wait_until_stopped(client, &target).await?;
 
     let delete = DeleteRequest {
         context: operation(nonce, "delete")?,
@@ -208,7 +284,7 @@ pub(super) async fn exercise(
     report.delete_succeeded = true;
     native_call("replayed delete", client.delete(delete)).await?;
     report.delete_replayed = true;
-    report.events_verified = verify_runtime_events(&client, &target).await?;
+    report.events_verified = verify_runtime_events(client, &target).await?;
     if !report.events_verified {
         return Err("native durable runtime events were incomplete or out of order".into());
     }
@@ -217,7 +293,7 @@ pub(super) async fn exercise(
     if !report.hooks_verified {
         return Err("native OCI hooks did not preserve exact order and state".into());
     }
-    report.state_missing_after_delete = state_is_missing(&client, target).await?;
+    report.state_missing_after_delete = state_is_missing(client, target).await?;
     if !report.state_missing_after_delete {
         return Err("native state remained visible after delete".into());
     }
@@ -228,8 +304,10 @@ pub(super) async fn exercise(
     if !report.list_empty_after_delete {
         return Err("native durable list retained a deleted container".into());
     }
-    control_descriptors.verify_closed().await?;
-    report.control_descriptors_closed_after_delete = true;
+    if direct_service.is_some() {
+        control_descriptors.verify_closed().await?;
+        report.control_descriptors_closed_after_delete = true;
+    }
     Ok(())
 }
 
@@ -312,6 +390,24 @@ async fn create_without_descriptors_is_rejected(
         Err(error) if error.code == ErrorCode::FailedPrecondition => Ok(true),
         Err(error) => Err(native_error(
             "retry descriptor-bearing create without descriptors",
+            &error,
+        )),
+        Ok(_) => Ok(false),
+    }
+}
+
+async fn bound_service_rejects_other_container(
+    client: &RuntimeClient,
+    mut request: CreateRequest,
+    nonce: &str,
+) -> Result<bool, String> {
+    request.id = ContainerId::new(format!("native-other-{nonce}"))
+        .map_err(|error| format!("failed to construct alternate container ID: {error}"))?;
+    request.context = operation(nonce, "create-other")?;
+    match client.create(request).await {
+        Err(error) if error.code == ErrorCode::PermissionDenied => Ok(true),
+        Err(error) => Err(native_error(
+            "create a second bound-service container",
             &error,
         )),
         Ok(_) => Ok(false),

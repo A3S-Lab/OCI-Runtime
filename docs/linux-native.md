@@ -206,6 +206,55 @@ sysctl, the qualification script snapshots it, enables the isolated rootless
 test, and restores the original value on exit. The complete qualification
 directory and dedicated test account are removed on every exit path.
 
+## Native SDK service gate
+
+The Box-facing native path runs one long-lived `NativeLinuxService` owner per
+Sandbox. Its public lifecycle boundary is the normal
+`RuntimeClient::connect` Unix transport; Box does not import
+`NativeLinuxDriver` or send descriptor-bearing private requests. The owner is
+configured with one container ID and duplicates the inherited Box FD 3/4/5
+roles before it opens any workload.
+
+The `native-linux-service-smoke` command reuses the complete
+`a3s.oci.native-linux-smoke.v11` lifecycle assertions over a real `0600` Unix
+socket. In addition to the 25 lifecycle requirements above, success requires:
+
+1. the service root, state root, and executor parent are real, owner-owned
+   `0700` directories, while the endpoint is an owner-owned `0600` socket;
+2. the endpoint accepts the same-UID SDK client and carries every advertised
+   request through protocol negotiation and server-side validation;
+3. normal transported create automatically attaches the inherited FD 3/4/5
+   roles for the configured container ID;
+4. create for any other container ID fails as `PermissionDenied` before
+   driver dispatch or descriptor reuse;
+5. create/start/exec, piped and terminal I/O, update/stats, pause/resume,
+   processes, kill/wait, events, and delete all cross the transport boundary;
+6. service shutdown closes the retained Box descriptors, removes its exact
+   socket inode, reaps every driver-owned process, and leaves the executor
+   parent empty before the isolated session is removed.
+
+The same x86_64 and aarch64 qualification script also launches the production
+`native-linux-service` entry point with real inherited listeners and log,
+checks every path mode, sends `SIGTERM`, waits for exit status zero, and proves
+that the socket and executor slot are gone. Both gates run while `/dev/kvm` is
+absent; neither the service bind nor native lifecycle initializes libkrun.
+
+The owner command is intentionally fail-closed:
+
+```text
+a3s-oci native-linux-service \
+  --root /absolute/private/sandbox/runtime \
+  --agent /absolute/path/to/a3s-oci-agent \
+  --container-id box-sandbox-42 \
+  --a3s-box-control-fds
+```
+
+The root and agent paths must be absolute and normalized, and the root parent
+must already exist. An existing root is accepted only when it is the exact
+canonical owner-owned `0700` directory. A pre-existing socket, permissive
+directory, wrong descriptor role, different peer UID, or second container ID
+fails instead of weakening the boundary.
+
 ## Rootless core lifecycle gate
 
 `native-linux-rootless-smoke` must run with nonzero effective UID/GID and no

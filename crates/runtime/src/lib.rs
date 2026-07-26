@@ -26,6 +26,8 @@ mod namespace_join;
 mod native_control;
 #[cfg(target_os = "linux")]
 mod native_linux_driver;
+#[cfg(target_os = "linux")]
+mod native_service;
 mod native_smoke;
 mod oci_smoke;
 mod platform;
@@ -62,9 +64,11 @@ pub use native_control::{
 };
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
+#[cfg(target_os = "linux")]
+pub use native_service::{NativeLinuxService, NativeLinuxServiceConfig};
 pub use native_smoke::{
     native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_rootless_smoke,
-    native_linux_smoke,
+    native_linux_service_smoke, native_linux_smoke,
 };
 pub use oci_smoke::{oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke};
 pub use report::{

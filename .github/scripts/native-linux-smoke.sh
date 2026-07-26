@@ -296,24 +296,9 @@ report_native_failure() {
   sudo dmesg --ctime 2>/dev/null | tail -n 120 || true
 }
 
-run_smoke() {
+verify_single_container_report() {
   local expected_kvm_present="$1"
-  local output
-  local status
-  sudo truncate --size 0 "$hook_trace"
-  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
-      --agent "$PWD/target/debug/a3s-oci-agent" \
-      --bundle "$bundle" \
-      --work-parent "$work_parent")"; then
-    status=0
-  else
-    status=$?
-  fi
-  printf '%s\n' "$output"
-  if ((status != 0)); then
-    report_native_failure "$bundle/rootfs"
-    return "$status"
-  fi
+  local output="$2"
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
     '.schema_version == "a3s.oci.native-linux-smoke.v11"
@@ -366,6 +351,50 @@ run_smoke() {
      and .session_root_clean
      and (.reason == null)' \
     <<<"$output" >/dev/null
+}
+
+run_smoke() {
+  local expected_kvm_present="$1"
+  local output
+  local status
+  sudo truncate --size 0 "$hook_trace"
+  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle "$bundle" \
+      --work-parent "$work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if ((status != 0)); then
+    report_native_failure "$bundle/rootfs"
+    return "$status"
+  fi
+  verify_single_container_report "$expected_kvm_present" "$output"
+}
+
+run_service_smoke() {
+  local expected_kvm_present="$1"
+  local output
+  local status
+  sudo truncate --size 0 "$hook_trace"
+  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-service-smoke \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle "$bundle" \
+      --work-parent "$work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if ((status != 0)); then
+    report_native_failure "$bundle/rootfs"
+    return "$status"
+  fi
+  verify_single_container_report "$expected_kvm_present" "$output"
+  test ! -e "$bundle/rootfs/.a3s-oci-native-smoke"
+  test -z "$(find "$work_parent" -mindepth 1 -print -quit)"
 }
 
 run_multi_container_smoke() {
@@ -598,6 +627,127 @@ run_rootless_smoke() {
   test -z "$(sudo find "$rootless_work_parent" -mindepth 1 -print -quit)"
 }
 
+run_service_signal_cleanup() {
+  python3 - \
+    "$PWD/target/debug/a3s-oci" \
+    "$PWD/target/debug/a3s-oci-agent" \
+    "$qualification_root/native-service-owner" \
+    "$qualification_root/native-service-control" <<'PY'
+import atexit
+import fcntl
+import os
+import signal
+import socket
+import stat
+import subprocess
+import sys
+import time
+
+runtime, agent, service_root, control_root = sys.argv[1:]
+os.mkdir(control_root, mode=0o700)
+exec_path = os.path.join(control_root, "exec.sock")
+pty_path = os.path.join(control_root, "pty.sock")
+log_path = os.path.join(control_root, "init.log")
+
+exec_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+exec_listener.bind(exec_path)
+exec_listener.listen()
+pty_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+pty_listener.bind(pty_path)
+pty_listener.listen()
+init_log = open(log_path, "w+b", buffering=0)
+sources = [exec_listener.fileno(), pty_listener.fileno(), init_log.fileno()]
+copies = [fcntl.fcntl(fd, fcntl.F_DUPFD, 10) for fd in sources]
+for source, target in zip(copies, (3, 4, 5)):
+    os.dup2(source, target, inheritable=True)
+
+process = subprocess.Popen(
+    [
+        runtime,
+        "native-linux-service",
+        "--root",
+        service_root,
+        "--agent",
+        agent,
+        "--container-id",
+        "box-signal-cleanup",
+        "--a3s-box-control-fds",
+    ],
+    pass_fds=(3, 4, 5),
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+
+def cleanup_process():
+    if process.poll() is None:
+        process.kill()
+        process.communicate()
+
+atexit.register(cleanup_process)
+originals = set(sources)
+exec_listener.close()
+pty_listener.close()
+init_log.close()
+for target in (3, 4, 5):
+    if target not in originals:
+        os.close(target)
+for source in copies:
+    os.close(source)
+
+socket_path = os.path.join(service_root, "runtime.sock")
+deadline = time.monotonic() + 15
+while not os.path.exists(socket_path):
+    if process.poll() is not None:
+        stdout, stderr = process.communicate()
+        raise RuntimeError(
+            f"native service exited before readiness ({process.returncode}): "
+            f"stdout={stdout!r} stderr={stderr!r}"
+        )
+    if time.monotonic() >= deadline:
+        process.kill()
+        stdout, stderr = process.communicate()
+        raise RuntimeError(
+            f"timed out waiting for native service: stdout={stdout!r} stderr={stderr!r}"
+        )
+    time.sleep(0.025)
+
+for path, expected_mode in [
+    (service_root, 0o700),
+    (os.path.join(service_root, "state"), 0o700),
+    (os.path.join(service_root, "executor"), 0o700),
+    (socket_path, 0o600),
+]:
+    actual_mode = stat.S_IMODE(os.lstat(path).st_mode)
+    if actual_mode != expected_mode:
+        raise RuntimeError(
+            f"native service path {path} has mode {oct(actual_mode)}, "
+            f"expected {oct(expected_mode)}"
+        )
+
+process.send_signal(signal.SIGTERM)
+try:
+    stdout, stderr = process.communicate(timeout=15)
+except subprocess.TimeoutExpired as error:
+    process.kill()
+    stdout, stderr = process.communicate()
+    raise RuntimeError(
+        f"native service ignored SIGTERM: stdout={stdout!r} stderr={stderr!r}"
+    ) from error
+if process.returncode != 0:
+    raise RuntimeError(
+        f"native service SIGTERM exit was {process.returncode}: "
+        f"stdout={stdout!r} stderr={stderr!r}"
+    )
+if os.path.exists(socket_path):
+    raise RuntimeError("native service socket remained after SIGTERM")
+executor_root = os.path.join(service_root, "executor")
+if os.listdir(executor_root):
+    raise RuntimeError("native service executor root remained populated after SIGTERM")
+atexit.unregister(cleanup_process)
+PY
+}
+
 if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   sudo mv /dev/kvm "$saved_kvm"
   kvm_original_moved=true
@@ -605,6 +755,8 @@ fi
 
 run_rootless_smoke
 run_smoke false
+run_service_smoke false
+run_service_signal_cleanup
 run_multi_container_smoke false
 run_fault_cleanup
 sudo mkdir /dev/kvm

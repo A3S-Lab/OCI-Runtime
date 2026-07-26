@@ -483,6 +483,10 @@ and recovery suites in the Windows guest and on native Linux.
   cgroup-v2 delegation remains a separate release gate.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
+- [ ] Add the Sandbox-scoped native runtime owner, bind its protected Unix SDK
+  endpoint, route the complete lifecycle through `a3s-oci-sdk`, fence inherited
+  Box descriptors to one container ID, and prove signal-driven cleanup on
+  x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver
