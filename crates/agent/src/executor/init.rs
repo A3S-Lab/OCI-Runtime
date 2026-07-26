@@ -512,6 +512,7 @@ fn exec_configured_process(plan: &InitPlan) -> Result<()> {
         .collect::<Vec<_>>();
     environment_pointers.push(std::ptr::null());
 
+    plan.rlimits.apply()?;
     plan.capabilities.prepare_for_credentials(plan.uid)?;
     // SAFETY: every pointer below references a live, NUL-terminated buffer.
     // This internal init process is single-threaded and immediately replaces

@@ -397,6 +397,10 @@ then may HVF become `experimental`.
 - [x] Apply and verify OCI capability bounding, effective, permitted,
   inheritable, and ambient sets, and prevent exec from exceeding the
   configured init bounding ceiling.
+- [x] Validate, retain, and apply every OCI `process.rlimits` type before
+  credential reduction for both init and exec; reject duplicates, inverted
+  soft/hard values, and unbounded plans, and verify `RLIMIT_NOFILE` through
+  the native Linux workload.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
@@ -411,7 +415,7 @@ then may HVF become `experimental`.
 - [x] Enforce the bounded A3S Box static device-node profile with
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   CAP_MKNOD exclusion, and verified device-node creation.
-- [ ] Rootless ID-mapping policy, remaining credentials, rlimits, scheduler,
+- [ ] Rootless ID-mapping policy, remaining credentials, scheduler,
   I/O priority, affinity, LSMs, multi-architecture/notification seccomp, and
   broader device policies.
 - [ ] cgroup v2 I/O, hugepage, RDMA, unified resources, device-access BPF,

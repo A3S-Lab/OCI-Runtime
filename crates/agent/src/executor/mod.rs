@@ -19,6 +19,7 @@ mod plan;
 mod plan_tests;
 mod process;
 mod process_io;
+mod rlimit;
 mod rootfs;
 #[cfg(test)]
 mod rootfs_tests;

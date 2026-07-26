@@ -190,8 +190,9 @@ fail, and exact mutation retries replay their original process or signal
 result. Init and exec share the same fail-closed OCI process planner and I/O
 owner. The current slice accepts null or piped stdin, null or captured
 stdout/stderr, or the exact all-terminal PTY contract, while rejecting
-inherited descriptors, rlimit, scheduler, and other unenforced process
-settings.
+inherited descriptors, scheduler, and other unenforced process settings. It
+retains and applies all 16 OCI `process.rlimits` types to init and exec before
+credentials are reduced, with duplicate, count, and soft/hard validation.
 
 Piped stdin is written asynchronously with backpressure and can be closed
 idempotently. Dedicated tasks continuously drain captured stdout and stderr so

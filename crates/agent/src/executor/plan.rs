@@ -12,6 +12,7 @@ use super::device::DevicePlan;
 use super::hook::HookSet;
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
+use super::rlimit::RlimitPlan;
 use super::rootfs::RootfsPropagation;
 use super::seccomp::SeccompPlan;
 
@@ -35,6 +36,7 @@ pub(super) struct ProcessPlan {
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
     pub(super) terminal: bool,
+    pub(super) rlimits: RlimitPlan,
     pub(super) capabilities: CapabilityPlan,
     pub(super) seccomp: SeccompPlan,
 }
@@ -78,6 +80,7 @@ impl ProcessPlan {
             ));
         }
         let capabilities = CapabilityPlan::from_oci(process.capabilities().as_ref())?;
+        let rlimits = RlimitPlan::from_oci(process.rlimits().as_deref())?;
 
         Ok(Self {
             args,
@@ -89,6 +92,7 @@ impl ProcessPlan {
             umask: user.umask(),
             no_new_privileges: true,
             terminal,
+            rlimits,
             capabilities,
             seccomp: SeccompPlan::default(),
         })
@@ -113,6 +117,7 @@ pub(super) struct InitPlan {
     pub(super) umask: Option<u32>,
     pub(super) no_new_privileges: bool,
     pub(super) terminal: bool,
+    pub(super) rlimits: RlimitPlan,
     pub(super) capabilities: CapabilityPlan,
     pub(super) seccomp: SeccompPlan,
     pub(super) cgroup: CgroupPlan,
@@ -246,6 +251,7 @@ impl InitPlan {
             umask: process_plan.umask,
             no_new_privileges: process_plan.no_new_privileges,
             terminal: process_plan.terminal,
+            rlimits: process_plan.rlimits,
             capabilities: process_plan.capabilities,
             seccomp,
             cgroup,
@@ -283,6 +289,7 @@ fn validate_process_profile(process: &Process) -> Result<()> {
             "env",
             "cwd",
             "capabilities",
+            "rlimits",
             "noNewPrivileges",
         ],
     )?;
@@ -339,6 +346,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "env",
             "cwd",
             "capabilities",
+            "rlimits",
             "noNewPrivileges",
         ],
     )?;
