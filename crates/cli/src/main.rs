@@ -34,6 +34,18 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
     },
+    /// Prove helper-backed native Linux execution as an unprivileged user.
+    NativeLinuxRootlessSmoke {
+        /// Matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// Rootless OCI bundle containing config.json and rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing user-owned directory beneath which smoke state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+    },
     /// Prove two native Linux containers remain independently fenced.
     NativeLinuxMultiContainerSmoke {
         /// Matching a3s-oci-agent executable used for the prepared init mode.
@@ -202,6 +214,21 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             work_parent,
         } => {
             let report = a3s_oci_runtime::native_linux_smoke(&agent, &bundle, &work_parent).await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::NativeLinuxRootlessSmoke {
+            agent,
+            bundle,
+            work_parent,
+        } => {
+            let report =
+                a3s_oci_runtime::native_linux_rootless_smoke(&agent, &bundle, &work_parent).await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

@@ -12,6 +12,7 @@ mod filesystem;
 mod lifecycle;
 mod multi_container;
 mod process;
+mod rootless;
 
 use control_descriptors::{enable_workload_verification, ControlDescriptorFixture};
 use filesystem::{
@@ -36,6 +37,14 @@ pub(super) async fn run_multi_container(
     work_parent: &Path,
 ) -> crate::NativeLinuxMultiContainerSmokeReport {
     multi_container::run(init_executable, bundle_a, bundle_b, work_parent).await
+}
+
+pub(super) async fn run_rootless(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+) -> crate::NativeLinuxRootlessSmokeReport {
+    rootless::run(init_executable, bundle, work_parent).await
 }
 
 pub(super) async fn run(

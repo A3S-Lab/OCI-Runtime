@@ -12,10 +12,12 @@ not make native Linux unavailable, and a usable KVM device must not imply that
 the utility-VM driver can launch a workload.
 
 Both entries in the default feature inventory remain `probe-only`.
-`NativeLinuxDriver::open_experimental` is a separate, explicit rootful
-development opt-in. It changes only the constructed driver instance to
-`experimental`, accepts only `shared-host-kernel` isolation, and reuses
-`LinuxExecutor` directly without linking or initializing libkrun.
+`NativeLinuxDriver::open_experimental` is a separate, explicit development
+opt-in. It changes only the constructed driver instance to `experimental`,
+accepts only `shared-host-kernel` isolation, and reuses `LinuxExecutor`
+directly without linking or initializing libkrun. The executor selects direct
+rootful mapping or helper-backed rootless mapping from its effective host
+identity.
 
 ## Native prerequisite probe
 
@@ -39,8 +41,9 @@ kernel interfaces without delivering a signal. The stable
 result.
 
 It also records `/proc/sys/kernel/unprivileged_userns_clone` when that
-distribution-specific policy file exists. The policy is evidence for future
-rootless execution; it is not required for rootful host availability.
+distribution-specific policy file exists. The policy is required when a
+non-root caller opens the executor, but it is not required for rootful host
+availability.
 On kernels that expose
 `/proc/sys/kernel/apparmor_restrict_unprivileged_userns`, the probe reports the
 setting as `apparmor_restrict_unprivileged_userns`. This is diagnostic evidence:
@@ -181,10 +184,9 @@ device after the test.
 The fixture is created beneath a private `/var/tmp` directory whose complete
 ancestor chain is searchable by the mapped host root identity. This is required
 after entering the child user namespace: its capabilities no longer bypass
-mode bits owned by the initial user namespace. The script does not weaken
-AppArmor or another host security policy. A production rootfs must likewise be
-reachable by its configured host mappings; an inaccessible ancestor or an LSM
-denial fails the create operation.
+mode bits owned by the initial user namespace. A production rootfs must
+likewise be reachable by its configured host mappings; an inaccessible
+ancestor or an LSM denial fails the create operation.
 
 Run the same gate on a supported Ubuntu host:
 
@@ -192,14 +194,50 @@ Run the same gate on a supported Ubuntu host:
 bash .github/scripts/native-linux-smoke.sh
 ```
 
-The script installs `busybox-static` and `jq`, builds the matching
-`a3s-oci-agent` and CLI binaries, constructs the checked-in fixture with a
-100000:200000-owned, searchable rootfs, `/proc` mount target, and writable hook
-trace, injects one hook for every OCI phase, checks that the on-disk ownership
-and OCI mappings match, requires the workload to read back its file-descriptor
-limit, binds the two host-visible Unix listeners and dedicated init log before
-create, executes both KVM-independent cases, and removes its qualification
-directory on exit.
+The script installs `busybox-static`, `jq`, `uidmap`, and `util-linux`, builds
+the matching `a3s-oci-agent` and CLI binaries, constructs the checked-in
+rootful fixture with a 100000:200000-owned searchable rootfs, `/proc` mount
+target, and writable hook trace, injects one hook for every OCI phase, checks
+that on-disk ownership and OCI mappings match, binds the two host-visible Unix
+listeners and dedicated init log, and executes both KVM-independent cases. It
+also constructs the rootless fixture described below. If Ubuntu exposes a
+disabled unprivileged-user-namespace or restrictive AppArmor user-namespace
+sysctl, the qualification script snapshots it, enables the isolated rootless
+test, and restores the original value on exit. The complete qualification
+directory and dedicated test account are removed on every exit path.
+
+## Rootless core lifecycle gate
+
+`native-linux-rootless-smoke` must run with nonzero effective UID/GID and no
+supplementary groups. Executor startup verifies that unprivileged user
+namespaces are enabled and accepts only fixed, regular, root-owned,
+setuid-root, unprivileged-executable, not group/world-writable `newuidmap` and
+`newgidmap` helpers. The bundle must omit `linux.cgroupsPath`, map container ID 0 exactly
+to the effective host UID/GID with size 1, map no host ID 0, and cover
+container ID 1 through delegated subordinate ranges. Additional process GIDs
+are rejected because the child installs `setgroups=deny` before `newgidmap`.
+
+The CI fixture creates a dedicated UID/GID 20000 account with UID range
+300000:65536 and GID range 400000:65536. A host file owned by 300000:400000
+must appear as 1:1 inside the workload. The versioned
+`a3s.oci.native-linux-rootless-smoke.v1` report then requires:
+
+1. exact create and replay behind the OCI `created` barrier;
+2. exact `/proc/<pid>/uid_map` and `gid_map` read-back plus
+   `/proc/<pid>/setgroups == deny` before start;
+3. a started workload that observes namespace root and the translated 1:1
+   fixture ownership;
+4. exact exec/replay, pidfd signal/replay, and stable signal-9 process wait;
+5. exact init kill/replay and stable signal-9 lifecycle wait;
+6. one ordered creating/created/started, exec create/start/exit, stopped, init
+   exit, and deleted event sequence with an empty tail cursor;
+7. stopped-only delete replay, post-delete `NotFound`, empty list, and removal
+   of every process, marker, executor root, and durable session directory.
+
+GitHub Actions runs this gate as the dedicated user on both x86_64 and
+aarch64. It proves the core helper-backed lifecycle only. Rootless cgroup-v2
+delegation, pause/resume, updates/stats, device access, and broader security
+policy remain promotion gates.
 
 ## Multi-container generation gate
 
@@ -317,11 +355,12 @@ every command.
 
 ## Remaining promotion gates
 
-This evidence proves one rootful bootstrap profile, not general OCI support.
-The default driver must remain `probe-only` until at least the following pass:
+This evidence proves rootful and core rootless bootstrap profiles, not general
+OCI support. The default driver must remain `probe-only` until at least the
+following pass:
 
-- rootless lifecycle using subordinate UID/GID mappings and the
-  `setgroups=deny` flow;
+- rootless cgroup-v2 delegation, pause/resume, live updates/stats, and device
+  policy without privileged host fallback;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
 - remaining mount and credential controls, broader cgroup v2 policies and

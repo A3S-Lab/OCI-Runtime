@@ -5,7 +5,7 @@ use a3s_oci_core::HostPlatform;
 
 use crate::{
     LifecycleFaultPoint, NativeLinuxFaultCleanupReport, NativeLinuxMultiContainerSmokeReport,
-    NativeLinuxSmokeReport,
+    NativeLinuxRootlessSmokeReport, NativeLinuxSmokeReport,
 };
 
 #[cfg(target_os = "linux")]
@@ -29,6 +29,27 @@ pub async fn native_linux_smoke(
     {
         let _ = (init_executable, bundle, work_parent);
         NativeLinuxSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Exercise the native Linux core lifecycle as an unprivileged host user.
+///
+/// The diagnostic requires helper-backed subordinate UID/GID mappings and a
+/// bundle without a cgroup path. It fails closed when invoked as host root.
+pub async fn native_linux_rootless_smoke(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+) -> NativeLinuxRootlessSmokeReport {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_rootless(init_executable, bundle, work_parent).await
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (init_executable, bundle, work_parent);
+        NativeLinuxRootlessSmokeReport::unsupported(HostPlatform::current())
     }
 }
 

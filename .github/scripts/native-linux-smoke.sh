@@ -6,6 +6,15 @@ qualification_root=""
 saved_kvm="/dev/a3s-oci-kvm-$$"
 kvm_original_moved=false
 kvm_test_directory_created=false
+rootless_user="a3soci$$"
+rootless_uid=20000
+rootless_gid=20000
+rootless_user_created=false
+rootless_group_created=false
+unprivileged_userns_original=""
+unprivileged_userns_changed=false
+apparmor_userns_original=""
+apparmor_userns_changed=false
 
 restore_host() {
   local command_status=$?
@@ -35,6 +44,41 @@ restore_host() {
       cleanup_status=$status
     fi
   fi
+  if [[ "$rootless_user_created" == true ]]; then
+    sudo userdel "$rootless_user"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+    sudo sed -i "\|^${rootless_user}:|d" /etc/subuid /etc/subgid
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ "$rootless_group_created" == true ]] && getent group "$rootless_user" >/dev/null; then
+    sudo groupdel "$rootless_user"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ "$apparmor_userns_changed" == true ]]; then
+    sudo sysctl -w \
+      "kernel.apparmor_restrict_unprivileged_userns=$apparmor_userns_original"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ "$unprivileged_userns_changed" == true ]]; then
+    sudo sysctl -w \
+      "kernel.unprivileged_userns_clone=$unprivileged_userns_original"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
   if ((command_status != 0)); then
     exit "$command_status"
   fi
@@ -43,7 +87,7 @@ restore_host() {
 trap restore_host EXIT
 
 sudo apt-get update
-sudo apt-get install --yes busybox-static jq
+sudo apt-get install --yes busybox-static jq uidmap util-linux
 cargo build -p a3s-oci-agent -p a3s-oci-cli
 
 features="$("$PWD/target/debug/a3s-oci" features)"
@@ -62,20 +106,28 @@ jq --exit-status \
 qualification_root="$(mktemp -d /var/tmp/a3s-oci-native.XXXXXXXX)"
 bundle="$qualification_root/bundle"
 bundle_b="$qualification_root/bundle-b"
+rootless_bundle="$qualification_root/rootless-bundle"
+rootless_bin="$qualification_root/rootless-bin"
 work_parent="$qualification_root/work"
+rootless_work_parent="$qualification_root/rootless-work"
 mkdir -p \
   "$bundle/rootfs/bin" "$bundle/rootfs/proc" \
   "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
-  "$work_parent"
+  "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/proc" \
+  "$rootless_bin" "$work_parent" "$rootless_work_parent"
 for candidate in "$bundle" "$bundle_b"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
 done
+cp fixtures/native-linux/config.json "$rootless_bundle/config.json"
+cp "$(command -v busybox)" "$rootless_bundle/rootfs/bin/busybox"
+ln -s busybox "$rootless_bundle/rootfs/bin/sh"
 jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
   "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
 mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
 hook_trace="$bundle/rootfs/.a3s-oci-hook-trace"
+# shellcheck disable=SC2016 # Expanded by the hook process, not this script.
 hook_command='IFS= read -r A3S_HOOK_STATE || :; printf "%s %s\n" "$A3S_HOOK_PHASE" "$A3S_HOOK_STATE" >> "$A3S_HOOK_TRACE"'
 jq \
   --arg command "$hook_command" \
@@ -114,6 +166,91 @@ sudo chmod 0666 "$hook_trace"
 sudo chmod 0755 "$qualification_root"
 test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
+
+if getent passwd "$rootless_uid" >/dev/null; then
+  printf 'Required rootless smoke UID %s is already allocated\n' "$rootless_uid" >&2
+  exit 1
+fi
+if getent group "$rootless_gid" >/dev/null; then
+  printf 'Required rootless smoke GID %s is already allocated\n' "$rootless_gid" >&2
+  exit 1
+fi
+sudo groupadd --gid "$rootless_gid" "$rootless_user"
+rootless_group_created=true
+sudo useradd \
+  --no-create-home \
+  --uid "$rootless_uid" \
+  --gid "$rootless_gid" \
+  --shell /usr/sbin/nologin \
+  "$rootless_user"
+rootless_user_created=true
+sudo sed -i "\|^${rootless_user}:|d" /etc/subuid /etc/subgid
+printf '%s:300000:65536\n' "$rootless_user" | sudo tee -a /etc/subuid >/dev/null
+printf '%s:400000:65536\n' "$rootless_user" | sudo tee -a /etc/subgid >/dev/null
+
+if [[ -f /proc/sys/kernel/unprivileged_userns_clone ]]; then
+  unprivileged_userns_original="$(
+    cat /proc/sys/kernel/unprivileged_userns_clone
+  )"
+  if [[ "$unprivileged_userns_original" == 0 ]]; then
+    sudo sysctl -w kernel.unprivileged_userns_clone=1
+    unprivileged_userns_changed=true
+  fi
+fi
+if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+  apparmor_userns_original="$(
+    cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+  )"
+  if [[ "$apparmor_userns_original" == 1 ]]; then
+    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+    apparmor_userns_changed=true
+  fi
+fi
+
+# shellcheck disable=SC2016 # Expanded inside the rootless workload.
+rootless_command='set -eu; test "$(/bin/busybox id -u)" = 0; test "$(/bin/busybox id -g)" = 0; test "$(/bin/busybox cat /proc/self/setgroups)" = deny; test "$(/bin/busybox stat -c "%u:%g" /.a3s-oci-rootless-subordinate)" = 1:1; printf "a3s-oci-rootless-mapping-v1\n" > /.a3s-oci-rootless-smoke; exec /bin/busybox sleep 300'
+jq \
+  --arg command "$rootless_command" \
+  --argjson uid "$rootless_uid" \
+  --argjson gid "$rootless_gid" \
+  '
+    del(.linux.cgroupsPath, .linux.timeOffsets, .hooks)
+    | .linux.namespaces = [
+        {"type": "uts"},
+        {"type": "mount"},
+        {"type": "pid"},
+        {"type": "user"}
+      ]
+    | .linux.uidMappings = [
+        {"containerID": 0, "hostID": $uid, "size": 1},
+        {"containerID": 1, "hostID": 300000, "size": 65535}
+      ]
+    | .linux.gidMappings = [
+        {"containerID": 0, "hostID": $gid, "size": 1},
+        {"containerID": 1, "hostID": 400000, "size": 65535}
+      ]
+    | .process.args = ["/bin/sh", "-c", $command]
+  ' \
+  "$rootless_bundle/config.json" >"$rootless_bundle/config.json.tmp"
+mv "$rootless_bundle/config.json.tmp" "$rootless_bundle/config.json"
+sudo chown -R "$rootless_uid:$rootless_gid" \
+  "$rootless_bin" "$rootless_bundle" "$rootless_work_parent"
+sudo install \
+  --owner="$rootless_uid" \
+  --group="$rootless_gid" \
+  --mode=0755 \
+  "$PWD/target/debug/a3s-oci" \
+  "$PWD/target/debug/a3s-oci-agent" \
+  "$rootless_bin/"
+sudo touch "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate"
+sudo chown 300000:400000 \
+  "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate"
+sudo chmod 0644 "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate"
+test "$(stat --format '%u:%g' "$rootless_bundle/rootfs")" \
+  = "$rootless_uid:$rootless_gid"
+test "$(stat --format '%u:%g' \
+  "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate")" \
+  = '300000:400000'
 
 report_native_failure() {
   local rootfs="$1"
@@ -398,11 +535,75 @@ run_fault_cleanup() {
   done
 }
 
+run_rootless_smoke() {
+  local output
+  local status
+  if output="$(sudo setpriv \
+      --reuid="$rootless_uid" \
+      --regid="$rootless_gid" \
+      --clear-groups \
+      -- \
+      "$rootless_bin/a3s-oci" native-linux-rootless-smoke \
+      --agent "$rootless_bin/a3s-oci-agent" \
+      --bundle "$rootless_bundle" \
+      --work-parent "$rootless_work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if ((status != 0)); then
+    printf '%s\n' 'Native Linux rootless diagnostics:'
+    ls -l /usr/bin/newuidmap /usr/bin/newgidmap || true
+    grep "^${rootless_user}:" /etc/subuid /etc/subgid || true
+    cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || true
+    cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true
+    report_native_failure "$rootless_bundle/rootfs"
+    return "$status"
+  fi
+  jq --exit-status \
+    --argjson uid "$rootless_uid" \
+    --argjson gid "$rootless_gid" \
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v1"
+     and .platform == "linux" and .status == "available"
+     and .effective_uid == $uid and .effective_gid == $gid
+     and .bundle_loaded
+     and .mapping_plan_verified
+     and .service_operations
+         == ["features", "create", "state", "start", "kill", "delete",
+             "exec", "wait", "list", "pause", "resume", "update", "processes",
+             "stats", "events", "read-output", "write-stdin", "close-stdin", "resize",
+             "signal-process", "wait-process"]
+     and .create_returned_created
+     and .create_replayed
+     and (.created_pid > 0)
+     and .uid_map_verified
+     and .gid_map_verified
+     and .setgroups_denied
+     and .workload_verified
+     and .exec_replayed
+     and .exec_signal_replayed
+     and .exec_wait_status == {"signal": 9, "oom_killed": false}
+     and .init_kill_replayed
+     and .init_wait_status == {"signal": 9, "oom_killed": false}
+     and .events_verified
+     and .delete_replayed
+     and .durable_state_removed
+     and .executor_runtime_clean
+     and .session_root_clean
+     and .marker_removed
+     and (.reason == null)' \
+    <<<"$output" >/dev/null
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke"
+  test -z "$(sudo find "$rootless_work_parent" -mindepth 1 -print -quit)"
+}
+
 if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   sudo mv /dev/kvm "$saved_kvm"
   kvm_original_moved=true
 fi
 
+run_rootless_smoke
 run_smoke false
 run_multi_container_smoke false
 run_fault_cleanup

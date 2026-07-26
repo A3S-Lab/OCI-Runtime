@@ -26,7 +26,7 @@ exact libkrun shim PID before it sends the token.
 
 ## Current Executor Boundary
 
-The current root-only bootstrap executor advertises `create`, `state`,
+The current bootstrap executor advertises `create`, `state`,
 `start`, `kill`, `delete`, `wait`, `exec`, `signal-process`, and
 `wait-process`, `pause`, `resume`, `processes`, `update`, `stats`,
 `read-output`, `write-stdin`, `close-stdin`, and `resize`. It is intentionally narrower
@@ -53,20 +53,36 @@ the entry inherits the runtime namespace of that type. Configured hostname and
 domainname values are bounded to the Linux kernel limit and require a created
 or joined UTS namespace.
 
-The user-namespace profile is deliberately rootful. A new user namespace
-requires both `uidMappings` and `gidMappings`, each list is bounded to the
-kernel's 340-entry limit, and container ID 0 plus the process UID, GID, and
-every supplementary GID must be covered. The wrapper creates the user
-namespace first, then blocks on the authenticated control channel while the
-parent verifies the distinct namespace, writes each
-`/proc/<pid>/{uid,gid}_map` exactly once, reads both maps back, and requires
-`/proc/<pid>/setgroups` to remain `allow`. After creating the remaining
-namespaces and verifying any time offsets, the wrapper clears inherited
-supplementary groups and switches all UID/GID slots to mapped namespace root
-before any rootfs or mount mutation. Native x86_64 and aarch64 qualification
-uses the A3S Box mapping of container root to host UID 100000 and GID 200000
-and verifies it from inside the workload. Rootless `setgroups=deny` and
-subordinate-ID helper flows are not implemented.
+New user namespaces require both `uidMappings` and `gidMappings`. Each list is
+bounded to the kernel's 340-entry limit, and container ID 0 plus the process
+UID, GID, and every supplementary GID must be covered. The wrapper creates the
+user namespace first and blocks on the authenticated control channel while the
+parent verifies that the target entered a distinct namespace.
+
+When the executor runs as root, the parent writes each
+`/proc/<pid>/{uid,gid}_map` directly, reads both maps back, and requires
+`/proc/<pid>/setgroups` to remain `allow`. Native rootful qualification uses
+the A3S Box mapping of container root to host UID 100000 and GID 200000.
+
+When the native executor runs without host root, startup requires no active
+supplementary groups, enabled unprivileged user namespaces, and fixed
+root-owned, non-writable, executable, setuid-root `newuidmap` and `newgidmap`
+helpers. The OCI maps must map container ID 0 exclusively to the effective
+host UID/GID with size 1, must never map host ID 0, and must place later IDs in
+the caller's `/etc/subuid` and `/etc/subgid` ranges. The parent runs
+`newuidmap`, verifies `uid_map`, writes and verifies `setgroups=deny`, runs
+`newgidmap`, and verifies `gid_map`. Rootless
+`process.user.additionalGids` is rejected because the namespace cannot call
+`setgroups` after that transition.
+
+After creating the remaining namespaces and verifying any time offsets, the
+wrapper switches all UID/GID slots to mapped namespace root before any rootfs
+or mount mutation. Credential setup clears or applies supplementary groups
+only when the namespace policy is `allow`; an empty group request under
+`deny` is verified without issuing the forbidden syscall. Native x86_64 and
+aarch64 qualification reads both rootless maps and `setgroups` from `/proc`,
+proves a subordinate-owned host file appears as container ID 1, and exercises
+create, start, exec, signal, wait, kill, delete, events, and cleanup.
 
 Before any namespace transition, the wrapper opens every join target and
 verifies its type with `NS_GET_NSTYPE`. It joins non-user namespaces, then the
@@ -266,9 +282,10 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
-namespaces, rootless user-mapping policy, unsupported cgroup I/O, hugetlb,
-RDMA, and unified resources, inherited process I/O, process-group signals,
-and every other unimplemented OCI property. Hook rollback/recovery,
+namespaces, rootless supplementary groups and nondelegated cgroup paths,
+unsupported cgroup I/O, hugetlb, RDMA, and unified resources, inherited
+process I/O, process-group signals, and every other unimplemented OCI
+property. Rootless cgroup-v2 and device delegation, hook rollback/recovery,
 security-negative, and soak certification remain release blockers rather than
 silently accepted compatibility gaps.
 

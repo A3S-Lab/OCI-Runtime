@@ -514,16 +514,16 @@ fn exec_configured_process(plan: &InitPlan) -> Result<()> {
 
     plan.rlimits.apply()?;
     plan.capabilities.prepare_for_credentials(plan.uid)?;
+    namespace::apply_supplementary_groups(
+        &plan.additional_gids,
+        "apply init supplementary groups",
+    )?;
     // SAFETY: every pointer below references a live, NUL-terminated buffer.
     // This internal init process is single-threaded and immediately replaces
     // its image after applying the validated bootstrap profile.
     unsafe {
         if libc::chdir(cwd.as_ptr()) != 0 {
             return Err(last_os_error("change to configured process.cwd"));
-        }
-        let groups = plan.additional_gids.clone();
-        if libc::setgroups(groups.len(), groups.as_ptr()) != 0 {
-            return Err(last_os_error("apply supplementary groups"));
         }
         if libc::setgid(plan.gid) != 0 {
             return Err(last_os_error("apply process GID"));

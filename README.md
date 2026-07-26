@@ -161,7 +161,7 @@ prerequisite while remaining `probe-only`.
 
 ### Native Linux lifecycle
 
-The explicit rootful development driver proves the current OCI
+The explicit rootful development gate proves the current OCI
 create/start/update/stats/pause/resume/processes/kill/wait/delete,
 exec/signal/wait-process, and read-output/write-stdin/close-stdin/resize vertical
 slice without opening `/dev/kvm` or initializing libkrun:
@@ -274,6 +274,33 @@ Each `a3s.oci.native-linux-fault-cleanup.v6` success identifies the exact
 injected boundary, records that normal delete was not attempted, and proves
 that the configured-process PID, executor root, marker, and complete
 diagnostic session were removed.
+
+### Rootless native Linux lifecycle
+
+The same native driver can run its core lifecycle as a non-root host user.
+Rootless execution requires the distribution's setuid-root `newuidmap` and
+`newgidmap` helpers, an enabled unprivileged-user-namespace policy, empty host
+supplementary groups, and subordinate ranges assigned in `/etc/subuid` and
+`/etc/subgid`. Container ID 0 must map exactly to the executor's effective
+host UID/GID with size 1; later container IDs use the subordinate ranges.
+Rootless bundles cannot request `process.user.additionalGids`, and the current
+qualified profile deliberately omits `linux.cgroupsPath` until cgroup-v2
+delegation is implemented.
+
+The repository gate creates a dedicated UID/GID 20000 user, delegates UID
+300000 and GID 400000 ranges, and runs the CLI with all supplementary groups
+cleared:
+
+```sh
+bash .github/scripts/native-linux-smoke.sh
+```
+
+Its `a3s.oci.native-linux-rootless-smoke.v1` report proves exact helper-backed
+UID/GID map read-back, `setgroups=deny`, container ownership translation for
+ID 1, create/start/exec/signal/wait/kill/delete replay, ordered durable events,
+post-delete state removal, and complete process and runtime-root cleanup on
+x86_64 and aarch64. This is a core rootless lifecycle gate, not a claim of
+rootless cgroup, device, LSM, or full OCI conformance.
 
 ### macOS host gates
 
@@ -538,10 +565,12 @@ state transition and replay remains container-scoped.
 The current executor implements a reviewed bootstrap vertical slice:
 
 - new UTS, mount, IPC, network, cgroup, PID, user, and time namespaces;
-- parent-authenticated rootful UID/GID mappings plus read-back verification,
-  including the A3S Box production mapping of container root to non-root host
-  UID 100000 and GID 200000, with normalized monotonic and boottime offsets
-  applied before the first time-namespace child;
+- parent-authenticated UID/GID mappings plus read-back verification: direct
+  rootful maps include the A3S Box production mapping of container root to
+  host UID 100000 and GID 200000, while rootless maps use verified
+  setuid-root `newuidmap`/`newgidmap` helpers, exact effective-ID root entries,
+  subordinate ranges, and `setgroups=deny`; normalized monotonic and boottime
+  offsets are applied before the first time-namespace child;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
   and time namespaces, including retained rootfs access after a mount join;
 - hostname and domain name configuration;
@@ -597,13 +626,17 @@ The current executor implements a reviewed bootstrap vertical slice:
   identity, collision-safe high-FD duplication, exact child `dup2` onto 3/4/5,
   non-native rejection, and real workload/listener/log/cleanup evidence.
 
-The supported user-namespace slice is rootful: it requires both UID and GID
-mappings, coverage for container ID 0 and every configured process ID, and an
-`allow` setgroups policy. The wrapper switches to mapped namespace-root
-credentials before rootfs mutation. Mount entries and rootfs mutation remain
-unsupported when joining or inheriting a mount namespace. Other unimplemented
-OCI fields are rejected instead of ignored. Rootless mapping policy, cgroup
-I/O/hugetlb/RDMA/unified resources and cgroup v2 device-access filtering,
+The user-namespace slice requires both UID and GID mappings plus coverage for
+container ID 0 and every configured process ID. Rootful execution writes maps
+directly and retains `setgroups=allow`. Rootless execution requires an exact
+`0 -> effective host ID` size-1 entry, rejects host ID 0 and supplementary
+groups, installs remaining delegated ranges through fixed, root-owned,
+setuid mapping helpers, and verifies `setgroups=deny`. The wrapper switches to
+mapped namespace-root credentials before rootfs mutation in both modes.
+Mount entries and rootfs mutation remain unsupported when joining or
+inheriting a mount namespace. Other unimplemented OCI fields are rejected
+instead of ignored. Rootless cgroup-v2 delegation and device policy,
+cgroup I/O/hugetlb/RDMA/unified resources and device-access filtering,
 broader device policies, multi-architecture seccomp and notification
 listeners, schedulers, LSMs, generic inherited process I/O beyond the fixed
 A3S Box control profile, real-driver reattachment after runtime-process
@@ -654,7 +687,7 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping and exec/PTY/init-log FD 3/4/5 handoff, exact six-phase OCI hook order/state trace, exact init and exec SIGKILL status, exec/signal/update/process-I/O replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, hooks, cgroup controls, I/O, PTY, two-container isolation, namespace joins, mount enforcement, and fault cleanup; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
