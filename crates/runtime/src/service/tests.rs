@@ -25,7 +25,7 @@ use crate::{
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
     DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
     DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    DriverWriteStdinRequest, RuntimeDriver,
+    DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 
 mod fault_matrix;
@@ -76,6 +76,7 @@ type DriverProcessState = (DriverProcess, Option<ExitStatus>);
 struct RecordingDriver {
     capability: DriverCapability,
     operations: Vec<RuntimeOperation>,
+    hooks: Vec<OciHookPhase>,
     calls: Mutex<Vec<DriverCall>>,
     states: Mutex<HashMap<ContainerId, (Generation, DriverState)>>,
     exits: Mutex<HashMap<ContainerId, ExitStatus>>,
@@ -109,6 +110,7 @@ impl RecordingDriver {
                 RuntimeOperation::Delete,
                 RuntimeOperation::Wait,
             ],
+            hooks: Vec::new(),
             calls: Mutex::new(Vec::new()),
             states: Mutex::new(HashMap::new()),
             exits: Mutex::new(HashMap::new()),
@@ -159,6 +161,12 @@ impl RecordingDriver {
             RuntimeOperation::CloseStdin,
             RuntimeOperation::Resize,
         ]);
+        driver
+    }
+
+    fn with_hooks(hooks: Vec<OciHookPhase>) -> Self {
+        let mut driver = Self::supported();
+        driver.hooks = hooks;
         driver
     }
 
@@ -218,6 +226,10 @@ impl RuntimeDriver for RecordingDriver {
 
     fn operations(&self) -> &[RuntimeOperation] {
         &self.operations
+    }
+
+    fn hooks(&self) -> &[OciHookPhase] {
+        &self.hooks
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
@@ -1030,6 +1042,51 @@ async fn reports_only_operations_that_are_currently_implemented() {
         .expect("compile pinned schemas")
         .validate_features(&info.oci)
         .expect("runtime feature report must match the pinned OCI schema");
+}
+
+#[tokio::test]
+async fn reports_driver_hook_phases_in_normative_order_and_rejects_duplicates() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let driver = Arc::new(RecordingDriver::with_hooks(vec![
+        OciHookPhase::Poststop,
+        OciHookPhase::CreateContainer,
+        OciHookPhase::Prestart,
+        OciHookPhase::Poststart,
+        OciHookPhase::StartContainer,
+        OciHookPhase::CreateRuntime,
+    ]));
+    let service = HostRuntimeService::open(temporary.path().join("state"), driver)
+        .await
+        .expect("open hook-capable runtime");
+    let info = service.features().await.expect("hook feature report");
+    assert_eq!(
+        info.oci.hooks().as_deref(),
+        Some(
+            [
+                "prestart",
+                "createRuntime",
+                "createContainer",
+                "startContainer",
+                "poststart",
+                "poststop",
+            ]
+            .map(str::to_string)
+            .as_slice()
+        )
+    );
+
+    let duplicate_root = temporary.path().join("duplicate-state");
+    let error = HostRuntimeService::open(
+        &duplicate_root,
+        Arc::new(RecordingDriver::with_hooks(vec![
+            OciHookPhase::Poststop,
+            OciHookPhase::Poststop,
+        ])),
+    )
+    .await
+    .expect_err("duplicate hook phases must fail closed");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(!duplicate_root.exists());
 }
 
 #[tokio::test]

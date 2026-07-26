@@ -23,7 +23,7 @@ use crate::driver::{
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
     DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
     DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    DriverWriteStdinRequest, RuntimeDriver,
+    DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 
 const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 18] = [
@@ -46,6 +46,7 @@ const NATIVE_LINUX_OPERATIONS: [RuntimeOperation; 18] = [
     RuntimeOperation::CloseStdin,
     RuntimeOperation::Resize,
 ];
+const NATIVE_LINUX_HOOKS: [OciHookPhase; 6] = OciHookPhase::ALL;
 
 /// Explicitly opted-in native Linux runtime driver.
 ///
@@ -118,6 +119,10 @@ impl RuntimeDriver for NativeLinuxDriver {
 
     fn operations(&self) -> &[RuntimeOperation] {
         &NATIVE_LINUX_OPERATIONS
+    }
+
+    fn hooks(&self) -> &[OciHookPhase] {
+        &NATIVE_LINUX_HOOKS
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {

@@ -10,6 +10,8 @@ use a3s_oci_sdk::{
     Error, ErrorCode, Result, OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 
+use crate::driver::OciHookPhase;
+
 pub(super) const RECOGNIZED_LINUX_MOUNT_OPTIONS: &[&str] = &[
     "async",
     "atime",
@@ -118,7 +120,7 @@ pub(super) const SUPPORTED_LINUX_CAPABILITIES: &[&str] = &[
     "CAP_WAKE_ALARM",
 ];
 
-pub(super) fn build(has_lifecycle: bool) -> Result<Features> {
+pub(super) fn build(has_lifecycle: bool, hooks: &[OciHookPhase]) -> Result<Features> {
     let annotations = HashMap::from([
         (
             "dev.a3s.oci.runtime.version".to_string(),
@@ -137,7 +139,12 @@ pub(super) fn build(has_lifecycle: bool) -> Result<Features> {
     FeaturesBuilder::default()
         .oci_version_min(OCI_RUNTIME_SPEC_VERSION_MIN)
         .oci_version_max(OCI_RUNTIME_SPEC_VERSION_MAX)
-        .hooks(Vec::<String>::new())
+        .hooks(
+            hooks
+                .iter()
+                .map(|phase| phase.as_str().to_string())
+                .collect::<Vec<_>>(),
+        )
         .mount_options(
             RECOGNIZED_LINUX_MOUNT_OPTIONS
                 .iter()

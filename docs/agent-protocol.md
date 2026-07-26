@@ -120,6 +120,10 @@ driver gives every bounded chunk of a larger SDK stdin write a stable derived
 operation ID. Durable recovery across an agent restart remains a separate
 host/driver release gate.
 
+OCI hooks do not add guest protocol operations: they travel inside the exact
+digest-bound `config.json` and execute in the shared Linux executor. Native
+feature discovery separately advertises the six enforced hook phases.
+
 Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current
 bootstrap executor keeps only session-local replay state.
@@ -307,22 +311,27 @@ namespace supervisor, remove the executor root, and exit successfully. The
 host retains the exact requested and injected boundary together with
 guest-runtime and platform cleanup evidence.
 
-The private parent/init control channel reports a user-mapping request,
-readiness with a positive runtime-visible configured-process PID and optional
-namespace-init PID, or a bounded typed SDK error. The parent validates the
-kernel-reported launcher peer PID before reading any outcome. It permits the
-mapping request only when the exact plan requires one, acknowledges it only
-after verified writes, and rejects a bypass or repeat. For new PID isolation
-it additionally verifies both parent links, the PID 1 and PID 2+ `NSpid`
-mappings, and both namespace links; user and time namespace identities are
-also compared with the authenticated launcher's intended links before
-exposing the created state. Create-time namespace and rootfs failures
-therefore retain their exact error class and context without trusting a
-pathname socket.
+The private parent/init control channel reports a user-mapping request, a
+pre-pivot hook barrier, final create readiness, start-time exec confirmation,
+or a bounded typed SDK error. Both create barriers carry the positive
+runtime-visible configured-process PID and optional namespace-init PID. The
+parent validates the kernel-reported launcher peer PID before reading any
+outcome. It permits the mapping request only when the exact plan requires one,
+acknowledges it only after verified writes, and rejects a bypass or repeat. At
+the first barrier it verifies both parent links, the PID 1 and PID 2+ `NSpid`
+mappings, both PID namespace links, and the requested user/time namespace
+identities before running runtime-namespace hooks. It releases
+`createContainer` with a distinct byte and accepts final readiness only when
+both reported PIDs match the authenticated first barrier. The start release is
+separate again. The wrapper marks the control descriptor close-on-exec; EOF
+proves the successful exec transition, while any pre-exec or start-hook error
+is returned as the exact bounded rejection. Create/start failures therefore
+retain their error class and context without trusting a pathname socket.
 
 This is the first Linux executor vertical slice, not complete OCI
 enforcement. A pinned immutable system image, inherited-descriptor I/O,
-rootless ID mapping, advanced mount semantics, resources, hooks,
-exhaustive recovery injection, broader negative isolation cases, and full
-platform-specific lifecycle evidence remain required before a utility-VM
-driver can advance beyond `probe-only`.
+rootless ID mapping, advanced mount semantics and resources, hook
+rollback/recovery/security-negative suites, exhaustive recovery injection,
+broader negative isolation cases, and full platform-specific lifecycle
+evidence remain required before a utility-VM driver can advance beyond
+`probe-only`.

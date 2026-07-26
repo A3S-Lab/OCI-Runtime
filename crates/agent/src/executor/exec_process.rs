@@ -191,6 +191,13 @@ impl ExecProcess {
                     "exec helper requested an unexpected user mapping",
                 ));
             }
+            Ok(Ok(InitOutcome::CreateHooksReady { .. })) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::PermissionDenied,
+                    "exec helper reported an unexpected create-hook barrier",
+                ));
+            }
             Ok(Err(error)) => {
                 terminate(&mut child).await;
                 return Err(error);

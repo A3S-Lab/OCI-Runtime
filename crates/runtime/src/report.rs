@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v8";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v8";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v9";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,6 +365,10 @@ pub struct NativeLinuxSmokeReport {
     pub create_replayed: bool,
     /// Whether unfiltered and isolation-filtered list returned the exact created record.
     pub list_visible_after_create: bool,
+    /// OCI hook phases advertised by the configured native driver.
+    pub hook_phases: Vec<String>,
+    /// Whether all six hook phases received exact state in normative order.
+    pub hooks_verified: bool,
     /// Host-visible init PID returned while the container was created.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_pid: Option<i32>,
@@ -435,6 +439,8 @@ impl NativeLinuxSmokeReport {
             create_returned_created: false,
             create_replayed: false,
             list_visible_after_create: false,
+            hook_phases: Vec::new(),
+            hooks_verified: false,
             created_pid: None,
             marker_absent_after_create: false,
             start_released: false,
@@ -507,6 +513,16 @@ impl NativeLinuxSmokeReport {
             && self.create_returned_created
             && self.create_replayed
             && self.list_visible_after_create
+            && self.hook_phases
+                == [
+                    "prestart",
+                    "createRuntime",
+                    "createContainer",
+                    "startContainer",
+                    "poststart",
+                    "poststop",
+                ]
+            && self.hooks_verified
             && self.created_pid.is_some_and(|pid| pid > 0)
             && self.marker_absent_after_create
             && self.start_released

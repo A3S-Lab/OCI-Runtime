@@ -111,6 +111,11 @@ Completed:
   and namespace descriptors, per-process pidfds and replay journals, stable
   process wait, cgroup-v2 pause/resume, live process inventory, init-exit
   supervision, and complete session cleanup;
+- shared Linux executor support for all six OCI hook phases in normative order,
+  with runtime/container namespace placement, exact OCI state on stdin,
+  bounded configuration, timeout and process-group cleanup, typed
+  create/start failures, warning-only poststop continuation, and native Linux
+  lifecycle trace evidence;
 - direct A3S Box compiler compatibility fixture pinned to Box commit
   `d24c951989c8ee8dbc772ccd0021713855613656`, with schema/semantic loading and
   fail-closed executor planning for its absolute rootfs, annotations,
@@ -183,7 +188,8 @@ Not yet complete:
 - descriptor-relative path resolution;
 - complete shared guest OCI executor;
 - a production workload driver;
-- OCI hook execution;
+- OCI hook rollback, crash recovery, security-negative, and soak
+  certification;
 - OCI configuration enforcement;
 - production-ready native Linux execution;
 - A3S Box migration;
@@ -250,7 +256,8 @@ enforce it. No property is silently ignored.
 - [x] Verify the barrier against the real Linux guest bootstrap executor.
 - [x] Fault-inject every registered core-lifecycle durable commit stage and
   every `RuntimeDriver` method boundary, then reopen and replay.
-- [ ] Implement all OCI hook phases and error behavior.
+- [x] Implement all OCI hook phases with typed create/start failure, bounded
+  timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.
 
 Exit gate: lifecycle tests pass under fault injection at every durable write
@@ -423,7 +430,7 @@ then may HVF become `experimental`.
   pause/resume, and prove with a progress-producing workload that cgroup freeze
   stops execution and resume restarts it through native Linux and the shared
   utility-VM lifecycle harness.
-- [ ] Ordered hooks with OCI state on stdin.
+- [x] Ordered hooks with OCI state on stdin.
 - [x] Backpressured piped stdin, bounded captured stdout/stderr, controlling
   PTYs, initial terminal dimensions, resize, merged terminal output, VEOF
   close, signals, and byte-accurate output cursors.
