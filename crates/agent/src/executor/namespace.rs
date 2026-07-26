@@ -264,6 +264,14 @@ impl NamespacePlan {
         &self.gid_mappings
     }
 
+    pub(super) fn host_uid(&self, container_id: u32) -> Option<u32> {
+        mapped_host_id(container_id, &self.uid_mappings)
+    }
+
+    pub(super) fn host_gid(&self, container_id: u32) -> Option<u32> {
+        mapped_host_id(container_id, &self.gid_mappings)
+    }
+
     pub(super) const fn monotonic_offset(&self) -> Option<TimeOffset> {
         self.monotonic_offset
     }
@@ -453,6 +461,15 @@ fn ensure_id_mapped(field: &str, id: u32, mappings: &[IdMapping]) -> Result<()> 
             "{field} value {id} is not covered by its container ID mappings"
         )))
     }
+}
+
+fn mapped_host_id(id: u32, mappings: &[IdMapping]) -> Option<u32> {
+    mappings.iter().find_map(|mapping| {
+        let offset = id.checked_sub(mapping.container_id)?;
+        (offset < mapping.size)
+            .then(|| mapping.host_id.checked_add(offset))
+            .flatten()
+    })
 }
 
 fn time_offset(

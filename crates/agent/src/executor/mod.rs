@@ -31,6 +31,7 @@ mod state;
 mod terminal;
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -67,6 +68,29 @@ const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const MAX_OPERATION_RECORDS: usize = 4_096;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RootfsScope {
+    BundleOnly,
+    NativeAbsolute,
+}
+
+impl RootfsScope {
+    const fn internal_argument(self) -> &'static str {
+        match self {
+            Self::BundleOnly => "bundle-only",
+            Self::NativeAbsolute => "native-absolute",
+        }
+    }
+
+    fn from_internal_argument(value: &OsStr) -> Option<Self> {
+        match value.to_str()? {
+            "bundle-only" => Some(Self::BundleOnly),
+            "native-absolute" => Some(Self::NativeAbsolute),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     init::run_container_init_if_requested().or_else(exec_process::run_container_exec_if_requested)
 }
@@ -77,6 +101,7 @@ pub struct LinuxExecutor {
     capabilities: AgentCapabilities,
     init_executable: PathBuf,
     runtime_root: PathBuf,
+    rootfs_scope: RootfsScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
     state: Mutex<ExecutorState>,
 }
@@ -89,7 +114,8 @@ impl LinuxExecutor {
                 format!("failed to resolve guest-agent executable: {error}"),
             )
         })?;
-        Self::open(DEFAULT_RUNTIME_PARENT, executable).await
+        Self::open_with_rootfs_scope(DEFAULT_RUNTIME_PARENT, executable, RootfsScope::BundleOnly)
+            .await
     }
 
     /// Open an isolated executor beneath an existing runtime-owned directory.
@@ -99,6 +125,27 @@ impl LinuxExecutor {
     pub async fn open(
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
+    ) -> Result<Self> {
+        Self::open_with_rootfs_scope(runtime_parent, init_executable, RootfsScope::BundleOnly).await
+    }
+
+    /// Open the native Linux executor with OCI absolute root paths enabled.
+    ///
+    /// This scope is reserved for the explicitly selected shared-host-kernel
+    /// driver. Relative root paths remain confined to their bundle, while an
+    /// absolute root path may identify a separately managed host directory.
+    pub async fn open_native_with_absolute_rootfs(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+    ) -> Result<Self> {
+        Self::open_with_rootfs_scope(runtime_parent, init_executable, RootfsScope::NativeAbsolute)
+            .await
+    }
+
+    async fn open_with_rootfs_scope(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+        rootfs_scope: RootfsScope,
     ) -> Result<Self> {
         pidfd::verify_support()?;
         let parent = runtime_parent.as_ref();
@@ -178,6 +225,7 @@ impl LinuxExecutor {
             capabilities: AgentCapabilities::linux_executor(AGENT_VERSION, std::env::consts::ARCH)?,
             init_executable,
             runtime_root,
+            rootfs_scope,
             user_mapping_runtime,
             state: Mutex::new(ExecutorState::default()),
         })
@@ -323,6 +371,7 @@ impl LinuxExecutor {
             &hook_state,
             ProcessSpawnContext {
                 inherited_descriptors,
+                rootfs_scope: self.rootfs_scope,
                 user_mapping_runtime: &self.user_mapping_runtime,
             },
         )
