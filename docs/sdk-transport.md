@@ -64,6 +64,30 @@ The platform-specific constructors are compiled only on their corresponding
 targets. Callers can also create `RuntimeTransportClient::from_io` over an
 already authenticated async byte stream.
 
+### Native Linux A3S Box owner
+
+`a3s-oci native-linux-service` is the Linux process owner used by the Box
+adapter. It binds one absolute private runtime root and one `ContainerId`.
+Before starting it, Box creates and listens on its exec and PTY Unix sockets,
+opens the writable init log, and inherits those handles as FD 3, FD 4, and FD
+5. The explicit `--a3s-box-control-fds` flag prevents an accidental service
+start with a different descriptor contract.
+
+The owner creates `runtime.sock` beneath its `0700` runtime root, applies mode
+`0600`, verifies the socket owner and inode, and authenticates every accepted
+peer against the service effective UID. A normal transported `create` for the
+bound ID receives the inherited handles without adding process-local types to
+the SDK wire contract. Requests for another container ID are rejected before
+driver dispatch.
+
+Box should treat the runtime owner and `RuntimeClient` as one Sandbox-scoped
+resource: retain one client connection for the Sandbox lifecycle, close it
+when no more requests are needed, then terminate the owner with `SIGTERM` and
+wait for a successful exit. The signal path shuts down every driver-owned
+process and transient executor slot before the exact service socket is
+removed. Durable state stays inside the Sandbox runtime root until Box removes
+that product-owned root.
+
 For an in-process host integration, A3S Box can wrap
 `HostRuntimeService::open(state_root, driver)` in `RuntimeClient`. The
 `RuntimeDriver` trait receives exact-generation requests and the immutable

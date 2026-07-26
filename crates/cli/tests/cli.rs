@@ -139,6 +139,50 @@ fn native_linux_rootless_smoke_fails_closed_with_versioned_output() {
     assert_ne!(report["status"], "available");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_service_requires_explicit_box_descriptor_contract() {
+    let root = format!("/tmp/a3s-oci-cli-service-contract-{}", std::process::id());
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "native-linux-service",
+            "--root",
+            &root,
+            "--agent",
+            "/bin/true",
+            "--container-id",
+            "box-contract-test",
+        ])
+        .output()
+        .expect("native Linux service command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--a3s-box-control-fds"));
+    assert!(!std::path::Path::new(&root).exists());
+}
+
+#[test]
+fn native_linux_service_smoke_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "native-linux-service-smoke",
+            "--agent",
+            "missing-a3s-oci-agent",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--work-parent",
+            "missing-a3s-oci-work-parent",
+        ])
+        .output()
+        .expect("native Linux service smoke command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("native service smoke output must be valid JSON");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v11");
+    assert_ne!(report["status"], "available");
+}
+
 #[test]
 fn native_linux_multi_container_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))

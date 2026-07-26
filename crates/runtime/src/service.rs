@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverKind, RuntimeFeatures};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+#[cfg(target_os = "linux")]
+use a3s_oci_sdk::ContainerId;
 use a3s_oci_sdk::{
     async_trait, CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
     ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
@@ -39,6 +41,14 @@ use feature_report::{RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIE
 #[derive(Clone, Default)]
 pub struct HostRuntimeService {
     lifecycle: Option<Arc<LifecycleHost>>,
+    #[cfg(target_os = "linux")]
+    native_control: Option<Arc<BoundNativeControl>>,
+}
+
+#[cfg(target_os = "linux")]
+struct BoundNativeControl {
+    container_id: ContainerId,
+    descriptors: crate::NativeControlDescriptors,
 }
 
 struct LifecycleHost {
@@ -69,7 +79,11 @@ impl HostRuntimeService {
     /// Construct the probe-only local host service.
     #[must_use]
     pub const fn new() -> Self {
-        Self { lifecycle: None }
+        Self {
+            lifecycle: None,
+            #[cfg(target_os = "linux")]
+            native_control: None,
+        }
     }
 
     /// Open durable lifecycle orchestration around one fully enforcing driver.
@@ -78,6 +92,28 @@ impl HostRuntimeService {
         driver: Arc<dyn RuntimeDriver>,
     ) -> Result<Self> {
         Self::open_with_fault_injector(state_root, driver, Arc::new(NoFaultInjector)).await
+    }
+
+    /// Open one native Linux service whose normal SDK `create` operation
+    /// carries the A3S Box control descriptors for exactly one container ID.
+    ///
+    /// This binding lets an out-of-process runtime owner expose only the
+    /// transport-neutral [`OciRuntimeService`] API while retaining the
+    /// process-local listener and log handles inherited at service startup.
+    #[cfg(target_os = "linux")]
+    pub async fn open_with_native_control_descriptors(
+        state_root: impl AsRef<Path>,
+        driver: Arc<dyn RuntimeDriver>,
+        container_id: ContainerId,
+        descriptors: crate::NativeControlDescriptors,
+    ) -> Result<Self> {
+        descriptors.descriptor_plan()?;
+        let mut service = Self::open(state_root, driver).await?;
+        service.native_control = Some(Arc::new(BoundNativeControl {
+            container_id,
+            descriptors,
+        }));
+        Ok(service)
     }
 
     pub(crate) async fn open_with_fault_injector(
@@ -132,6 +168,8 @@ impl HostRuntimeService {
                 hooks,
                 faults,
             })),
+            #[cfg(target_os = "linux")]
+            native_control: None,
         })
     }
 
@@ -426,8 +464,27 @@ impl OciRuntimeService for HostRuntimeService {
     }
 
     async fn create(&self, request: CreateRequest) -> Result<ContainerRecord> {
-        self.create_internal(request, DriverCreateAttachments::None)
-            .await
+        #[cfg(target_os = "linux")]
+        let attachments = match &self.native_control {
+            Some(binding) if request.id == binding.container_id => {
+                DriverCreateAttachments::NativeControl(binding.descriptors.clone())
+            }
+            Some(binding) => {
+                return Err(Error::new(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "native control service is bound to container {}; refusing create for {}",
+                        binding.container_id, request.id
+                    ),
+                )
+                .for_operation("create"));
+            }
+            None => DriverCreateAttachments::None,
+        };
+        #[cfg(not(target_os = "linux"))]
+        let attachments = DriverCreateAttachments::None;
+
+        self.create_internal(request, attachments).await
     }
 
     async fn state(&self, request: StateRequest) -> Result<ContainerRecord> {

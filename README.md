@@ -204,8 +204,52 @@ observation, idempotent mutation replay, marker verification, post-delete
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
 remaining production gates.
 
-The in-process A3S Box adapter supplies those resources without changing the
-wire protocol:
+For the Box integration, one long-lived runtime owner is started for each
+Sandbox. The launcher inherits the already-bound Box exec listener on FD 3,
+PTY listener on FD 4, and writable init log on FD 5, then starts:
+
+```text
+a3s-oci native-linux-service \
+  --root /absolute/private/sandbox/runtime \
+  --agent /absolute/path/to/a3s-oci-agent \
+  --container-id box-sandbox-42 \
+  --a3s-box-control-fds
+```
+
+The parent of `--root` must already exist. The service creates or verifies the
+root, `state`, and `executor` directories as owner-only `0700`, binds
+`runtime.sock` as `0600`, accepts only same-UID peers, and allows the inherited
+handles to be used by exactly the configured container ID. Box performs every
+lifecycle call through `a3s-oci-sdk`:
+
+```rust,no_run
+use a3s_oci_sdk::{LocalIpcEndpoint, RuntimeClient};
+
+# async fn connect() -> a3s_oci_sdk::Result<()> {
+let endpoint = LocalIpcEndpoint::unix_socket(
+    "/absolute/private/sandbox/runtime/runtime.sock",
+)?;
+let client = RuntimeClient::connect(&endpoint).await?;
+let info = client.features().await?;
+# let _ = info;
+# Ok(())
+# }
+```
+
+Normal SDK `create` automatically receives the bound Box handles; a create for
+another container ID fails before driver dispatch. `SIGINT` or `SIGTERM` stops
+all driver-owned processes, removes the transient executor root, and removes
+only the exact socket inode created by that service. The complete transported
+lifecycle can be exercised with:
+
+```sh
+sudo target/debug/a3s-oci native-linux-service-smoke \
+  --agent "$PWD/target/debug/a3s-oci-agent" \
+  --bundle "$bundle" \
+  --work-parent "$work_parent"
+```
+
+The process-local adapter remains available for focused runtime tests:
 
 ```rust
 use std::fs::OpenOptions;
@@ -226,9 +270,8 @@ let created = service
     .await?;
 ```
 
-The service consumes the host handles, fingerprints only their stable logical
-schema, and rejects this entry point unless the configured driver reports
-`native-linux`.
+Both forms consume typed handles, fingerprint only their stable logical
+schema, and reject them unless the configured driver reports `native-linux`.
 
 Create a second distinct bundle to run the multi-container gate:
 
@@ -687,7 +730,7 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, hooks, cgroup controls, I/O, PTY, two-container isolation, namespace joins, mount enforcement, and fault cleanup; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle through both the in-process SDK and the private same-UID Unix SDK service, with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, signal-driven owner cleanup, hooks, cgroup controls, I/O, PTY, two-container isolation, namespace joins, mount enforcement, and fault cleanup; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
@@ -726,6 +769,7 @@ flowchart TB
     end
 
     subgraph native["Native Linux — experimental opt-in"]
+        native_owner["NativeLinuxService<br/>one Box container · private Unix socket"]
         native_driver["NativeLinuxDriver<br/>shared host kernel"]
     end
 
@@ -742,7 +786,9 @@ flowchart TB
 
     executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts · hooks<br/>recursive attributes · PID 1 supervision · pidfds · FD 3/4/5 handoff<br/>exec/signal/wait · update/stats · pause/resume/processes · scoped cleanup"]
 
-    client --> service
+    client -->|"in-process diagnostics"| service
+    client -->|"Unix SDK transport"| native_owner
+    native_owner --> service
     selection -->|"shared-host-kernel"| native_driver
     selection -.->|"dedicated-vm / shared-guest-kernel"| utility_driver
     native_driver --> executor

@@ -1573,6 +1573,62 @@ async fn native_control_create_is_forwarded_durable_and_reopened_by_logical_sche
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn bound_native_control_service_routes_transport_style_create_to_one_container() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::native_supported());
+    let create = native_create_request(&bundle_directory, "bound-native-control");
+    let descriptors = native_control_descriptors(&temporary.path().join("control"), "bound");
+    let service = HostRuntimeService::open_with_native_control_descriptors(
+        temporary.path().join("state"),
+        driver.clone(),
+        create.id.clone(),
+        descriptors,
+    )
+    .await
+    .expect("open bound native control service");
+
+    service
+        .create(create.clone())
+        .await
+        .expect("normal service create must carry the bound descriptors");
+    let calls = driver.calls();
+    let DriverCall::Create(driver_create) = calls
+        .iter()
+        .find(|call| matches!(call, DriverCall::Create(_)))
+        .expect("driver create call")
+    else {
+        unreachable!("matched create call")
+    };
+    assert!(matches!(
+        driver_create.attachments,
+        DriverCreateAttachments::NativeControl(_)
+    ));
+
+    let other_bundle = temporary.path().join("other-bundle");
+    std::fs::create_dir(&other_bundle).expect("other bundle directory");
+    let mut other = native_create_request(&other_bundle, "other-container-create");
+    other.id = container_id("other-container");
+    let error = service
+        .create(other)
+        .await
+        .expect_err("a bound service must not reuse control descriptors for another container");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+    assert!(error.message.contains("sdk-container"));
+    assert!(error.message.contains("other-container"));
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Create(_)))
+            .count(),
+        1
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn non_native_driver_rejects_control_descriptors_without_claiming_operation() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let bundle_directory = temporary.path().join("bundle");

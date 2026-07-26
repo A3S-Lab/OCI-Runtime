@@ -7,6 +7,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use thiserror::Error;
 
+#[cfg(target_os = "linux")]
+mod native_service;
+
 #[derive(Debug, Parser)]
 #[command(name = "a3s-oci", version, about)]
 struct Cli {
@@ -43,6 +46,34 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
         /// Existing user-owned directory beneath which smoke state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+    },
+    /// Own one A3S Box container through the native Linux SDK service.
+    #[cfg(target_os = "linux")]
+    NativeLinuxService {
+        /// Private absolute root containing runtime.sock, state, and executor data.
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        /// Absolute matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// Exact A3S Box container identity allowed to consume the inherited descriptors.
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        /// Require A3S Box exec, PTY, and init-log handles on descriptors 3, 4, and 5.
+        #[arg(long, action = clap::ArgAction::SetTrue, required = true)]
+        a3s_box_control_fds: bool,
+    },
+    /// Prove the complete native lifecycle over the packaged Unix SDK service.
+    NativeLinuxServiceSmoke {
+        /// Matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// OCI bundle containing config.json and rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing directory beneath which isolated service state is created.
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
     },
@@ -229,6 +260,31 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
         } => {
             let report =
                 a3s_oci_runtime::native_linux_rootless_smoke(&agent, &bundle, &work_parent).await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxService {
+            root,
+            agent,
+            container_id,
+            a3s_box_control_fds: _,
+        } => {
+            native_service::run(root, agent, container_id).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::NativeLinuxServiceSmoke {
+            agent,
+            bundle,
+            work_parent,
+        } => {
+            let report =
+                a3s_oci_runtime::native_linux_service_smoke(&agent, &bundle, &work_parent).await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {
