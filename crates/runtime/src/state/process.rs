@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     ContainerId, ContainerTarget, ErrorCode, ExecRequest, ExitStatus, OciSchemaValidator,
-    OperationId, ProcessId, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
-    SignalProcessRequest, ValidateRequest, WaitProcessRequest,
+    OperationId, ProcessId, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeEventKind,
+    Signal, SignalProcessRequest, ValidateRequest, WaitProcessRequest,
 };
 use serde::Serialize;
 
@@ -122,6 +124,7 @@ impl DurableStateStore {
                             )
                             .await?;
                         }
+                        self.append_exec_events(&process.record).await?;
                         operation.outcome = StoredOperationStatus::SucceededProcess {
                             response: process.record.clone(),
                         };
@@ -348,6 +351,7 @@ impl DurableStateStore {
         )
         .await?;
         let response = process.record;
+        self.append_exec_events(&response).await?;
         operation.outcome = StoredOperationStatus::SucceededProcess {
             response: response.clone(),
         };
@@ -358,6 +362,44 @@ impl DurableStateStore {
         )
         .await?;
         Ok(response)
+    }
+
+    async fn append_exec_events(&self, process: &ProcessRecord) -> Result<()> {
+        let pid = process.pid.ok_or_else(|| {
+            state_error(
+                ErrorCode::FailedPrecondition,
+                "append-exec-events",
+                format!("process {} has no durable PID", process.target.process_id),
+            )
+        })?;
+        if pid == 0 {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "append-exec-events",
+                format!("process {} has durable PID zero", process.target.process_id),
+            ));
+        }
+        let attributes = BTreeMap::from([
+            ("pid".to_string(), pid.to_string()),
+            ("terminal".to_string(), process.terminal.to_string()),
+        ]);
+        self.append_process_event(
+            "created",
+            &process.target.container,
+            &process.target.process_id,
+            RuntimeEventKind::ProcessCreated,
+            attributes.clone(),
+        )
+        .await?;
+        self.append_process_event(
+            "started",
+            &process.target.container,
+            &process.target.process_id,
+            RuntimeEventKind::ProcessStarted,
+            attributes,
+        )
+        .await?;
+        Ok(())
     }
 
     pub(crate) async fn prepare_signal_process(
@@ -606,6 +648,21 @@ impl DurableStateStore {
                     ));
                 }
             }
+            self.append_process_event(
+                "exited",
+                &target.container,
+                &target.process_id,
+                RuntimeEventKind::ProcessExited,
+                exit_status_attributes(&status),
+            )
+            .await?;
+            self.append_container_event(
+                "stopped",
+                &target.container,
+                RuntimeEventKind::ContainerStopped,
+                BTreeMap::new(),
+            )
+            .await?;
             container.init_exit_status = Some(status.clone());
             self.write_json(
                 DurableMutation::CacheInitWait,
@@ -626,6 +683,14 @@ impl DurableStateStore {
                 Err(exit_status_conflict(target, existing, &status))
             };
         }
+        self.append_process_event(
+            "exited",
+            &target.container,
+            &target.process_id,
+            RuntimeEventKind::ProcessExited,
+            exit_status_attributes(&status),
+        )
+        .await?;
         process.exit_status = Some(status.clone());
         self.write_json(
             DurableMutation::CacheProcessWait,
@@ -824,6 +889,18 @@ impl DurableStateStore {
             create_private_directory(&directory).await
         }
     }
+}
+
+fn exit_status_attributes(status: &ExitStatus) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::new();
+    if let Some(exit_code) = status.exit_code {
+        attributes.insert("exit-code".to_string(), exit_code.to_string());
+    }
+    if let Some(signal) = status.signal {
+        attributes.insert("signal".to_string(), signal.to_string());
+    }
+    attributes.insert("oom-killed".to_string(), status.oom_killed.to_string());
+    attributes
 }
 
 async fn validate_signal_target(

@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerTarget, DeleteMode, DeleteRequest, ErrorCode, OperationId, Result, ValidateRequest,
+    ContainerTarget, DeleteMode, DeleteRequest, ErrorCode, OperationId, Result, RuntimeEventKind,
+    ValidateRequest,
 };
 use serde::Serialize;
 
@@ -71,6 +73,7 @@ impl DurableStateStore {
                             Ok(DeletePreparation::Resume(stored.record))
                         }
                         (false, true) => {
+                            self.append_delete_event(&operation).await?;
                             operation.outcome = StoredOperationStatus::SucceededEmpty;
                             self.write_json(
                                 DurableMutation::ReconcileDeleteOperation,
@@ -92,6 +95,7 @@ impl DurableStateStore {
                                     ),
                                 ))
                             } else {
+                                self.append_delete_event(&operation).await?;
                                 operation.outcome = StoredOperationStatus::SucceededEmpty;
                                 self.write_json(
                                     DurableMutation::ReconcileDeleteOperation,
@@ -246,6 +250,7 @@ impl DurableStateStore {
             }
         }
 
+        self.append_delete_event(&operation).await?;
         operation.outcome = StoredOperationStatus::SucceededEmpty;
         self.write_json(
             DurableMutation::CompleteDeleteOperation,
@@ -259,6 +264,25 @@ impl DurableStateStore {
         self.root
             .join("quarantine")
             .join(format!("{}.deleted", operation_id.as_str()))
+    }
+
+    async fn append_delete_event(&self, operation: &StoredOperation) -> Result<()> {
+        let target = ContainerTarget::exact(operation.container_id.clone(), operation.generation);
+        self.append_container_event(
+            "stopped",
+            &target,
+            RuntimeEventKind::ContainerStopped,
+            BTreeMap::new(),
+        )
+        .await?;
+        self.append_container_event(
+            "deleted",
+            &target,
+            RuntimeEventKind::ContainerDeleted,
+            BTreeMap::new(),
+        )
+        .await
+        .map(|_| ())
     }
 }
 

@@ -75,6 +75,9 @@ pub(crate) enum DurableMutation {
     CompleteResizeOperation,
     CacheInitWait,
     CacheProcessWait,
+    AdvanceEventSequence,
+    ClaimRuntimeEvent,
+    StoreRuntimeEvent,
     RecordCreateFailure,
     MoveFailedCreateTombstone,
     ReleaseFailedStartClaim,
@@ -105,7 +108,7 @@ pub(crate) enum DurableMutation {
 
 impl DurableMutation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 92] = [
+    pub(crate) const ALL: [Self; 95] = [
         Self::RuntimeRootMarker,
         Self::AllocateGeneration,
         Self::PrepareCreateOperation,
@@ -172,6 +175,9 @@ impl DurableMutation {
         Self::CompleteResizeOperation,
         Self::CacheInitWait,
         Self::CacheProcessWait,
+        Self::AdvanceEventSequence,
+        Self::ClaimRuntimeEvent,
+        Self::StoreRuntimeEvent,
         Self::RecordCreateFailure,
         Self::MoveFailedCreateTombstone,
         Self::ReleaseFailedStartClaim,

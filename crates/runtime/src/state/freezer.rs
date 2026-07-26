@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerOperationRequest, ContainerRecord, ContainerTarget, ErrorCode, OciSchemaValidator,
-    OperationId, Result, ValidateRequest,
+    OperationId, Result, RuntimeEventKind, ValidateRequest,
 };
 use serde::Serialize;
 
@@ -155,6 +157,24 @@ impl DurableStateStore {
                             )
                             .await?;
                         }
+                        self.append_operation_event(
+                            &operation.operation_id,
+                            operation_name,
+                            &ContainerTarget::exact(
+                                operation.container_id.clone(),
+                                operation.generation,
+                            ),
+                            None,
+                            match action {
+                                FreezerAction::Pause => RuntimeEventKind::ContainerPaused,
+                                FreezerAction::Resume => RuntimeEventKind::ContainerResumed,
+                            },
+                            BTreeMap::from([(
+                                "operation-id".to_string(),
+                                operation.operation_id.as_str().to_string(),
+                            )]),
+                        )
+                        .await?;
                         operation.outcome = StoredOperationStatus::Succeeded {
                             response: stored.record.clone(),
                         };
@@ -351,6 +371,21 @@ impl DurableStateStore {
         )
         .await?;
         let response = stored.record.clone();
+        self.append_operation_event(
+            operation_id,
+            operation_name,
+            &ContainerTarget::exact(operation.container_id.clone(), operation.generation),
+            None,
+            match action {
+                FreezerAction::Pause => RuntimeEventKind::ContainerPaused,
+                FreezerAction::Resume => RuntimeEventKind::ContainerResumed,
+            },
+            BTreeMap::from([(
+                "operation-id".to_string(),
+                operation_id.as_str().to_string(),
+            )]),
+        )
+        .await?;
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
         };

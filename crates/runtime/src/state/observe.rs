@@ -1,6 +1,10 @@
+use std::collections::BTreeMap;
+
 use a3s_oci_core::{LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ContainerRecord, ContainerTarget, ErrorCode, OciSchemaValidator, Result};
+use a3s_oci_sdk::{
+    ContainerRecord, ContainerTarget, ErrorCode, OciSchemaValidator, Result, RuntimeEventKind,
+};
 
 use crate::fault::DurableMutation;
 
@@ -134,6 +138,63 @@ impl DurableStateStore {
                     .container_directory(&target.id)
                     .join(super::CONTAINER_RECORD_FILE),
                 &stored,
+            )
+            .await?;
+        }
+        let exact_target = ContainerTarget::exact(stored.id.clone(), stored.record.generation);
+        if completes_active {
+            let operation = active.as_ref().ok_or_else(|| {
+                state_error(
+                    ErrorCode::Internal,
+                    "observe-state",
+                    "active operation disappeared before event reconciliation",
+                )
+            })?;
+            match operation.kind {
+                StoredOperationKind::Start => {
+                    self.append_container_event(
+                        "started",
+                        &exact_target,
+                        RuntimeEventKind::ContainerStarted,
+                        BTreeMap::new(),
+                    )
+                    .await?;
+                }
+                StoredOperationKind::Pause | StoredOperationKind::Resume => {
+                    let (suffix, kind) = if operation.kind == StoredOperationKind::Pause {
+                        ("pause", RuntimeEventKind::ContainerPaused)
+                    } else {
+                        ("resume", RuntimeEventKind::ContainerResumed)
+                    };
+                    self.append_operation_event(
+                        &operation.operation_id,
+                        suffix,
+                        &exact_target,
+                        None,
+                        kind,
+                        BTreeMap::from([(
+                            "operation-id".to_string(),
+                            operation.operation_id.as_str().to_string(),
+                        )]),
+                    )
+                    .await?;
+                }
+                StoredOperationKind::Kill | StoredOperationKind::SignalProcess => {}
+                StoredOperationKind::Create
+                | StoredOperationKind::Delete
+                | StoredOperationKind::Exec
+                | StoredOperationKind::WriteStdin
+                | StoredOperationKind::CloseStdin
+                | StoredOperationKind::Resize
+                | StoredOperationKind::Update => {}
+            }
+        }
+        if status == ContainerState::Stopped && current != ContainerState::Stopped {
+            self.append_container_event(
+                "stopped",
+                &exact_target,
+                RuntimeEventKind::ContainerStopped,
+                BTreeMap::new(),
             )
             .await?;
         }

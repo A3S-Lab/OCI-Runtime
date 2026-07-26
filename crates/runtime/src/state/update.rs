@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
-    ContainerRecord, ContainerTarget, ErrorCode, OperationId, Result, UpdateRequest,
-    ValidateRequest,
+    ContainerRecord, ContainerTarget, ErrorCode, OperationId, Result, RuntimeEventKind,
+    UpdateRequest, ValidateRequest,
 };
 use serde::Serialize;
 
@@ -214,6 +216,18 @@ impl DurableStateStore {
         )
         .await?;
         let response = stored.record.clone();
+        self.append_operation_event(
+            operation_id,
+            "resources-updated",
+            &ContainerTarget::exact(operation.container_id.clone(), operation.generation),
+            None,
+            RuntimeEventKind::ResourcesUpdated,
+            BTreeMap::from([(
+                "operation-id".to_string(),
+                operation_id.as_str().to_string(),
+            )]),
+        )
+        .await?;
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
         };

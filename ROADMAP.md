@@ -163,6 +163,9 @@ Completed:
 - deterministic durable container enumeration with isolation filtering,
   complete record validation, host-service reopen evidence, and no driver
   dispatch;
+- durable exact-generation lifecycle and process events with global ordered
+  cursors, replay-safe identities, bounded filtering, long polling, crash
+  repair, host-service reopen evidence, and no driver dispatch;
 - single-writer durable state for the complete core lifecycle, with exact
   bundle snapshots, monotonic generations, generation fencing, global
   idempotent create/start/kill/delete journals, active-operation claims,
@@ -175,7 +178,7 @@ Completed:
   and write-stdin/close-stdin/resize journals, durable update journals,
   terminal failure replay, active-operation claims, and stable init/exec
   exit-status caching across host-service reopen;
-- typed, exhaustive recovery injection at all 636 registered durable commit
+- typed, exhaustive recovery injection at all 657 registered durable commit
   stages and all 38 before/after `RuntimeDriver` method boundaries;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
@@ -198,8 +201,8 @@ Not yet complete:
 The built-in WHPX driver remains `probe-only`, and the default host service
 advertises only `features`. A host explicitly opened around a launch-ready
 `RuntimeDriver` advertises the five required core lifecycle operations,
-host-owned durable `list`, plus only the optional operations that driver
-implements.
+host-owned durable `list` and `events`, plus only the optional operations that
+driver implements.
 
 ## Delivery Sequence
 
@@ -443,7 +446,11 @@ then may HVF become `experimental`.
   validation, collision-safe child `dup2`, stable host/agent replay schemas,
   non-native rejection, exact listener/log lifecycle evidence, and cleanup.
 - [x] Update and stats.
-- [ ] Ordered events.
+- [x] Persist exact-generation lifecycle and process events behind a global
+  nonzero sequence, deterministic replay identity, bounded pagination and
+  filtering, exclusive cursors, long polling, crash repair, and host-service
+  reopen. The configured host owns and advertises `events` without driver or
+  guest dispatch, and native Linux verifies the exact lifecycle stream.
 
 Exit gate: the same executor passes its lifecycle, configuration, security,
 and recovery suites in the Windows guest and on native Linux.

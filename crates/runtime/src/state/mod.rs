@@ -1,5 +1,6 @@
 mod create;
 mod delete;
+mod event;
 mod failure;
 mod filesystem;
 mod freezer;
@@ -14,6 +15,7 @@ mod process_io;
 mod start;
 mod update;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,9 +23,10 @@ use a3s_oci_core::{DriverKind, LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode, Generation, OciBundle,
-    OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget, Result, ValidateRequest,
+    OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget, Result, RuntimeEventKind,
+    ValidateRequest,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 #[cfg(test)]
 use crate::fault::NoFaultInjector;
@@ -113,6 +116,7 @@ pub(crate) enum ProcessIoPreparation {
 pub(crate) struct DurableStateStore {
     root: Arc<PathBuf>,
     gate: Arc<Mutex<()>>,
+    event_notify: Arc<Notify>,
     _root_lock: Arc<RootLock>,
     faults: Arc<dyn FaultInjector>,
 }
@@ -132,6 +136,7 @@ impl DurableStateStore {
         Ok(Self {
             root: Arc::new(root),
             gate: Arc::new(Mutex::new(())),
+            event_notify: Arc::new(Notify::new()),
             _root_lock: root_lock,
             faults,
         })
@@ -181,6 +186,13 @@ impl DurableStateStore {
                         &request.context.operation_id,
                         DurableMutation::ClaimCreateOperation,
                         "prepare-create",
+                    )
+                    .await?;
+                    self.append_container_event(
+                        "creating",
+                        &ContainerTarget::exact(request.id.clone(), stored.record.generation),
+                        RuntimeEventKind::ContainerCreating,
+                        BTreeMap::new(),
                     )
                     .await?;
                     Ok(RecordOperationPreparation::Resume(stored.record))
@@ -236,6 +248,13 @@ impl DurableStateStore {
             .reconcile_prepared_create(request, driver, generation)
             .await?;
         let record = stored.record;
+        self.append_container_event(
+            "creating",
+            &ContainerTarget::exact(request.id.clone(), record.generation),
+            RuntimeEventKind::ContainerCreating,
+            BTreeMap::new(),
+        )
+        .await?;
         Ok(RecordOperationPreparation::Prepared(record))
     }
 
@@ -414,6 +433,13 @@ impl DurableStateStore {
         )
         .await?;
         let response = stored.record.clone();
+        self.append_container_event(
+            "created",
+            &ContainerTarget::exact(operation.container_id.clone(), operation.generation),
+            RuntimeEventKind::ContainerCreated,
+            BTreeMap::from([("pid".to_string(), pid.to_string())]),
+        )
+        .await?;
         operation.outcome = StoredOperationStatus::Succeeded {
             response: response.clone(),
         };

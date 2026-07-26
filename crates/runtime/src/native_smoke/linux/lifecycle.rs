@@ -5,10 +5,10 @@ use std::time::Duration;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, State};
 use a3s_oci_sdk::{
     ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, ListRequest,
-    OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo, ProcessTarget,
-    ProcessesRequest, RuntimeClient, Signal, StartRequest, StateRequest, StatsRequest,
-    UpdateRequest, WaitRequest,
+    DeleteRequest, Error, ErrorCode, EventsRequest, ExitStatus, IsolationRequest, KillRequest,
+    ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo,
+    ProcessTarget, ProcessesRequest, RuntimeClient, RuntimeEventKind, Signal, StartRequest,
+    StateRequest, StatsRequest, UpdateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -208,6 +208,10 @@ pub(super) async fn exercise(
     report.delete_succeeded = true;
     native_call("replayed delete", client.delete(delete)).await?;
     report.delete_replayed = true;
+    report.events_verified = verify_runtime_events(&client, &target).await?;
+    if !report.events_verified {
+        return Err("native durable runtime events were incomplete or out of order".into());
+    }
     report.hooks_verified =
         verify_hook_trace(hook_trace, bundle, target.id.as_str(), report.created_pid).await?;
     if !report.hooks_verified {
@@ -227,6 +231,77 @@ pub(super) async fn exercise(
     control_descriptors.verify_closed().await?;
     report.control_descriptors_closed_after_delete = true;
     Ok(())
+}
+
+async fn verify_runtime_events(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+) -> Result<bool, String> {
+    let batch = native_call(
+        "runtime events",
+        client.events(EventsRequest {
+            container: Some(target.clone()),
+            after_sequence: 0,
+            limit: a3s_oci_sdk::MAX_EVENT_BATCH_ITEMS,
+            wait_timeout_ms: None,
+        }),
+    )
+    .await?;
+    let events = &batch.events;
+    if events.len() < 12
+        || events.first().map(|event| event.kind) != Some(RuntimeEventKind::ContainerCreating)
+        || events.get(1).map(|event| event.kind) != Some(RuntimeEventKind::ContainerCreated)
+        || events.get(2).map(|event| event.kind) != Some(RuntimeEventKind::ContainerStarted)
+        || events.last().map(|event| event.kind) != Some(RuntimeEventKind::ContainerDeleted)
+        || events.iter().any(|event| event.container != *target)
+        || events
+            .windows(2)
+            .any(|window| window[1].sequence != window[0].sequence + 1)
+        || events.last().map(|event| event.sequence) != Some(batch.next_sequence)
+    {
+        return Ok(false);
+    }
+    for (kind, expected) in [
+        (RuntimeEventKind::ContainerCreating, 1),
+        (RuntimeEventKind::ContainerCreated, 1),
+        (RuntimeEventKind::ContainerStarted, 1),
+        (RuntimeEventKind::ContainerStopped, 1),
+        (RuntimeEventKind::ContainerDeleted, 1),
+        (RuntimeEventKind::ContainerPaused, 1),
+        (RuntimeEventKind::ContainerResumed, 1),
+        (RuntimeEventKind::ResourcesUpdated, 1),
+    ] {
+        if events.iter().filter(|event| event.kind == kind).count() != expected {
+            return Ok(false);
+        }
+    }
+    let created = events
+        .iter()
+        .filter(|event| event.kind == RuntimeEventKind::ProcessCreated)
+        .count();
+    let started = events
+        .iter()
+        .filter(|event| event.kind == RuntimeEventKind::ProcessStarted)
+        .count();
+    let exited = events
+        .iter()
+        .filter(|event| event.kind == RuntimeEventKind::ProcessExited)
+        .count();
+    if created == 0 || created != started || exited < created + 1 {
+        return Ok(false);
+    }
+
+    let tail = native_call(
+        "runtime event cursor tail",
+        client.events(EventsRequest {
+            container: Some(target.clone()),
+            after_sequence: batch.next_sequence,
+            limit: 1,
+            wait_timeout_ms: None,
+        }),
+    )
+    .await?;
+    Ok(tail.events.is_empty() && tail.next_sequence == batch.next_sequence)
 }
 
 async fn create_without_descriptors_is_rejected(

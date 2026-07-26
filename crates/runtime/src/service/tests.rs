@@ -18,12 +18,12 @@ use a3s_oci_sdk::oci_spec::runtime::{
 use a3s_oci_sdk::{
     async_trait, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerStats,
     ContainerTarget, CpuStats, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest, ListRequest,
-    MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
-    OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeOperation, Signal,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize, TrustDomainId,
-    UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    EventsRequest, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest,
+    ListRequest, MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext,
+    OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
+    Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
+    TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
@@ -1262,6 +1262,118 @@ async fn durable_list_fails_closed_on_an_invalid_container_entry() {
 }
 
 #[tokio::test]
+async fn durable_events_are_host_owned_replay_safe_and_reopen_safe() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+
+    let create = create_request(&bundle_directory, "event-create");
+    let created = service
+        .create(create.clone())
+        .await
+        .expect("create container");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    let request = EventsRequest {
+        container: Some(target.clone()),
+        after_sequence: 0,
+        limit: 16,
+        wait_timeout_ms: None,
+    };
+    let driver_calls = driver.calls().len();
+    let events = service
+        .events(request.clone())
+        .await
+        .expect("poll runtime events");
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        [
+            RuntimeEventKind::ContainerCreating,
+            RuntimeEventKind::ContainerCreated,
+        ]
+    );
+    assert_eq!(events.next_sequence, 2);
+    assert_eq!(
+        driver.calls().len(),
+        driver_calls,
+        "events called the driver"
+    );
+
+    assert_eq!(
+        service.create(create.clone()).await.expect("replay create"),
+        created
+    );
+    assert_eq!(
+        service
+            .events(request)
+            .await
+            .expect("poll after create replay"),
+        events
+    );
+
+    let calls_before_invalid = driver.calls().len();
+    let error = service
+        .events(EventsRequest {
+            container: None,
+            after_sequence: 0,
+            limit: 0,
+            wait_timeout_ms: None,
+        })
+        .await
+        .expect_err("zero event limit must fail");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert_eq!(driver.calls().len(), calls_before_invalid);
+
+    let waiting_service = service.clone();
+    let second_target = ContainerTarget::current(container_id("event-second"));
+    let waiter = tokio::spawn(async move {
+        waiting_service
+            .events(EventsRequest {
+                container: Some(second_target),
+                after_sequence: events.next_sequence,
+                limit: 16,
+                wait_timeout_ms: Some(2_000),
+            })
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    let mut second = create_request(&bundle_directory, "event-second-create");
+    second.id = container_id("event-second");
+    service
+        .create(second)
+        .await
+        .expect("create second container");
+    let awakened = waiter
+        .await
+        .expect("join event waiter")
+        .expect("event waiter result");
+    assert!(!awakened.events.is_empty());
+    assert!(awakened
+        .events
+        .iter()
+        .all(|event| event.container.id.as_str() == "event-second"));
+
+    drop(service);
+    let reopened = open_service(&temporary, Arc::clone(&driver)).await;
+    let replayed = reopened
+        .events(EventsRequest {
+            container: Some(target),
+            after_sequence: 0,
+            limit: 16,
+            wait_timeout_ms: None,
+        })
+        .await
+        .expect("poll events after reopen");
+    assert_eq!(replayed.events.len(), 2);
+    assert_eq!(replayed.events[1].kind, RuntimeEventKind::ContainerCreated);
+}
+
+#[tokio::test]
 async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let bundle_directory = temporary.path().join("bundle");
@@ -1281,6 +1393,7 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
             RuntimeOperation::Delete,
             RuntimeOperation::Wait,
             RuntimeOperation::List,
+            RuntimeOperation::Events,
         ]
     );
 

@@ -330,10 +330,15 @@ pub struct StatsRequest {
 /// Poll ordered runtime events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventsRequest {
+    /// Optional container filter. A missing generation matches every retained
+    /// generation of this ID; an exact generation matches only that instance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<ContainerTarget>,
+    /// Exclusive global cursor. Use zero for the beginning of retained history.
     pub after_sequence: u64,
+    /// Maximum matching events returned in this batch.
     pub limit: u32,
+    /// Optional long-poll timeout. `None` performs an immediate poll.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_timeout_ms: Option<u64>,
 }
@@ -651,8 +656,11 @@ pub enum RuntimeEventKind {
 /// Ordered lifecycle or process event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
+    /// Nonzero global sequence assigned by the durable host journal.
     pub sequence: u64,
+    /// Host commit timestamp in nanoseconds since the Unix epoch.
     pub timestamp_unix_ns: u64,
+    /// Exact container generation that produced the event.
     pub container: ContainerTarget,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_id: Option<ProcessId>,
@@ -664,6 +672,8 @@ pub struct RuntimeEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventBatch {
     pub events: Vec<RuntimeEvent>,
+    /// Exclusive cursor for the next poll. This may advance past nonmatching
+    /// events when a container filter is active.
     pub next_sequence: u64,
 }
 

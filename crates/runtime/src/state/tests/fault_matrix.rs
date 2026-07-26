@@ -78,7 +78,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        636,
+        657,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -172,6 +172,9 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         | DurableMutation::ReleaseFailedResizeClaim
         | DurableMutation::RecordResizeFailure => Scenario::ProcessIoFailure,
         DurableMutation::AllocateGeneration
+        | DurableMutation::AdvanceEventSequence
+        | DurableMutation::ClaimRuntimeEvent
+        | DurableMutation::StoreRuntimeEvent
         | DurableMutation::PrepareCreateOperation
         | DurableMutation::StoreCreateConfig
         | DurableMutation::StoreCreatingContainer
@@ -1445,8 +1448,20 @@ fn assert_injected(error: &Error, point: FaultPoint, injector: &RecordingFaultIn
 }
 
 fn assert_consistent_layout(root: &Path) {
-    for directory in ["containers", "generations", "operations", "quarantine"] {
+    for directory in [
+        "containers",
+        "generations",
+        "operations",
+        "quarantine",
+        "events",
+    ] {
         assert!(root.join(directory).is_dir(), "missing {directory}");
+    }
+    for directory in ["records", "keys"] {
+        assert!(
+            root.join("events").join(directory).is_dir(),
+            "missing events/{directory}"
+        );
     }
     assert_no_transaction_files(root);
 
