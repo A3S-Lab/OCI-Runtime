@@ -1,3 +1,4 @@
+use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
@@ -13,6 +14,35 @@ const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
     RuntimeOperation::Kill,
     RuntimeOperation::Delete,
 ];
+
+/// Process-local resources attached to a native create request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DriverCreateAttachments {
+    /// Normal SDK or guest-protocol create with no inherited descriptors.
+    #[default]
+    None,
+    /// A3S Box exec listener, PTY listener, and dedicated init log.
+    #[cfg(target_os = "linux")]
+    NativeControl(crate::NativeControlDescriptors),
+}
+
+impl DriverCreateAttachments {
+    /// Stable logical schema without raw descriptor or inode identity.
+    #[must_use]
+    pub fn schema(&self) -> Option<AgentInheritedDescriptorSchema> {
+        match self {
+            Self::None => None,
+            #[cfg(target_os = "linux")]
+            Self::NativeControl(_) => Some(AgentInheritedDescriptorSchema::a3s_box_control_v1()),
+        }
+    }
+
+    /// Whether the create carries process-local native resources.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
 
 /// OCI hook phases implemented by one exact runtime driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -145,6 +175,8 @@ pub struct DriverCreateRequest {
     pub isolation: IsolationRequest,
     /// Host-side standard-I/O disposition for the init process.
     pub io: ProcessIo,
+    /// Process-local native resources, excluded from the wire protocol.
+    pub attachments: DriverCreateAttachments,
 }
 
 /// Exact start input. The immutable durable bundle is supplied again so a

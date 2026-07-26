@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use a3s_oci_agent::LinuxExecutor;
+use a3s_oci_agent::{InheritedDescriptorPlan, LinuxExecutor};
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
@@ -19,8 +19,8 @@ use a3s_oci_sdk::{
 use sha2::{Digest, Sha256};
 
 use crate::driver::{
-    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
-    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
     DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
     DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
     DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
@@ -133,17 +133,24 @@ impl RuntimeDriver for NativeLinuxDriver {
             )
             .for_operation("native-linux-create"));
         }
+        let inherited_descriptors = match &request.attachments {
+            DriverCreateAttachments::None => InheritedDescriptorPlan::empty(),
+            DriverCreateAttachments::NativeControl(descriptors) => descriptors.descriptor_plan()?,
+        };
         let guest_directory = guest_path(request.bundle.directory()).await?;
         let expected_digest = request.bundle.config_digest().to_string();
         let expected_target = request.target.clone();
         let state = self
             .executor
-            .create(AgentCreateRequest {
-                context: request.context,
-                target: request.target,
-                bundle: AgentBundle::new(&request.bundle, guest_directory),
-                io: request.io,
-            })
+            .create_with_inherited_descriptors(
+                AgentCreateRequest {
+                    context: request.context,
+                    target: request.target,
+                    bundle: AgentBundle::new(&request.bundle, guest_directory),
+                    io: request.io,
+                },
+                inherited_descriptors,
+            )
             .await?;
         driver_state(&expected_target, Some(&expected_digest), state)
     }

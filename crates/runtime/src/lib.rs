@@ -23,6 +23,8 @@ mod host_cleanup;
 mod multi_container_report;
 mod namespace_join;
 #[cfg(target_os = "linux")]
+mod native_control;
+#[cfg(target_os = "linux")]
 mod native_linux_driver;
 mod native_smoke;
 mod oci_smoke;
@@ -44,8 +46,8 @@ pub use cleanup_report::{
     OciVmFaultCleanupReport,
 };
 pub use driver::{
-    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
-    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
     DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
     DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
     DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
@@ -53,6 +55,10 @@ pub use driver::{
 pub use multi_container_report::{
     MultiContainerLifecycleEvidence, NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport,
     OciVmMultiContainerSmokeReport, PidSupervisionEvidence, RootfsMountEvidence,
+};
+#[cfg(target_os = "linux")]
+pub use native_control::{
+    NativeControlDescriptors, EXEC_LISTENER_FD, INIT_LOG_FD, PTY_LISTENER_FD,
 };
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;

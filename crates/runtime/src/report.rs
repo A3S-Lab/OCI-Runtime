@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v8";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v9";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v10";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,6 +355,8 @@ pub struct NativeLinuxSmokeReport {
     pub kvm_device_present: bool,
     /// Whether the host loaded and validated the submitted OCI bundle.
     pub bundle_loaded: bool,
+    /// Whether host-created A3S Box listener and log descriptors passed validation.
+    pub control_descriptors_prepared: bool,
     /// Operations advertised by the explicitly opened native service.
     pub service_operations: Vec<RuntimeOperation>,
     /// Whether dedicated-VM isolation failed before claiming the create ID.
@@ -363,6 +365,8 @@ pub struct NativeLinuxSmokeReport {
     pub create_returned_created: bool,
     /// Whether retrying create replayed its exact original result.
     pub create_replayed: bool,
+    /// Whether retrying that operation without the attachment schema failed.
+    pub create_without_control_descriptors_rejected: bool,
     /// Whether unfiltered and isolation-filtered list returned the exact created record.
     pub list_visible_after_create: bool,
     /// OCI hook phases advertised by the configured native driver.
@@ -407,6 +411,10 @@ pub struct NativeLinuxSmokeReport {
     pub stopped_observed: bool,
     /// Whether the workload produced the exact expected marker.
     pub marker_verified: bool,
+    /// Whether both inherited listener paths accepted host connections.
+    pub control_listener_connectivity_verified: bool,
+    /// Whether FD 5 received the exact workload-written init-log bytes.
+    pub control_init_log_verified: bool,
     /// Whether stopped-only delete succeeded.
     pub delete_succeeded: bool,
     /// Whether retrying delete replayed its exact success.
@@ -415,6 +423,8 @@ pub struct NativeLinuxSmokeReport {
     pub state_missing_after_delete: bool,
     /// Whether durable list became empty after delete.
     pub list_empty_after_delete: bool,
+    /// Whether neither inherited listener accepted connections after delete.
+    pub control_descriptors_closed_after_delete: bool,
     /// Whether the host removed the known marker.
     pub marker_removed: bool,
     /// Whether executor shutdown removed its private transient root.
@@ -434,10 +444,12 @@ impl NativeLinuxSmokeReport {
             status: CapabilityStatus::Unavailable,
             kvm_device_present: false,
             bundle_loaded: false,
+            control_descriptors_prepared: false,
             service_operations: Vec::new(),
             dedicated_vm_rejected_before_create: false,
             create_returned_created: false,
             create_replayed: false,
+            create_without_control_descriptors_rejected: false,
             list_visible_after_create: false,
             hook_phases: Vec::new(),
             hooks_verified: false,
@@ -459,10 +471,13 @@ impl NativeLinuxSmokeReport {
             wait_replayed: false,
             stopped_observed: false,
             marker_verified: false,
+            control_listener_connectivity_verified: false,
+            control_init_log_verified: false,
             delete_succeeded: false,
             delete_replayed: false,
             state_missing_after_delete: false,
             list_empty_after_delete: false,
+            control_descriptors_closed_after_delete: false,
             marker_removed: false,
             executor_runtime_clean: false,
             session_root_clean: false,
@@ -486,6 +501,7 @@ impl NativeLinuxSmokeReport {
 
     pub(crate) fn lifecycle_succeeded(&self) -> bool {
         self.bundle_loaded
+            && self.control_descriptors_prepared
             && self.service_operations
                 == [
                     RuntimeOperation::Features,
@@ -512,6 +528,7 @@ impl NativeLinuxSmokeReport {
             && self.dedicated_vm_rejected_before_create
             && self.create_returned_created
             && self.create_replayed
+            && self.create_without_control_descriptors_rejected
             && self.list_visible_after_create
             && self.hook_phases
                 == [
@@ -546,10 +563,13 @@ impl NativeLinuxSmokeReport {
             && self.wait_replayed
             && self.stopped_observed
             && self.marker_verified
+            && self.control_listener_connectivity_verified
+            && self.control_init_log_verified
             && self.delete_succeeded
             && self.delete_replayed
             && self.state_missing_after_delete
             && self.list_empty_after_delete
+            && self.control_descriptors_closed_after_delete
             && self.marker_removed
             && self.executor_runtime_clean
             && self.session_root_clean

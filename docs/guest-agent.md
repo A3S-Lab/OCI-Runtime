@@ -188,11 +188,16 @@ Exec accepts one exact `(container ID, generation, process ID)` target while
 the configured process is running. `init` is reserved, duplicate process IDs
 fail, and exact mutation retries replay their original process or signal
 result. Init and exec share the same fail-closed OCI process planner and I/O
-owner. The current slice accepts null or piped stdin, null or captured
-stdout/stderr, or the exact all-terminal PTY contract, while rejecting
-inherited descriptors, scheduler, and other unenforced process settings. It
-retains and applies all 16 OCI `process.rlimits` types to init and exec before
-credentials are reduced, with duplicate, count, and soft/hard validation.
+owner. The current process-I/O slice accepts null or piped stdin, null or
+captured stdout/stderr, or the exact all-terminal PTY contract, while rejecting
+generic SDK inherited-I/O modes, scheduler, and other unenforced process
+settings. A separate Linux-only native create attachment implements the fixed
+A3S Box control contract: validated Unix stream listeners become FD 3 and FD 4
+and a writable regular init log becomes FD 5. Raw handles never enter the
+guest protocol; the native driver supplies a process-local descriptor plan
+directly to `LinuxExecutor`. It retains and applies all 16 OCI
+`process.rlimits` types to init and exec before credentials are reduced, with
+duplicate, count, and soft/hard validation.
 
 Piped stdin is written asynchronously with backpressure and can be closed
 idempotently. Dedicated tasks continuously drain captured stdout and stderr so

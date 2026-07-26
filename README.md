@@ -194,11 +194,38 @@ idempotent stdin close, and rejected writes after close or process exit,
 controlling-terminal allocation, initial and resized dimensions, interactive
 input, merged terminal output, and terminal VEOF close,
 the Box production mapping of container root to host UID 100000 and GID
-200000, the exact SIGKILL terminal results, running and stopped observation,
-idempotent mutation replay, marker verification, post-delete `NotFound`, and
-scoped cleanup. See
+200000, A3S Box exec/PTY listeners inherited on FD 3/4 and an exact init-log
+write on FD 5, the exact SIGKILL terminal results, running and stopped
+observation, idempotent mutation replay, marker verification, post-delete
+`NotFound`, and scoped cleanup. See
 [Native Linux Development](docs/linux-native.md) for the accepted profile and
 remaining production gates.
+
+The in-process A3S Box adapter supplies those resources without changing the
+wire protocol:
+
+```rust
+use std::fs::OpenOptions;
+use std::os::unix::net::UnixListener;
+use a3s_oci_runtime::NativeControlDescriptors;
+
+let controls = NativeControlDescriptors::new(
+    UnixListener::bind(exec_socket_path)?,
+    UnixListener::bind(pty_socket_path)?,
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(init_log_path)?,
+)?;
+let created = service
+    .create_with_native_control_descriptors(create_request, controls)
+    .await?;
+```
+
+The service consumes the host handles, fingerprints only their stable logical
+schema, and rejects this entry point unless the configured driver reports
+`native-linux`.
 
 Create a second distinct bundle to run the multi-container gate:
 
@@ -561,7 +588,11 @@ The current executor implements a reviewed bootstrap vertical slice:
 - the A3S Box terminal mechanism adapted behind the same I/O contract:
   `openpty`, a fresh session and controlling terminal, foreground process
   groups, explicit initial dimensions, `TIOCSWINSZ` resize, merged output, and
-  active `VEOF` delivery on stdin close.
+  active `VEOF` delivery on stdin close;
+- the A3S Box native init-control contract: typed exec and PTY Unix listeners
+  plus a writable init log, stable replay metadata without ephemeral FD/inode
+  identity, collision-safe high-FD duplication, exact child `dup2` onto 3/4/5,
+  non-native rejection, and real workload/listener/log/cleanup evidence.
 
 The supported user-namespace slice is rootful: it requires both UID and GID
 mappings, coverage for container ID 0 and every configured process ID, and an
@@ -571,8 +602,9 @@ unsupported when joining or inheriting a mount namespace. Other unimplemented
 OCI fields are rejected instead of ignored. Rootless mapping policy, cgroup
 I/O/hugetlb/RDMA/unified resources and cgroup v2 device-access filtering,
 broader device policies, multi-architecture seccomp and notification
-listeners, schedulers, LSMs, inherited I/O, A3S Box listener/log
-descriptor handoff, real-driver reattachment after runtime-process restart,
+listeners, schedulers, LSMs, generic inherited process I/O beyond the fixed
+A3S Box control profile, real-driver reattachment after runtime-process
+restart,
 hook rollback/recovery/security-negative certification, events, checkpoint,
 and restore are still release gates.
 
@@ -619,7 +651,7 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping, exact six-phase OCI hook order/state trace, exact init and exec SIGKILL status, exec/signal/update/process-I/O replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe, real rootful lifecycle with A3S Box `0 -> 100000:200000` root mapping and exec/PTY/init-log FD 3/4/5 handoff, exact six-phase OCI hook order/state trace, exact init and exec SIGKILL status, exec/signal/update/process-I/O replay, normalized stats, stable per-process wait, piped stdin, captured stdout/stderr cursor/EOF, controlling PTY, resize, interactive I/O and VEOF evidence, pause/resume, init-exit exec cleanup, two-container isolation, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem/bind enforcement, plus shutdown cleanup after create, start, and kill without delete; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
@@ -672,7 +704,7 @@ flowchart TB
         shim --> hypervisor --> bridge --> agent
     end
 
-    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts · hooks<br/>recursive attributes · PID 1 supervision · pidfds<br/>exec/signal/wait · update/stats · pause/resume/processes · scoped cleanup"]
+    executor["Shared LinuxExecutor<br/>namespace create/join · pivot_root · OCI mounts · hooks<br/>recursive attributes · PID 1 supervision · pidfds · FD 3/4/5 handoff<br/>exec/signal/wait · update/stats · pause/resume/processes · scoped cleanup"]
 
     client --> service
     selection -->|"shared-host-kernel"| native_driver

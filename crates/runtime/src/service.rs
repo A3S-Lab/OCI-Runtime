@@ -3,7 +3,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
-use a3s_oci_core::{CapabilityStatus, DriverCapability, RuntimeFeatures};
+use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverKind, RuntimeFeatures};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
@@ -16,11 +16,11 @@ use a3s_oci_sdk::{
 };
 
 use crate::driver::{
-    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
-    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverReadOutputRequest,
-    DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest, DriverUpdateRequest,
-    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase,
-    RuntimeDriver,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest,
+    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
+    OciHookPhase, RuntimeDriver,
 };
 use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
@@ -156,6 +156,86 @@ impl HostRuntimeService {
         }
         features
     }
+
+    /// Create a native Linux container with the A3S Box control listeners and
+    /// dedicated init log inherited as descriptors 3, 4, and 5.
+    #[cfg(target_os = "linux")]
+    pub async fn create_with_native_control_descriptors(
+        &self,
+        request: CreateRequest,
+        descriptors: crate::NativeControlDescriptors,
+    ) -> Result<ContainerRecord> {
+        // Revalidate immediately before durable reservation. The private
+        // handles cannot be replaced through safe code, but this also fails
+        // closed if external unsafe code closed a process-wide descriptor.
+        descriptors.descriptor_plan()?;
+        self.create_internal(request, DriverCreateAttachments::NativeControl(descriptors))
+            .await
+    }
+
+    async fn create_internal(
+        &self,
+        request: CreateRequest,
+        attachments: DriverCreateAttachments,
+    ) -> Result<ContainerRecord> {
+        let lifecycle = self.lifecycle("create")?;
+        lifecycle.ensure_attachments(&attachments)?;
+        lifecycle.ensure_isolation(&request)?;
+        let attachment_schema = attachments.schema();
+        let prepared = lifecycle
+            .store
+            .prepare_create_with_inherited_descriptors(
+                &request,
+                lifecycle.capability.driver,
+                attachment_schema.as_ref(),
+            )
+            .await?;
+        let record = match prepared {
+            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Prepared(record)
+            | RecordOperationPreparation::Resume(record) => record,
+        };
+        let target = ContainerTarget::exact(request.id.clone(), record.generation);
+        let durable_bundle = lifecycle.store.bundle(&target).await?;
+        lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::BeforeCall)?;
+        let result = lifecycle
+            .driver
+            .create(DriverCreateRequest {
+                context: request.context.clone(),
+                target,
+                bundle: durable_bundle,
+                isolation: request.isolation,
+                io: request.io,
+                attachments,
+            })
+            .await;
+        lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::AfterCall)?;
+        let observed = match result {
+            Ok(observed) => observed,
+            Err(error) => {
+                return lifecycle
+                    .fail_driver_operation(&request.context.operation_id, error)
+                    .await;
+            }
+        };
+        if observed.status() != ContainerState::Created {
+            let error = driver_state_error("create", ContainerState::Created, observed.status());
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
+        let pid = observed.pid().ok_or_else(|| {
+            Error::new(
+                ErrorCode::Internal,
+                "created driver state did not contain an init PID",
+            )
+            .for_operation("create")
+        })?;
+        lifecycle
+            .store
+            .complete_create(&request.context.operation_id, pid)
+            .await
+    }
 }
 
 impl LifecycleHost {
@@ -177,6 +257,21 @@ impl LifecycleHost {
                 ErrorCode::Unsupported,
                 format!(
                     "driver {:?} does not provide requested isolation {isolation:?}",
+                    self.capability.driver
+                ),
+            )
+            .for_operation("create"))
+        }
+    }
+
+    fn ensure_attachments(&self, attachments: &DriverCreateAttachments) -> Result<()> {
+        if attachments.is_empty() || self.capability.driver == DriverKind::NativeLinux {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "driver {:?} does not accept native inherited descriptors",
                     self.capability.driver
                 ),
             )
@@ -330,55 +425,7 @@ impl OciRuntimeService for HostRuntimeService {
     }
 
     async fn create(&self, request: CreateRequest) -> Result<ContainerRecord> {
-        let lifecycle = self.lifecycle("create")?;
-        lifecycle.ensure_isolation(&request)?;
-        let prepared = lifecycle
-            .store
-            .prepare_create(&request, lifecycle.capability.driver)
-            .await?;
-        let record = match prepared {
-            RecordOperationPreparation::Replayed(record) => return Ok(record),
-            RecordOperationPreparation::Prepared(record)
-            | RecordOperationPreparation::Resume(record) => record,
-        };
-        let target = ContainerTarget::exact(request.id.clone(), record.generation);
-        let durable_bundle = lifecycle.store.bundle(&target).await?;
-        lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::BeforeCall)?;
-        let result = lifecycle
-            .driver
-            .create(DriverCreateRequest {
-                context: request.context.clone(),
-                target,
-                bundle: durable_bundle,
-                isolation: request.isolation,
-                io: request.io,
-            })
-            .await;
-        lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::AfterCall)?;
-        let observed = match result {
-            Ok(observed) => observed,
-            Err(error) => {
-                return lifecycle
-                    .fail_driver_operation(&request.context.operation_id, error)
-                    .await;
-            }
-        };
-        if observed.status() != ContainerState::Created {
-            let error = driver_state_error("create", ContainerState::Created, observed.status());
-            return lifecycle
-                .fail_driver_operation(&request.context.operation_id, error)
-                .await;
-        }
-        let pid = observed.pid().ok_or_else(|| {
-            Error::new(
-                ErrorCode::Internal,
-                "created driver state did not contain an init PID",
-            )
-            .for_operation("create")
-        })?;
-        lifecycle
-            .store
-            .complete_create(&request.context.operation_id, pid)
+        self.create_internal(request, DriverCreateAttachments::None)
             .await
     }
 

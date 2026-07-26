@@ -24,6 +24,7 @@ use super::control::{
     START_BYTE,
 };
 use super::hook::{HookPhase, HookSet, HookStateTemplate};
+use super::inherited_descriptor::InheritedDescriptorPlan;
 use super::io::ProcessIoHandle;
 use super::namespace::{self, RetainedExecutionContext};
 use super::pid;
@@ -57,6 +58,7 @@ impl PreparedProcess {
         cgroup_manager: Option<&CgroupManager>,
         io: &ProcessIo,
         hook_state: &HookStateTemplate,
+        inherited_descriptors: InheritedDescriptorPlan,
     ) -> Result<Self> {
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
         let mut cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
@@ -75,13 +77,15 @@ impl PreparedProcess {
         let terminal = io_setup.uses_terminal();
         // SAFETY: the callback runs in the freshly forked command child and
         // performs one bounded write to the already-open cgroup.procs file,
-        // then establishes the configured controlling terminal when present.
+        // establishes the configured controlling terminal when present, and
+        // installs already-validated inherited descriptors with bounded dup2.
         unsafe {
             command.pre_exec(move || {
                 if let Some(descriptor) = cgroup_procs {
                     cgroup::join_from_pre_exec(descriptor)?;
                 }
-                super::terminal::prepare_child_terminal(terminal)
+                super::terminal::prepare_child_terminal(terminal)?;
+                inherited_descriptors.install_in_child()
             });
         }
         let mut child = command.spawn().map_err(|error| {

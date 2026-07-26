@@ -1,3 +1,4 @@
+use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_sdk::{ContainerId, CreateRequest, OciBundle, Result};
 use serde::Serialize;
 
@@ -10,15 +11,21 @@ struct CreateRequestFingerprint<'a> {
     bundle: &'a OciBundle,
     isolation: &'a a3s_oci_sdk::IsolationRequest,
     io: &'a a3s_oci_sdk::ProcessIo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inherited_descriptors: Option<&'a AgentInheritedDescriptorSchema>,
 }
 
-pub(super) fn create_request_digest(request: &CreateRequest) -> Result<String> {
+pub(super) fn create_request_digest(
+    request: &CreateRequest,
+    inherited_descriptors: Option<&AgentInheritedDescriptorSchema>,
+) -> Result<String> {
     request_digest(
         &CreateRequestFingerprint {
             id: &request.id,
             bundle: &request.bundle,
             isolation: &request.isolation,
             io: &request.io,
+            inherited_descriptors,
         },
         "digest-create-request",
     )
