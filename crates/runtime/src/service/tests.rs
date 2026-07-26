@@ -1608,8 +1608,10 @@ async fn bound_native_control_service_routes_transport_style_create_to_one_conta
 
     let other_bundle = temporary.path().join("other-bundle");
     std::fs::create_dir(&other_bundle).expect("other bundle directory");
+    let mut other = native_create_request(&other_bundle, "other-container-create");
+    other.id = container_id("other-container");
     let error = service
-        .create(native_create_request(&other_bundle, "other-container"))
+        .create(other)
         .await
         .expect_err("a bound service must not reuse control descriptors for another container");
     assert_eq!(error.code, ErrorCode::PermissionDenied);

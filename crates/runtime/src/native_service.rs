@@ -70,8 +70,10 @@ impl NativeLinuxServiceConfig {
 /// Bound native Linux SDK service owning one exact A3S Box runtime process.
 pub struct NativeLinuxService {
     config: NativeLinuxServiceConfig,
-    listener: UnixListener,
+    // Drop the path guard while the listener still pins the original socket
+    // inode, preventing a replacement path from matching through inode reuse.
     socket: OwnedSocketPath,
+    listener: UnixListener,
     service: Arc<HostRuntimeService>,
     driver: Arc<NativeLinuxDriver>,
     effective_uid: u32,
@@ -123,8 +125,8 @@ impl NativeLinuxService {
         let effective_uid = unsafe { libc::geteuid() };
         Ok(Self {
             config,
-            listener,
             socket,
+            listener,
             service,
             driver,
             effective_uid,
@@ -448,14 +450,21 @@ mod tests {
         let metadata = std::fs::symlink_metadata(&socket_path).expect("socket metadata");
         assert!(metadata.file_type().is_socket());
         assert_eq!(metadata.mode() & 0o777, 0o600);
-        drop(listener);
         std::fs::remove_file(&socket_path).expect("unlink original socket");
         let replacement =
             std::os::unix::net::UnixListener::bind(&socket_path).expect("bind replacement socket");
         drop(socket);
         assert!(socket_path.exists());
+        drop(listener);
         drop(replacement);
         std::fs::remove_file(&socket_path).expect("unlink replacement socket");
+
+        let (listener, socket) = bind_private_socket(&socket_path)
+            .await
+            .expect("bind another owned socket");
+        drop(socket);
+        assert!(!socket_path.exists());
+        drop(listener);
     }
 
     #[tokio::test]
