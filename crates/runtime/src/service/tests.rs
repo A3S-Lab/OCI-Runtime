@@ -1615,7 +1615,8 @@ async fn bound_native_control_service_routes_transport_style_create_to_one_conta
         .await
         .expect_err("a bound service must not reuse control descriptors for another container");
     assert_eq!(error.code, ErrorCode::PermissionDenied);
-    assert!(error.message.contains("bound-native-control"));
+    assert!(error.message.contains("sdk-container"));
+    assert!(error.message.contains("other-container"));
     assert_eq!(
         driver
             .calls()
