@@ -83,7 +83,7 @@ jq \
   '
     def hook($phase; $trace): {
       path: "/bin/sh",
-      args: ["a3s-oci-hook", "-c", $command],
+      args: ["sh", "-c", $command],
       env: ["A3S_HOOK_PHASE=" + $phase, "A3S_HOOK_TRACE=" + $trace],
       timeout: 5
     };
