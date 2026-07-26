@@ -338,8 +338,8 @@ never serialized into `AgentCreateRequest` or any protocol frame; the ordinary
 wire-service `create` always uses an empty descriptor plan.
 
 This is the first Linux executor vertical slice, not complete OCI
-enforcement. A pinned immutable system image, generic inherited process I/O,
-rootless ID mapping, advanced mount semantics and resources, hook
+enforcement. A pinned immutable system image, rootless ID mapping, advanced
+mount semantics and resources, hook
 rollback/recovery/security-negative suites, exhaustive recovery injection,
 broader negative isolation cases, and full platform-specific lifecycle
 evidence remain required before a utility-VM driver can advance beyond

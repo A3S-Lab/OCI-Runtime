@@ -664,6 +664,8 @@ The current executor implements a reviewed bootstrap vertical slice:
   `openpty`, a fresh session and controlling terminal, foreground process
   groups, explicit initial dimensions, `TIOCSWINSZ` resize, merged output, and
   active `VEOF` delivery on stdin close;
+- inherited stdin/stdout/stderr for runtime launchers that project a
+  container's raw console through their own already-open descriptors;
 - the A3S Box native init-control contract: typed exec and PTY Unix listeners
   plus a writable init log, stable replay metadata without ephemeral FD/inode
   identity, collision-safe high-FD duplication, exact child `dup2` onto 3/4/5,
@@ -681,8 +683,7 @@ inheriting a mount namespace. Other unimplemented OCI fields are rejected
 instead of ignored. Rootless cgroup-v2 delegation and device policy,
 cgroup I/O/hugetlb/RDMA/unified resources and device-access filtering,
 broader device policies, multi-architecture seccomp and notification
-listeners, schedulers, LSMs, generic inherited process I/O beyond the fixed
-A3S Box control profile, real-driver reattachment after runtime-process
+listeners, schedulers, LSMs, real-driver reattachment after runtime-process
 restart, hook rollback/recovery/security-negative certification, checkpoint,
 and restore are still release gates.
 

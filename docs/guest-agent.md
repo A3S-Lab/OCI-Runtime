@@ -38,9 +38,10 @@ The accepted bootstrap profile requires:
   `domainname`, optional `mounts`, optional `hooks`, optional `annotations`,
   and optional `linux` at the configuration root;
 - a writable normalized relative `root.path` equal to `rootfs`;
-- either `terminal: false` with null or piped stdin, null or captured stdout
-  and stderr, and no terminal size; or `terminal: true` with terminal mode on
-  all three streams and positive initial dimensions;
+- either `terminal: false` with null, piped, or inherited stdin, null,
+  captured, or inherited stdout and stderr, and no terminal size; or
+  `terminal: true` with terminal mode on all three streams and positive
+  initial dimensions;
 - `noNewPrivileges: true`;
 - an absolute executable and working directory;
 - numeric UID, GID, optional supplementary groups, and optional umask;
@@ -204,10 +205,12 @@ Exec accepts one exact `(container ID, generation, process ID)` target while
 the configured process is running. `init` is reserved, duplicate process IDs
 fail, and exact mutation retries replay their original process or signal
 result. Init and exec share the same fail-closed OCI process planner and I/O
-owner. The current process-I/O slice accepts null or piped stdin, null or
-captured stdout/stderr, or the exact all-terminal PTY contract, while rejecting
-generic SDK inherited-I/O modes, scheduler, and other unenforced process
-settings. A separate Linux-only native create attachment implements the fixed
+owner. The current process-I/O slice accepts null, piped, or inherited stdin,
+null, captured, or inherited stdout/stderr, or the exact all-terminal PTY
+contract, while rejecting scheduler and other unenforced process settings.
+Inherited descriptors remain owned by the runtime launcher and are
+deliberately absent from SDK read/write operations. A separate Linux-only
+native create attachment implements the fixed
 A3S Box control contract: validated Unix stream listeners become FD 3 and FD 4
 and a writable regular init log becomes FD 5. Raw handles never enter the
 guest protocol; the native driver supplies a process-local descriptor plan
@@ -283,8 +286,8 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,
-unsupported cgroup I/O, hugetlb, RDMA, and unified resources, inherited
-process I/O, process-group signals, and every other unimplemented OCI
+unsupported cgroup I/O, hugetlb, RDMA, and unified resources, process-group
+signals, and every other unimplemented OCI
 property. Rootless cgroup-v2 and device delegation, hook rollback/recovery,
 security-negative, and soak certification remain release blockers rather than
 silently accepted compatibility gaps.

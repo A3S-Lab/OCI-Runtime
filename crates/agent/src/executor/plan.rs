@@ -561,22 +561,22 @@ fn validate_process_io(io: &ProcessIo, process_uses_terminal: bool) -> Result<()
             "terminal process I/O requires process.terminal=true",
         ));
     }
-    if !matches!(io.stdin, IoMode::Null | IoMode::Pipe) {
+    if !matches!(io.stdin, IoMode::Null | IoMode::Pipe | IoMode::Inherit) {
         return Err(unsupported(
             "process I/O stdin",
-            "the bootstrap executor accepts null or pipe stdin",
+            "the bootstrap executor accepts null, pipe, or inherited stdin",
         ));
     }
-    if !matches!(io.stdout, IoMode::Null | IoMode::Capture) {
+    if !matches!(io.stdout, IoMode::Null | IoMode::Capture | IoMode::Inherit) {
         return Err(unsupported(
             "process I/O stdout",
-            "the bootstrap executor accepts null or captured stdout",
+            "the bootstrap executor accepts null, captured, or inherited stdout",
         ));
     }
-    if !matches!(io.stderr, IoMode::Null | IoMode::Capture) {
+    if !matches!(io.stderr, IoMode::Null | IoMode::Capture | IoMode::Inherit) {
         return Err(unsupported(
             "process I/O stderr",
-            "the bootstrap executor accepts null or captured stderr",
+            "the bootstrap executor accepts null, captured, or inherited stderr",
         ));
     }
     if io.terminal_size.is_some() {
