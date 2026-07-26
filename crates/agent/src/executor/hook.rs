@@ -763,26 +763,23 @@ mod tests {
     }
 
     #[test]
-    fn hook_timeout_bounds_state_writer_after_the_leader_exits() {
-        let hooks = HookSet {
-            prestart: vec![HookPlan {
-                path: PathBuf::from("/bin/sh"),
-                args: Some(vec![
-                    "a3s-hook".to_string(),
-                    "-c".to_string(),
-                    "/bin/sleep 30 <&0 & exit 0".to_string(),
-                ]),
-                environment: Some(Vec::new()),
-                timeout: Some(Duration::from_millis(100)),
-            }],
-            ..HookSet::default()
-        };
+    fn hook_state_writer_obeys_the_same_deadline() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn non-reading hook process");
+        let stdin = child.stdin.take().expect("piped hook stdin");
         let state = vec![b'x'; super::MAX_HOOK_STATE_BYTES];
         let started = Instant::now();
-        let error = hooks
-            .run_sync(HookPhase::Prestart, &state)
-            .expect_err("unread state must time out");
-        assert_eq!(error.code, ErrorCode::DeadlineExceeded);
+        let error = super::write_hook_state(
+            stdin,
+            &state,
+            Some(Instant::now() + Duration::from_millis(100)),
+        )
+        .expect_err("unread state must time out");
+        super::terminate_hook(&mut child);
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
