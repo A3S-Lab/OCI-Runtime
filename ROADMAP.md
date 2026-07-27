@@ -496,6 +496,10 @@ and recovery suites in the Windows guest and on native Linux.
   drives concurrent lifecycle, query, captured exec, pause, durable service
   reopen, resume, generation reuse, and leak checks across four independent
   slots on x86_64 and aarch64 without KVM.
+- [x] Retain a versioned real-driver configuration matrix for private,
+  host-inherited, and donor-shared network namespaces; shared/read-only bind
+  and private-tmpfs storage; inline/script/direct/nonzero init; and selected
+  create/start/timeout/poststop Hook failure behavior on x86_64 and aarch64.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver

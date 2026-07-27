@@ -623,8 +623,8 @@ mod tests {
     use a3s_oci_sdk::ExitStatus;
 
     use super::{
-        MultiContainerLifecycleEvidence, NamespaceJoinEvidence, PidSupervisionEvidence,
-        RootfsMountEvidence,
+        InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
+        NetworkModeEvidence, PidSupervisionEvidence, RootfsMountEvidence, StorageVolumeEvidence,
     };
 
     #[test]
@@ -653,6 +653,57 @@ mod tests {
 
         let mut incomplete = complete;
         incomplete.wrong_type_rejected_before_state = false;
+        assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn network_mode_success_requires_private_host_shared_and_cleanup_evidence() {
+        let complete = NetworkModeEvidence {
+            private_namespace_verified: true,
+            host_namespace_verified: true,
+            shared_namespace_verified: true,
+            all_profiles_removed: true,
+        };
+        assert!(complete.is_success());
+
+        let mut incomplete = complete;
+        incomplete.host_namespace_verified = false;
+        assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn storage_success_requires_sharing_isolation_persistence_and_cleanup() {
+        let complete = StorageVolumeEvidence {
+            shared_bind_write_visible: true,
+            readonly_bind_enforced: true,
+            private_tmpfs_isolated: true,
+            bind_data_persisted_after_recreate: true,
+            all_profiles_removed: true,
+        };
+        assert!(complete.is_success());
+
+        let mut incomplete = complete;
+        incomplete.private_tmpfs_isolated = false;
+        assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn initialization_success_requires_commands_negative_hooks_and_cleanup() {
+        let complete = InitializationEvidence {
+            inline_shell_verified: true,
+            executable_script_verified: true,
+            direct_argv_verified: true,
+            nonzero_exit_verified: true,
+            create_hook_failure_rolled_back: true,
+            start_hook_failure_rolled_back: true,
+            hook_timeout_rolled_back: true,
+            poststop_failure_warning_only: true,
+            all_profiles_removed: true,
+        };
+        assert!(complete.is_success());
+
+        let mut incomplete = complete;
+        incomplete.hook_timeout_rolled_back = false;
         assert!(!incomplete.is_success());
     }
 

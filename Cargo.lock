@@ -17,7 +17,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "a3s-oci-agent-protocol",
  "a3s-oci-sdk",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-agent-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "a3s-oci-sdk",
  "async-trait",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "a3s-oci-core",
  "a3s-oci-runtime",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-krun"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "a3s-libkrun-sys",
  "a3s-oci-agent-protocol",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "a3s-oci-agent",
  "a3s-oci-agent-protocol",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "a3s-oci-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "a3s-oci-core",
  "async-trait",
