@@ -24,8 +24,14 @@ pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 pub const AGENT_MAX_IO_PAYLOAD_BYTES: u32 = 4 * 1024 * 1024;
 /// Required session-token entropy supplied by the host.
 pub const AGENT_SESSION_TOKEN_BYTES: usize = 32;
-/// Environment key used only for the protected guest bootstrap.
+/// Environment key used for the protected host-to-shim bootstrap.
 pub const AGENT_SESSION_TOKEN_ENV: &str = "A3S_OCI_AGENT_SESSION_TOKEN";
+/// Guest environment key containing the one-time bootstrap token path.
+pub const AGENT_SESSION_TOKEN_FILE_ENV: &str = "A3S_OCI_AGENT_SESSION_TOKEN_FILE";
+/// Runtime-owned guest directory prefix for one-time token handoff.
+pub const AGENT_SESSION_TOKEN_DIRECTORY_PREFIX: &str = ".a3s-oci-bootstrap-";
+/// Fixed file name inside a one-time guest bootstrap directory.
+pub const AGENT_SESSION_TOKEN_FILE_NAME: &str = "session-token";
 
 const MAX_GUEST_PATH_BYTES: usize = 4_096;
 const MAX_CAPABILITY_TEXT_BYTES: usize = 128;
@@ -96,10 +102,10 @@ impl SessionToken {
         Self::from_bytes(bytes)
     }
 
-    /// Expose the token for one protected bootstrap environment entry.
+    /// Expose the token for one protected bootstrap handoff.
     ///
     /// The returned string is secret, zeroizes on drop, and must not be logged
-    /// or persisted.
+    /// or retained after the one-time handoff is consumed.
     #[must_use]
     pub fn expose_hex(&self) -> Zeroizing<String> {
         let mut encoded = String::with_capacity(AGENT_SESSION_TOKEN_BYTES * 2);

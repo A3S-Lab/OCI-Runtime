@@ -39,7 +39,16 @@ The runtime:
 11. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
-   `a3s-oci agent-vm-smoke` and `a3s-oci oci-vm-smoke`.
+   `a3s-oci agent-vm-smoke` and `a3s-oci oci-vm-smoke`;
+12. stages the one-time guest token in a create-new, fixed-size bootstrap file
+    instead of exposing it in the Windows guest command line or environment,
+    rejects alternate paths and links, and removes the file on every exit;
+13. binds each shim to the exact host owner process and terminates the VM if
+    that owner disappears, including during startup and a stuck shutdown;
+14. exposes a repeatable hardware soak covering serial, parallel, same-VM
+    multi-container, network, storage, init, typed-negative, lifecycle-fault,
+    and owner-death profiles with machine-readable resource and inventory
+    evidence.
 
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
@@ -151,6 +160,45 @@ A successful fixed OCI VM smoke additionally proves that:
 - the marker is removed and VM shutdown leaves no new agent runtime directory
   or A3S process.
 
+## Hardware soak gate
+
+Run the complete gate from an x86-64 Windows host with WHPX enabled:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-soak.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+```
+
+The default profile requires:
+
+- 25 consecutive full protocol-v8 OCI lifecycles;
+- three waves of two independent VMs and three two-container lifecycles inside
+  one authenticated VM;
+- cleanup without a normal delete after create, start, and kill;
+- isolated and inherited network namespace identities;
+- persistent read-write and enforced read-only bind volumes;
+- a delayed successful init script and an expected nonzero init failure, both
+  with state written through a bind volume;
+- ten exact host/guest validation rejections;
+- owner termination at 0, 250, 1000, and 2500 milliseconds after shim spawn.
+
+Success additionally requires exact requested/completed counts, no bootstrap
+token directory, guest runtime directory, marker, host CLI, or host shim
+remaining, every operation sample marked `pass`, a bounded owner-to-shim exit,
+and bounded host working-set and log growth. The evidence directory contains
+`host.json`, start/final process inventories, `capability-results.tsv`,
+`operations.tsv`, `resource-samples.tsv`, every command report and console,
+`summary.json`, and a final `verify.out`.
+
+`fixtures/utility-vm/config.windows.json` is an explicit Windows qualification
+profile. It requests UTS, mount, IPC, network, cgroup, and PID namespaces. It
+does not request user or time namespaces because those paths hang in the
+current WHPX utility kernel, and the resource update omits only the unavailable
+swap controller. The compatibility marker still has its historical
+`user-time-v1` payload; the soak never treats that string as evidence that
+Windows applied user or time namespaces.
+
 The July 24, 2026 qualification used the untouched Alpine 3.22.5 x86_64
 minirootfs archive with SHA-256
 `4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`.
@@ -204,12 +252,10 @@ does not build it.
 The smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
-- configured networking or inherited process I/O works;
 - the rootful user/time namespace slice now exercised on native Linux and
-  macOS, namespace joins, advanced mount semantics, resources, capabilities,
+  macOS, namespace joins, recursive or ID-mapped mounts, tmpfs, capabilities,
   seccomp, or hooks work through WHPX;
-- restart recovery, concurrent containers, or shared-guest-kernel isolation
-  work;
+- restart recovery or arbitrary shared-guest-kernel isolation policies work;
 - the driver is production ready.
 
 For that reason, driver readiness remains `probe-only` even after all smokes
@@ -227,8 +273,8 @@ The next vertical slice must:
 4. extend the current piped and terminal I/O gate with inherited-descriptor
    handling plus arbitrary natural exit-code coverage;
 5. reconcile stopped state after host runtime restart;
-6. add concurrent-container and negative isolation evidence;
-7. prove cleanup under fault injection and repeated soak runs.
+6. expand the retained two-container gate into arbitrary shared-guest
+   isolation and recovery evidence.
 
 Only completion of that gate may promote Windows driver readiness to
 `experimental`.

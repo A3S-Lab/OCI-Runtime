@@ -1,13 +1,13 @@
 use std::path::Path;
 
-#[cfg(not(any(
-    all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
-)))]
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
 use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
-use crate::{LifecycleFaultPoint, OciVmFaultCleanupReport, OciVmMultiContainerSmokeReport};
+use crate::{
+    LifecycleFaultPoint, OciVmFaultCleanupReport, OciVmMultiContainerSmokeReport,
+    WindowsOciVmMultiContainerSmokeReport,
+};
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
@@ -71,6 +71,30 @@ pub async fn oci_vm_multi_container_smoke(
     {
         let _ = (shim, vm_rootfs, bundle_a, bundle_b, console);
         OciVmMultiContainerSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Exercise two independently fenced containers in the Windows WHPX bootstrap profile.
+///
+/// This deliberately excludes user/time namespaces and ID-mapped mount
+/// enforcement, which remain outside the qualified Windows utility kernel.
+#[must_use]
+pub async fn windows_oci_vm_multi_container_smoke(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    console: &Path,
+) -> WindowsOciVmMultiContainerSmokeReport {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        utility_vm::run_windows_multi_container(shim, vm_rootfs, bundle_a, bundle_b, console).await
+    }
+
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle_a, bundle_b, console);
+        WindowsOciVmMultiContainerSmokeReport::unsupported(HostPlatform::current())
     }
 }
 

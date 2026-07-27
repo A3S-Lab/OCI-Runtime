@@ -25,8 +25,9 @@
 
 **A3S OCI Runtime** is the low-level execution boundary for Linux OCI
 workloads across Linux, macOS, and Windows. It is designed to replace A3S
-Box's direct dependency on an external `crun` binary while keeping image
+Box's direct dependency on an external OCI runtime binary while keeping image
 management, builds, volumes, networks, and product policy in A3S Box.
+The runtime never shells out to, discovers, or falls back to a second runtime.
 
 The release target is complete
 [OCI Runtime Specification 1.3.0](https://github.com/opencontainers/runtime-spec)
@@ -616,8 +617,29 @@ cargo run -p a3s-oci-cli -- whpx-smoke
 cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
 ```
 
-The repository also provides a real guest command smoke, authenticated guest
-agent smoke, and fixed OCI lifecycle smoke. See
+The repository also provides a hardware soak that builds the static Linux
+agent and Windows host binaries, then exercises the authenticated WHPX path:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-soak.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+```
+
+The default gate runs 25 serial lifecycles, three two-VM parallel waves,
+three two-container lifecycles inside one VM, cleanup faults after create,
+start, and kill, private and inherited network profiles, read-write and
+read-only bind volumes, successful and failing init scripts, ten typed
+negative cases, and four owner-termination timing points. It fails on count
+drift, leaked host or guest runtime state, missing resource samples, excessive
+host working set or log growth, or a shim that survives its owner for 20
+seconds. `summary.json`, `verify.out`, inventories, capability results,
+operation rows, resource samples, and per-case JSON/logs form the retained
+evidence contract.
+
+The Windows fixture intentionally omits user and time namespaces and the swap
+controller, which the current WHPX utility kernel has not qualified. Those
+omissions are not reported as passing coverage. See
 [Windows WHPX Development](docs/windows-whpx.md) for the required runtime
 assets and commands.
 
@@ -808,7 +830,7 @@ boundary.
 | Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle through both the in-process SDK and the private same-UID Unix SDK service, with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, signal-driven owner cleanup, hooks, cgroup controls, I/O, PTY, two-container isolation, private/host/shared network identity, shared/read-only bind volumes, private tmpfs, init/Hook success and failure profiles, namespace joins, mount enforcement, and fault cleanup; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
-| Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
+| Windows x86_64 | libkrun + WHPX utility VM | Partition and context probes; authenticated protocol-v8 agent; fixed lifecycle with process/PTY I/O, update/stats and pause/resume; repeated serial and parallel VMs; two containers in one VM; private/inherited network namespaces; RW/RO bind volumes; init success/failure; typed negatives; lifecycle and owner-death cleanup with inventory/resource evidence | `probe-only`; user/time namespaces, advanced mounts, restart recovery, and immutable system-image qualification pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
 KVM is missing or inaccessible. KVM is an optional VM backend, not a Linux

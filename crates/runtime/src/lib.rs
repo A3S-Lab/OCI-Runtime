@@ -59,6 +59,7 @@ pub use multi_container_report::{
     InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
     NativeLinuxMultiContainerSmokeReport, NetworkModeEvidence, OciVmMultiContainerSmokeReport,
     PidSupervisionEvidence, RootfsMountEvidence, StorageVolumeEvidence,
+    WindowsOciVmMultiContainerSmokeReport,
 };
 #[cfg(target_os = "linux")]
 pub use native_control::{
@@ -72,7 +73,10 @@ pub use native_smoke::{
     native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_rootless_smoke,
     native_linux_service_smoke, native_linux_smoke, native_linux_soak,
 };
-pub use oci_smoke::{oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke};
+pub use oci_smoke::{
+    oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke,
+    windows_oci_vm_multi_container_smoke,
+};
 pub use report::{
     AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxRootlessSmokeReport,
     NativeLinuxSmokeReport, OciVmSmokeReport, WhpxSmokeReport,
