@@ -30,10 +30,13 @@ impl StorageVolumeFixture {
         writer_base: &OciBundle,
         reader_base: &OciBundle,
         rootfs: [&Path; 2],
-        session_root: &Path,
+        source_parent: &Path,
         nonce: &str,
     ) -> Result<Self, String> {
-        let shared_directory = session_root.join(format!("volume-source-{nonce}"));
+        // The executor resolves bind sources after entering the container's
+        // user namespace. Keep this deliberately external volume outside the
+        // mode-0700 runtime session so the mapped root can traverse to it.
+        let shared_directory = source_parent.join(format!("volume-source-{nonce}"));
         tokio::fs::create_dir(&shared_directory)
             .await
             .map_err(|error| {

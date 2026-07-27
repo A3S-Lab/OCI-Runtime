@@ -146,7 +146,7 @@ pub(super) async fn run(
         &bundle_a,
         &bundle_b,
         [&rootfs_a, &rootfs_b],
-        &session_root,
+        &work_parent,
         &nonce,
     )
     .await;
