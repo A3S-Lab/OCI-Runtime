@@ -6,7 +6,7 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v12";
+    "a3s.oci.native-linux-multi-container-smoke.v13";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
 pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v9";
 
@@ -150,6 +150,107 @@ impl NamespaceJoinEvidence {
             && self.retained_rootfs_verified
             && self.donor_unchanged_after_joins
             && self.all_state_removed
+    }
+}
+
+/// Native Linux network-mode identity and cleanup evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkModeEvidence {
+    /// Whether a container requesting a new network namespace received an
+    /// identity distinct from the host network namespace.
+    pub private_namespace_verified: bool,
+    /// Whether omitting the network namespace made the container inherit the
+    /// exact host network namespace identity.
+    pub host_namespace_verified: bool,
+    /// Whether a joiner requesting `/proc/<pid>/ns/net` received the exact
+    /// donor network namespace identity.
+    pub shared_namespace_verified: bool,
+    /// Whether all private, host, and shared-network containers were removed.
+    pub all_profiles_removed: bool,
+}
+
+impl NetworkModeEvidence {
+    /// Return whether every native network namespace profile passed.
+    #[must_use]
+    pub const fn is_success(&self) -> bool {
+        self.private_namespace_verified
+            && self.host_namespace_verified
+            && self.shared_namespace_verified
+            && self.all_profiles_removed
+    }
+}
+
+/// Native Linux shared-bind and private-tmpfs lifecycle evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageVolumeEvidence {
+    /// Whether a writer made data visible through a shared read-write bind.
+    pub shared_bind_write_visible: bool,
+    /// Whether a second container read the exact shared data through a
+    /// read-only bind and was unable to mutate it.
+    pub readonly_bind_enforced: bool,
+    /// Whether two simultaneously live containers received isolated tmpfs
+    /// instances at the same destination.
+    pub private_tmpfs_isolated: bool,
+    /// Whether the shared bind retained exact data after the writer was
+    /// deleted and a fresh reader generation was created.
+    pub bind_data_persisted_after_recreate: bool,
+    /// Whether every storage-profile container and fixture artifact was removed.
+    pub all_profiles_removed: bool,
+}
+
+impl StorageVolumeEvidence {
+    /// Return whether every native storage-volume profile passed.
+    #[must_use]
+    pub const fn is_success(&self) -> bool {
+        self.shared_bind_write_visible
+            && self.readonly_bind_enforced
+            && self.private_tmpfs_isolated
+            && self.bind_data_persisted_after_recreate
+            && self.all_profiles_removed
+    }
+}
+
+/// Native Linux init-command and OCI hook failure-path evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitializationEvidence {
+    /// Whether an inline shell init completed and emitted exact evidence.
+    pub inline_shell_verified: bool,
+    /// Whether an executable file init received its requested environment and
+    /// completed with exact evidence.
+    pub executable_script_verified: bool,
+    /// Whether a direct argv init completed without a shell wrapper.
+    pub direct_argv_verified: bool,
+    /// Whether a non-zero init exit remained an exact normal exit status.
+    pub nonzero_exit_verified: bool,
+    /// Whether a failing createContainer hook rejected create and rolled back
+    /// all visible runtime state.
+    pub create_hook_failure_rolled_back: bool,
+    /// Whether a failing startContainer hook rejected start and allowed exact
+    /// force cleanup of the created record.
+    pub start_hook_failure_rolled_back: bool,
+    /// Whether a timed-out prestart hook was terminated and rolled back before
+    /// any container state became visible.
+    pub hook_timeout_rolled_back: bool,
+    /// Whether a failing poststop hook remained warning-only and did not block
+    /// wait or deletion.
+    pub poststop_failure_warning_only: bool,
+    /// Whether every init/hook profile and fixture artifact was removed.
+    pub all_profiles_removed: bool,
+}
+
+impl InitializationEvidence {
+    /// Return whether every native initialization and hook profile passed.
+    #[must_use]
+    pub const fn is_success(&self) -> bool {
+        self.inline_shell_verified
+            && self.executable_script_verified
+            && self.direct_argv_verified
+            && self.nonzero_exit_verified
+            && self.create_hook_failure_rolled_back
+            && self.start_hook_failure_rolled_back
+            && self.hook_timeout_rolled_back
+            && self.poststop_failure_warning_only
+            && self.all_profiles_removed
     }
 }
 
@@ -318,8 +419,14 @@ pub struct NativeLinuxMultiContainerSmokeReport {
     pub lifecycle: MultiContainerLifecycleEvidence,
     /// Existing-namespace type validation, joins, and lifecycle evidence.
     pub namespace_join: NamespaceJoinEvidence,
+    /// Private, host-inherited, and donor-shared network namespace evidence.
+    pub network_modes: NetworkModeEvidence,
     /// Mount-target, propagation, masking, and read-only enforcement evidence.
     pub rootfs_mount: RootfsMountEvidence,
+    /// Shared bind, read-only bind, private tmpfs, and persistence evidence.
+    pub storage_volumes: StorageVolumeEvidence,
+    /// Init command forms and OCI hook failure/timeout cleanup evidence.
+    pub initialization: InitializationEvidence,
     /// Namespace PID 1 supervision and orphan-reaping evidence.
     pub pid_supervision: PidSupervisionEvidence,
     /// Whether both workload markers were removed.
@@ -344,7 +451,10 @@ impl NativeLinuxMultiContainerSmokeReport {
             service_operations: Vec::new(),
             lifecycle: MultiContainerLifecycleEvidence::default(),
             namespace_join: NamespaceJoinEvidence::default(),
+            network_modes: NetworkModeEvidence::default(),
             rootfs_mount: RootfsMountEvidence::default(),
+            storage_volumes: StorageVolumeEvidence::default(),
+            initialization: InitializationEvidence::default(),
             pid_supervision: PidSupervisionEvidence::default(),
             markers_removed: false,
             executor_runtime_clean: false,
@@ -404,8 +514,11 @@ impl NativeLinuxMultiContainerSmokeReport {
                 })
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
             && self.namespace_join.is_success()
+            && self.network_modes.is_success()
             && self.rootfs_mount.is_success()
             && self.rootfs_mount.native_idmap_bind_is_success()
+            && self.storage_volumes.is_success()
+            && self.initialization.is_success()
             && self.pid_supervision.is_success()
             && self.markers_removed
             && self.executor_runtime_clean
