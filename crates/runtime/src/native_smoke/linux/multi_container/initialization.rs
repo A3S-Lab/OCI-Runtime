@@ -37,10 +37,12 @@ impl InitializationFixture {
     pub(super) async fn prepare(
         base: &OciBundle,
         rootfs: &Path,
-        session_root: &Path,
+        source_parent: &Path,
         nonce: &str,
     ) -> Result<Self, String> {
-        let evidence_directory = session_root.join(format!("init-evidence-{nonce}"));
+        // This bind source is consumed after the executor enters the mapped
+        // user namespace, so it must remain outside the private runtime state.
+        let evidence_directory = source_parent.join(format!("init-evidence-{nonce}"));
         tokio::fs::create_dir(&evidence_directory)
             .await
             .map_err(|error| {

@@ -151,7 +151,7 @@ pub(super) async fn run(
     )
     .await;
     let initialization_fixture =
-        initialization::InitializationFixture::prepare(&bundle_b, &rootfs_b, &session_root, &nonce)
+        initialization::InitializationFixture::prepare(&bundle_b, &rootfs_b, &work_parent, &nonce)
             .await;
 
     let exercise = match (&rootfs_fixture, &storage_fixture, &initialization_fixture) {
