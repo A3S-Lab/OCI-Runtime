@@ -1,0 +1,565 @@
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use a3s_oci_sdk::{
+    ContainerId, ContainerTarget, DeleteMode, DeleteRequest, Error, ExitStatus, ListRequest,
+    OciBundle, RuntimeClient, StartRequest,
+};
+use serde_json::{json, Map, Value};
+use tokio::time::timeout;
+
+use super::lifecycle::{
+    container_id, create_request, native_call, operation, require, require_created,
+    state_is_missing, wait_request, wait_until_stopped,
+};
+use crate::NativeLinuxMultiContainerSmokeReport;
+
+const CALL_TIMEOUT: Duration = Duration::from_secs(15);
+const EXTERNAL_SCRIPT_EVIDENCE: &[u8] = b"a3s-oci-external-init-v1\n";
+const INLINE_EVIDENCE: &[u8] = b"a3s-oci-inline-init-v1\n";
+
+pub(super) struct InitializationFixture {
+    inline: OciBundle,
+    external_script: OciBundle,
+    direct_argv: OciBundle,
+    nonzero_exit: OciBundle,
+    create_hook_failure: OciBundle,
+    start_hook_failure: OciBundle,
+    hook_timeout: OciBundle,
+    poststop_failure: OciBundle,
+    evidence_directory: PathBuf,
+    rootfs_target: PathBuf,
+    script_path: PathBuf,
+}
+
+impl InitializationFixture {
+    pub(super) async fn prepare(
+        base: &OciBundle,
+        rootfs: &Path,
+        session_root: &Path,
+        nonce: &str,
+    ) -> Result<Self, String> {
+        let evidence_directory = session_root.join(format!("init-evidence-{nonce}"));
+        tokio::fs::create_dir(&evidence_directory)
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to create init evidence directory {}: {error}",
+                    evidence_directory.display()
+                )
+            })?;
+        tokio::fs::set_permissions(&evidence_directory, std::fs::Permissions::from_mode(0o777))
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to make init evidence directory writable {}: {error}",
+                    evidence_directory.display()
+                )
+            })?;
+
+        let target_name = format!(".a3s-oci-init-{nonce}");
+        let target = format!("/{target_name}");
+        let script_name = format!("a3s-oci-init-{nonce}");
+        let script_path = rootfs.join("bin").join(&script_name);
+        let script = format!(
+            "#!/bin/sh\nset -eu\ntest \"${{A3S_INIT_PROFILE:-}}\" = external\n\
+             printf 'a3s-oci-external-init-v1\\n' > {target}/evidence/external\n"
+        );
+        tokio::fs::write(&script_path, script)
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to write external init script {}: {error}",
+                    script_path.display()
+                )
+            })?;
+        tokio::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to make external init script executable {}: {error}",
+                    script_path.display()
+                )
+            })?;
+
+        let mount = EvidenceMount {
+            source: &evidence_directory,
+            target: &target,
+        };
+        let inline = build_profile(
+            base,
+            mount,
+            json!([
+                "/bin/sh",
+                "-c",
+                format!(
+                    "set -eu; printf 'a3s-oci-inline-init-v1\\n' > \
+                     {target}/evidence/inline"
+                )
+            ]),
+            json!(["PATH=/bin"]),
+            None,
+            &format!("a3s-oci-init-inline-{nonce}"),
+        )?;
+        let external_script = build_profile(
+            base,
+            mount,
+            json!([format!("/bin/{script_name}")]),
+            json!(["PATH=/bin", "A3S_INIT_PROFILE=external"]),
+            None,
+            &format!("a3s-oci-init-script-{nonce}"),
+        )?;
+        let direct_argv = build_profile(
+            base,
+            mount,
+            json!(["/bin/busybox", "touch", format!("{target}/evidence/direct")]),
+            json!(["PATH=/bin"]),
+            None,
+            &format!("a3s-oci-init-direct-{nonce}"),
+        )?;
+        let nonzero_exit = build_profile(
+            base,
+            mount,
+            json!(["/bin/busybox", "sh", "-c", "exit 42"]),
+            json!(["PATH=/bin"]),
+            None,
+            &format!("a3s-oci-init-nonzero-{nonce}"),
+        )?;
+        let create_hook_failure = build_profile(
+            base,
+            mount,
+            sleeping_init(),
+            json!(["PATH=/bin"]),
+            Some(hooks("createContainer", "exit 17", 2)),
+            &format!("a3s-oci-hook-create-{nonce}"),
+        )?;
+        let start_hook_failure = build_profile(
+            base,
+            mount,
+            sleeping_init(),
+            json!(["PATH=/bin"]),
+            Some(hooks("startContainer", "exit 19", 2)),
+            &format!("a3s-oci-hook-start-{nonce}"),
+        )?;
+        let hook_timeout = build_profile(
+            base,
+            mount,
+            sleeping_init(),
+            json!(["PATH=/bin"]),
+            Some(hooks("prestart", "/bin/busybox sleep 30", 1)),
+            &format!("a3s-oci-hook-timeout-{nonce}"),
+        )?;
+        let poststop_failure = build_profile(
+            base,
+            mount,
+            json!(["/bin/busybox", "true"]),
+            json!(["PATH=/bin"]),
+            Some(hooks("poststop", "exit 23", 2)),
+            &format!("a3s-oci-hook-poststop-{nonce}"),
+        )?;
+
+        Ok(Self {
+            inline,
+            external_script,
+            direct_argv,
+            nonzero_exit,
+            create_hook_failure,
+            start_hook_failure,
+            hook_timeout,
+            poststop_failure,
+            evidence_directory,
+            rootfs_target: rootfs.join(target_name),
+            script_path,
+        })
+    }
+
+    pub(super) async fn cleanup(&self) -> Result<bool, String> {
+        remove_file(&self.script_path, "external init script").await?;
+        remove_tree(&self.rootfs_target, "init-profile rootfs target").await?;
+        remove_tree(&self.evidence_directory, "init evidence directory").await?;
+        Ok(!self.script_path.exists()
+            && !self.rootfs_target.exists()
+            && !self.evidence_directory.exists())
+    }
+}
+
+pub(super) async fn exercise(
+    client: &RuntimeClient,
+    fixture: &InitializationFixture,
+    nonce: &str,
+    report: &mut NativeLinuxMultiContainerSmokeReport,
+) -> Result<(), String> {
+    let inline_target = run_expected_exit(client, &fixture.inline, nonce, "init-inline", 0).await?;
+    report.initialization.inline_shell_verified =
+        read_exact(&fixture.evidence_directory.join("inline"), INLINE_EVIDENCE).await?;
+
+    let script_target =
+        run_expected_exit(client, &fixture.external_script, nonce, "init-script", 0).await?;
+    report.initialization.executable_script_verified = read_exact(
+        &fixture.evidence_directory.join("external"),
+        EXTERNAL_SCRIPT_EVIDENCE,
+    )
+    .await?;
+
+    let direct_target =
+        run_expected_exit(client, &fixture.direct_argv, nonce, "init-direct", 0).await?;
+    report.initialization.direct_argv_verified =
+        fixture.evidence_directory.join("direct").is_file();
+    require(
+        report.initialization.direct_argv_verified,
+        "direct argv init did not emit its exact evidence file",
+    )?;
+
+    let nonzero_target =
+        run_expected_exit(client, &fixture.nonzero_exit, nonce, "init-nonzero", 42).await?;
+    report.initialization.nonzero_exit_verified = true;
+
+    let create_failure_id = container_id(nonce, "hook-create-failure")?;
+    expect_create_failure(
+        client,
+        &fixture.create_hook_failure,
+        nonce,
+        "hook-create-failure",
+        create_failure_id.clone(),
+        "createContainer hook",
+    )
+    .await?;
+    let create_failure_target = ContainerTarget::current(create_failure_id);
+    report.initialization.create_hook_failure_rolled_back = state_is_missing(
+        client,
+        &create_failure_target,
+        "create-hook failure after rollback",
+    )
+    .await?;
+
+    let timeout_id = container_id(nonce, "hook-timeout")?;
+    expect_create_failure(
+        client,
+        &fixture.hook_timeout,
+        nonce,
+        "hook-timeout",
+        timeout_id.clone(),
+        "prestart hook",
+    )
+    .await?;
+    let timeout_target = ContainerTarget::current(timeout_id);
+    report.initialization.hook_timeout_rolled_back =
+        state_is_missing(client, &timeout_target, "timed-out hook after rollback").await?;
+
+    let start_failure_target =
+        run_start_failure(client, &fixture.start_hook_failure, nonce).await?;
+    report.initialization.start_hook_failure_rolled_back = state_is_missing(
+        client,
+        &start_failure_target,
+        "start-hook failure after force delete",
+    )
+    .await?;
+
+    let poststop_target =
+        run_expected_exit(client, &fixture.poststop_failure, nonce, "hook-poststop", 0).await?;
+    report.initialization.poststop_failure_warning_only = true;
+
+    let listed = native_call(
+        "list after initialization matrix",
+        client.list(ListRequest::default()),
+    )
+    .await?;
+    report.initialization.all_profiles_removed = listed.is_empty()
+        && state_is_missing(client, &inline_target, "inline init after delete").await?
+        && state_is_missing(client, &script_target, "script init after delete").await?
+        && state_is_missing(client, &direct_target, "direct init after delete").await?
+        && state_is_missing(client, &nonzero_target, "nonzero init after delete").await?
+        && state_is_missing(client, &create_failure_target, "create hook after matrix").await?
+        && state_is_missing(client, &timeout_target, "timeout hook after matrix").await?
+        && state_is_missing(client, &start_failure_target, "start hook after matrix").await?
+        && state_is_missing(client, &poststop_target, "poststop hook after delete").await?;
+    require(
+        report.initialization.is_success(),
+        "initialization and hook matrix did not produce complete evidence",
+    )
+}
+
+async fn run_expected_exit(
+    client: &RuntimeClient,
+    bundle: &OciBundle,
+    nonce: &str,
+    label: &str,
+    exit_code: i32,
+) -> Result<ContainerTarget, String> {
+    let id = container_id(nonce, label)?;
+    let created = native_call(
+        &format!("create {label}"),
+        client.create(create_request(
+            nonce,
+            &format!("{label}-create"),
+            id.clone(),
+            bundle,
+        )?),
+    )
+    .await?;
+    require_created(&created, label)?;
+    let target = ContainerTarget::exact(id, created.generation);
+    native_call(
+        &format!("start {label}"),
+        client.start(StartRequest {
+            context: operation(nonce, &format!("{label}-start"))?,
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    let status = native_call(
+        &format!("wait for {label}"),
+        client.wait(wait_request(target.clone())),
+    )
+    .await?;
+    let expected = ExitStatus::exited(exit_code)
+        .map_err(|error| format!("failed to construct expected {label} exit: {error}"))?;
+    require(
+        status == expected,
+        format!("{label} returned {status:?}, expected {expected:?}"),
+    )?;
+    require(
+        wait_until_stopped(client, &target).await?,
+        format!("{label} did not stop"),
+    )?;
+    native_call(
+        &format!("delete {label}"),
+        client.delete(DeleteRequest {
+            context: operation(nonce, &format!("{label}-delete"))?,
+            target: target.clone(),
+            mode: DeleteMode::StoppedOnly,
+        }),
+    )
+    .await?;
+    Ok(target)
+}
+
+async fn expect_create_failure(
+    client: &RuntimeClient,
+    bundle: &OciBundle,
+    nonce: &str,
+    label: &str,
+    id: ContainerId,
+    expected_message: &str,
+) -> Result<(), String> {
+    let request = create_request(nonce, &format!("{label}-create"), id, bundle)?;
+    let error = expected_error(&format!("create {label}"), client.create(request)).await?;
+    require(
+        error.message.contains(expected_message),
+        format!(
+            "create {label} error omitted {expected_message:?}: {}",
+            error.message
+        ),
+    )
+}
+
+async fn run_start_failure(
+    client: &RuntimeClient,
+    bundle: &OciBundle,
+    nonce: &str,
+) -> Result<ContainerTarget, String> {
+    let label = "hook-start-failure";
+    let id = container_id(nonce, label)?;
+    let created = native_call(
+        "create start-hook failure profile",
+        client.create(create_request(
+            nonce,
+            "hook-start-failure-create",
+            id.clone(),
+            bundle,
+        )?),
+    )
+    .await?;
+    require_created(&created, "start-hook failure profile")?;
+    let target = ContainerTarget::exact(id, created.generation);
+    let error = expected_error(
+        "start start-hook failure profile",
+        client.start(StartRequest {
+            context: operation(nonce, "hook-start-failure-start")?,
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    require(
+        error.message.contains("startContainer hook"),
+        format!("start-hook error omitted its phase: {}", error.message),
+    )?;
+    native_call(
+        "force delete start-hook failure profile",
+        client.delete(DeleteRequest {
+            context: operation(nonce, "hook-start-failure-delete")?,
+            target: target.clone(),
+            mode: DeleteMode::Force,
+        }),
+    )
+    .await?;
+    Ok(target)
+}
+
+async fn expected_error<T>(
+    operation_name: &str,
+    future: impl std::future::Future<Output = Result<T, Error>>,
+) -> Result<Error, String> {
+    match timeout(CALL_TIMEOUT, future).await {
+        Ok(Err(error)) => Ok(error),
+        Ok(Ok(_)) => Err(format!("{operation_name} unexpectedly succeeded")),
+        Err(_) => Err(format!("{operation_name} timed out")),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct EvidenceMount<'a> {
+    source: &'a Path,
+    target: &'a str,
+}
+
+fn build_profile(
+    base: &OciBundle,
+    mount: EvidenceMount<'_>,
+    args: Value,
+    environment: Value,
+    hooks: Option<Value>,
+    cgroup_path: &str,
+) -> Result<OciBundle, String> {
+    let mut config: Value = serde_json::from_str(base.config_json())
+        .map_err(|error| format!("failed to decode init profile: {error}"))?;
+    let root = object_mut(&mut config, "config")?;
+    let mounts = root
+        .entry("mounts")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| "init profile mounts must be an array".to_string())?;
+    mounts.push(json!({
+        "destination": format!("{}/evidence", mount.target),
+        "type": "none",
+        "source": mount.source,
+        "options": ["rbind", "rw", "nosuid", "nodev"]
+    }));
+    let process = root
+        .get_mut("process")
+        .ok_or_else(|| "init profile process is required".to_string())?;
+    let process = object_mut(process, "process")?;
+    process.insert("args".to_string(), args);
+    process.insert("env".to_string(), environment);
+    match hooks {
+        Some(hooks) => {
+            root.insert("hooks".to_string(), hooks);
+        }
+        None => {
+            root.remove("hooks");
+        }
+    }
+    let linux = root
+        .get_mut("linux")
+        .ok_or_else(|| "init profile linux config is required".to_string())?;
+    object_mut(linux, "linux")?.insert(
+        "cgroupsPath".to_string(),
+        Value::String(cgroup_path.to_string()),
+    );
+    let encoded = serde_json::to_string(&config)
+        .map_err(|error| format!("failed to encode init profile: {error}"))?;
+    OciBundle::from_json(base.directory().to_path_buf(), encoded)
+        .map_err(|error| format!("failed to validate init profile: {error}"))
+}
+
+fn sleeping_init() -> Value {
+    json!(["/bin/busybox", "sleep", "300"])
+}
+
+fn hooks(phase: &str, command: &str, timeout_seconds: u32) -> Value {
+    let mut hooks = Map::new();
+    hooks.insert(
+        phase.to_string(),
+        json!([{
+            "path": "/bin/sh",
+            "args": ["sh", "-c", command],
+            "timeout": timeout_seconds
+        }]),
+    );
+    Value::Object(hooks)
+}
+
+async fn read_exact(path: &Path, expected: &[u8]) -> Result<bool, String> {
+    let actual = tokio::fs::read(path)
+        .await
+        .map_err(|error| format!("failed to read init evidence {}: {error}", path.display()))?;
+    require(
+        actual == expected,
+        format!("init evidence mismatch: expected {expected:?}, got {actual:?}"),
+    )?;
+    Ok(true)
+}
+
+async fn remove_tree(path: &Path, description: &str) -> Result<(), String> {
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to remove {description} {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+async fn remove_file(path: &Path, description: &str) -> Result<(), String> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to remove {description} {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn object_mut<'a>(
+    value: &'a mut Value,
+    description: &str,
+) -> Result<&'a mut Map<String, Value>, String> {
+    value
+        .as_object_mut()
+        .ok_or_else(|| format!("init profile {description} must be an object"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use a3s_oci_sdk::OciBundle;
+    use serde_json::{json, Value};
+
+    use super::{build_profile, hooks, EvidenceMount};
+
+    const CONFIG: &str = include_str!("../../../../../../fixtures/native-linux/config.json");
+
+    #[test]
+    fn init_profiles_replace_commands_hooks_and_cgroup_identity() {
+        let directory = std::env::current_dir()
+            .expect("current directory")
+            .join("init-profile-bundle");
+        let base = OciBundle::from_json(directory, CONFIG).expect("base bundle");
+        let bundle = build_profile(
+            &base,
+            EvidenceMount {
+                source: Path::new("/tmp/a3s-oci-init-evidence"),
+                target: "/.matrix",
+            },
+            json!(["/bin/busybox", "true"]),
+            json!(["PATH=/bin"]),
+            Some(hooks("poststop", "exit 7", 2)),
+            "a3s-oci-init-test",
+        )
+        .expect("init profile");
+        let config: Value = serde_json::from_str(bundle.config_json()).expect("profile JSON");
+
+        assert_eq!(config["process"]["args"], json!(["/bin/busybox", "true"]));
+        assert_eq!(config["linux"]["cgroupsPath"], "a3s-oci-init-test");
+        assert_eq!(config["hooks"]["poststop"][0]["timeout"], 2);
+        assert!(config["mounts"]
+            .as_array()
+            .expect("mount list")
+            .iter()
+            .any(|mount| mount["destination"] == "/.matrix/evidence"));
+    }
+}

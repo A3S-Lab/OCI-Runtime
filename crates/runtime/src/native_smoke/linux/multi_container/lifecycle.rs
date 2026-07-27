@@ -352,6 +352,14 @@ pub(super) async fn best_effort_delete(client: &RuntimeClient, nonce: &str) {
         "volume-writer",
         "volume-reader",
         "volume-persist",
+        "init-inline",
+        "init-script",
+        "init-direct",
+        "init-nonzero",
+        "hook-create-failure",
+        "hook-start-failure",
+        "hook-timeout",
+        "hook-poststop",
     ] {
         let (Ok(id), Ok(context)) = (
             container_id(nonce, label),

@@ -12,6 +12,7 @@ use crate::{
     HostRuntimeService, NativeLinuxDriver, NativeLinuxMultiContainerSmokeReport, RuntimeDriver,
 };
 
+mod initialization;
 mod lifecycle;
 mod namespace_join;
 mod rootfs_enforcement;
@@ -149,9 +150,12 @@ pub(super) async fn run(
         &nonce,
     )
     .await;
+    let initialization_fixture =
+        initialization::InitializationFixture::prepare(&bundle_b, &rootfs_b, &session_root, &nonce)
+            .await;
 
-    let exercise = match (&rootfs_fixture, &storage_fixture) {
-        (Ok(rootfs_fixture), Ok(storage_fixture)) => {
+    let exercise = match (&rootfs_fixture, &storage_fixture, &initialization_fixture) {
+        (Ok(rootfs_fixture), Ok(storage_fixture), Ok(initialization_fixture)) => {
             async {
                 exercise(
                     &client,
@@ -171,11 +175,12 @@ pub(super) async fn run(
                 )
                 .await?;
                 rootfs_enforcement::exercise(&client, rootfs_fixture, &nonce, &mut report).await?;
-                storage_volume::exercise(&client, storage_fixture, &nonce, &mut report).await
+                storage_volume::exercise(&client, storage_fixture, &nonce, &mut report).await?;
+                initialization::exercise(&client, initialization_fixture, &nonce, &mut report).await
             }
             .await
         }
-        (Err(reason), _) | (_, Err(reason)) => Err(reason.clone()),
+        (Err(reason), _, _) | (_, Err(reason), _) | (_, _, Err(reason)) => Err(reason.clone()),
     };
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;
@@ -200,6 +205,12 @@ pub(super) async fn run(
     if let Ok(storage_fixture) = &storage_fixture {
         match storage_fixture.cleanup().await {
             Ok(removed) => report.storage_volumes.all_profiles_removed &= removed,
+            Err(reason) => append_reason(&mut report, reason),
+        }
+    }
+    if let Ok(initialization_fixture) = &initialization_fixture {
+        match initialization_fixture.cleanup().await {
+            Ok(removed) => report.initialization.all_profiles_removed &= removed,
             Err(reason) => append_reason(&mut report, reason),
         }
     }
