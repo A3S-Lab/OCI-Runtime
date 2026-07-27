@@ -92,6 +92,27 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
     },
+    /// Run repeated concurrent native Linux lifecycle and leak checks.
+    NativeLinuxSoak {
+        /// Matching a3s-oci-agent executable used for the prepared init mode.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// Distinct writable OCI bundle; repeat once per available soak slot.
+        #[arg(long = "bundle", value_name = "DIR", required = true)]
+        bundles: Vec<PathBuf>,
+        /// Existing directory beneath which isolated soak state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Number of complete concurrent create-to-delete waves.
+        #[arg(long, default_value_t = 25)]
+        iterations: u32,
+        /// Number of supplied bundles kept live during every wave.
+        #[arg(long, default_value_t = 2)]
+        concurrent_containers: u32,
+        /// Independent outer deadline for each SDK operation.
+        #[arg(long, default_value_t = 15_000)]
+        operation_timeout_ms: u64,
+    },
     /// Interrupt native Linux lifecycle and prove cleanup without OCI delete.
     NativeLinuxFaultCleanup {
         /// Matching a3s-oci-agent executable used for the prepared init mode.
@@ -304,6 +325,33 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
                 &bundle_a,
                 &bundle_b,
                 &work_parent,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::NativeLinuxSoak {
+            agent,
+            bundles,
+            work_parent,
+            iterations,
+            concurrent_containers,
+            operation_timeout_ms,
+        } => {
+            let report = a3s_oci_runtime::native_linux_soak(
+                &agent,
+                &bundles,
+                &work_parent,
+                a3s_oci_runtime::NativeLinuxSoakConfig::new(
+                    iterations,
+                    concurrent_containers,
+                    operation_timeout_ms,
+                ),
             )
             .await;
             let succeeded = report.is_success();

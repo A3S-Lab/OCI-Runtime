@@ -119,6 +119,10 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   version-negotiated host/guest session with one-time token authentication
 - **Retained Conformance Evidence**: Lock the OCI schemas and normative
   requirement inventory in CI so unreviewed coverage changes fail closed
+- **Complex-Container Soak Evidence**: Repeatedly keep independent native
+  containers live together while exercising lifecycle, queries, captured
+  exec, pause, durable service reopen, resume, generation reuse, and
+  process/descriptor/runtime cleanup through one versioned report
 
 ### Driver readiness
 
@@ -299,6 +303,54 @@ nonblocking observation of B while A is being waited on, exact repeated exit
 status for both containers, generation-1 rejection after A is recreated as
 generation 2, dedicated namespace PID 1 supervision, adopted-orphan reaping,
 and complete process, marker, executor-root, and durable-session cleanup.
+
+### Native Linux complex-container soak
+
+`native-linux-soak` extends the fixed two-container gate into configurable
+churn. Every concurrent slot must have a distinct writable bundle, rootfs,
+and cgroup path. The following prepares four slots and completes 100 waves,
+for 400 independently generation-fenced container lifecycles:
+
+```sh
+soak_args=()
+for slot in 0 1 2 3; do
+  soak_bundle="$demo_root/soak-bundle-$slot"
+  mkdir -p "$soak_bundle/rootfs/bin" "$soak_bundle/rootfs/proc"
+  cp fixtures/native-linux/config.json "$soak_bundle/config.json"
+  jq --arg cgroup "a3s-oci-soak-$slot" \
+    '.linux.cgroupsPath = $cgroup' \
+    "$soak_bundle/config.json" >"$soak_bundle/config.json.tmp"
+  mv "$soak_bundle/config.json.tmp" "$soak_bundle/config.json"
+  cp "$(command -v busybox)" "$soak_bundle/rootfs/bin/busybox"
+  ln -s busybox "$soak_bundle/rootfs/bin/sh"
+  sudo chown -R 100000:200000 "$soak_bundle/rootfs"
+  soak_args+=(--bundle "$soak_bundle")
+done
+
+sudo target/debug/a3s-oci native-linux-soak \
+  --agent "$PWD/target/debug/a3s-oci-agent" \
+  --work-parent "$work_parent" \
+  --iterations 100 \
+  --concurrent-containers 4 \
+  --operation-timeout-ms 30000 \
+  "${soak_args[@]}"
+```
+
+The `a3s.oci.native-linux-soak.v1` report counts every successful SDK call.
+Each wave concurrently creates and starts all slots, verifies the exact live
+set, positive unique PIDs, state, process inventory, resource statistics, and
+captured exec output, pauses every container, drops and reopens the durable
+host service, verifies the paused set, then resumes, kills, waits, and deletes
+all slots. Reused IDs must advance by exactly one generation and reject every
+prior exact target. A successful report additionally requires an empty list,
+empty transient executor root, removed markers, restored direct-child count,
+and a stable open-descriptor count after every clean wave, followed by full
+executor and session removal.
+
+Configuration is bounded to 1–10,000 iterations, 2–32 concurrent containers,
+and 100–300,000 ms per operation. The repository CI uses three waves with four
+simultaneous containers on both x86_64 and aarch64; operators can retain the
+JSON from larger runs as release evidence.
 
 The separate fault-cleanup diagnostic deliberately stops before OCI delete and
 requires executor shutdown to reclaim the live process and all scoped state:
@@ -904,11 +956,11 @@ Platform CI covers:
 - the 657-point durable commit matrix and all 38 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
-  existing-namespace and rootfs/mount isolation, and three-phase no-delete
-  cleanup without KVM;
+  four-container churn soak, existing-namespace and rootfs/mount isolation,
+  and three-phase no-delete cleanup without KVM;
 - Ubuntu aarch64 native pidfd probe, lifecycle, multi-container,
-  existing-namespace and rootfs/mount isolation, and three-phase no-delete
-  cleanup without KVM;
+  four-container churn soak, existing-namespace and rootfs/mount isolation,
+  and three-phase no-delete cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,
   pidfd-backed fixed, multi-container, existing-namespace, and rootfs/mount OCI
   lifecycles, three-phase no-delete cleanup, and missing-entitlement

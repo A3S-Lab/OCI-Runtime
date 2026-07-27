@@ -34,6 +34,7 @@ mod platform;
 mod report;
 mod rootfs_enforcement;
 mod service;
+mod soak_report;
 mod state;
 #[cfg(windows)]
 mod windows_security;
@@ -68,7 +69,7 @@ pub use native_linux_driver::NativeLinuxDriver;
 pub use native_service::{NativeLinuxService, NativeLinuxServiceConfig};
 pub use native_smoke::{
     native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_rootless_smoke,
-    native_linux_service_smoke, native_linux_smoke,
+    native_linux_service_smoke, native_linux_smoke, native_linux_soak,
 };
 pub use oci_smoke::{oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke};
 pub use report::{
@@ -76,6 +77,12 @@ pub use report::{
     NativeLinuxSmokeReport, OciVmSmokeReport, WhpxSmokeReport,
 };
 pub use service::HostRuntimeService;
+pub use soak_report::{
+    NativeLinuxSoakConfig, NativeLinuxSoakOperationCounts, NativeLinuxSoakReport,
+    MAX_SOAK_CONCURRENT_CONTAINERS, MAX_SOAK_ITERATIONS, MAX_SOAK_OPERATION_TIMEOUT_MS,
+    MIN_SOAK_CONCURRENT_CONTAINERS, MIN_SOAK_OPERATION_TIMEOUT_MS,
+    NATIVE_LINUX_SOAK_SCHEMA_VERSION,
+};
 
 use a3s_oci_core::RuntimeFeatures;
 

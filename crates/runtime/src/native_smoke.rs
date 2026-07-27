@@ -1,11 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(not(target_os = "linux"))]
 use a3s_oci_core::HostPlatform;
 
 use crate::{
     LifecycleFaultPoint, NativeLinuxFaultCleanupReport, NativeLinuxMultiContainerSmokeReport,
-    NativeLinuxRootlessSmokeReport, NativeLinuxSmokeReport,
+    NativeLinuxRootlessSmokeReport, NativeLinuxSmokeReport, NativeLinuxSoakConfig,
+    NativeLinuxSoakReport,
 };
 
 #[cfg(target_os = "linux")]
@@ -95,6 +96,30 @@ pub async fn native_linux_multi_container_smoke(
     {
         let _ = (init_executable, bundle_a, bundle_b, work_parent);
         NativeLinuxMultiContainerSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Repeatedly exercise concurrent native Linux containers through lifecycle,
+/// query, exec, pause/reopen/resume, termination, generation reuse, and cleanup.
+///
+/// Each concurrent slot requires its own writable bundle, rootfs, and cgroup
+/// path. The versioned report records successful operation counts and fails
+/// closed on process, descriptor, marker, executor, or session leakage.
+pub async fn native_linux_soak(
+    init_executable: &Path,
+    bundles: &[PathBuf],
+    work_parent: &Path,
+    configuration: NativeLinuxSoakConfig,
+) -> NativeLinuxSoakReport {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_soak(init_executable, bundles, work_parent, configuration).await
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (init_executable, bundles, work_parent);
+        NativeLinuxSoakReport::unsupported(HostPlatform::current(), configuration)
     }
 }
 

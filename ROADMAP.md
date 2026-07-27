@@ -492,6 +492,10 @@ and recovery suites in the Windows guest and on native Linux.
   endpoint, route the complete lifecycle through `a3s-oci-sdk`, fence inherited
   Box descriptors to one container ID, and prove signal-driven cleanup on
   x86_64 and aarch64 without KVM.
+- [x] Add a bounded, versioned native complex-container soak that repeatedly
+  drives concurrent lifecycle, query, captured exec, pause, durable service
+  reopen, resume, generation reuse, and leak checks across four independent
+  slots on x86_64 and aarch64 without KVM.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver
