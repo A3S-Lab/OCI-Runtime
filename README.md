@@ -123,6 +123,11 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   containers live together while exercising lifecycle, queries, captured
   exec, pause, durable service reopen, resume, generation reuse, and
   process/descriptor/runtime cleanup through one versioned report
+- **Native Configuration Matrix**: Qualify private, host-inherited, and
+  donor-shared network namespaces; shared read-write and read-only binds;
+  isolated tmpfs mounts; inline, executable-file, and direct-argv init; exact
+  nonzero exits; and create/start/timeout/poststop Hook behavior on real
+  x86_64 and aarch64 containers
 
 ### Driver readiness
 
@@ -162,6 +167,14 @@ cargo run -p a3s-oci-cli -- features
 
 The command emits versioned JSON. A driver can report an available host
 prerequisite while remaining `probe-only`.
+
+Tagged releases publish SHA-256-verified GitHub archives for Linux x86_64,
+Linux aarch64, macOS aarch64, and Windows x86_64. Download the archive matching
+the host from the repository's Releases page, verify it against
+`SHA256SUMS`, and place `a3s-oci` on `PATH`. Linux archives also contain the
+matching native `a3s-oci-agent`; macOS archives contain the isolated libkrun
+shim and checksum-pinned runtime bundle. Release packaging does not change the
+readiness advertised by `a3s-oci features`.
 
 ### Native Linux lifecycle
 
@@ -302,7 +315,16 @@ positive PIDs, operation replay isolation, A/B lifecycle independence,
 nonblocking observation of B while A is being waited on, exact repeated exit
 status for both containers, generation-1 rejection after A is recreated as
 generation 2, dedicated namespace PID 1 supervision, adopted-orphan reaping,
-and complete process, marker, executor-root, and durable-session cleanup.
+and complete process, marker, executor-root, and durable-session cleanup. Its
+native-only profile matrix additionally proves that a private network
+namespace differs from the host, a host-network profile inherits the exact
+host namespace, and a shared-network profile joins the exact donor identity.
+Two simultaneously live containers exchange exact data through a shared bind,
+enforce a read-only reader, receive isolated tmpfs instances, and retain the
+bind data for a fresh reader after writer deletion. Sequential init profiles
+cover inline shell, an executable script with environment, direct argv, and an
+exact exit code 42; negative Hook profiles prove create rollback, start
+failure cleanup, timeout process-group cleanup, and warning-only poststop.
 
 ### Native Linux complex-container soak
 
@@ -783,7 +805,7 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle through both the in-process SDK and the private same-UID Unix SDK service, with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, signal-driven owner cleanup, hooks, cgroup controls, I/O, PTY, two-container isolation, namespace joins, mount enforcement, and fault cleanup; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle through both the in-process SDK and the private same-UID Unix SDK service, with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, signal-driven owner cleanup, hooks, cgroup controls, I/O, PTY, two-container isolation, private/host/shared network identity, shared/read-only bind volumes, private tmpfs, init/Hook success and failure profiles, namespace joins, mount enforcement, and fault cleanup; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition, context, guest command, authenticated agent, and fixed OCI core lifecycle | `probe-only`; complete enforcement and recovery pending |
@@ -956,11 +978,15 @@ Platform CI covers:
 - the 657-point durable commit matrix and all 38 `RuntimeDriver` call
   boundaries on Linux, macOS, and Windows;
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
-  four-container churn soak, existing-namespace and rootfs/mount isolation,
-  and three-phase no-delete cleanup without KVM;
+  private/host/shared network modes, shared/read-only bind and private-tmpfs
+  storage profiles, init/Hook positive and negative profiles, four-container
+  churn soak, existing-namespace and rootfs/mount isolation, and three-phase
+  no-delete cleanup without KVM;
 - Ubuntu aarch64 native pidfd probe, lifecycle, multi-container,
-  four-container churn soak, existing-namespace and rootfs/mount isolation,
-  and three-phase no-delete cleanup without KVM;
+  private/host/shared network modes, shared/read-only bind and private-tmpfs
+  storage profiles, init/Hook positive and negative profiles, four-container
+  churn soak, existing-namespace and rootfs/mount isolation, and three-phase
+  no-delete cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,
   pidfd-backed fixed, multi-container, existing-namespace, and rootfs/mount OCI
   lifecycles, three-phase no-delete cleanup, and missing-entitlement

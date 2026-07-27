@@ -323,7 +323,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v12` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v13` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -339,6 +339,12 @@ create barrier and requires:
    window;
 5. both joiners to complete without changing the donor's created state;
 6. all donor, joiner, and negative-case state to be removed.
+
+The report compares network namespace device/inode identities rather than
+inferring behavior from accepted configuration. It requires the private donor
+to differ from `/proc/self/ns/net`, the joined workload to exactly match the
+donor, and a profile with the network entry omitted to exactly match the host.
+All three profiles must be unobservable after deletion.
 
 The final enforcement workload must run as PID 2+ beneath a dedicated
 namespace PID 1, prove the launcher-to-PID-1-to-workload identity chain, leave
@@ -367,6 +373,22 @@ requires:
 8. the rootfs to be read-only and reject a write;
 9. exact ordered evidence, a normal zero exit, deleted state, and removal of
    all host-side fixture paths.
+
+The same real-driver invocation also retains two product-facing configuration
+matrices:
+
+- A storage writer and reader remain live together. The writer publishes exact
+  data through a read-write bind and creates a private tmpfs marker. The reader
+  sees the shared data through a read-only bind, cannot modify it, and cannot
+  see the writer's same-path tmpfs marker. After writer deletion, a fresh
+  reader still observes the exact bind data. All mount targets and host source
+  artifacts must be removed.
+- Init runs cover inline shell, an executable rootfs script with an exact
+  environment variable, direct BusyBox argv without a shell, and a normal
+  nonzero exit of 42. Negative OCI Hook runs require createContainer failure
+  rollback, startContainer failure followed by force cleanup, bounded prestart
+  timeout and process-group termination, and warning-only poststop failure.
+  The service list and every exact target must be empty afterward.
 
 GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
 with a present but unusable placeholder at that path.
@@ -455,7 +477,8 @@ following pass:
   enforcement;
 - real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
-- hook rollback/recovery/security-negative soak, durable recovery for the
+- broader Hook rollback/recovery/security-negative and adversarial soak beyond
+  the retained create/start/timeout/poststop matrix, durable recovery for the
   remaining mutating operations, descriptor-relative path handling,
   transport-level fault injection, and adversarial cleanup beyond the bounded
   native lifecycle churn gate;

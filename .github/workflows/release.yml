@@ -1,0 +1,182 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a main commit and matching workspace version
+        shell: bash
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          version="$(
+            sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p' \
+              Cargo.toml
+          )"
+          test -n "$version"
+          test "$GITHUB_REF_NAME" = "v$version"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  build-host:
+    name: Build ${{ matrix.name }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+          - name: macos-aarch64
+            os: macos-14
+          - name: windows-x86_64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.name }}
+      - name: Build Linux host runtime
+        if: runner.os == 'Linux'
+        run: cargo build --release -p a3s-oci-cli -p a3s-oci-agent
+      - name: Build macOS or Windows host runtime
+        if: runner.os != 'Linux'
+        run: cargo build --release -p a3s-oci-cli -p a3s-oci-krun
+      - name: Sign macOS host executables with HVF entitlement
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for executable in target/release/a3s-oci target/release/a3s-oci-krun-shim; do
+            codesign --force --sign - \
+              --entitlements packaging/macos/a3s-oci-hvf.entitlements \
+              "$executable"
+            codesign --verify --strict "$executable"
+          done
+      - name: Package host runtime
+        shell: bash
+        run: |
+          package="a3s-oci-runtime-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          mkdir -p "$package"
+          cp README.md CHANGELOG.md LICENSE "$package/"
+          case "${{ runner.os }}" in
+            Linux)
+              cp target/release/a3s-oci target/release/a3s-oci-agent "$package/"
+              ;;
+            macOS)
+              cp target/release/a3s-oci target/release/a3s-oci-krun-shim "$package/"
+              cp -R target/release/a3s-oci-krun-runtime "$package/"
+              ;;
+            Windows)
+              cp target/release/a3s-oci.exe \
+                target/release/a3s-oci-krun-shim.exe "$package/"
+              ;;
+          esac
+          tar -czf "${package}.tar.gz" "$package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host-${{ matrix.name }}
+          path: a3s-oci-runtime-${{ github.ref_name }}-${{ matrix.name }}.tar.gz
+          if-no-files-found: error
+
+  build-guest-agents:
+    name: Build static Linux guest agents
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-guest-agents
+      - run: >-
+          cargo build -p a3s-oci-agent --release
+          --target x86_64-unknown-linux-musl
+      - name: Build static aarch64 guest agent
+        shell: bash
+        run: |
+          host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+          rust_lld="$(
+            rustc --print sysroot
+          )/lib/rustlib/$host_triple/bin/rust-lld"
+          test -x "$rust_lld"
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld" \
+            cargo build -p a3s-oci-agent --release \
+              --target aarch64-unknown-linux-musl
+      - name: Verify and package static agents
+        shell: bash
+        run: |
+          package="a3s-oci-runtime-${GITHUB_REF_NAME}-guest-agents"
+          mkdir -p "$package"
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            agent="target/$target/release/a3s-oci-agent"
+            file "$agent"
+            if readelf --program-headers "$agent" | grep --quiet INTERP; then
+              echo "$agent contains a dynamic interpreter" >&2
+              exit 1
+            fi
+            if readelf --dynamic "$agent" | grep --quiet NEEDED; then
+              echo "$agent contains a dynamic dependency" >&2
+              exit 1
+            fi
+            cp "$agent" "$package/a3s-oci-agent-$target"
+          done
+          cp README.md CHANGELOG.md LICENSE "$package/"
+          tar -czf "${package}.tar.gz" "$package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-agents
+          path: a3s-oci-runtime-${{ github.ref_name }}-guest-agents.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [build-host, build-guest-agents]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifacts and create checksums
+        shell: bash
+        run: |
+          mkdir -p dist
+          find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
+          test "$(find dist -type f -name '*.tar.gz' | wc -l)" -eq 5
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+      - name: Create immutable release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: A3S OCI Runtime ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*

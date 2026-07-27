@@ -435,7 +435,7 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v12"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v13"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -492,6 +492,10 @@ run_multi_container_smoke() {
      and .namespace_join.retained_rootfs_verified
      and .namespace_join.donor_unchanged_after_joins
      and .namespace_join.all_state_removed
+     and .network_modes.private_namespace_verified
+     and .network_modes.host_namespace_verified
+     and .network_modes.shared_namespace_verified
+     and .network_modes.all_profiles_removed
      and .rootfs_mount.created_before_start
      and .rootfs_mount.mount_targets_created_before_start
      and .rootfs_mount.evidence_absent_before_start
@@ -510,6 +514,20 @@ run_multi_container_smoke() {
          == {"exit_code": 0, "oom_killed": false}
      and .rootfs_mount.state_removed
      and .rootfs_mount.artifacts_removed
+     and .storage_volumes.shared_bind_write_visible
+     and .storage_volumes.readonly_bind_enforced
+     and .storage_volumes.private_tmpfs_isolated
+     and .storage_volumes.bind_data_persisted_after_recreate
+     and .storage_volumes.all_profiles_removed
+     and .initialization.inline_shell_verified
+     and .initialization.executable_script_verified
+     and .initialization.direct_argv_verified
+     and .initialization.nonzero_exit_verified
+     and .initialization.create_hook_failure_rolled_back
+     and .initialization.start_hook_failure_rolled_back
+     and .initialization.hook_timeout_rolled_back
+     and .initialization.poststop_failure_warning_only
+     and .initialization.all_profiles_removed
      and .pid_supervision.pid1_supervision_enforced
      and .pid_supervision.orphan_reaping_enforced
      and .markers_removed

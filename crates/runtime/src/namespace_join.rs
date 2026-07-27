@@ -9,6 +9,33 @@ pub(crate) struct NamespaceJoinBundles {
     pub(crate) wrong_type: OciBundle,
 }
 
+/// Derive a profile that inherits the host network namespace while retaining
+/// every other namespace and mapping from the qualified base bundle.
+#[cfg(any(test, target_os = "linux"))]
+pub(crate) fn build_host_network_bundle(
+    base: &OciBundle,
+    cgroup_path: &str,
+) -> Result<OciBundle, String> {
+    let mut config: Value = serde_json::from_str(base.config_json())
+        .map_err(|error| format!("failed to decode host-network base config: {error}"))?;
+    let root = object_mut(&mut config, "config")?;
+    let linux = root
+        .get_mut("linux")
+        .ok_or_else(|| "host-network profile requires config.linux".to_string())?;
+    let linux = object_mut(linux, "linux")?;
+    let namespaces = linux
+        .get_mut("namespaces")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "host-network profile requires linux.namespaces".to_string())?;
+    namespaces.retain(|namespace| namespace.get("type").and_then(Value::as_str) != Some("network"));
+    linux.insert(
+        "cgroupsPath".to_string(),
+        Value::String(cgroup_path.to_string()),
+    );
+    replace_process_command(&mut config, join_workload_command())?;
+    bundle_from_value(base.directory(), config)
+}
+
 pub(crate) fn build_bundles(
     base: &OciBundle,
     donor_pid: i32,
@@ -144,7 +171,7 @@ mod tests {
     use a3s_oci_sdk::OciBundle;
     use serde_json::Value;
 
-    use super::build_bundles;
+    use super::{build_bundles, build_host_network_bundle};
 
     const CONFIG: &str = include_str!("../../../fixtures/utility-vm/config.json");
 
@@ -196,5 +223,31 @@ mod tests {
                 {"type": "uts", "path": "/proc/4242/ns/net"}
             ])
         );
+    }
+
+    #[test]
+    fn host_network_profile_removes_only_network_and_changes_cgroup_identity() {
+        let bundle_directory = std::env::current_dir()
+            .expect("current test directory")
+            .join("host-network-bundle");
+        let base = OciBundle::from_json(bundle_directory, CONFIG).expect("qualified base bundle");
+        let bundle = build_host_network_bundle(&base, "a3s-oci-host-network-test")
+            .expect("host-network bundle");
+        let config: Value = serde_json::from_str(bundle.config_json()).expect("host-network JSON");
+        let namespaces = config["linux"]["namespaces"]
+            .as_array()
+            .expect("namespace list");
+
+        assert!(!namespaces
+            .iter()
+            .any(|namespace| namespace["type"] == "network"));
+        assert!(namespaces
+            .iter()
+            .any(|namespace| namespace["type"] == "mount"));
+        assert_eq!(config["linux"]["cgroupsPath"], "a3s-oci-host-network-test");
+        assert!(config["process"]["args"][2]
+            .as_str()
+            .expect("host-network command")
+            .contains("busybox sleep 1"));
     }
 }

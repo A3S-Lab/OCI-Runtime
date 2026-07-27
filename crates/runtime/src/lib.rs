@@ -56,8 +56,9 @@ pub use driver::{
     DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 pub use multi_container_report::{
-    MultiContainerLifecycleEvidence, NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport,
-    OciVmMultiContainerSmokeReport, PidSupervisionEvidence, RootfsMountEvidence,
+    InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
+    NativeLinuxMultiContainerSmokeReport, NetworkModeEvidence, OciVmMultiContainerSmokeReport,
+    PidSupervisionEvidence, RootfsMountEvidence, StorageVolumeEvidence,
 };
 #[cfg(target_os = "linux")]
 pub use native_control::{
