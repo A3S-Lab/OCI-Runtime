@@ -232,6 +232,209 @@ pub(super) async fn run(
     report
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub(super) async fn run_windows(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    console: &Path,
+) -> crate::WindowsOciVmMultiContainerSmokeReport {
+    use crate::WindowsOciVmMultiContainerSmokeReport;
+
+    let mut report = WindowsOciVmMultiContainerSmokeReport::initial(HostPlatform::Windows);
+    let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
+        Ok(path) => path,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    let bundle_a_directory = match canonical_directory(bundle_a, "first OCI bundle").await {
+        Ok(path) => path,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    let bundle_b_directory = match canonical_directory(bundle_b, "second OCI bundle").await {
+        Ok(path) => path,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    for (label, bundle) in [
+        ("first", &bundle_a_directory),
+        ("second", &bundle_b_directory),
+    ] {
+        if bundle == &vm_rootfs || !bundle.starts_with(&vm_rootfs) {
+            return failed_windows(
+                report,
+                format!(
+                    "{label} OCI bundle must be a strict descendant of VM rootfs {}: {}",
+                    vm_rootfs.display(),
+                    bundle.display()
+                ),
+            );
+        }
+    }
+    report.lifecycle.distinct_bundle_directories = bundle_a_directory != bundle_b_directory;
+    if !report.lifecycle.distinct_bundle_directories {
+        return failed_windows(
+            report,
+            "Windows multi-container diagnostic requires two distinct bundle directories",
+        );
+    }
+
+    let bundle_a = match OciBundle::load(&bundle_a_directory).await {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return failed_windows(report, format!("failed to load first OCI bundle: {error}"));
+        }
+    };
+    let bundle_b = match OciBundle::load(&bundle_b_directory).await {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return failed_windows(report, format!("failed to load second OCI bundle: {error}"));
+        }
+    };
+    report.bundles_loaded = true;
+
+    let rootfs_a = match fixed_rootfs(&bundle_a).await {
+        Ok(path) => path,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    let rootfs_b = match fixed_rootfs(&bundle_b).await {
+        Ok(path) => path,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    report.lifecycle.distinct_rootfs_directories = rootfs_a != rootfs_b;
+    if !report.lifecycle.distinct_rootfs_directories {
+        return failed_windows(
+            report,
+            "Windows multi-container diagnostic requires distinct root filesystems",
+        );
+    }
+    let markers = [rootfs_a.join(MARKER_NAME), rootfs_b.join(MARKER_NAME)];
+    for (label, marker) in [("first", &markers[0]), ("second", &markers[1])] {
+        match path_exists(marker).await {
+            Ok(false) => {}
+            Ok(true) => {
+                return failed_windows(
+                    report,
+                    format!(
+                        "refusing to overwrite the {label} existing marker: {}",
+                        marker.display()
+                    ),
+                );
+            }
+            Err(reason) => return failed_windows(report, reason),
+        }
+    }
+
+    let guest_bundles = match (
+        guest_path(&vm_rootfs, &bundle_a_directory),
+        guest_path(&vm_rootfs, &bundle_b_directory),
+    ) {
+        (Ok(a), Ok(b)) => [a, b],
+        (Err(reason), _) | (_, Err(reason)) => return failed_windows(report, reason),
+    };
+    let baseline_runtime_entries = match runtime_entries(&vm_rootfs).await {
+        Ok(entries) => entries,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    let nonce = match unique_nonce() {
+        Ok(nonce) => nonce,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    let session = match AgentVmSession::connect(shim, &vm_rootfs, console).await {
+        Ok(session) => session,
+        Err(bridge) => {
+            report.reason = bridge.reason.clone();
+            report.bridge = bridge;
+            return report;
+        }
+    };
+
+    let mut lifecycle_report = OciVmMultiContainerSmokeReport::initial(HostPlatform::Windows);
+    lifecycle_report.lifecycle = std::mem::take(&mut report.lifecycle);
+    let exercise_result = exercise(
+        session.client(),
+        [&bundle_a, &bundle_b],
+        guest_bundles,
+        &nonce,
+        [&markers[0], &markers[1]],
+        &mut lifecycle_report,
+    )
+    .await;
+    report.lifecycle = lifecycle_report.lifecycle;
+    if exercise_result.is_err() {
+        best_effort_delete(session.client(), &nonce).await;
+    }
+    report.bridge = match &exercise_result {
+        Ok(()) => session.finish().await,
+        Err(reason) => session.finish_with_failure(reason).await,
+    };
+
+    let mut markers_removed = true;
+    for marker in &markers {
+        if let Err(reason) = remove_marker(marker).await {
+            markers_removed = false;
+            append_windows_reason(&mut report, reason);
+        }
+    }
+    report.markers_removed = markers_removed;
+    match runtime_entries(&vm_rootfs).await {
+        Ok(entries) => {
+            report.guest_runtime_clean = entries == baseline_runtime_entries;
+            if !report.guest_runtime_clean {
+                append_windows_reason(
+                    &mut report,
+                    format!(
+                        "guest agent left {GUEST_RUNTIME_PREFIX} runtime directories after shutdown"
+                    ),
+                );
+            }
+        }
+        Err(reason) => append_windows_reason(&mut report, reason),
+    }
+
+    if let Err(reason) = exercise_result {
+        append_windows_reason(&mut report, reason);
+    } else if !report.bridge.is_success() {
+        let reason = report
+            .bridge
+            .reason
+            .clone()
+            .unwrap_or_else(|| "authenticated guest bridge failed".into());
+        append_windows_reason(&mut report, reason);
+    }
+    if report.bundles_loaded
+        && report.lifecycle.is_success()
+        && report.markers_removed
+        && report.guest_runtime_clean
+        && report.bridge.is_success()
+        && report.reason.is_none()
+    {
+        report.status = CapabilityStatus::Available;
+    }
+    report
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn append_windows_reason(
+    report: &mut crate::WindowsOciVmMultiContainerSmokeReport,
+    reason: impl Into<String>,
+) {
+    let reason = reason.into();
+    report.reason = Some(match report.reason.take() {
+        Some(existing) if existing != reason => format!("{existing}; {reason}"),
+        Some(existing) => existing,
+        None => reason,
+    });
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn failed_windows(
+    mut report: crate::WindowsOciVmMultiContainerSmokeReport,
+    reason: impl Into<String>,
+) -> crate::WindowsOciVmMultiContainerSmokeReport {
+    append_windows_reason(&mut report, reason);
+    report
+}
+
 fn append_reason(report: &mut OciVmMultiContainerSmokeReport, reason: impl Into<String>) {
     let reason = reason.into();
     report.reason = Some(match report.reason.take() {

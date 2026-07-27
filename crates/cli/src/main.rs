@@ -173,6 +173,24 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
     },
+    /// Prove lifecycle isolation for two containers in the Windows WHPX bootstrap profile.
+    WindowsOciVmMultiContainerSmoke {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// First Windows-profile OCI bundle contained by the VM rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle_a: PathBuf,
+        /// Second distinct Windows-profile OCI bundle contained by the VM rootfs.
+        #[arg(long, value_name = "DIR")]
+        bundle_b: PathBuf,
+        /// New host file that receives the guest console stream.
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+    },
     /// Interrupt a utility-VM lifecycle and prove cleanup without OCI delete.
     OciVmFaultCleanup {
         /// Isolated libkrun shim executable.
@@ -420,6 +438,25 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             console,
         } => {
             let report = a3s_oci_runtime::oci_vm_multi_container_smoke(
+                &shim, &vm_rootfs, &bundle_a, &bundle_b, &console,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::WindowsOciVmMultiContainerSmoke {
+            shim,
+            vm_rootfs,
+            bundle_a,
+            bundle_b,
+            console,
+        } => {
+            let report = a3s_oci_runtime::windows_oci_vm_multi_container_smoke(
                 &shim, &vm_rootfs, &bundle_a, &bundle_b, &console,
             )
             .await;

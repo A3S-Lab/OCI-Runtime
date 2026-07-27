@@ -40,6 +40,17 @@ pub(super) async fn run_multi_container(
     multi_container::run(shim, vm_rootfs, bundle_a, bundle_b, console).await
 }
 
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub(super) async fn run_windows_multi_container(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    console: &Path,
+) -> crate::WindowsOciVmMultiContainerSmokeReport {
+    multi_container::run_windows(shim, vm_rootfs, bundle_a, bundle_b, console).await
+}
+
 pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,

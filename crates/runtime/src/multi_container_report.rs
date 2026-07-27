@@ -9,6 +9,9 @@ pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-multi-container-smoke.v13";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
 pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v9";
+/// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.
+pub const WINDOWS_OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str =
+    "a3s.oci.windows-oci-vm-multi-container-smoke.v1";
 
 /// Rootfs and mount enforcement evidence shared by native and utility-VM paths.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -400,6 +403,74 @@ impl MultiContainerLifecycleEvidence {
     }
 }
 
+/// Windows evidence for two containers sharing one authenticated WHPX utility VM.
+///
+/// This profile proves lifecycle and generation isolation without claiming the
+/// user/time namespace and ID-mapped mount coverage required by the broader
+/// cross-platform utility-VM diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowsOciVmMultiContainerSmokeReport {
+    /// Version of this JSON-compatible schema.
+    pub schema_version: String,
+    /// Host on which the diagnostic was attempted.
+    pub platform: HostPlatform,
+    /// End-to-end availability of this Windows bootstrap profile.
+    pub status: CapabilityStatus,
+    /// Whether both submitted OCI bundles loaded successfully.
+    pub bundles_loaded: bool,
+    /// Per-container generation, replay, isolation, and lifecycle evidence.
+    pub lifecycle: MultiContainerLifecycleEvidence,
+    /// Whether both workload markers were removed.
+    pub markers_removed: bool,
+    /// Whether VM shutdown left no new guest-agent runtime directory.
+    pub guest_runtime_clean: bool,
+    /// Nested authenticated host/guest and shim evidence.
+    pub bridge: AgentVmSmokeReport,
+    /// Diagnostic reason when the profile was not successful.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl WindowsOciVmMultiContainerSmokeReport {
+    pub(crate) fn initial(platform: HostPlatform) -> Self {
+        Self {
+            schema_version: WINDOWS_OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION.to_string(),
+            platform,
+            status: CapabilityStatus::Unavailable,
+            bundles_loaded: false,
+            lifecycle: MultiContainerLifecycleEvidence::default(),
+            markers_removed: false,
+            guest_runtime_clean: false,
+            bridge: AgentVmSmokeReport::initial(platform),
+            reason: None,
+        }
+    }
+
+    #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+    pub(crate) fn unsupported(platform: HostPlatform) -> Self {
+        let mut report = Self::initial(platform);
+        report.status = CapabilityStatus::Unsupported;
+        report.bridge.status = CapabilityStatus::Unsupported;
+        report.bridge.reason = Some("the Windows authenticated bridge was not attempted".into());
+        report.reason =
+            Some("the Windows multi-container diagnostic requires Windows x86_64/WHPX".into());
+        report
+    }
+
+    /// Return whether every Windows lifecycle-isolation and cleanup invariant passed.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.platform == HostPlatform::Windows
+            && matches!(self.status, CapabilityStatus::Available)
+            && self.bundles_loaded
+            && self.lifecycle.is_success()
+            && self.markers_removed
+            && self.guest_runtime_clean
+            && self.bridge.is_success()
+            && self.reason.is_none()
+    }
+}
+
 /// End-to-end evidence for two native Linux containers sharing one executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeLinuxMultiContainerSmokeReport {
@@ -620,12 +691,17 @@ impl OciVmMultiContainerSmokeReport {
 
 #[cfg(test)]
 mod tests {
+    use a3s_oci_agent_protocol::{AgentOperation, AGENT_PROTOCOL_VERSION_MAX};
+    use a3s_oci_core::{CapabilityStatus, HostPlatform};
     use a3s_oci_sdk::ExitStatus;
+    use serde_json::json;
 
     use super::{
         InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
         NetworkModeEvidence, PidSupervisionEvidence, RootfsMountEvidence, StorageVolumeEvidence,
+        WindowsOciVmMultiContainerSmokeReport,
     };
+    use crate::AgentVmSmokeReport;
 
     #[test]
     fn multi_container_success_requires_every_isolation_invariant() {
@@ -635,6 +711,21 @@ mod tests {
         let mut incomplete = complete;
         incomplete.b_unchanged_after_a_delete = false;
         assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn windows_multi_container_success_requires_bridge_lifecycle_and_cleanup() {
+        let mut report = WindowsOciVmMultiContainerSmokeReport::initial(HostPlatform::Windows);
+        report.status = CapabilityStatus::Available;
+        report.bundles_loaded = true;
+        report.lifecycle = complete_lifecycle();
+        report.markers_removed = true;
+        report.guest_runtime_clean = true;
+        report.bridge = complete_windows_bridge();
+        assert!(report.is_success());
+
+        report.lifecycle.b_unchanged_after_a_delete = false;
+        assert!(!report.is_success());
     }
 
     #[test]
@@ -794,5 +885,45 @@ mod tests {
             delete_b_replayed: true,
             b_missing_after_delete: true,
         }
+    }
+
+    fn complete_windows_bridge() -> AgentVmSmokeReport {
+        let mut report = AgentVmSmokeReport::initial(HostPlatform::Windows);
+        report.status = CapabilityStatus::Available;
+        report.endpoint_bound = true;
+        report.endpoint_name = Some("a3s-oci-agent-00000000000000000000000000000000".into());
+        report.shim_spawned = true;
+        report.shim_process_id = Some(41);
+        report.bridge_process_id = Some(41);
+        report.shim_client_verified = true;
+        report.protocol_negotiated = true;
+        report.selected_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.agent_version = Some(env!("CARGO_PKG_VERSION").into());
+        report.guest_architecture = Some("x86_64".into());
+        report.advertised_operations = vec![
+            AgentOperation::Create,
+            AgentOperation::State,
+            AgentOperation::Start,
+            AgentOperation::Kill,
+            AgentOperation::Delete,
+            AgentOperation::Wait,
+            AgentOperation::Exec,
+            AgentOperation::SignalProcess,
+            AgentOperation::WaitProcess,
+            AgentOperation::Pause,
+            AgentOperation::Resume,
+            AgentOperation::Processes,
+            AgentOperation::Update,
+            AgentOperation::Stats,
+            AgentOperation::ReadOutput,
+            AgentOperation::WriteStdin,
+            AgentOperation::CloseStdin,
+            AgentOperation::Resize,
+        ];
+        report.shim_report_verified = true;
+        report.shim_exit_code = Some(0);
+        report.console_created = true;
+        report.shim_report = Some(json!({}));
+        report
     }
 }

@@ -351,9 +351,9 @@ endpoint and libkrun hypervisor backend differ.
 The current native Linux and macOS lifecycle fixtures request all eight Linux
 namespace types. Their workload markers are written only after `/proc` proves
 the exact UID/GID maps and the configured monotonic and boottime offsets.
-Multi-container and no-delete cleanup gates reuse the same fixture. The
-retained WHPX qualification below predates this user/time requalification and
-does not count as Windows evidence for the new slice.
+Multi-container and no-delete cleanup gates reuse the same fixture. Windows
+uses `config.windows.json`, a separate six-namespace profile that does not
+claim user/time qualification or ID-mapped mounts.
 
 The July 24, 2026 qualification used an untouched Alpine 3.22.5 x86-64
 minirootfs and the 6,328,408-byte static agent with SHA-256
@@ -366,9 +366,17 @@ identities differed from guest PID 1 before producing its marker. A
 joined-network negative bundle retained its typed `Unsupported` error and left
 no guest runtime state. This historical run proves the then-current fixed
 bootstrap slice, not the immutable A3S system image, complete OCI enforcement,
-the current process-I/O gate, configured networking, restart recovery, or
-exhaustive durable-write fault injection. The WHPX driver therefore remains
-`probe-only`.
+restart recovery, or exhaustive durable-write fault injection.
+
+The current Windows hardware soak supersedes that historical run for the
+protocol-v8 core profile. It proves process and PTY I/O, resources and stats,
+pause/resume, serial and parallel VM churn, two same-VM containers,
+private/inherited networking, RW/RO bind volumes, init success/failure, ten
+typed negatives, lifecycle cleanup faults, and owner-death cleanup. It retains
+start/final inventories, operation and resource tables, and a hard-gated
+verification result. User/time namespaces, recursive and ID-mapped mounts,
+tmpfs, restart recovery, and the immutable A3S system image remain outside
+that evidence, so the WHPX driver remains `probe-only`.
 
 The PID qualification used the 6,371,704-byte static agent with SHA-256
 `45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.

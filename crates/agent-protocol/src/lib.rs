@@ -26,7 +26,8 @@ pub use model::{
     AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
     GuestPath, SessionToken, AGENT_MAX_FRAME_BYTES, AGENT_MAX_IO_PAYLOAD_BYTES,
     AGENT_PROTOCOL_VERSION_MAX, AGENT_PROTOCOL_VERSION_MIN, AGENT_SESSION_TOKEN_BYTES,
-    AGENT_SESSION_TOKEN_ENV,
+    AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_ENV,
+    AGENT_SESSION_TOKEN_FILE_NAME,
 };
 pub use server::{serve_agent_connection, GuestAgentService};
 pub use transport::{AgentVsockEndpoint, AGENT_VSOCK_PORT};

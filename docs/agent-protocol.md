@@ -254,8 +254,12 @@ signals use the retained descriptor rather than resolving the numeric PID
 again. PID 1 reaps adopted children and terminates every remaining namespace
 process after the configured process exits. The host verifies marker removal
 and that VM shutdown leaves no new guest-agent runtime directory. Native Linux
-and macOS HVF retain this user/time, PID-supervision, and rootfs enforcement
-evidence; the historical WHPX qualification predates it.
+and macOS HVF retain the complete user/time, PID-supervision, and advanced
+rootfs enforcement evidence. The current Windows WHPX profile retains PID
+supervision and the core pivot/mount lifecycle but deliberately omits user and
+time namespaces plus recursive and ID-mapped mount claims; its same-VM
+multi-container report therefore uses the distinct
+`a3s.oci.windows-oci-vm-multi-container-smoke.v1` schema.
 
 The same create plan now retains the configured capability and seccomp
 security ceiling plus its owned cgroup v2 leaf. Init and every later exec

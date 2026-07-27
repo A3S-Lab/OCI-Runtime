@@ -9,6 +9,7 @@ use a3s_oci_agent_protocol::{
     AgentStartRequest, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
     AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, GuestPath,
 };
+use a3s_oci_core::HostPlatform;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IoMode, OciBundle, OperationContext,
@@ -594,7 +595,7 @@ async fn exercise_control_plane<T: AgentStream>(
     let update = AgentUpdateRequest {
         context: operation(nonce, "update")?,
         target: target.clone(),
-        resources: resource_profile()?,
+        resources: resource_profile(report.platform)?,
     };
     let updated = guest_call("update resources", client.update(update.clone())).await?;
     report.resources_updated = updated
@@ -682,12 +683,11 @@ async fn exercise_control_plane<T: AgentStream>(
     Ok(())
 }
 
-fn resource_profile() -> Result<LinuxResources, String> {
-    serde_json::from_value(serde_json::json!({
+fn resource_profile(platform: HostPlatform) -> Result<LinuxResources, String> {
+    let mut profile = serde_json::json!({
         "memory": {
             "limit": UPDATED_MEMORY_LIMIT,
-            "reservation": 64 * 1024 * 1024,
-            "swap": 1024 * 1024 * 1024
+            "reservation": 64 * 1024 * 1024
         },
         "cpu": {
             "shares": 512,
@@ -697,8 +697,15 @@ fn resource_profile() -> Result<LinuxResources, String> {
             "mems": "0"
         },
         "pids": {"limit": 64}
-    }))
-    .map_err(|error| format!("failed to construct guest resource profile: {error}"))
+    });
+    // The fixed WHPX utility kernel intentionally has no swap controller.
+    // Preserve swap-limit coverage on HVF while qualifying the common
+    // memory, CPU, cpuset, PID, stats, and freezer surface on Windows.
+    if platform != HostPlatform::Windows {
+        profile["memory"]["swap"] = serde_json::json!(1024 * 1024 * 1024_u64);
+    }
+    serde_json::from_value(profile)
+        .map_err(|error| format!("failed to construct guest resource profile: {error}"))
 }
 
 fn resource_stats_are_exact(
@@ -1165,5 +1172,30 @@ fn null_io() -> ProcessIo {
         stdout: IoMode::Null,
         stderr: IoMode::Null,
         terminal_size: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use a3s_oci_core::HostPlatform;
+
+    use super::{resource_profile, UPDATED_MEMORY_LIMIT};
+
+    #[test]
+    fn windows_resource_profile_omits_only_the_unavailable_swap_controller() {
+        let windows = serde_json::to_value(
+            resource_profile(HostPlatform::Windows).expect("Windows resource profile"),
+        )
+        .expect("serialize Windows resource profile");
+        assert_eq!(windows["memory"]["limit"], UPDATED_MEMORY_LIMIT);
+        assert!(windows["memory"].get("swap").is_none());
+        assert_eq!(windows["cpu"]["cpus"], "0");
+        assert_eq!(windows["pids"]["limit"], 64);
+
+        let macos = serde_json::to_value(
+            resource_profile(HostPlatform::Macos).expect("macOS resource profile"),
+        )
+        .expect("serialize macOS resource profile");
+        assert_eq!(macos["memory"]["swap"], 1024 * 1024 * 1024_u64);
     }
 }

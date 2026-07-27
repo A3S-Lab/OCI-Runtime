@@ -518,7 +518,8 @@ on supported x86_64 and aarch64 Linux hosts without KVM.
   untrusted hypervisor, kernel, or firmware paths.
 - [ ] Pass OCI JSON schema validation for config, state, and features.
 - [ ] Pass upstream lifecycle validation tools.
-- [ ] Differential-test supported bundles against the certified `crun`.
+- [ ] Cross-check supported bundles with upstream OCI lifecycle validation
+  tools without shipping a second runtime backend.
 - [ ] Run hook-order, rollback, recovery, security-negative, and soak suites.
 - [ ] Publish an exact, generated support manifest with no unclassified field.
 
@@ -527,14 +528,14 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
 
 ### R6 — A3S Box Migration
 
-- [ ] Add the pinned `a3s-oci-sdk` dependency to A3S Box.
-- [ ] Implement the Box adapter using SDK types only.
+- [x] Add the pinned `a3s-oci-sdk` dependency to A3S Box.
+- [x] Implement the Box adapter using SDK types only.
 - [ ] Preserve commands, files, exec, PTY, logs, stats, pause/resume, stop,
   kill, recovery, and cleanup behavior.
-- [ ] Run differential Box suites against A3S OCI Runtime and certified
-  `crun`.
-- [ ] Keep `crun` as an explicit rollback backend during the release window.
-- [ ] Remove direct `crun` invocation only after every release gate passes.
+- [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
+  Runtime.
+- [x] Remove external-runtime discovery, direct invocation, configuration, and
+  fallback paths.
 
 ## Platform Promotion
 

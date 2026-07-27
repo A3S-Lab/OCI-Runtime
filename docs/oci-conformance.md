@@ -167,7 +167,8 @@ Remaining evidence includes:
    complex-container churn report;
 5. feature-report comparisons against actual driver behavior;
 6. crash-recovery and cleanup evidence;
-7. differential results against certified `crun` for shared behavior.
+7. upstream OCI lifecycle validation and independent cross-runtime results for
+   shared behavior, without shipping a fallback runtime.
 
 CI must fail when a pinned schema property has no classification or when code
 advertises an operation without a passing implementation test. It also fails
