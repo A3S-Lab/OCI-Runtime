@@ -211,6 +211,39 @@ fn native_linux_multi_container_smoke_fails_closed_with_versioned_output() {
 }
 
 #[test]
+fn native_linux_soak_fails_closed_with_versioned_configuration() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "native-linux-soak",
+            "--agent",
+            "missing-a3s-oci-agent",
+            "--bundle",
+            "missing-a3s-oci-bundle-a",
+            "--bundle",
+            "missing-a3s-oci-bundle-b",
+            "--work-parent",
+            "missing-a3s-oci-work-parent",
+            "--iterations",
+            "3",
+            "--concurrent-containers",
+            "2",
+            "--operation-timeout-ms",
+            "1000",
+        ])
+        .output()
+        .expect("native Linux soak command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("soak output must be valid JSON");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-soak.v1");
+    assert_eq!(report["configuration"]["iterations"], 3);
+    assert_eq!(report["configuration"]["concurrent_containers"], 2);
+    assert_eq!(report["configuration"]["operation_timeout_ms"], 1000);
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
 fn native_linux_fault_cleanup_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
         .args([

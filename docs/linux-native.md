@@ -371,6 +371,44 @@ requires:
 GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
 with a present but unusable placeholder at that path.
 
+## Complex-container soak gate
+
+`native-linux-soak` accepts one or more repeated `--bundle` arguments and
+selects exactly `--concurrent-containers` distinct bundle/rootfs/cgroup slots.
+It rejects fewer than two live slots, duplicate paths, missing cgroup paths,
+unbounded iteration counts, and operation timeouts outside the recorded
+configuration bounds before opening the native driver.
+
+One iteration has these ordered phases:
+
+1. release all create tasks together and retain every OCI `created` barrier;
+2. require monotonic per-ID generations, reject prior exact targets after ID
+   reuse, then release all starts together;
+3. require the exact live list, unique positive PIDs, exact running state, a
+   live init process, valid cgroup statistics, a zero-exit captured exec, and
+   exact stdout for every slot;
+4. pause every slot, drop the last handle to the single-writer durable store,
+   reopen that store around the still-live driver, and recover the exact
+   paused live set;
+5. resume, SIGKILL, wait for the exact signal-9 result, stopped-only delete,
+   require exact-target `NotFound`, and require an empty service list;
+6. remove every marker and require an empty executor root, the original direct
+   child-process count, and the first clean-wave open-descriptor count.
+
+The final `a3s.oci.native-linux-soak.v1` report succeeds only after all
+configured waves complete and driver shutdown removes the executor root and
+complete durable session. `NativeLinuxSoakOperationCounts` makes partial
+coverage visible rather than reducing the run to one success boolean.
+
+The accepted bounds are 1–10,000 iterations, 2–32 concurrent containers, and
+100–300,000 ms per SDK operation. `.github/scripts/native-linux-smoke.sh`
+constructs four independent BusyBox bundles and retains a three-wave report
+on both x86_64 and aarch64. Longer operator runs use the same command and JSON
+schema; for example, `--iterations 100 --concurrent-containers 4` proves 400
+complete container lifecycles. This gate covers native lifecycle churn and
+leak detection. Hook failure/security-negative soak and runtime-process
+reattachment remain separate promotion work.
+
 ## Fault-injected shutdown cleanup
 
 `native-linux-fault-cleanup` accepts exactly `after-create`, `after-start`, or
@@ -417,9 +455,10 @@ following pass:
   enforcement;
 - real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
-- hook rollback/recovery/security-negative and soak suites, durable recovery
-  for the remaining mutating operations, descriptor-relative path handling,
-  transport-level fault injection, and adversarial cleanup;
+- hook rollback/recovery/security-negative soak, durable recovery for the
+  remaining mutating operations, descriptor-relative path handling,
+  transport-level fault injection, and adversarial cleanup beyond the bounded
+  native lifecycle churn gate;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on
   x86_64 and aarch64 without KVM.
 

@@ -18,6 +18,7 @@ mod lifecycle;
 mod multi_container;
 mod process;
 mod rootless;
+mod soak;
 
 use control_descriptors::{enable_workload_verification, ControlDescriptorFixture};
 use filesystem::{
@@ -52,6 +53,15 @@ pub(super) async fn run_rootless(
     work_parent: &Path,
 ) -> crate::NativeLinuxRootlessSmokeReport {
     rootless::run(init_executable, bundle, work_parent).await
+}
+
+pub(super) async fn run_soak(
+    init_executable: &Path,
+    bundles: &[PathBuf],
+    work_parent: &Path,
+    configuration: crate::NativeLinuxSoakConfig,
+) -> crate::NativeLinuxSoakReport {
+    soak::run(init_executable, bundles, work_parent, configuration).await
 }
 
 pub(super) async fn run_service(

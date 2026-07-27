@@ -11,6 +11,7 @@ rootless_uid=20000
 rootless_gid=20000
 rootless_user_created=false
 rootless_group_created=false
+soak_bundles=()
 unprivileged_userns_original=""
 unprivileged_userns_changed=false
 apparmor_userns_original=""
@@ -120,6 +121,18 @@ for candidate in "$bundle" "$bundle_b"; do
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
 done
+for slot in 0 1 2 3; do
+  candidate="$qualification_root/soak-bundle-$slot"
+  mkdir -p "$candidate/rootfs/bin" "$candidate/rootfs/proc"
+  cp fixtures/native-linux/config.json "$candidate/config.json"
+  cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
+  ln -s busybox "$candidate/rootfs/bin/sh"
+  jq --arg cgroup "a3s-oci-soak-$slot" \
+    '.linux.cgroupsPath = $cgroup' \
+    "$candidate/config.json" >"$candidate/config.json.tmp"
+  mv "$candidate/config.json.tmp" "$candidate/config.json"
+  soak_bundles+=("$candidate")
+done
 cp fixtures/native-linux/config.json "$rootless_bundle/config.json"
 cp "$(command -v busybox)" "$rootless_bundle/rootfs/bin/busybox"
 ln -s busybox "$rootless_bundle/rootfs/bin/sh"
@@ -160,6 +173,10 @@ for candidate in "$bundle" "$bundle_b"; do
     "$candidate/config.json" >/dev/null
 done
 sudo chown -R 100000:200000 "$bundle/rootfs" "$bundle_b/rootfs"
+for candidate in "${soak_bundles[@]}"; do
+  sudo chown -R 100000:200000 "$candidate/rootfs"
+  test "$(stat --format '%u:%g' "$candidate/rootfs")" = '100000:200000'
+done
 sudo touch "$hook_trace"
 sudo chown 100000:200000 "$hook_trace"
 sudo chmod 0666 "$hook_trace"
@@ -505,6 +522,89 @@ run_multi_container_smoke() {
   test -z "$(find "$work_parent" -mindepth 1 -print -quit)"
 }
 
+run_soak() {
+  local expected_kvm_present="$1"
+  local output
+  local status
+  local arguments=(
+    native-linux-soak
+    --agent "$PWD/target/debug/a3s-oci-agent"
+    --work-parent "$work_parent"
+    --iterations 3
+    --concurrent-containers 4
+    --operation-timeout-ms 30000
+  )
+  for candidate in "${soak_bundles[@]}"; do
+    arguments+=(--bundle "$candidate")
+  done
+  if output="$(sudo "$PWD/target/debug/a3s-oci" "${arguments[@]}")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if ((status != 0)); then
+    report_native_failure "${soak_bundles[0]}/rootfs"
+    return "$status"
+  fi
+  jq --exit-status \
+    --argjson expected "$expected_kvm_present" \
+    '.schema_version == "a3s.oci.native-linux-soak.v1"
+     and .platform == "linux" and .status == "available"
+     and .configuration
+         == {"iterations": 3, "concurrent_containers": 4,
+             "operation_timeout_ms": 30000}
+     and .kvm_device_present == $expected
+     and .bundles_loaded == 4
+     and .distinct_bundles_and_rootfs
+     and .service_operations
+         == ["features", "create", "state", "start", "kill", "delete",
+             "exec", "wait", "list", "pause", "resume", "update", "processes",
+             "stats", "events", "read-output", "write-stdin", "close-stdin", "resize",
+             "signal-process", "wait-process"]
+     and .completed_iterations == 3
+     and .completed_container_lifecycles == 12
+     and .operation_counts.features == 4
+     and .operation_counts.create == 12
+     and .operation_counts.state >= 44
+     and .operation_counts.start == 12
+     and .operation_counts.list == 9
+     and .operation_counts.exec == 12
+     and .operation_counts.wait_process == 12
+     and .operation_counts.processes == 12
+     and .operation_counts.stats == 12
+     and .operation_counts.pause == 12
+     and .operation_counts.resume == 12
+     and .operation_counts.kill == 12
+     and .operation_counts.wait == 12
+     and .operation_counts.delete == 12
+     and .operation_counts.read_output >= 12
+     and .max_live_containers == 4
+     and .unique_live_pids
+     and .generation_sequence_verified
+     and .stale_generation_rejections == 8
+     and .exec_output_verified
+     and .pause_resume_verified
+     and .durable_reopens == 3
+     and .durable_recovery_verified
+     and .runtime_empty_after_each_iteration
+     and .executor_empty_after_each_iteration
+     and .markers_removed_after_each_iteration
+     and (.steady_open_descriptors > 0)
+     and .final_open_descriptors == .steady_open_descriptors
+     and .descriptor_inventory_stable
+     and .final_child_processes == .baseline_child_processes
+     and .child_process_inventory_stable
+     and .executor_runtime_clean
+     and .session_root_clean
+     and (.reason == null)' \
+    <<<"$output" >/dev/null
+  for candidate in "${soak_bundles[@]}"; do
+    test ! -e "$candidate/rootfs/.a3s-oci-native-smoke"
+  done
+  test -z "$(find "$work_parent" -mindepth 1 -print -quit)"
+}
+
 run_fault_cleanup() {
   local phase
   local output
@@ -759,6 +859,7 @@ run_smoke false
 run_service_smoke false
 run_service_signal_cleanup
 run_multi_container_smoke false
+run_soak false
 run_fault_cleanup
 sudo mkdir /dev/kvm
 kvm_test_directory_created=true
