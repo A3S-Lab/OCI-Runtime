@@ -2,6 +2,16 @@
 
 All notable changes to A3S OCI Runtime are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- An opt-in `control-workload-v1` cgroup-v2 layout that keeps
+  `linux.resources` exact for the workload, derives bounded control-plane
+  headroom, hands fixed membership descriptors to a trusted init, and keeps
+  update, freeze, statistics, OOM behavior, and cleanup scoped to one
+  runtime-owned topology.
+
 ## [0.2.0] - 2026-07-27
 
 ### Added

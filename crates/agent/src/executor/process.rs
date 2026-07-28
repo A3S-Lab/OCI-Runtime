@@ -11,6 +11,7 @@ use a3s_oci_agent_protocol::AgentVsockEndpoint;
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, ProcessIo, Result,
+    CONTROL_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
@@ -76,8 +77,21 @@ impl PreparedProcess {
         } = context;
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
         let process_group = ProcessGroupLease::open_for_snapshot(config_snapshot).await?;
+        if plan.cgroup.uses_control_workload_layout() {
+            inherited_descriptors
+                .ensure_targets_available(&[CONTROL_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD])?;
+        }
         let mut cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
-        let cgroup_procs = cgroup.as_ref().map(CgroupHandle::procs_descriptor);
+        let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
+        let control_workload_descriptors = cgroup
+            .as_ref()
+            .and_then(CgroupHandle::control_workload_descriptors);
+        if plan.cgroup.uses_control_workload_layout() && control_workload_descriptors.is_none() {
+            return Err(process_error(
+                ErrorCode::Internal,
+                "control/workload cgroup descriptors were not prepared",
+            ));
+        }
         let (listener, control_name) = bind_control_listener()?;
         let mut command = Command::new(init_executable);
         command
@@ -92,13 +106,17 @@ impl PreparedProcess {
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
         let terminal = io_setup.uses_terminal();
         // SAFETY: the callback runs in the freshly forked command child and
-        // performs one bounded write to the already-open cgroup.procs file,
-        // establishes the configured controlling terminal when present, and
-        // installs already-validated inherited descriptors with bounded dup2.
+        // performs one bounded write to the already-open outer cgroup.procs
+        // file, installs fixed control/workload descriptors, establishes the
+        // configured controlling terminal when present, and installs the
+        // already-validated caller descriptors with bounded dup2.
         unsafe {
             command.pre_exec(move || {
-                if let Some(descriptor) = cgroup_procs {
+                if let Some(descriptor) = init_cgroup_procs {
                     cgroup::join_from_pre_exec(descriptor)?;
+                }
+                if let Some((control, workload)) = control_workload_descriptors {
+                    cgroup::install_control_workload_descriptors_from_pre_exec(control, workload)?;
                 }
                 super::terminal::prepare_child_terminal(terminal)?;
                 inherited_descriptors.install_in_child()
@@ -476,8 +494,10 @@ impl PreparedProcess {
         self.pidfd.raw_descriptor()
     }
 
-    pub(super) fn cgroup_procs_descriptor(&self) -> Option<std::os::fd::RawFd> {
-        self.cgroup.as_ref().map(CgroupHandle::procs_descriptor)
+    pub(super) fn workload_cgroup_procs_descriptor(&self) -> Option<std::os::fd::RawFd> {
+        self.cgroup
+            .as_ref()
+            .map(CgroupHandle::workload_procs_descriptor)
     }
 
     pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {

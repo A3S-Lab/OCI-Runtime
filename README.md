@@ -99,7 +99,9 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   init/exec process-control, cgroup-v2 pause/resume, live process inventory,
   stable per-process exit-status, and cleanup implementation directly on
   Linux and through the guest agent, with independently fenced per-container
-  generations
+  generations; an opt-in control/workload layout keeps `linux.resources` as
+  the exact workload limit while the runtime derives one bounded management
+  envelope for a trusted in-container control plane
 - **Ordered OCI Hooks**: Execute `prestart`, `createRuntime`,
   `createContainer`, `startContainer`, `poststart`, and `poststop` in their
   required namespaces and order, pass bounded OCI state JSON on stdin, apply
@@ -755,7 +757,12 @@ The current executor implements a reviewed bootstrap vertical slice:
   CPU/memory/PID/event statistics, plus `cgroup.freeze` transitions verified
   through `cgroup.events`; the executor owns a private controller-enabled
   cgroup root so a container can receive limits after an initially unlimited
-  create;
+  create; the versioned `control-workload-v1` annotation layout additionally
+  creates fixed `a3s-control` and `a3s-workload` children, passes their
+  pre-opened `cgroup.procs` descriptors only to the trusted init, keeps
+  `linux.resources` exact on the workload child, derives outer CPU, memory,
+  and PID headroom, and applies update/freeze/stats plus OOM accounting to the
+  workload child;
 - exact process bounding/effective/permitted/inheritable/ambient capability
   sets, including an init capability ceiling for later exec processes;
 - all 16 OCI `process.rlimits` types, with bounded unique planning,

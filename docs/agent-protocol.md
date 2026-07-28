@@ -113,12 +113,14 @@ per-process signal, and per-process wait; pause, resume, and processes; and
 update and stats; plus captured-output polling, stdin write/close, and terminal
 resize. It
 retains an exact-generation process registry, one pidfd per authenticated init
-or exec process, the private controller-enabled cgroup-v2 root and owned leaf,
-stable replay and wait results, exact session-local write/close/resize replay,
-process-group and standard-I/O ownership, and session cleanup. The native host
-driver gives every bounded chunk of a larger SDK stdin write a stable derived
-operation ID. Durable recovery across an agent restart remains a separate
-host/driver release gate.
+or exec process, the private controller-enabled cgroup-v2 root and owned
+workload target, stable replay and wait results, exact session-local
+write/close/resize replay, process-group and standard-I/O ownership, and
+session cleanup. The target is one leaf by default; the opt-in
+`control-workload-v1` layout uses a fixed workload child plus a derived outer
+management envelope. The native host driver gives every bounded chunk of a
+larger SDK stdin write a stable derived operation ID. Durable recovery across
+an agent restart remains a separate host/driver release gate.
 
 OCI hooks do not add guest protocol operations: they travel inside the exact
 digest-bound `config.json` and execute in the shared Linux executor. Native
@@ -262,12 +264,15 @@ multi-container report therefore uses the distinct
 `a3s.oci.windows-oci-vm-multi-container-smoke.v1` schema.
 
 The same create plan now retains the configured capability and seccomp
-security ceiling plus its owned cgroup v2 leaf. Init and every later exec
-process apply exact capability sets, join that leaf, and install the same
-architecture-bound seccomp policy immediately before `execve`. The bounded
-A3S Box profile additionally creates and verifies its exact device nodes after
-the `/dev` mount. These controls have focused Linux tests; complete
-native/utility-VM lifecycle evidence remains a promotion gate.
+security ceiling plus its owned cgroup-v2 topology. Every later exec applies
+exact capability sets, joins the selected workload target, and installs the
+same architecture-bound seccomp policy immediately before `execve`. Init also
+joins that target in the default layout. With `control-workload-v1`, init
+starts in the outer envelope and receives pre-opened control/workload
+membership descriptors while OCI exec joins the workload child directly. The
+bounded A3S Box profile additionally creates and verifies its exact device
+nodes after the `/dev` mount. These controls have focused Linux tests;
+complete native/utility-VM lifecycle evidence remains a promotion gate.
 
 Exec uses the same fail-closed process planner as init. The agent snapshots the
 accepted OCI `Process`, preserves descriptors for the exact configured

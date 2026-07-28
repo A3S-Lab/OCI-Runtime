@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::oci_spec::runtime::Process;
-use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result};
+use a3s_oci_sdk::{
+    Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, CONTROL_CGROUP_PROCS_FD,
+    CONTROL_CGROUP_PROCS_FD_ENV, WORKLOAD_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD_ENV,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -156,14 +159,23 @@ impl InitPlan {
             .process()
             .as_ref()
             .ok_or_else(|| invalid("OCI bootstrap executor requires process for create/start"))?;
-        let process_plan = ProcessPlan::from_process(process, io)?;
+        let mut process_plan = ProcessPlan::from_process(process, io)?;
+        let annotations = plan_annotations(spec.annotations().as_ref())?;
         let namespaces = NamespacePlan::from_linux(
             spec.linux().as_ref(),
             process_plan.uid,
             process_plan.gid,
             &process_plan.additional_gids,
         )?;
-        let cgroup = CgroupPlan::from_linux(spec.linux().as_ref())?;
+        let cgroup = CgroupPlan::from_linux(spec.linux().as_ref(), &annotations)?;
+        if cgroup.uses_control_workload_layout() {
+            if !namespaces.new_cgroup() {
+                return Err(invalid(
+                    "control/workload cgroup layout requires a newly created Linux cgroup namespace",
+                ));
+            }
+            inject_control_workload_environment(&mut process_plan.environment)?;
+        }
         let seccomp = SeccompPlan::from_linux(spec.linux().as_ref())?;
         let rootfs_propagation = spec
             .linux()
@@ -189,6 +201,9 @@ impl InitPlan {
             "linux.readonlyPaths",
         )?;
         let mounts = mount::plan_all(spec.mounts().as_deref(), &namespaces)?;
+        if cgroup.uses_control_workload_layout() {
+            mount::validate_control_workload_cgroup_mount(&mounts)?;
+        }
         let devices = DevicePlan::from_linux(spec.linux().as_ref(), &mounts)?;
         if devices.requires_setup() && process_plan.capabilities.permits_mknod() {
             return Err(unsupported(
@@ -235,7 +250,6 @@ impl InitPlan {
                 "the bootstrap executor changes UTS names only in a configured UTS namespace",
             ));
         }
-        let annotations = plan_annotations(spec.annotations().as_ref())?;
         let hooks = HookSet::from_oci(spec.hooks().as_ref())?;
 
         Ok(Self {
@@ -268,6 +282,25 @@ impl InitPlan {
             hooks,
         })
     }
+}
+
+fn inject_control_workload_environment(environment: &mut Vec<String>) -> Result<()> {
+    for name in [CONTROL_CGROUP_PROCS_FD_ENV, WORKLOAD_CGROUP_PROCS_FD_ENV] {
+        if environment
+            .iter()
+            .filter_map(|entry| entry.split_once('='))
+            .any(|(candidate, _)| candidate == name)
+        {
+            return Err(invalid(format!(
+                "process.env variable `{name}` is reserved by the control/workload cgroup layout"
+            )));
+        }
+    }
+    environment.extend([
+        format!("{CONTROL_CGROUP_PROCS_FD_ENV}={CONTROL_CGROUP_PROCS_FD}"),
+        format!("{WORKLOAD_CGROUP_PROCS_FD_ENV}={WORKLOAD_CGROUP_PROCS_FD}"),
+    ]);
+    validate_environment(environment)
 }
 
 fn validate_process_profile(process: &Process) -> Result<()> {

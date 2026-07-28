@@ -1,15 +1,23 @@
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
-use std::path::{Component, Path, PathBuf};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
-use a3s_oci_sdk::{Error, ErrorCode, Result};
+use a3s_oci_sdk::{
+    Error, ErrorCode, Result, CONTROL_CGROUP_NAME, CONTROL_CGROUP_PROCS_FD, WORKLOAD_CGROUP_NAME,
+    WORKLOAD_CGROUP_PROCS_FD,
+};
 
+mod plan;
 mod stats;
 mod update;
+
+pub(super) use plan::CgroupPlan;
+use plan::{
+    shares_to_weight, validate_cpuset, validate_supported_resource_fields, ControlHeadroom,
+};
 
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
@@ -17,199 +25,7 @@ const CGROUP_PROCS: &str = "cgroup.procs";
 const SUPPORTED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_CGROUP_PATH_BYTES: usize = 4_096;
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct CgroupPlan {
-    relative_path: Option<PathBuf>,
-    memory_limit: Option<i64>,
-    memory_reservation: Option<i64>,
-    memory_swap: Option<i64>,
-    cpu_shares: Option<u64>,
-    cpu_quota: Option<i64>,
-    cpu_period: Option<u64>,
-    cpuset_cpus: Option<String>,
-    cpuset_mems: Option<String>,
-    pids_limit: Option<i64>,
-}
-
-impl CgroupPlan {
-    pub(super) fn from_linux(linux: Option<&Linux>) -> Result<Self> {
-        let Some(linux) = linux else {
-            return Ok(Self::default());
-        };
-        let relative_path = linux
-            .cgroups_path()
-            .as_deref()
-            .map(validate_cgroup_path)
-            .transpose()?;
-        let Some(resources) = linux.resources().as_ref() else {
-            return Ok(Self {
-                relative_path,
-                ..Self::default()
-            });
-        };
-        validate_supported_resource_fields(resources)?;
-
-        let memory = resources.memory().as_ref();
-        let cpu = resources.cpu().as_ref();
-        let pids = resources.pids().as_ref();
-        let plan = Self {
-            relative_path,
-            memory_limit: memory.and_then(|memory| memory.limit()),
-            memory_reservation: memory.and_then(|memory| memory.reservation()),
-            memory_swap: memory.and_then(|memory| memory.swap()),
-            cpu_shares: cpu.and_then(|cpu| cpu.shares()),
-            cpu_quota: cpu.and_then(|cpu| cpu.quota()),
-            cpu_period: cpu.and_then(|cpu| cpu.period()),
-            cpuset_cpus: cpu.and_then(|cpu| cpu.cpus().clone()),
-            cpuset_mems: cpu.and_then(|cpu| cpu.mems().clone()),
-            pids_limit: pids.map(|pids| pids.limit()),
-        };
-        plan.validate()?;
-        if plan.has_limits() && plan.relative_path.is_none() {
-            return Err(unsupported(
-                "linux.cgroupsPath",
-                "resource limits require an explicit normalized cgroup v2 path",
-            ));
-        }
-        Ok(plan)
-    }
-
-    fn validate(&self) -> Result<()> {
-        if self.memory_limit.is_some_and(|value| value <= 0) {
-            return Err(invalid("linux.resources.memory.limit must be positive"));
-        }
-        if self
-            .memory_reservation
-            .is_some_and(|value| value < 0 || self.memory_limit.is_some_and(|limit| value > limit))
-        {
-            return Err(invalid(
-                "linux.resources.memory.reservation must be non-negative and not exceed limit",
-            ));
-        }
-        if self.memory_swap.is_some_and(|value| {
-            value < -1
-                || self
-                    .memory_limit
-                    .is_some_and(|limit| value != -1 && value < limit)
-        }) {
-            return Err(invalid(
-                "linux.resources.memory.swap must be -1 or at least the memory limit",
-            ));
-        }
-        if self
-            .memory_swap
-            .is_some_and(|value| value != -1 && self.memory_limit.is_none())
-        {
-            return Err(invalid(
-                "linux.resources.memory.swap requires memory.limit when it is finite",
-            ));
-        }
-        if self
-            .cpu_shares
-            .is_some_and(|value| !(2..=262_144).contains(&value))
-        {
-            return Err(invalid(
-                "linux.resources.cpu.shares must be between 2 and 262144",
-            ));
-        }
-        if self
-            .cpu_quota
-            .is_some_and(|value| value != -1 && value <= 0)
-        {
-            return Err(invalid("linux.resources.cpu.quota must be -1 or positive"));
-        }
-        if self.cpu_period.is_some_and(|value| value == 0) {
-            return Err(invalid("linux.resources.cpu.period must be positive"));
-        }
-        if self.cpu_quota.is_some() != self.cpu_period.is_some() {
-            return Err(invalid(
-                "linux.resources.cpu.quota and period must be specified together",
-            ));
-        }
-        for (field, value) in [
-            ("linux.resources.cpu.cpus", self.cpuset_cpus.as_deref()),
-            ("linux.resources.cpu.mems", self.cpuset_mems.as_deref()),
-        ] {
-            if let Some(value) = value {
-                validate_cpuset(field, value)?;
-            }
-        }
-        if self.pids_limit.is_some_and(|value| value <= 0) {
-            return Err(invalid("linux.resources.pids.limit must be positive"));
-        }
-        Ok(())
-    }
-
-    pub(super) fn settings(&self) -> Vec<(&'static str, String)> {
-        let mut settings = Vec::new();
-        if let Some(value) = &self.cpuset_mems {
-            settings.push(("cpuset.mems", value.clone()));
-        }
-        if let Some(value) = &self.cpuset_cpus {
-            settings.push(("cpuset.cpus", value.clone()));
-        }
-        if let Some(value) = self.memory_limit {
-            settings.push(("memory.max", value.to_string()));
-            settings.push(("memory.oom.group", "1".to_string()));
-        }
-        if let Some(value) = self.memory_reservation {
-            settings.push(("memory.low", value.to_string()));
-        }
-        if let Some(value) = self.memory_swap {
-            let value = if value == -1 {
-                "max".to_string()
-            } else {
-                (value - self.memory_limit.unwrap_or_default()).to_string()
-            };
-            settings.push(("memory.swap.max", value));
-        }
-        if let (Some(quota), Some(period)) = (self.cpu_quota, self.cpu_period) {
-            let quota = if quota == -1 {
-                "max".to_string()
-            } else {
-                quota.to_string()
-            };
-            settings.push(("cpu.max", format!("{quota} {period}")));
-        }
-        if let Some(shares) = self.cpu_shares {
-            settings.push(("cpu.weight", shares_to_weight(shares).to_string()));
-        }
-        if let Some(value) = self.pids_limit {
-            settings.push(("pids.max", value.to_string()));
-        }
-        settings
-    }
-
-    fn required_controllers(&self) -> BTreeSet<&'static str> {
-        let mut controllers = BTreeSet::new();
-        if self.memory_limit.is_some()
-            || self.memory_reservation.is_some()
-            || self.memory_swap.is_some()
-        {
-            controllers.insert("memory");
-        }
-        if self.cpu_shares.is_some() || self.cpu_quota.is_some() {
-            controllers.insert("cpu");
-        }
-        if self.cpuset_cpus.is_some() || self.cpuset_mems.is_some() {
-            controllers.insert("cpuset");
-        }
-        if self.pids_limit.is_some() {
-            controllers.insert("pids");
-        }
-        controllers
-    }
-
-    fn has_limits(&self) -> bool {
-        !self.settings().is_empty()
-    }
-
-    pub(super) fn has_cgroup(&self) -> bool {
-        self.relative_path.is_some()
-    }
-}
+const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
 
 #[derive(Debug)]
 pub(super) struct CgroupManager {
@@ -299,7 +115,16 @@ impl CgroupManager {
 pub(super) struct CgroupHandle {
     created: Vec<PathBuf>,
     leaf: PathBuf,
-    procs: File,
+    init_procs: File,
+    control_workload: Option<ControlWorkloadCgroup>,
+}
+
+#[derive(Debug)]
+struct ControlWorkloadCgroup {
+    management: PathBuf,
+    headroom: ControlHeadroom,
+    control_procs: File,
+    workload_procs: File,
 }
 
 impl CgroupHandle {
@@ -352,36 +177,69 @@ impl CgroupHandle {
                 }
             }
         }
-        if let Err(error) = initialize_cpuset(&current) {
-            cleanup_directories(&created);
-            return Err(error);
-        }
-        if let Err(error) = apply_settings(&current, plan) {
-            cleanup_directories(&created);
-            return Err(error);
-        }
-        let procs = OpenOptions::new()
-            .write(true)
-            .open(current.join(CGROUP_PROCS))
-            .map_err(|error| {
+        let configured = (|| {
+            initialize_cpuset(&current)?;
+            let init_procs = open_cgroup_procs(&current)?;
+            let Some(headroom) = plan.control_headroom() else {
+                apply_settings(&current, &plan.settings())?;
+                return Ok((current.clone(), init_procs, None));
+            };
+
+            // The OCI leaf is an empty management envelope at create time, so
+            // controllers can be delegated once to the two fixed children.
+            let management = plan.management_plan(headroom)?;
+            apply_settings(&current, &management.settings())?;
+            enable_controllers(&current, controllers)?;
+
+            let control = current.join(CONTROL_CGROUP_NAME);
+            create_cgroup_directory(&control, &mut created)?;
+            initialize_cpuset(&control)?;
+
+            let workload = current.join(WORKLOAD_CGROUP_NAME);
+            create_cgroup_directory(&workload, &mut created)?;
+            initialize_cpuset(&workload)?;
+            apply_settings(&workload, &plan.settings_with_oom_group(false))?;
+
+            let control_workload = ControlWorkloadCgroup {
+                management: current.clone(),
+                headroom: headroom.clone(),
+                control_procs: open_cgroup_procs(&control)?,
+                workload_procs: open_cgroup_procs(&workload)?,
+            };
+            Ok((workload, init_procs, Some(control_workload)))
+        })();
+        match configured {
+            Ok((leaf, init_procs, control_workload)) => Ok(Some(Self {
+                created,
+                leaf,
+                init_procs,
+                control_workload,
+            })),
+            Err(error) => {
                 cleanup_directories(&created);
-                cgroup_error(
-                    ErrorCode::PermissionDenied,
-                    format!(
-                        "failed to open container cgroup.procs at {}: {error}",
-                        current.display()
-                    ),
-                )
-            })?;
-        Ok(Some(Self {
-            created,
-            leaf: current,
-            procs,
-        }))
+                Err(error)
+            }
+        }
     }
 
-    pub(super) fn procs_descriptor(&self) -> RawFd {
-        self.procs.as_raw_fd()
+    pub(super) fn init_procs_descriptor(&self) -> RawFd {
+        self.init_procs.as_raw_fd()
+    }
+
+    pub(super) fn workload_procs_descriptor(&self) -> RawFd {
+        self.control_workload.as_ref().map_or_else(
+            || self.init_procs.as_raw_fd(),
+            |layout| layout.workload_procs.as_raw_fd(),
+        )
+    }
+
+    pub(super) fn control_workload_descriptors(&self) -> Option<(RawFd, RawFd)> {
+        self.control_workload.as_ref().map(|layout| {
+            (
+                layout.control_procs.as_raw_fd(),
+                layout.workload_procs.as_raw_fd(),
+            )
+        })
     }
 
     pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {
@@ -459,8 +317,86 @@ pub(super) fn join_from_pre_exec(descriptor: RawFd) -> io::Result<()> {
     }
 }
 
-fn apply_settings(path: &Path, plan: &CgroupPlan) -> Result<()> {
-    for (file, value) in plan.settings() {
+pub(super) fn install_control_workload_descriptors_from_pre_exec(
+    control_source: RawFd,
+    workload_source: RawFd,
+) -> io::Result<()> {
+    install_inherited_descriptor(control_source, CONTROL_CGROUP_PROCS_FD)?;
+    install_inherited_descriptor(workload_source, WORKLOAD_CGROUP_PROCS_FD)
+}
+
+fn install_inherited_descriptor(source: RawFd, target: RawFd) -> io::Result<()> {
+    if source != target && unsafe { libc::dup2(source, target) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // dup2 clears FD_CLOEXEC for a distinct target. Clear it explicitly as
+    // well so the helper remains correct if a future source already occupies
+    // its fixed target.
+    let flags = unsafe { libc::fcntl(target, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::FD_CLOEXEC != 0
+        && unsafe { libc::fcntl(target, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn create_cgroup_directory(path: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
+    std::fs::create_dir(path).map_err(|error| {
+        cgroup_error(
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                ErrorCode::Conflict
+            } else {
+                ErrorCode::PermissionDenied
+            },
+            format!("failed to create cgroup {}: {error}", path.display()),
+        )
+    })?;
+    created.push(path.to_path_buf());
+    Ok(())
+}
+
+fn open_cgroup_procs(path: &Path) -> Result<File> {
+    let file = OpenOptions::new()
+        .write(true)
+        .open(path.join(CGROUP_PROCS))
+        .map_err(|error| {
+            cgroup_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "failed to open container cgroup.procs at {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    // Keep every source above the fixed inherited targets so installing one
+    // descriptor can never overwrite the source of the other.
+    let descriptor = unsafe {
+        libc::fcntl(
+            file.as_raw_fd(),
+            libc::F_DUPFD_CLOEXEC,
+            PROTECTED_CGROUP_DESCRIPTOR_MINIMUM,
+        )
+    };
+    if descriptor < 0 {
+        return Err(cgroup_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to protect cgroup.procs descriptor at {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            ),
+        ));
+    }
+    // SAFETY: F_DUPFD_CLOEXEC returned a distinct owned descriptor.
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn apply_settings(path: &Path, settings: &[(&'static str, String)]) -> Result<()> {
+    for (file, value) in settings {
         let destination = path.join(file);
         std::fs::write(&destination, value.as_bytes()).map_err(|error| {
             cgroup_error(
@@ -480,7 +416,7 @@ fn apply_settings(path: &Path, plan: &CgroupPlan) -> Result<()> {
                 ),
             )
         })?;
-        if normalize_cgroup_value(&actual) != normalize_cgroup_value(&value) {
+        if normalize_cgroup_value(&actual) != normalize_cgroup_value(value) {
             return Err(cgroup_error(
                 ErrorCode::FailedPrecondition,
                 format!(
@@ -622,93 +558,6 @@ fn cgroup2_mountpoint(mountinfo: &str) -> Option<PathBuf> {
     })
 }
 
-fn validate_cgroup_path(path: &Path) -> Result<PathBuf> {
-    let value = path
-        .to_str()
-        .ok_or_else(|| invalid("linux.cgroupsPath is not valid UTF-8"))?;
-    if value.is_empty() || value.len() > MAX_CGROUP_PATH_BYTES || value.as_bytes().contains(&0) {
-        return Err(invalid(format!(
-            "linux.cgroupsPath must contain 1..={MAX_CGROUP_PATH_BYTES} bytes and no NUL"
-        )));
-    }
-    let relative = value.trim_start_matches('/');
-    let path = Path::new(relative);
-    if relative.is_empty()
-        || path.components().any(|component| {
-            !matches!(component, Component::Normal(_))
-                || component.as_os_str().to_string_lossy().contains(':')
-        })
-    {
-        return Err(invalid(
-            "linux.cgroupsPath must be a normalized cgroupfs path without systemd syntax",
-        ));
-    }
-    Ok(path.to_path_buf())
-}
-
-fn validate_supported_resource_fields(resources: &LinuxResources) -> Result<()> {
-    let value = serde_json::to_value(resources).map_err(|error| {
-        cgroup_error(
-            ErrorCode::Internal,
-            format!("failed to inspect OCI resources: {error}"),
-        )
-    })?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| invalid("linux.resources must be an object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !matches!(field.as_str(), "devices" | "memory" | "cpu" | "pids"))
-    {
-        return Err(unsupported(
-            &format!("linux.resources.{field}"),
-            "this cgroup v2 resource is not implemented",
-        ));
-    }
-    for (name, allowed) in [
-        ("memory", &["limit", "reservation", "swap"][..]),
-        ("cpu", &["shares", "quota", "period", "cpus", "mems"][..]),
-        ("pids", &["limit"][..]),
-    ] {
-        if let Some(object) = object.get(name).and_then(serde_json::Value::as_object) {
-            if let Some(field) = object
-                .keys()
-                .find(|field| !allowed.contains(&field.as_str()))
-            {
-                return Err(unsupported(
-                    &format!("linux.resources.{name}.{field}"),
-                    "this cgroup v2 resource is not implemented",
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_cpuset(field: &str, value: &str) -> Result<()> {
-    if value.is_empty()
-        || value.len() > 4_096
-        || value.split(',').any(|range| match range.split_once('-') {
-            Some((start, end)) => {
-                start.parse::<u32>().is_err()
-                    || end.parse::<u32>().is_err()
-                    || start.parse::<u32>().ok() > end.parse::<u32>().ok()
-            }
-            None => range.parse::<u32>().is_err(),
-        })
-    {
-        Err(invalid(format!(
-            "{field} must be a comma-separated list of CPU or memory-node indices and ranges"
-        )))
-    } else {
-        Ok(())
-    }
-}
-
-const fn shares_to_weight(shares: u64) -> u64 {
-    1 + ((shares - 2) * 9_999) / 262_142
-}
-
 fn normalize_cgroup_value(value: &str) -> String {
     value.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -805,14 +654,6 @@ fn cleanup_cgroup_tree(root: &Path) -> Result<()> {
         })
 }
 
-fn invalid(message: impl Into<String>) -> Error {
-    cgroup_error(ErrorCode::InvalidArgument, message)
-}
-
-fn unsupported(field: &str, reason: &str) -> Error {
-    cgroup_error(ErrorCode::Unsupported, format!("{field}: {reason}"))
-}
-
 fn cgroup_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("configure-container-cgroup")
 }
@@ -823,32 +664,54 @@ fn stats_error(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use a3s_oci_sdk::oci_spec::runtime::Linux;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
 
-    use super::{cgroup2_mountpoint, cgroup_event_value, shares_to_weight, CgroupPlan};
-
-    fn fixture_linux() -> Linux {
-        let config: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../fixtures/a3s-box/config.json"))
-                .expect("decode fixture");
-        serde_json::from_value(config["linux"].clone()).expect("decode Linux config")
-    }
+    use super::{
+        cgroup2_mountpoint, cgroup_event_value, install_control_workload_descriptors_from_pre_exec,
+        open_cgroup_procs,
+    };
 
     #[test]
-    fn plans_exact_a3s_box_cgroup_v2_settings() {
-        let plan = CgroupPlan::from_linux(Some(&fixture_linux())).expect("cgroup plan");
+    fn installs_fixed_control_workload_descriptors_across_exec() {
+        let directory = tempfile::tempdir().expect("temporary descriptor directory");
+        let control_path = directory.path().join("control");
+        let workload_path = directory.path().join("workload");
+        std::fs::create_dir(&control_path).expect("control directory");
+        std::fs::create_dir(&workload_path).expect("workload directory");
+        std::fs::write(control_path.join("cgroup.procs"), "").expect("control descriptor file");
+        std::fs::write(workload_path.join("cgroup.procs"), "").expect("workload descriptor file");
+        let control = open_cgroup_procs(&control_path).expect("protected control descriptor");
+        let workload = open_cgroup_procs(&workload_path).expect("protected workload descriptor");
+        let control_descriptor = control.as_raw_fd();
+        let workload_descriptor = workload.as_raw_fd();
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("printf control-v1 >&6 && printf workload-v1 >&7")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: the child callback performs only bounded dup2/fcntl
+        // operations over protected descriptors captured before fork.
+        unsafe {
+            command.pre_exec(move || {
+                install_control_workload_descriptors_from_pre_exec(
+                    control_descriptor,
+                    workload_descriptor,
+                )
+            });
+        }
+        let status = command.status().expect("run descriptor child");
+        assert!(status.success(), "descriptor child failed with {status}");
         assert_eq!(
-            plan.settings(),
-            [
-                ("cpuset.cpus", "0-1".to_string()),
-                ("memory.max", "536870912".to_string()),
-                ("memory.oom.group", "1".to_string()),
-                ("memory.low", "268435456".to_string()),
-                ("memory.swap.max", "536870912".to_string()),
-                ("cpu.max", "200000 100000".to_string()),
-                ("cpu.weight", "39".to_string()),
-                ("pids.max", "512".to_string()),
-            ]
+            std::fs::read(control_path.join("cgroup.procs")).expect("read control descriptor"),
+            b"control-v1"
+        );
+        assert_eq!(
+            std::fs::read(workload_path.join("cgroup.procs")).expect("read workload descriptor"),
+            b"workload-v1"
         );
     }
 
@@ -860,13 +723,6 @@ mod tests {
             cgroup2_mountpoint(mountinfo).as_deref(),
             Some(std::path::Path::new("/sys/fs/cgroup"))
         );
-    }
-
-    #[test]
-    fn uses_the_runc_cpu_shares_conversion() {
-        assert_eq!(shares_to_weight(2), 1);
-        assert_eq!(shares_to_weight(1_024), 39);
-        assert_eq!(shares_to_weight(262_144), 10_000);
     }
 
     #[test]

@@ -87,6 +87,22 @@ impl InheritedDescriptorPlan {
         Ok(())
     }
 
+    pub(super) fn ensure_targets_available(&self, reserved: &[RawFd]) -> Result<()> {
+        if let Some(target) = self
+            .schema
+            .as_ref()
+            .into_iter()
+            .flat_map(|schema| &schema.slots)
+            .map(|slot| slot.target)
+            .find(|target| reserved.contains(target))
+        {
+            return Err(descriptor_error(format!(
+                "inherited descriptor target {target} is reserved by the cgroup layout"
+            )));
+        }
+        Ok(())
+    }
+
     fn prepare(
         schema: AgentInheritedDescriptorSchema,
         sources: &[DescriptorSource<'_>],
@@ -532,6 +548,30 @@ mod tests {
             .expect_err("oversized descriptor plans must fail")
             .message
             .contains("count"));
+    }
+
+    #[test]
+    fn descriptor_plan_rejects_runtime_reserved_targets() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let exec = UnixListener::bind(temporary.path().join("exec.sock")).expect("exec listener");
+        let schema = AgentInheritedDescriptorSchema {
+            profile: "reserved-target".to_string(),
+            slots: vec![AgentInheritedDescriptorSlot {
+                role: AgentInheritedDescriptorRole::ExecListener,
+                target: 6,
+                descriptor_type: AgentInheritedDescriptorType::UnixStreamListener,
+            }],
+        };
+        let sources = [DescriptorSource {
+            slot: schema.slots[0],
+            source: exec.as_fd(),
+        }];
+        let plan = InheritedDescriptorPlan::prepare(schema, &sources).expect("descriptor plan");
+        assert!(plan
+            .ensure_targets_available(&[6, 7])
+            .expect_err("reserved target must fail")
+            .message
+            .contains("reserved by the cgroup layout"));
     }
 
     #[test]
