@@ -44,7 +44,7 @@ impl ExecProcess {
         let context = init_process.execution_context();
         let process_group = ProcessGroupLease::open_for_snapshot(snapshot).await?;
         let init_pidfd = init_process.pidfd_descriptor();
-        let cgroup_procs = init_process.cgroup_procs_descriptor();
+        let cgroup_procs = init_process.workload_cgroup_procs_descriptor();
         let inherited = context.inherited_descriptors(init_pidfd)?;
         let namespace_arguments = context.namespace_arguments();
         let (listener, control_name) = bind_control_listener()?;

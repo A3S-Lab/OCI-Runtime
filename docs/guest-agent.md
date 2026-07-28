@@ -272,19 +272,51 @@ the private process directory serializes pidfd validation and group delivery
 against final cleanup/reap. The path works without delegated cgroup v2 and
 retains exact operation replay.
 
-The executor creates one private controller-enabled cgroup-v2 root and places
-each init and exec pair in the same owned leaf. This permits a later update
-even when create supplied no initial limits. Update preserves omitted fields,
-applies the supported memory, CPU, cpuset, and PID changes with exact
-read-back, and rolls earlier writes back in reverse order if a later write
-fails. Stats normalizes CPU counters to nanoseconds, memory counters to bytes,
-and includes PID plus memory/PID event counters. Pause writes `1` to
-`cgroup.freeze`, resume writes `0`, and neither operation returns until
-`cgroup.events` reports the exact `frozen` state. The process inventory
-refreshes the init and exec supervisors, excludes terminal processes, and
-returns only positive PIDs bound to the exact container generation. Exec is
-rejected while the leaf is frozen. Force cleanup thaws a paused leaf before
-signaling and reaping its processes.
+The executor creates one private controller-enabled cgroup-v2 root. The
+default layout places init and exec in one owned leaf, which permits a later
+update even when create supplied no initial limits.
+
+A trusted in-container control plane can opt in to the versioned
+`control-workload-v1` layout with these OCI annotations:
+
+| Annotation | Meaning |
+| --- | --- |
+| `dev.a3s.oci.cgroup.layout=control-workload-v1` | Select the versioned two-child layout |
+| `dev.a3s.oci.cgroup.control-memory-headroom-bytes` | Positive memory added only to the outer management envelope |
+| `dev.a3s.oci.cgroup.control-cpu-headroom-micros` | Positive CPU quota added to the outer envelope for the configured period |
+| `dev.a3s.oci.cgroup.control-pids-headroom` | Positive process capacity added only to the outer envelope |
+
+This layout requires finite memory, CPU, and PID limits in
+`linux.resources` plus a newly created cgroup namespace. The runtime creates
+an outer management cgroup and fixed `a3s-control` and `a3s-workload`
+children before spawning init. It starts the namespace root in the empty
+outer cgroup, then installs pre-opened `cgroup.procs` files at FD 6 and FD 7.
+The trusted configured init receives those descriptor numbers through
+`A3S_CONTROL_CGROUP_PROCS_FD` and `A3S_WORKLOAD_CGROUP_PROCS_FD`; conflicting
+environment variables or inherited descriptor targets fail create. The
+container can therefore keep `/sys/fs/cgroup` read-only while its trusted init
+moves control and workload processes through authority retained by the
+runtime-opened files.
+
+`linux.resources` remains the only exact workload source of truth. The
+runtime applies it to `a3s-workload` with `memory.oom.group=0`, derives the
+outer memory, CPU, and PID envelope from the declared headroom, and sends all
+later OCI exec processes directly to the workload child. Live updates modify
+the derived outer envelope and exact workload settings in one rollback-safe
+transaction. Stats and freeze/thaw observe only the workload child, so memory
+pressure cannot kill or freeze the trusted control transport. Cleanup removes
+both children and the complete owned topology.
+
+For either layout, update preserves omitted fields, applies supported memory,
+CPU, cpuset, and PID changes with exact read-back, and rolls earlier writes
+back in reverse order if a later write fails. Stats normalizes CPU counters to
+nanoseconds, memory counters to bytes, and includes PID plus memory/PID event
+counters. Pause writes `1` to `cgroup.freeze`, resume writes `0`, and neither
+operation returns until `cgroup.events` reports the exact `frozen` state. The
+process inventory refreshes the init and exec supervisors, excludes terminal
+processes, and returns only positive PIDs bound to the exact container
+generation. Exec is rejected while the workload target is frozen. Force
+cleanup thaws a paused target before signaling and reaping its processes.
 
 Exact request retries are fingerprinted by `OperationId`, and reused IDs with
 different requests fail. This includes pause, resume, and resource update.

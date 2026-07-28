@@ -429,6 +429,33 @@ pub struct ContainerRecord {
 /// inventing a non-standard OCI lifecycle status.
 pub const PAUSED_STATE_ANNOTATION: &str = "dev.a3s.oci.runtime.paused";
 
+/// Opt-in cgroup layout used by runtimes that embed a trusted control plane
+/// beside an untrusted workload in one OCI container.
+pub const CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION: &str = "dev.a3s.oci.cgroup.layout";
+/// Versioned value for [`CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION`].
+pub const CONTROL_WORKLOAD_CGROUP_LAYOUT_V1: &str = "control-workload-v1";
+/// Extra outer-envelope memory reserved for the trusted control plane.
+pub const CONTROL_CGROUP_MEMORY_HEADROOM_ANNOTATION: &str =
+    "dev.a3s.oci.cgroup.control-memory-headroom-bytes";
+/// Extra outer-envelope CPU quota reserved for the trusted control plane.
+pub const CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION: &str =
+    "dev.a3s.oci.cgroup.control-cpu-headroom-micros";
+/// Extra outer-envelope process capacity reserved for the trusted control plane.
+pub const CONTROL_CGROUP_PIDS_HEADROOM_ANNOTATION: &str =
+    "dev.a3s.oci.cgroup.control-pids-headroom";
+/// Descriptor inherited by the trusted init for moving bootstrap processes.
+pub const CONTROL_CGROUP_PROCS_FD: i32 = 6;
+/// Descriptor inherited by the trusted init for joining user workload processes.
+pub const WORKLOAD_CGROUP_PROCS_FD: i32 = 7;
+/// Environment key identifying [`CONTROL_CGROUP_PROCS_FD`].
+pub const CONTROL_CGROUP_PROCS_FD_ENV: &str = "A3S_CONTROL_CGROUP_PROCS_FD";
+/// Environment key identifying [`WORKLOAD_CGROUP_PROCS_FD`].
+pub const WORKLOAD_CGROUP_PROCS_FD_ENV: &str = "A3S_WORKLOAD_CGROUP_PROCS_FD";
+/// Guest-visible child cgroup containing trusted control-plane processes.
+pub const CONTROL_CGROUP_NAME: &str = "a3s-control";
+/// Guest-visible child cgroup containing all user workload processes.
+pub const WORKLOAD_CGROUP_NAME: &str = "a3s-workload";
+
 impl ContainerRecord {
     /// Whether all processes in this exact container generation are frozen.
     #[must_use]

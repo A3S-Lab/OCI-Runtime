@@ -57,6 +57,26 @@ pub(super) fn plan_all(
         .collect()
 }
 
+pub(super) fn validate_control_workload_cgroup_mount(plans: &[MountPlan]) -> Result<()> {
+    let mut cgroup_mounts = plans
+        .iter()
+        .filter(|plan| plan.filesystem_type.as_deref() == Some("cgroup2"));
+    let Some(mount) = cgroup_mounts.next() else {
+        return Err(invalid(
+            "control/workload cgroup layout requires a read-only cgroup2 mount at /sys/fs/cgroup",
+        ));
+    };
+    if cgroup_mounts.next().is_some()
+        || mount.destination != Path::new("/sys/fs/cgroup")
+        || !mount.is_effectively_readonly()
+    {
+        return Err(invalid(
+            "control/workload cgroup layout requires exactly one read-only cgroup2 mount at /sys/fs/cgroup",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn apply_all(
     plans: &[MountPlan],
     bundle_directory: &Path,
@@ -70,6 +90,21 @@ pub(super) fn apply_all(
 }
 
 impl MountPlan {
+    fn is_effectively_readonly(&self) -> bool {
+        self.recursive_attributes.map_or_else(
+            || self.flags & libc::MS_RDONLY != 0,
+            |attributes| {
+                if attributes.attr_set & attributes::MOUNT_ATTR_RDONLY != 0 {
+                    true
+                } else if attributes.attr_clr & attributes::MOUNT_ATTR_RDONLY != 0 {
+                    false
+                } else {
+                    self.flags & libc::MS_RDONLY != 0
+                }
+            },
+        )
+    }
+
     fn new(index: usize, mount: &Mount, namespaces: &NamespacePlan) -> Result<Self> {
         let uid_mappings_specified = mount.uid_mappings().is_some();
         let gid_mappings_specified = mount.gid_mappings().is_some();

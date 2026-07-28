@@ -141,6 +141,11 @@ Completed:
   normalized cgroup stats, exact static device nodes within a bounded
   default-deny profile, and pure-Rust x86_64/AArch64 seccomp BPF retained
   across init and exec;
+- versioned control/workload cgroup topology for trusted A3S Box init: exact
+  `linux.resources` enforcement on `a3s-workload`, derived outer control-plane
+  headroom, pre-opened FD 6/7 membership handoff, read-only guest cgroupfs,
+  workload-scoped update/freeze/stats, non-group OOM behavior, and complete
+  topology cleanup;
 - real WHPX fixed-bundle create/state/start/kill/delete evidence, including
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
@@ -438,6 +443,12 @@ then may HVF become `experimental`.
   generation-fenced partial resource updates with exact read-back and
   reverse-order rollback, and expose normalized CPU, memory, PID, and event
   statistics through native Linux and the shared utility-VM lifecycle harness.
+- [x] Add the opt-in `control-workload-v1` topology for a trusted configured
+  init: retain exact workload limits in `linux.resources`, derive a bounded
+  outer management envelope, create fixed control/workload children, pass
+  collision-checked membership FDs, keep guest cgroupfs read-only, and update,
+  freeze, inspect, and clean up the workload topology through the same cgroup
+  owner.
 - [x] Enforce the bounded A3S Box static device-node profile with
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   CAP_MKNOD exclusion, and verified device-node creation.
@@ -551,6 +562,9 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   kill, recovery, and cleanup behavior.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
+- [ ] Qualify the Box R17 resource profile against `control-workload-v1`,
+  including exact CPU/memory/PID enforcement, control-service survival under
+  workload OOM pressure, and zero leaked processes or cgroups.
 - [x] Remove external-runtime discovery, direct invocation, configuration, and
   fallback paths.
 

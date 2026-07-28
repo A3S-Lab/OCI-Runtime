@@ -186,7 +186,8 @@ mod tests {
         let handle = CgroupHandle {
             created: Vec::new(),
             leaf: directory.path().to_path_buf(),
-            procs,
+            init_procs: procs,
+            control_workload: None,
         };
         let target = ContainerTarget::exact(
             ContainerId::new("stats-fixture").expect("container ID"),

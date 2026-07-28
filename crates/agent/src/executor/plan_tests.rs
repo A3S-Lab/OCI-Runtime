@@ -1,5 +1,11 @@
 use a3s_oci_sdk::oci_spec::runtime::Process;
-use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize};
+use a3s_oci_sdk::{
+    ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize, CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION,
+    CONTROL_CGROUP_MEMORY_HEADROOM_ANNOTATION, CONTROL_CGROUP_PIDS_HEADROOM_ANNOTATION,
+    CONTROL_CGROUP_PROCS_FD, CONTROL_CGROUP_PROCS_FD_ENV,
+    CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION, CONTROL_WORKLOAD_CGROUP_LAYOUT_V1,
+    WORKLOAD_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD_ENV,
+};
 
 use super::hook::HookSet;
 use super::plan::{InitPlan, ProcessPlan};
@@ -115,6 +121,80 @@ fn plans_the_exact_a3s_box_compiler_output() {
     assert_eq!(plan.devices.len(), 6);
     assert!(plan.seccomp.is_enabled());
     assert_eq!(plan.seccomp.filter_count(), 2);
+}
+
+#[test]
+fn plans_versioned_control_workload_cgroups_with_reserved_descriptors() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(A3S_BOX_CONFIG).expect("decode A3S Box config");
+    config["annotations"][CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION] =
+        serde_json::json!(CONTROL_WORKLOAD_CGROUP_LAYOUT_V1);
+    config["annotations"][CONTROL_CGROUP_MEMORY_HEADROOM_ANNOTATION] =
+        serde_json::json!("67108864");
+    config["annotations"][CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION] = serde_json::json!("25000");
+    config["annotations"][CONTROL_CGROUP_PIDS_HEADROOM_ANNOTATION] = serde_json::json!("16");
+    let config = serde_json::to_string(&config).expect("encode cgroup layout config");
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("control/workload cgroup layout");
+
+    assert!(plan.cgroup.uses_control_workload_layout());
+    assert!(plan.namespaces.new_cgroup());
+    assert!(plan.environment.contains(&format!(
+        "{CONTROL_CGROUP_PROCS_FD_ENV}={CONTROL_CGROUP_PROCS_FD}"
+    )));
+    assert!(plan.environment.contains(&format!(
+        "{WORKLOAD_CGROUP_PROCS_FD_ENV}={WORKLOAD_CGROUP_PROCS_FD}"
+    )));
+}
+
+#[test]
+fn rejects_control_workload_layout_without_new_namespace_or_with_spoofed_environment() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(A3S_BOX_CONFIG).expect("decode A3S Box config");
+    config["annotations"][CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION] =
+        serde_json::json!(CONTROL_WORKLOAD_CGROUP_LAYOUT_V1);
+    config["annotations"][CONTROL_CGROUP_MEMORY_HEADROOM_ANNOTATION] =
+        serde_json::json!("67108864");
+    config["annotations"][CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION] = serde_json::json!("25000");
+    config["annotations"][CONTROL_CGROUP_PIDS_HEADROOM_ANNOTATION] = serde_json::json!("16");
+
+    let mut no_namespace = config.clone();
+    no_namespace["linux"]["namespaces"]
+        .as_array_mut()
+        .expect("namespace array")
+        .retain(|namespace| namespace["type"] != "cgroup");
+    let no_namespace = serde_json::to_string(&no_namespace).expect("encode namespace config");
+    assert!(InitPlan::from_bundle(&bundle(&no_namespace), &null_io())
+        .expect_err("new cgroup namespace is required")
+        .message
+        .contains("newly created Linux cgroup namespace"));
+
+    let mut writable_mount = config.clone();
+    let cgroup_mount = writable_mount["mounts"]
+        .as_array_mut()
+        .expect("mount array")
+        .iter_mut()
+        .find(|mount| mount["destination"] == "/sys/fs/cgroup")
+        .expect("cgroup mount");
+    cgroup_mount["options"] = serde_json::json!(["nosuid", "noexec", "nodev", "rw"]);
+    let writable_mount =
+        serde_json::to_string(&writable_mount).expect("encode writable cgroup mount config");
+    assert!(InitPlan::from_bundle(&bundle(&writable_mount), &null_io())
+        .expect_err("writable cgroup mount must fail")
+        .message
+        .contains("exactly one read-only cgroup2 mount"));
+
+    config["process"]["env"]
+        .as_array_mut()
+        .expect("process environment")
+        .push(serde_json::json!(format!(
+            "{CONTROL_CGROUP_PROCS_FD_ENV}=99"
+        )));
+    let spoofed = serde_json::to_string(&config).expect("encode spoofed environment config");
+    assert!(InitPlan::from_bundle(&bundle(&spoofed), &null_io())
+        .expect_err("reserved cgroup environment must not be spoofed")
+        .message
+        .contains("reserved by the control/workload cgroup layout"));
 }
 
 #[test]
