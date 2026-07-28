@@ -456,6 +456,13 @@ then may HVF become `experimental`.
   WNOWAIT process-group cleanup, and automatic exec termination when init or
   the agent session exits. Prove the path through native Linux and the shared
   utility-VM lifecycle harness.
+- [x] Put configured and exec workloads in separately supervised process
+  groups, retain each leader with pidfd plus non-reaping wait ownership, use
+  `waitid(WNOWAIT)` in fork supervisors, serialize signal/reap through a
+  cross-process lease, and fan replay-safe `kill(all=true)` signals across
+  every live group without requiring delegated cgroup v2. Prove descendant
+  delivery and the closed PGID-reuse race with real Linux regressions and the
+  rootless native lifecycle.
 - [x] Add exact-generation live init/exec process inventory plus replay-safe
   pause/resume, and prove with a progress-producing workload that cgroup freeze
   stops execution and resume restarts it through native Linux and the shared

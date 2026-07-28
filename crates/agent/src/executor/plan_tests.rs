@@ -467,7 +467,6 @@ fn accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets() {
         .expect("new user and time namespace profile");
     assert!(plan.namespaces.new_user());
     assert!(plan.namespaces.new_time());
-    assert!(plan.namespaces.requires_child_process());
     assert_eq!(plan.namespaces.uid_mappings().len(), 1);
     assert_eq!(plan.namespaces.gid_mappings().len(), 1);
     assert_eq!(
@@ -508,7 +507,6 @@ fn accepts_the_last_uint32_id_in_user_namespace_mappings() {
     let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
         .expect("the final uint32 ID is a one-element valid range");
     assert!(plan.namespaces.new_user());
-    assert!(!plan.namespaces.requires_child_process());
     assert_eq!(plan.namespaces.uid_mappings()[1].container_id, u32::MAX);
     assert_eq!(plan.namespaces.uid_mappings()[1].host_id, u32::MAX);
 }
@@ -745,7 +743,6 @@ fn accepts_all_joined_namespace_types_and_retains_their_absolute_paths() {
         plan.namespaces.joined_time(),
         Some(std::path::Path::new("/proc/42/ns/time"))
     );
-    assert!(plan.namespaces.requires_child_process());
     assert_eq!(plan.hostname.as_deref(), Some("joined-host"));
     assert_eq!(plan.domainname.as_deref(), Some("joined.test"));
 }

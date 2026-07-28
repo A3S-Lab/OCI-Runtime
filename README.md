@@ -775,8 +775,10 @@ The current executor implements a reviewed bootstrap vertical slice:
   plans, optional environments, timeout enforcement, process-group cleanup,
   typed failure propagation, and warning-only poststop continuation;
 - credentials, umask, `no_new_privileges`, `execve`, PID-reuse-safe pidfd
-  signaling, exact normal-or-signal exit status, repeated wait, observation,
-  and scoped cleanup;
+  signaling, dedicated configured/exec workload process groups, replay-safe
+  container-wide signal fan-out, a cross-process signal/reap lease that closes
+  numeric PGID reuse races, exact normal-or-signal exit status, repeated wait,
+  observation, and scoped cleanup;
 - exact-generation exec process registries with reserved init identity,
   retained root and namespace descriptors, parent/PID/root/namespace
   authentication, pidfd-backed per-process signaling, stable repeated wait,

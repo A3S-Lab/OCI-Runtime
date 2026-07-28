@@ -111,22 +111,10 @@ pub(super) async fn validate_runtime_pid(
             "container payload reported a namespace init without creating a PID namespace",
         ));
     }
-    if !plan.namespaces.requires_child_process() {
-        if runtime_pid == launcher_pid {
-            return validate_created_namespace_identities(plan, launcher_pid, runtime_pid).await;
-        }
-        return Err(pid_error(
-            ErrorCode::PermissionDenied,
-            format!(
-                "container payload reported PID {runtime_pid}, but authenticated launcher PID is \
-                 {launcher_pid}"
-            ),
-        ));
-    }
     if runtime_pid == launcher_pid {
         return Err(pid_error(
             ErrorCode::PermissionDenied,
-            "namespace child must differ from its authenticated launcher",
+            "configured payload must differ from its authenticated supervisor",
         ));
     }
 
@@ -136,7 +124,7 @@ pub(super) async fn validate_runtime_pid(
             ErrorCode::PermissionDenied,
             format!(
                 "reported container payload {runtime_pid} has parent {}, expected authenticated \
-                 launcher {launcher_pid}",
+                 supervisor {launcher_pid}",
                 identity.parent_pid
             ),
         ));

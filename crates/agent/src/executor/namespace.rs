@@ -208,14 +208,6 @@ impl NamespacePlan {
         self.uts.is_configured()
     }
 
-    pub(super) const fn has_pid(&self) -> bool {
-        self.pid.is_configured()
-    }
-
-    pub(super) const fn has_time(&self) -> bool {
-        self.time.is_configured()
-    }
-
     pub(super) const fn has_user(&self) -> bool {
         self.user.is_configured()
     }
@@ -250,10 +242,6 @@ impl NamespacePlan {
 
     pub(super) fn joined_time(&self) -> Option<&Path> {
         self.time.joined()
-    }
-
-    pub(super) const fn requires_child_process(&self) -> bool {
-        self.has_pid() || self.has_time()
     }
 
     pub(super) fn uid_mappings(&self) -> &[IdMapping] {

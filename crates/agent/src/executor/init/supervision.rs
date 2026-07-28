@@ -7,12 +7,14 @@ use super::{complete_create_and_wait_for_start, init_error, reject_before_ready,
 use crate::executor::mount::IdmappedMountSources;
 use crate::executor::pid;
 use crate::executor::pid_supervisor::{self, ChildOutcome, NamespaceForkRole, PayloadForkRole};
+use crate::executor::process_group::ProcessGroupLease;
 
-pub(super) fn run_namespaced_init(
+pub(super) fn run_supervised_init(
     create: &CreateContext<'_>,
     host_proc: &File,
     idmapped_sources: IdmappedMountSources,
     mut control: UnixStream,
+    process_group: ProcessGroupLease,
 ) -> Result<()> {
     match pid_supervisor::fork_namespace_child() {
         Ok(NamespaceForkRole::Launcher {
@@ -42,7 +44,7 @@ pub(super) fn run_namespaced_init(
                 }
             } else {
                 drop(outcome_channel);
-                let outcome = pid_supervisor::wait_for_child(child_pid)?;
+                let outcome = pid_supervisor::supervise_process_group(child_pid, &process_group)?;
                 pid_supervisor::mirror_child_outcome(outcome)
             }
         }
@@ -58,6 +60,7 @@ pub(super) fn run_namespaced_init(
                     idmapped_sources,
                     control,
                     outcome_channel,
+                    &process_group,
                 );
             }
             drop(outcome_channel);
@@ -74,6 +77,7 @@ fn run_pid_namespace_init(
     idmapped_sources: IdmappedMountSources,
     mut control: UnixStream,
     mut outcome_channel: UnixStream,
+    process_group: &ProcessGroupLease,
 ) -> Result<()> {
     // SAFETY: `getpid` has no preconditions. This branch is the first child
     // created after `CLONE_NEWPID` and must therefore be namespace PID 1.
@@ -90,7 +94,7 @@ fn run_pid_namespace_init(
     match pid_supervisor::fork_payload(namespace_init_pid) {
         Ok(PayloadForkRole::NamespaceInit { child_pid }) => {
             drop(control);
-            let outcome = pid_supervisor::supervise_payload(child_pid)?;
+            let outcome = pid_supervisor::supervise_payload(child_pid, process_group)?;
             pid_supervisor::report_supervised_outcome(&mut outcome_channel, outcome)
         }
         Ok(PayloadForkRole::Payload) => {

@@ -17,7 +17,9 @@ use super::device::{DevicePlan, PreparedDeviceSources};
 use super::hook::{HookPhase, HookStateTemplate};
 use super::mount::{self, IdmappedMountSources};
 use super::namespace::{self, IdmapNamespaceHandles};
+use super::pid_supervisor;
 use super::plan::InitPlan;
+use super::process_group::ProcessGroupLease;
 use super::rootfs;
 use super::RootfsScope;
 
@@ -109,6 +111,10 @@ fn run_container_init(
         )
     })?;
     ensure_close_on_exec(&control)?;
+    let process_group = match ProcessGroupLease::open_for_snapshot_sync(&config_snapshot) {
+        Ok(process_group) => process_group,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
     let (plan, canonical_bundle, rootfs, rootfs_file, host_proc) =
         match prepare_container_init(config_snapshot, bundle_directory, rootfs_scope) {
             Ok(prepared) => prepared,
@@ -150,13 +156,13 @@ fn run_container_init(
         prepared_devices: &prepared_devices,
         hook_state: &hook_state,
     };
-    if plan.namespaces.requires_child_process() {
-        return supervision::run_namespaced_init(&create, &host_proc, idmapped_sources, control);
-    }
-    // SAFETY: `getpid` has no preconditions and this wrapper has not entered a
-    // PID namespace that changes the runtime-visible process.
-    let pid = unsafe { libc::getpid() };
-    complete_create_and_wait_for_start(&create, idmapped_sources, pid, None, control)
+    supervision::run_supervised_init(
+        &create,
+        &host_proc,
+        idmapped_sources,
+        control,
+        process_group,
+    )
 }
 
 pub(super) struct CreateContext<'a> {
@@ -175,6 +181,9 @@ pub(super) fn complete_create_and_wait_for_start(
     namespace_init_pid: Option<i32>,
     mut control: UnixStream,
 ) -> Result<()> {
+    if let Err(error) = prepare_configured_process_group(create.plan.terminal) {
+        return reject_before_ready(&mut control, error);
+    }
     if let Err(error) = prepare_create_environment_before_pivot(
         create.plan,
         create.bundle_directory,
@@ -216,6 +225,16 @@ pub(super) fn complete_create_and_wait_for_start(
         control,
         create.hook_state,
     )
+}
+
+fn prepare_configured_process_group(terminal: bool) -> Result<()> {
+    pid_supervisor::establish_process_group()?;
+    super::terminal::make_foreground_process_group(terminal).map_err(|error| {
+        init_error(
+            ErrorCode::Internal,
+            format!("make configured workload process group terminal foreground failed: {error}"),
+        )
+    })
 }
 
 fn wait_for_create_continue(control: &mut UnixStream) -> Result<()> {

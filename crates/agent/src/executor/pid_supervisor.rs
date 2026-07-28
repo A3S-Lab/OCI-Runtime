@@ -4,6 +4,8 @@ use std::os::unix::net::UnixStream;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
+use super::process_group::ProcessGroupLease;
+
 const EXITED_OUTCOME_BYTE: u8 = 0x31;
 const SIGNALED_OUTCOME_BYTE: u8 = 0x32;
 
@@ -134,20 +136,67 @@ pub(super) fn wait_for_child(pid: libc::pid_t) -> Result<ChildOutcome> {
     }
 }
 
-pub(super) fn supervise_payload(payload_pid: libc::pid_t) -> Result<ChildOutcome> {
+pub(super) fn supervise_payload(
+    payload_pid: libc::pid_t,
+    process_group: &ProcessGroupLease,
+) -> Result<ChildOutcome> {
     let payload_outcome = loop {
-        let (waited, outcome) = wait_for_any_child()?;
+        let (waited, outcome) = wait_for_any_child_without_reaping()?;
         if waited == payload_pid {
             break outcome;
         }
+        let reaped = wait_for_child(waited)?;
+        if reaped != outcome {
+            return Err(supervisor_error(
+                ErrorCode::Internal,
+                format!(
+                    "peeked namespace child {waited} outcome {outcome:?} changed to {reaped:?} \
+                     while reaping"
+                ),
+            ));
+        }
     };
+    let lease = process_group.lock_for_reap()?;
+    terminate_visible_descendants()?;
+    let reaped = wait_for_child(payload_pid)?;
+    if reaped != payload_outcome {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            format!(
+                "peeked configured payload outcome {payload_outcome:?} changed to {reaped:?} \
+                 while reaping"
+            ),
+        ));
+    }
     terminate_and_reap_remaining_children()?;
+    lease.unlock()?;
     Ok(payload_outcome)
+}
+
+pub(super) fn supervise_process_group(
+    payload_pid: libc::pid_t,
+    process_group: &ProcessGroupLease,
+) -> Result<ChildOutcome> {
+    let outcome = wait_for_child_without_reaping(payload_pid)?;
+    let lease = process_group.lock_for_reap()?;
+    terminate_process_group(payload_pid);
+    let reaped = wait_for_child(payload_pid)?;
+    if reaped != outcome {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            format!(
+                "peeked configured payload outcome {outcome:?} changed to {reaped:?} while reaping"
+            ),
+        ));
+    }
+    lease.unlock()?;
+    Ok(outcome)
 }
 
 pub(super) fn supervise_exec_payload(
     payload_pid: libc::pid_t,
     init_pidfd: RawFd,
+    process_group: &ProcessGroupLease,
 ) -> Result<ChildOutcome> {
     if payload_pid <= 0 || init_pidfd < 0 {
         return Err(supervisor_error(
@@ -164,6 +213,7 @@ pub(super) fn supervise_exec_payload(
             // group. This is the same WNOWAIT ownership pattern used by the
             // A3S Box PID 1 reaper and prevents the kernel from reusing the
             // leader PID/PGID before descendant cleanup.
+            let lease = process_group.lock_for_reap()?;
             terminate_process_group(payload_pid);
             let reaped = wait_for_child(payload_pid)?;
             if reaped != outcome {
@@ -174,6 +224,7 @@ pub(super) fn supervise_exec_payload(
                     ),
                 ));
             }
+            lease.unlock()?;
             return Ok(outcome);
         }
 
@@ -191,8 +242,11 @@ pub(super) fn supervise_exec_payload(
             if error.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
+            let lease = process_group.lock_for_reap()?;
+            terminate_process_group(payload_pid);
             terminate_pid(payload_pid);
             let _ = wait_for_child(payload_pid);
+            lease.unlock()?;
             return Err(supervisor_error(
                 error_code(&error),
                 format!("monitor configured-process pidfd failed: {error}"),
@@ -200,9 +254,11 @@ pub(super) fn supervise_exec_payload(
         }
         let fatal_events = libc::POLLERR | libc::POLLHUP | libc::POLLNVAL;
         if descriptor.revents & (libc::POLLIN | fatal_events) != 0 {
+            let lease = process_group.lock_for_reap()?;
             terminate_process_group(payload_pid);
             terminate_pid(payload_pid);
             let outcome = wait_for_child(payload_pid)?;
+            lease.unlock()?;
             return Ok(outcome);
         }
     }
@@ -277,15 +333,71 @@ pub(super) fn terminate_pid(pid: libc::pid_t) {
     }
 }
 
-pub(super) fn terminate_process_group(leader_pid: libc::pid_t) {
-    if leader_pid > 0 {
-        // SAFETY: a negative PID targets the process group whose leader was
-        // created and authenticated by this helper. SIGKILL has no pointer
-        // preconditions.
-        unsafe {
-            libc::kill(-leader_pid, libc::SIGKILL);
-        }
+pub(super) fn establish_process_group() -> Result<()> {
+    // SAFETY: getpid and getpgrp have no preconditions.
+    let (pid, process_group) = unsafe { (libc::getpid(), libc::getpgrp()) };
+    if pid <= 0 {
+        return Err(supervisor_error(
+            ErrorCode::Internal,
+            format!("configured workload reported invalid PID {pid}"),
+        ));
     }
+    if process_group == pid {
+        return Ok(());
+    }
+    // Linux reports PGID 0 when the inherited process-group leader is not
+    // visible in the current PID namespace. Treat that as requiring a local
+    // group rather than rejecting a valid namespace child.
+    // SAFETY: zero selects the current process and requests a new process
+    // group led by that process before untrusted workload code is released.
+    if unsafe { libc::setpgid(0, 0) } == 0 {
+        Ok(())
+    } else {
+        Err(last_os_error("create configured workload process group"))
+    }
+}
+
+pub(super) fn signal_process_group(leader_pid: libc::pid_t, signal: i32) -> Result<()> {
+    if leader_pid <= 0 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("process-group leader PID must be positive; received {leader_pid}"),
+        ));
+    }
+    validate_process_group_signal(signal)?;
+    // SAFETY: a negative PID targets the process group whose leader identity
+    // the caller retains through a pidfd or non-reaping wait ownership.
+    if unsafe { libc::kill(-leader_pid, signal) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    let code = match error.raw_os_error() {
+        Some(libc::ESRCH) => ErrorCode::FailedPrecondition,
+        Some(libc::EPERM) | Some(libc::EACCES) => ErrorCode::PermissionDenied,
+        Some(libc::EINVAL) => ErrorCode::InvalidArgument,
+        _ => ErrorCode::Internal,
+    };
+    Err(supervisor_error(
+        code,
+        format!("signal process group {leader_pid} with signal {signal} failed: {error}"),
+    ))
+}
+
+pub(super) fn validate_process_group_signal(signal: i32) -> Result<()> {
+    if is_valid_signal(signal) {
+        Ok(())
+    } else {
+        Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!(
+                "process-group signal must be a valid positive Linux signal; received {signal}"
+            ),
+        ))
+    }
+}
+
+pub(super) fn terminate_process_group(leader_pid: libc::pid_t) {
+    let _ = signal_process_group(leader_pid, libc::SIGKILL);
 }
 
 pub(super) fn arm_parent_death_signal(role: &str) -> Result<()> {
@@ -299,19 +411,75 @@ pub(super) fn arm_parent_death_signal(role: &str) -> Result<()> {
     }
 }
 
-fn wait_for_any_child() -> Result<(libc::pid_t, ChildOutcome)> {
+fn wait_for_child_without_reaping(pid: libc::pid_t) -> Result<ChildOutcome> {
     loop {
-        let mut status = 0;
-        // SAFETY: `status` points to writable storage. PID -1 waits for one
-        // child owned by this namespace init.
-        let waited = unsafe { libc::waitpid(-1, &mut status, 0) };
-        if waited > 0 {
-            return decode_wait_status(status).map(|outcome| (waited, outcome));
+        // SAFETY: an all-zero siginfo_t is the required input sentinel and
+        // waitid initializes it for the exact selected child.
+        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        // SAFETY: `info` points to writable storage and `pid` is the positive
+        // direct child retained by this supervisor. WNOWAIT preserves its PID
+        // and process-group identity until descendant cleanup is complete.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            // SAFETY: successful waitid initialized the child identity.
+            let reported_pid = unsafe { info.si_pid() };
+            if reported_pid != pid {
+                return Err(supervisor_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "waitid reported configured payload PID {reported_pid}, expected {pid}"
+                    ),
+                ));
+            }
+            return decode_siginfo(&info);
         }
-        if waited < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
             continue;
         }
-        return Err(last_os_error("reap namespace child"));
+        return Err(supervisor_error(
+            error_code(&error),
+            format!("inspect configured payload without reaping failed: {error}"),
+        ));
+    }
+}
+
+fn wait_for_any_child_without_reaping() -> Result<(libc::pid_t, ChildOutcome)> {
+    loop {
+        // SAFETY: an all-zero siginfo_t is the required input sentinel and
+        // waitid initializes it for one waitable child. WNOWAIT retains the
+        // child PID so its identity cannot be reused before cleanup.
+        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        // SAFETY: `info` points to writable storage. P_ALL with id zero waits
+        // for one child owned by this namespace init.
+        let result =
+            unsafe { libc::waitid(libc::P_ALL, 0, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        if result == 0 {
+            // SAFETY: successful waitid initialized the child identity.
+            let pid = unsafe { info.si_pid() };
+            if pid <= 0 {
+                return Err(supervisor_error(
+                    ErrorCode::Internal,
+                    format!("waitid reported non-positive namespace child PID {pid}"),
+                ));
+            }
+            return decode_siginfo(&info).map(|outcome| (pid, outcome));
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(supervisor_error(
+            error_code(&error),
+            format!("inspect namespace child without reaping failed: {error}"),
+        ));
     }
 }
 
@@ -353,38 +521,47 @@ fn peek_child_outcome(pid: libc::pid_t) -> Result<Option<ChildOutcome>> {
             ),
         ));
     }
-    // SAFETY: waitid initialized si_status for the CLD_* outcome in si_code.
+    decode_siginfo(&info).map(Some)
+}
+
+fn decode_siginfo(info: &libc::siginfo_t) -> Result<ChildOutcome> {
+    // SAFETY: the caller received this record from a successful waitid call.
     let status = unsafe { info.si_status() };
     match info.si_code {
-        libc::CLD_EXITED if (0..=255).contains(&status) => Ok(Some(ChildOutcome::Exited(status))),
+        libc::CLD_EXITED if (0..=255).contains(&status) => Ok(ChildOutcome::Exited(status)),
         libc::CLD_KILLED | libc::CLD_DUMPED if is_valid_signal(status) => {
-            Ok(Some(ChildOutcome::Signaled(status)))
+            Ok(ChildOutcome::Signaled(status))
         }
         code => Err(supervisor_error(
             ErrorCode::Internal,
-            format!(
-                "supervised exec payload produced unsupported waitid code {code} status {status}"
-            ),
+            format!("child produced unsupported waitid code {code} status {status}"),
         )),
+    }
+}
+
+fn terminate_visible_descendants() -> Result<()> {
+    // SAFETY: from namespace PID 1, PID -1 addresses only visible descendants
+    // and excludes the caller.
+    let killed = unsafe { libc::kill(-1, libc::SIGKILL) };
+    if killed == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(supervisor_error(
+            error_code(&error),
+            format!("terminate remaining PID namespace processes failed: {error}"),
+        ))
     }
 }
 
 fn terminate_and_reap_remaining_children() -> Result<()> {
     loop {
-        // SAFETY: from namespace PID 1, PID -1 addresses only visible
-        // descendants and excludes the caller. Repeating the signal after
-        // every reap closes races with descendants that fork while teardown
-        // begins.
-        let killed = unsafe { libc::kill(-1, libc::SIGKILL) };
-        if killed != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(supervisor_error(
-                    error_code(&error),
-                    format!("terminate remaining PID namespace processes failed: {error}"),
-                ));
-            }
-        }
+        // Repeating the signal after every reap closes races with descendants
+        // that fork while teardown begins.
+        terminate_visible_descendants()?;
 
         let mut status = 0;
         // SAFETY: `status` points to writable storage. PID -1 waits for one
@@ -449,7 +626,7 @@ fn is_valid_signal(signal: i32) -> bool {
 }
 
 fn error_code(error: &io::Error) -> ErrorCode {
-    if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EPERM)) {
+    if matches!(error.raw_os_error(), Some(libc::EACCES) | Some(libc::EPERM)) {
         ErrorCode::PermissionDenied
     } else {
         ErrorCode::Internal

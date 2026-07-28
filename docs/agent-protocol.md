@@ -284,6 +284,16 @@ uses the same non-destructive `waitid(WNOWAIT)` ownership pattern as the A3S
 Box PID 1 reaper so descendants are killed before the leader PID/PGID can be
 reused.
 
+The configured workload now uses the same dedicated-process-group ownership.
+Container-wide kill authenticates live configured and exec leaders through
+their retained pidfds, signals every exec group before the configured group,
+and records the exact result for replay. Fork supervisors and namespace PID 1
+retain exited leaders with `waitid(WNOWAIT)` until descendant cleanup, while a
+direct launcher remains wait-owned by the executor. The numeric process-group
+target therefore cannot be reused during delivery. A cross-process advisory
+lease on the private process directory serializes pidfd validation plus group
+delivery against the supervisor's final cleanup and reap.
+
 Terminal execution adapts the existing A3S Box PTY mechanism: `openpty`
 allocates the pair, the launcher creates a session and acquires the slave as
 its controlling terminal, and the workload process group becomes foreground.

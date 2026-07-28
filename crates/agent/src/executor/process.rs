@@ -30,6 +30,7 @@ use super::namespace::{self, RetainedExecutionContext, UserMappingRuntime};
 use super::pid;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
+use super::process_group::ProcessGroupLease;
 use super::seccomp::SeccompPlan;
 use super::RootfsScope;
 
@@ -41,6 +42,7 @@ pub(super) struct PreparedProcess {
     control: Option<UnixStream>,
     pid: i32,
     pidfd: PidFd,
+    process_group: ProcessGroupLease,
     execution_context: RetainedExecutionContext,
     capabilities: CapabilityPlan,
     seccomp: SeccompPlan,
@@ -73,6 +75,7 @@ impl PreparedProcess {
             user_mapping_runtime,
         } = context;
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
+        let process_group = ProcessGroupLease::open_for_snapshot(config_snapshot).await?;
         let mut cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
         let cgroup_procs = cgroup.as_ref().map(CgroupHandle::procs_descriptor);
         let (listener, control_name) = bind_control_listener()?;
@@ -370,6 +373,7 @@ impl PreparedProcess {
             control: Some(control),
             pid: runtime_pid,
             pidfd,
+            process_group,
             execution_context,
             capabilities: plan.capabilities,
             seccomp: plan.seccomp.clone(),
@@ -448,6 +452,10 @@ impl PreparedProcess {
         self.pidfd.send_signal(signal)
     }
 
+    pub(super) fn signal_all(&self, signal: i32) -> Result<SignalOutcome> {
+        self.process_group.signal(&self.pidfd, signal)
+    }
+
     pub(super) const fn execution_context(&self) -> &RetainedExecutionContext {
         &self.execution_context
     }
@@ -515,7 +523,7 @@ impl PreparedProcess {
         if self.try_wait()?.is_some() {
             return Ok(());
         }
-        match self.pidfd.send_signal(libc::SIGKILL) {
+        match self.signal_all(libc::SIGKILL) {
             Ok(SignalOutcome::Delivered | SignalOutcome::Exited) => {}
             Err(error) => {
                 terminate(&mut self.child).await;

@@ -13,9 +13,9 @@ use super::control::{read_outcome, InitOutcome, START_BYTE};
 use super::io::ProcessIoHandle;
 use super::namespace::RetainedNamespaceArgument;
 use super::pid;
-use super::pid_supervisor;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::process::{bind_control_listener, convert_exit_status, terminate};
+use super::process_group::ProcessGroupLease;
 
 mod helper;
 
@@ -27,6 +27,7 @@ pub(super) struct ExecProcess {
     child: Child,
     pid: i32,
     pidfd: PidFd,
+    process_group: ProcessGroupLease,
     terminal: bool,
     io: ProcessIoHandle,
     exit_status: Option<ExitStatus>,
@@ -41,6 +42,7 @@ impl ExecProcess {
         io: &ProcessIo,
     ) -> Result<Self> {
         let context = init_process.execution_context();
+        let process_group = ProcessGroupLease::open_for_snapshot(snapshot).await?;
         let init_pidfd = init_process.pidfd_descriptor();
         let cgroup_procs = init_process.cgroup_procs_descriptor();
         let inherited = context.inherited_descriptors(init_pidfd)?;
@@ -250,6 +252,7 @@ impl ExecProcess {
             child,
             pid: runtime_pid,
             pidfd,
+            process_group,
             terminal,
             io: process_io,
             exit_status: None,
@@ -287,12 +290,15 @@ impl ExecProcess {
         self.pidfd.send_signal(signal)
     }
 
+    pub(super) fn signal_all(&self, signal: i32) -> Result<SignalOutcome> {
+        self.process_group.signal(&self.pidfd, signal)
+    }
+
     pub(super) async fn force_stop(&mut self) -> Result<()> {
         if self.try_wait()?.is_some() {
             return Ok(());
         }
-        pid_supervisor::terminate_process_group(self.pid);
-        match self.pidfd.send_signal(libc::SIGKILL) {
+        match self.signal_all(libc::SIGKILL) {
             Ok(SignalOutcome::Delivered | SignalOutcome::Exited) => {}
             Err(error) => {
                 terminate(&mut self.child).await;
