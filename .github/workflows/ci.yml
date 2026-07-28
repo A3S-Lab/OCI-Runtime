@@ -637,6 +637,124 @@ jobs:
           test ! -e "$marker_a"
           test ! -e "$marker_b"
       - if: runner.os == 'macOS'
+        name: Repeated macOS HVF utility-VM soak
+        shell: bash
+        timeout-minutes: 90
+        run: |
+          rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
+          signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
+          bundle_a="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
+          bundle_b="$rootfs_dir/var/lib/a3s-oci-smoke/bundle-b"
+          marker_a="$bundle_a/rootfs/.a3s-oci-create-start-smoke"
+          marker_b="$bundle_b/rootfs/.a3s-oci-create-start-smoke"
+          console_dir="$RUNNER_TEMP/a3s-oci-macos-hvf-soak-consoles"
+          report="$RUNNER_TEMP/a3s-oci-macos-hvf-soak.json"
+          iterations=25
+          mkdir -p "$console_dir"
+
+          endpoint_baseline="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          runtime_baseline="$(
+            find "$rootfs_dir/run" -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          set +e
+          output="$(
+            target/debug/a3s-oci macos-hvf-soak \
+              --shim "$signed_dir/a3s-oci-krun-shim" \
+              --vm-rootfs "$rootfs_dir" \
+              --bundle-a "$bundle_a" \
+              --bundle-b "$bundle_b" \
+              --console-dir "$console_dir" \
+              --iterations "$iterations"
+          )"
+          status=$?
+          set -e
+          printf '%s\n' "$output" | tee "$report"
+
+          support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+          architecture="$(uname -m)"
+          if [[ "$architecture" == "arm64" && "$support" == "1" ]]; then
+            test "$status" -eq 0
+            jq --exit-status --argjson iterations "$iterations" \
+              '.schema_version == "a3s.oci.macos-hvf-soak.v1"
+               and .platform == "macos" and .status == "available"
+               and .configuration.iterations == $iterations
+               and .configuration.concurrent_containers == 2
+               and .completed_iterations == $iterations
+               and .completed_vm_lifecycles == $iterations
+               and .completed_primary_container_generations
+                   == ($iterations * 3)
+               and .lifecycle_verified_every_iteration
+               and .namespace_join_verified_every_iteration
+               and .rootfs_mount_verified_every_iteration
+               and .pid_supervision_verified_every_iteration
+               and .markers_removed_every_iteration
+               and .guest_runtime_clean_every_iteration
+               and .host_cleanup_verified_every_iteration
+               and .unique_endpoint_names
+               and (.steady_open_descriptors > 0)
+               and .final_open_descriptors == .steady_open_descriptors
+               and .descriptor_count_stable
+               and .console_files_created == $iterations
+               and (.failure_iteration == null)
+               and (.reason == null)' \
+              "$report" >/dev/null
+            test "$(
+              find "$console_dir" -maxdepth 1 -type f \
+                -name 'macos-hvf-soak-*.log' | wc -l | tr -d ' '
+            )" -eq "$iterations"
+          elif [[ "$architecture" == "arm64" ]]; then
+            test "$status" -eq 2
+            jq --exit-status --argjson iterations "$iterations" \
+              '.schema_version == "a3s.oci.macos-hvf-soak.v1"
+               and .platform == "macos" and .status == "unavailable"
+               and .configuration.iterations == $iterations
+               and .configuration.concurrent_containers == 2
+               and .completed_iterations == 0
+               and .completed_vm_lifecycles == 0
+               and .completed_primary_container_generations == 0
+               and .failure_iteration == 1
+               and (.reason | length > 0)' \
+              "$report" >/dev/null
+          else
+            test "$status" -eq 2
+            jq --exit-status --argjson iterations "$iterations" \
+              '.schema_version == "a3s.oci.macos-hvf-soak.v1"
+               and .platform == "macos" and .status == "unsupported"
+               and .configuration.iterations == $iterations
+               and .configuration.concurrent_containers == 2
+               and .completed_iterations == 0
+               and (.failure_iteration == null)
+               and (.reason | length > 0)' \
+              "$report" >/dev/null
+          fi
+
+          endpoint_after="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          runtime_after="$(
+            find "$rootfs_dir/run" -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          test "$endpoint_after" = "$endpoint_baseline"
+          test "$runtime_after" = "$runtime_baseline"
+          test ! -e "$marker_a"
+          test ! -e "$marker_b"
+      - if: runner.os == 'macOS' && always()
+        name: Upload macOS HVF soak evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-hvf-soak-${{ runner.arch }}
+          path: |
+            ${{ runner.temp }}/a3s-oci-macos-hvf-soak.json
+            ${{ runner.temp }}/a3s-oci-macos-hvf-soak-consoles
+          if-no-files-found: warn
+          retention-days: 14
+      - if: runner.os == 'macOS'
         name: Fault-injected macOS OCI cleanup
         shell: bash
         run: |
@@ -751,19 +869,40 @@ jobs:
           done
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
+        env:
+          A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
         run: bash .github/scripts/native-linux-smoke.sh
+      - if: runner.os == 'Linux' && always()
+        name: Upload native Linux soak evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-soak-${{ runner.arch }}
+          path: ${{ runner.temp }}/a3s-oci-native-soak.json
+          if-no-files-found: warn
+          retention-days: 14
       - if: runner.os == 'Windows'
         run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
 
   native-linux-arm64:
     name: native-linux-lifecycle (aarch64)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: bash .github/scripts/native-linux-smoke.sh
+      - name: Native Linux SDK lifecycle without KVM
+        env:
+          A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
+        run: bash .github/scripts/native-linux-smoke.sh
+      - if: always()
+        name: Upload native Linux soak evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-soak-${{ runner.arch }}
+          path: ${{ runner.temp }}/a3s-oci-native-soak.json
+          if-no-files-found: warn
+          retention-days: 14
 
   guest-agent-musl:
     runs-on: ubuntu-latest
