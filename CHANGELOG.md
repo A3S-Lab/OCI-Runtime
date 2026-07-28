@@ -12,6 +12,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   update, freeze, statistics, OOM behavior, and cleanup scoped to one
   runtime-owned topology.
 
+### Fixed
+
+- Start trusted native init processes in the `control` cgroup instead of the
+  empty management envelope, preserving the cgroup-v2 no-internal-process
+  invariant when domain controllers are delegated to fixed children.
+
 ## [0.2.0] - 2026-07-27
 
 ### Added
