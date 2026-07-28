@@ -17,6 +17,8 @@ const GUEST_RUNTIME_PREFIX: &str = "a3s-oci-agent-";
 mod fault_cleanup;
 mod lifecycle;
 mod multi_container;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod soak;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -38,6 +40,26 @@ pub(super) async fn run_multi_container(
     console: &Path,
 ) -> crate::OciVmMultiContainerSmokeReport {
     multi_container::run(shim, vm_rootfs, bundle_a, bundle_b, console).await
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(super) async fn run_macos_hvf_soak(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    console_directory: &Path,
+    configuration: crate::MacosHvfSoakConfig,
+) -> crate::MacosHvfSoakReport {
+    soak::run(
+        shim,
+        vm_rootfs,
+        bundle_a,
+        bundle_b,
+        console_directory,
+        configuration,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

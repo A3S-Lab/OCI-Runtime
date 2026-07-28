@@ -5,8 +5,8 @@ use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
 use crate::{
-    LifecycleFaultPoint, OciVmFaultCleanupReport, OciVmMultiContainerSmokeReport,
-    WindowsOciVmMultiContainerSmokeReport,
+    LifecycleFaultPoint, MacosHvfSoakConfig, MacosHvfSoakReport, OciVmFaultCleanupReport,
+    OciVmMultiContainerSmokeReport, WindowsOciVmMultiContainerSmokeReport,
 };
 
 #[cfg(any(
@@ -71,6 +71,42 @@ pub async fn oci_vm_multi_container_smoke(
     {
         let _ = (shim, vm_rootfs, bundle_a, bundle_b, console);
         OciVmMultiContainerSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
+/// Repeatedly exercise the full two-container utility-VM profile on macOS HVF.
+///
+/// Each serial wave creates a fresh authenticated libkrun VM, exercises
+/// lifecycle, generation fencing, namespace joins, rootfs enforcement, and
+/// PID supervision, then proves host and guest resources returned to the same
+/// baseline before the next wave begins. Console files are iteration-scoped
+/// below the supplied existing directory and are never overwritten.
+#[must_use]
+pub async fn macos_hvf_soak(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_a: &Path,
+    bundle_b: &Path,
+    console_directory: &Path,
+    configuration: MacosHvfSoakConfig,
+) -> MacosHvfSoakReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_macos_hvf_soak(
+            shim,
+            vm_rootfs,
+            bundle_a,
+            bundle_b,
+            console_directory,
+            configuration,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle_a, bundle_b, console_directory);
+        MacosHvfSoakReport::unsupported(HostPlatform::current(), configuration)
     }
 }
 
