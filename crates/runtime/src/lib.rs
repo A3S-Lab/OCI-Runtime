@@ -20,6 +20,7 @@ mod driver;
 mod fault;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
+mod marker;
 mod multi_container_report;
 mod namespace_join;
 #[cfg(target_os = "linux")]
@@ -36,6 +37,7 @@ mod rootfs_enforcement;
 mod service;
 mod soak_report;
 mod state;
+mod utility_vm_soak_report;
 #[cfg(windows)]
 mod windows_security;
 
@@ -74,7 +76,7 @@ pub use native_smoke::{
     native_linux_service_smoke, native_linux_smoke, native_linux_soak,
 };
 pub use oci_smoke::{
-    oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke,
+    macos_hvf_soak, oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke,
     windows_oci_vm_multi_container_smoke,
 };
 pub use report::{
@@ -87,6 +89,10 @@ pub use soak_report::{
     MAX_SOAK_CONCURRENT_CONTAINERS, MAX_SOAK_ITERATIONS, MAX_SOAK_OPERATION_TIMEOUT_MS,
     MIN_SOAK_CONCURRENT_CONTAINERS, MIN_SOAK_OPERATION_TIMEOUT_MS,
     NATIVE_LINUX_SOAK_SCHEMA_VERSION,
+};
+pub use utility_vm_soak_report::{
+    MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,
+    MACOS_HVF_SOAK_SCHEMA_VERSION, MAX_MACOS_HVF_SOAK_ITERATIONS,
 };
 
 use a3s_oci_core::RuntimeFeatures;

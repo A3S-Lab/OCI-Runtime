@@ -173,6 +173,27 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
     },
+    /// Run repeated macOS HVF utility-VM lifecycle and leak checks.
+    MacosHvfSoak {
+        /// Isolated, entitlement-signed libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// First OCI bundle contained by the VM root filesystem.
+        #[arg(long, value_name = "DIR")]
+        bundle_a: PathBuf,
+        /// Second distinct OCI bundle contained by the VM root filesystem.
+        #[arg(long, value_name = "DIR")]
+        bundle_b: PathBuf,
+        /// Existing empty directory that receives one console per VM wave.
+        #[arg(long, value_name = "DIR")]
+        console_dir: PathBuf,
+        /// Number of complete utility-VM waves.
+        #[arg(long, default_value_t = 25)]
+        iterations: u32,
+    },
     /// Prove lifecycle isolation for two containers in the Windows WHPX bootstrap profile.
     WindowsOciVmMultiContainerSmoke {
         /// Isolated libkrun shim executable.
@@ -439,6 +460,31 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
         } => {
             let report = a3s_oci_runtime::oci_vm_multi_container_smoke(
                 &shim, &vm_rootfs, &bundle_a, &bundle_b, &console,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::MacosHvfSoak {
+            shim,
+            vm_rootfs,
+            bundle_a,
+            bundle_b,
+            console_dir,
+            iterations,
+        } => {
+            let report = a3s_oci_runtime::macos_hvf_soak(
+                &shim,
+                &vm_rootfs,
+                &bundle_a,
+                &bundle_b,
+                &console_dir,
+                a3s_oci_runtime::MacosHvfSoakConfig::new(iterations),
             )
             .await;
             let succeeded = report.is_success();

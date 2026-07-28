@@ -424,10 +424,13 @@ coverage visible rather than reducing the run to one success boolean.
 
 The accepted bounds are 1–10,000 iterations, 2–32 concurrent containers, and
 100–300,000 ms per SDK operation. `.github/scripts/native-linux-smoke.sh`
-constructs four independent BusyBox bundles and retains a three-wave report
-on both x86_64 and aarch64. Longer operator runs use the same command and JSON
-schema; for example, `--iterations 100 --concurrent-containers 4` proves 400
-complete container lifecycles. This gate covers native lifecycle churn and
+constructs four independent BusyBox bundles and defaults to 25 waves on both
+x86_64 and aarch64, retaining 100 complete container lifecycles. Set
+`A3S_OCI_NATIVE_SOAK_ITERATIONS` to another bounded value when an operator
+needs a shorter diagnostic or a longer qualification; the script derives all
+lifecycle, stale-generation, durable-reopen, and SDK-operation assertions from
+that value. CI also sets `A3S_OCI_NATIVE_SOAK_REPORT` and uploads the resulting
+JSON report for each architecture. This gate covers native lifecycle churn and
 leak detection. Hook failure/security-negative soak and runtime-process
 reattachment remain separate promotion work.
 

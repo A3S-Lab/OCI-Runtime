@@ -120,10 +120,11 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   version-negotiated host/guest session with one-time token authentication
 - **Retained Conformance Evidence**: Lock the OCI schemas and normative
   requirement inventory in CI so unreviewed coverage changes fail closed
-- **Complex-Container Soak Evidence**: Repeatedly keep independent native
-  containers live together while exercising lifecycle, queries, captured
-  exec, pause, durable service reopen, resume, generation reuse, and
-  process/descriptor/runtime cleanup through one versioned report
+- **Cross-Platform Soak Evidence**: Repeatedly keep independent native Linux
+  containers live together, or start a fresh macOS HVF utility VM for every
+  complete two-container matrix, while retaining lifecycle, generation,
+  namespace, mount, PID-supervision, process, descriptor, and runtime cleanup
+  evidence in versioned reports
 - **Native Configuration Matrix**: Qualify private, host-inherited, and
   donor-shared network namespaces; shared read-write and read-only binds;
   isolated tmpfs mounts; inline, executable-file, and direct-argv init; exact
@@ -371,9 +372,11 @@ and a stable open-descriptor count after every clean wave, followed by full
 executor and session removal.
 
 Configuration is bounded to 1–10,000 iterations, 2–32 concurrent containers,
-and 100–300,000 ms per operation. The repository CI uses three waves with four
-simultaneous containers on both x86_64 and aarch64; operators can retain the
-JSON from larger runs as release evidence.
+and 100–300,000 ms per operation. Repository CI defaults to 25 waves with four
+simultaneous containers, or 100 complete lifecycles, on both x86_64 and
+aarch64. `A3S_OCI_NATIVE_SOAK_ITERATIONS` can reduce or extend that gate while
+preserving dynamically calculated report assertions. Both jobs upload the
+JSON report as retained CI evidence.
 
 The separate fault-cleanup diagnostic deliberately stops before OCI delete and
 requires executor shutdown to reclaim the live process and all scoped state:
@@ -587,6 +590,33 @@ explicit `idmap` and `ridmap` ownership on detached filesystem mounts, a
 read-only rootfs, a PID 2+ configured process beneath a dedicated namespace
 PID 1, and adopted-orphan reaping before exact cleanup; and VM shutdown
 restores guest-runtime, endpoint, descriptor, shim, and worker inventories.
+
+The macOS soak gate repeats that complete matrix in a fresh authenticated HVF
+utility VM for every wave:
+
+```sh
+console_dir="$rootfs_dir/macos-hvf-soak-consoles"
+mkdir "$console_dir"
+
+target/debug/a3s-oci macos-hvf-soak \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --vm-rootfs "$rootfs_dir/rootfs" \
+  --bundle-a "$bundle" \
+  --bundle-b "$bundle_b" \
+  --console-dir "$console_dir" \
+  --iterations 25
+```
+
+`a3s.oci.macos-hvf-soak.v1` accepts 1–10,000 serial waves and fixes each wave
+at two primary concurrent containers. Success requires all configured VM
+lifecycles and three primary generations per wave, complete lifecycle,
+namespace-join, rootfs/mount, and PID-supervision evidence, distinct protected
+endpoint names, exact marker and guest-runtime cleanup, shim and VM-worker
+reaping, and identical descriptor counts before and after every wave. Console
+paths are iteration-scoped and existing files are never overwritten. macOS CI
+requires 25 successful waves when HVF is available and uploads the JSON report
+and all per-wave consoles; an unavailable host must instead retain a
+first-wave fail-closed report.
 
 Fault cleanup reuses the same signed shim and bundle but stops after each
 successful lifecycle boundary:
@@ -827,9 +857,9 @@ boundary.
 
 | Host | Execution path | Retained evidence | Current readiness |
 | --- | --- | --- | --- |
-| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle through both the in-process SDK and the private same-UID Unix SDK service, with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, signal-driven owner cleanup, hooks, cgroup controls, I/O, PTY, two-container isolation, private/host/shared network identity, shared/read-only bind volumes, private tmpfs, init/Hook success and failure profiles, namespace joins, mount enforcement, and fault cleanup; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
+| Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle through both the in-process SDK and the private same-UID Unix SDK service, with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, signal-driven owner cleanup, hooks, cgroup controls, I/O, PTY, two-container isolation, private/host/shared network identity, shared/read-only bind volumes, private tmpfs, init/Hook success and failure profiles, namespace joins, mount enforcement, fault cleanup, and a retained 25-wave × 4-container soak; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
-| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, and no-delete cleanup after create, start, and kill | `probe-only`; complete enforcement and recovery pending |
+| macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, no-delete cleanup after create, start, and kill, and a versioned 25-wave fresh-VM soak gate with endpoint/process/descriptor/runtime cleanup | `probe-only`; immutable system image, exhaustive recovery, and hardware qualification pending |
 | Windows x86_64 | libkrun + WHPX utility VM | Partition and context probes; authenticated protocol-v8 agent; fixed lifecycle with process/PTY I/O, update/stats and pause/resume; repeated serial and parallel VMs; two containers in one VM; private/inherited network namespaces; RW/RO bind volumes; init success/failure; typed negatives; lifecycle and owner-death cleanup with inventory/resource evidence | `probe-only`; user/time namespaces, advanced mounts, restart recovery, and immutable system-image qualification pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
@@ -1002,17 +1032,17 @@ Platform CI covers:
 - Ubuntu x86_64 native pidfd probe, lifecycle, multi-container,
   private/host/shared network modes, shared/read-only bind and private-tmpfs
   storage profiles, init/Hook positive and negative profiles, four-container
-  churn soak, existing-namespace and rootfs/mount isolation, and three-phase
-  no-delete cleanup without KVM;
+  25-wave churn soak, existing-namespace and rootfs/mount isolation, and
+  three-phase no-delete cleanup without KVM;
 - Ubuntu aarch64 native pidfd probe, lifecycle, multi-container,
   private/host/shared network modes, shared/read-only bind and private-tmpfs
   storage profiles, init/Hook positive and negative profiles, four-container
-  churn soak, existing-namespace and rootfs/mount isolation, and three-phase
-  no-delete cleanup without KVM;
+  25-wave churn soak, existing-namespace and rootfs/mount isolation, and
+  three-phase no-delete cleanup without KVM;
 - macOS HVF, isolated libkrun context, guest-marker, authenticated-agent,
   pidfd-backed fixed, multi-container, existing-namespace, and rootfs/mount OCI
-  lifecycles, three-phase no-delete cleanup, and missing-entitlement
-  fail-closed gates;
+  lifecycles, a 25-wave fresh-VM soak with retained JSON and consoles,
+  three-phase no-delete cleanup, and missing-entitlement fail-closed gates;
 - Windows WHPX and libkrun context gates;
 - static x86_64 and aarch64 musl guest-agent output.
 

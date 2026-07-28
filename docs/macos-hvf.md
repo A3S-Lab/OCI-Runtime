@@ -515,6 +515,42 @@ descriptor-inventory restoration. The Apple Silicon HVF qualification and
 macOS CI both run this gate; an unavailable-hypervisor branch must fail before
 negotiation while retaining the same host cleanup evidence.
 
+## Repeated HVF soak gate
+
+`macos-hvf-soak` repeats the complete multi-container matrix above while
+creating a fresh authenticated libkrun/HVF utility VM for every serial wave:
+
+```sh
+console_dir="$asset_dir/macos-hvf-soak-consoles"
+mkdir "$console_dir"
+
+target/debug/a3s-oci macos-hvf-soak \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --vm-rootfs "$rootfs" \
+  --bundle-a "$bundle_a" \
+  --bundle-b "$bundle_b" \
+  --console-dir "$console_dir" \
+  --iterations 25
+```
+
+The bounded `a3s.oci.macos-hvf-soak.v1` configuration accepts 1–10,000 waves
+and always keeps two primary containers live together. Each successful wave
+qualifies initial A and B plus recreated A, then aggregates the existing
+lifecycle/generation, eight-namespace join, rootfs/mount, ID-mapped mount,
+namespace PID 1, and orphan-reaping evidence. It also requires removal of both
+workload markers and the guest runtime directory, exact endpoint, shim, and VM
+worker cleanup, a distinct protected endpoint name for every wave, and the
+same positive host descriptor count before and after every wave.
+
+Every console uses the sortable name `macos-hvf-soak-NNNNN.log`; the command
+refuses to overwrite any existing path. A successful report must retain one
+console and three primary container generations for every configured wave.
+The macOS CI gate requests 25 waves, independently compares host endpoint and
+guest runtime inventories, and uploads the JSON report plus all consoles for
+14 days. Apple Silicon without available HVF must return status 2 with
+`failure_iteration: 1`; Intel macOS is reported as unsupported. Neither branch
+is counted as hardware soak success.
+
 The historical pidfd requalification used the 8,493,136-byte static arm64
 agent with
 SHA-256

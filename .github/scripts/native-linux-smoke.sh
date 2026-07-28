@@ -12,6 +12,9 @@ rootless_gid=20000
 rootless_user_created=false
 rootless_group_created=false
 soak_bundles=()
+soak_iterations="${A3S_OCI_NATIVE_SOAK_ITERATIONS:-25}"
+soak_concurrent_containers=4
+soak_operation_timeout_ms=30000
 unprivileged_userns_original=""
 unprivileged_userns_changed=false
 apparmor_userns_original=""
@@ -86,6 +89,12 @@ restore_host() {
   exit "$cleanup_status"
 }
 trap restore_host EXIT
+
+if [[ ! "$soak_iterations" =~ ^[0-9]+$ ]] ||
+  ((soak_iterations < 1 || soak_iterations > 10000)); then
+  printf 'A3S_OCI_NATIVE_SOAK_ITERATIONS must be an integer from 1 to 10000\n' >&2
+  exit 2
+fi
 
 sudo apt-get update
 sudo apt-get install --yes busybox-static jq uidmap util-linux
@@ -548,9 +557,9 @@ run_soak() {
     native-linux-soak
     --agent "$PWD/target/debug/a3s-oci-agent"
     --work-parent "$work_parent"
-    --iterations 3
-    --concurrent-containers 4
-    --operation-timeout-ms 30000
+    --iterations "$soak_iterations"
+    --concurrent-containers "$soak_concurrent_containers"
+    --operation-timeout-ms "$soak_operation_timeout_ms"
   )
   for candidate in "${soak_bundles[@]}"; do
     arguments+=(--bundle "$candidate")
@@ -561,49 +570,58 @@ run_soak() {
     status=$?
   fi
   printf '%s\n' "$output"
+  if [[ -n "${A3S_OCI_NATIVE_SOAK_REPORT:-}" ]]; then
+    mkdir -p "$(dirname "$A3S_OCI_NATIVE_SOAK_REPORT")"
+    printf '%s\n' "$output" >"$A3S_OCI_NATIVE_SOAK_REPORT"
+  fi
   if ((status != 0)); then
     report_native_failure "${soak_bundles[0]}/rootfs"
     return "$status"
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-soak.v1"
+    --argjson iterations "$soak_iterations" \
+    --argjson concurrent "$soak_concurrent_containers" \
+    --argjson operation_timeout_ms "$soak_operation_timeout_ms" \
+    '($iterations * $concurrent) as $lifecycles
+     | (($iterations - 1) * $concurrent) as $stale
+     | .schema_version == "a3s.oci.native-linux-soak.v1"
      and .platform == "linux" and .status == "available"
-     and .configuration
-         == {"iterations": 3, "concurrent_containers": 4,
-             "operation_timeout_ms": 30000}
+     and .configuration.iterations == $iterations
+     and .configuration.concurrent_containers == $concurrent
+     and .configuration.operation_timeout_ms == $operation_timeout_ms
      and .kvm_device_present == $expected
-     and .bundles_loaded == 4
+     and .bundles_loaded == $concurrent
      and .distinct_bundles_and_rootfs
      and .service_operations
          == ["features", "create", "state", "start", "kill", "delete",
              "exec", "wait", "list", "pause", "resume", "update", "processes",
              "stats", "events", "read-output", "write-stdin", "close-stdin", "resize",
              "signal-process", "wait-process"]
-     and .completed_iterations == 3
-     and .completed_container_lifecycles == 12
-     and .operation_counts.features == 4
-     and .operation_counts.create == 12
-     and .operation_counts.state >= 44
-     and .operation_counts.start == 12
-     and .operation_counts.list == 9
-     and .operation_counts.exec == 12
-     and .operation_counts.wait_process == 12
-     and .operation_counts.processes == 12
-     and .operation_counts.stats == 12
-     and .operation_counts.pause == 12
-     and .operation_counts.resume == 12
-     and .operation_counts.kill == 12
-     and .operation_counts.wait == 12
-     and .operation_counts.delete == 12
-     and .operation_counts.read_output >= 12
-     and .max_live_containers == 4
+     and .completed_iterations == $iterations
+     and .completed_container_lifecycles == $lifecycles
+     and .operation_counts.features == ($iterations + 1)
+     and .operation_counts.create == $lifecycles
+     and .operation_counts.state >= (($lifecycles * 3) + $stale)
+     and .operation_counts.start == $lifecycles
+     and .operation_counts.list == ($iterations * 3)
+     and .operation_counts.exec == $lifecycles
+     and .operation_counts.wait_process == $lifecycles
+     and .operation_counts.processes == $lifecycles
+     and .operation_counts.stats == $lifecycles
+     and .operation_counts.pause == $lifecycles
+     and .operation_counts.resume == $lifecycles
+     and .operation_counts.kill == $lifecycles
+     and .operation_counts.wait == $lifecycles
+     and .operation_counts.delete == $lifecycles
+     and .operation_counts.read_output >= $lifecycles
+     and .max_live_containers == $concurrent
      and .unique_live_pids
      and .generation_sequence_verified
-     and .stale_generation_rejections == 8
+     and .stale_generation_rejections == $stale
      and .exec_output_verified
      and .pause_resume_verified
-     and .durable_reopens == 3
+     and .durable_reopens == $iterations
      and .durable_recovery_verified
      and .runtime_empty_after_each_iteration
      and .executor_empty_after_each_iteration

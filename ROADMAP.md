@@ -67,6 +67,10 @@ Completed:
   boundaries, with exact fault identity, guest executor shutdown, endpoint and
   marker removal, shim/worker reap, descriptor-inventory restoration, and no
   new guest runtime root;
+- bounded, versioned macOS HVF soak orchestration that starts a fresh utility
+  VM for every complete two-container lifecycle, namespace-join, rootfs/mount,
+  and PID-supervision matrix, and retains unique endpoint, process,
+  descriptor, marker, runtime-root, and per-wave console evidence;
 - explicit native Linux driver integration that reuses the shared executor
   without linking or initializing libkrun;
 - real native Linux create/state/start/kill/wait/delete SDK evidence on x86_64
@@ -346,6 +350,10 @@ runtime-root leak. Only then may WHPX become `experimental`.
   Each phase requires exact endpoint removal, observed-PID reap, complete
   descriptor-inventory restoration, marker removal, and no new guest runtime
   root.
+- [x] Add a bounded, versioned 25-wave HVF soak gate that creates a fresh VM
+  for every complete two-container matrix, retains three primary generations
+  per wave, rejects endpoint and descriptor drift, and uploads its JSON report
+  and per-wave consoles in CI.
 - [x] Retain fail-closed unavailable-virtualization, missing-entitlement,
   invalid-runtime-asset, missing-agent-rootfs, wrong-token, and unexpected-peer
   evidence without reporting false negotiation.
@@ -495,7 +503,9 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Add a bounded, versioned native complex-container soak that repeatedly
   drives concurrent lifecycle, query, captured exec, pause, durable service
   reopen, resume, generation reuse, and leak checks across four independent
-  slots on x86_64 and aarch64 without KVM.
+  slots on x86_64 and aarch64 without KVM. CI defaults to 25 waves, verifies
+  100 complete lifecycles from dynamic operation counts, and retains each
+  architecture's JSON report.
 - [x] Retain a versioned real-driver configuration matrix for private,
   host-inherited, and donor-shared network namespaces; shared/read-only bind
   and private-tmpfs storage; inline/script/direct/nonzero init; and selected
