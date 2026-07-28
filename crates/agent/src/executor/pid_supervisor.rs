@@ -336,17 +336,18 @@ pub(super) fn terminate_pid(pid: libc::pid_t) {
 pub(super) fn establish_process_group() -> Result<()> {
     // SAFETY: getpid and getpgrp have no preconditions.
     let (pid, process_group) = unsafe { (libc::getpid(), libc::getpgrp()) };
-    if pid <= 0 || process_group <= 0 {
+    if pid <= 0 {
         return Err(supervisor_error(
             ErrorCode::Internal,
-            format!(
-                "configured workload reported invalid PID {pid} or process group {process_group}"
-            ),
+            format!("configured workload reported invalid PID {pid}"),
         ));
     }
     if process_group == pid {
         return Ok(());
     }
+    // Linux reports PGID 0 when the inherited process-group leader is not
+    // visible in the current PID namespace. Treat that as requiring a local
+    // group rather than rejecting a valid namespace child.
     // SAFETY: zero selects the current process and requests a new process
     // group led by that process before untrusted workload code is released.
     if unsafe { libc::setpgid(0, 0) } == 0 {
