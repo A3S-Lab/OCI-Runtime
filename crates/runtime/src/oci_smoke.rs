@@ -1,6 +1,5 @@
 use std::path::Path;
 
-#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
 use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
