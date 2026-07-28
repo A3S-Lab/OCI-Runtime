@@ -15,6 +15,7 @@ use tokio::time::{sleep, timeout, Instant};
 use super::control_descriptors::ControlDescriptorFixture;
 use super::filesystem::{path_exists, read_marker, MARKER_CONTENTS};
 use super::process;
+use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::{
     FaultInjectionEvidence, HostRuntimeService, LifecycleFaultPoint, NativeLinuxSmokeReport,
 };
@@ -824,10 +825,13 @@ async fn wait_for_exact_marker(
             }
         }
         if path_exists(marker).await? {
-            if read_marker(marker).await? == MARKER_CONTENTS {
-                return Ok(());
+            match exact_marker_state(&read_marker(marker).await?, MARKER_CONTENTS) {
+                ExactMarkerState::Complete => return Ok(()),
+                ExactMarkerState::InProgress => {}
+                ExactMarkerState::Mismatch => {
+                    return Err("native workload produced unexpected marker contents".into());
+                }
             }
-            return Err("native workload produced unexpected marker contents".into());
         }
         if Instant::now() >= deadline {
             return Err("timed out waiting for native workload marker".into());

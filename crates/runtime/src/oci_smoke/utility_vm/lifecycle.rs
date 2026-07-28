@@ -19,6 +19,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{sleep, timeout, Instant};
 
 use super::{path_exists, read_marker, OciVmSmokeReport};
+use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::{FaultInjectionEvidence, LifecycleFaultPoint};
 
 const GUEST_CALL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -1058,10 +1059,13 @@ async fn wait_for_exact_marker<T: AgentStream>(
             }
         }
         if path_exists(marker).await? {
-            if read_marker(marker).await? == MARKER_CONTENTS {
-                return Ok(());
+            match exact_marker_state(&read_marker(marker).await?, MARKER_CONTENTS) {
+                ExactMarkerState::Complete => return Ok(()),
+                ExactMarkerState::InProgress => {}
+                ExactMarkerState::Mismatch => {
+                    return Err("configured process produced unexpected marker contents".into());
+                }
             }
-            return Err("configured process produced unexpected marker contents".into());
         }
         if Instant::now() >= deadline {
             return Err("timed out waiting for the running workload marker".into());

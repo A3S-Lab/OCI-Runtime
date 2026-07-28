@@ -18,6 +18,7 @@ use super::filesystem::{
     canonical_directory, create_private_directory, fixed_rootfs, path_exists, read_marker,
     remove_marker, unique_nonce,
 };
+use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::{HostRuntimeService, NativeLinuxDriver, NativeLinuxRootlessSmokeReport, RuntimeDriver};
 
 mod config;
@@ -449,11 +450,13 @@ async fn wait_for_marker(
             return Err("rootless workload stopped before producing its marker".into());
         }
         if path_exists(marker).await? {
-            return if read_marker(marker).await? == MARKER_CONTENTS {
-                Ok(())
-            } else {
-                Err("rootless workload produced unexpected marker contents".into())
-            };
+            match exact_marker_state(&read_marker(marker).await?, MARKER_CONTENTS) {
+                ExactMarkerState::Complete => return Ok(()),
+                ExactMarkerState::InProgress => {}
+                ExactMarkerState::Mismatch => {
+                    return Err("rootless workload produced unexpected marker contents".into());
+                }
+            }
         }
         if Instant::now() >= deadline {
             return Err("timed out waiting for rootless workload marker".into());

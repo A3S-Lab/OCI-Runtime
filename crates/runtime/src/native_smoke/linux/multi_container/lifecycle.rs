@@ -11,6 +11,7 @@ use a3s_oci_sdk::{
 use tokio::time::{sleep, timeout, Instant};
 
 use super::super::filesystem::{path_exists, read_marker, remove_marker, MARKER_CONTENTS};
+use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::NativeLinuxMultiContainerSmokeReport;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -458,10 +459,13 @@ pub(super) async fn wait_for_marker(
             ),
         )?;
         if path_exists(marker).await? {
-            return require(
-                read_marker(marker).await? == MARKER_CONTENTS,
-                "workload produced unexpected marker contents",
-            );
+            match exact_marker_state(&read_marker(marker).await?, MARKER_CONTENTS) {
+                ExactMarkerState::Complete => return Ok(()),
+                ExactMarkerState::InProgress => {}
+                ExactMarkerState::Mismatch => {
+                    return Err("workload produced unexpected marker contents".into());
+                }
+            }
         }
         if Instant::now() >= deadline {
             return Err("timed out waiting for multi-container workload marker".into());

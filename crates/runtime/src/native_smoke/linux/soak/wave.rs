@@ -17,6 +17,7 @@ use tokio::task::JoinSet;
 use tokio::time::{sleep, timeout, Instant};
 
 use super::super::filesystem::{path_exists, read_marker, MARKER_CONTENTS};
+use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::NativeLinuxSoakReport;
 
 const MARKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -581,13 +582,16 @@ async fn wait_for_markers(markers: &[PathBuf], timeout_duration: Duration) -> Re
         let mut complete = true;
         for marker in markers {
             if path_exists(marker).await? {
-                require(
-                    read_marker(marker).await? == MARKER_CONTENTS,
-                    format!(
-                        "soak marker contained unexpected data: {}",
-                        marker.display()
-                    ),
-                )?;
+                match exact_marker_state(&read_marker(marker).await?, MARKER_CONTENTS) {
+                    ExactMarkerState::Complete => {}
+                    ExactMarkerState::InProgress => complete = false,
+                    ExactMarkerState::Mismatch => {
+                        return Err(format!(
+                            "soak marker contained unexpected data: {}",
+                            marker.display()
+                        ));
+                    }
+                }
             } else {
                 complete = false;
             }
