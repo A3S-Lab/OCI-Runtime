@@ -245,14 +245,14 @@ async fn exercise(
         context: operation(nonce, "kill")?,
         target: target.clone(),
         signal: Signal::new(libc::SIGKILL)
-            .map_err(|error| format!("failed to construct rootless init signal: {error}"))?,
-        all: false,
+            .map_err(|error| format!("failed to construct rootless container signal: {error}"))?,
+        all: true,
     };
-    let killed = call("rootless init kill", client.kill(kill.clone())).await?;
-    let replayed_kill = call("replayed rootless init kill", client.kill(kill)).await?;
+    let killed = call("rootless container-wide kill", client.kill(kill.clone())).await?;
+    let replayed_kill = call("replayed rootless container-wide kill", client.kill(kill)).await?;
     report.init_kill_replayed = replayed_kill == killed;
     if !report.init_kill_replayed {
-        return Err("rootless init kill did not replay exactly".into());
+        return Err("rootless container-wide kill did not replay exactly".into());
     }
     let wait = WaitRequest {
         target: target.clone(),

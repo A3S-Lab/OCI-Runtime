@@ -16,6 +16,7 @@ use crate::executor::namespace::{apply_supplementary_groups, become_user_namespa
 use crate::executor::pid;
 use crate::executor::pid_supervisor;
 use crate::executor::plan::ProcessPlan;
+use crate::executor::process_group::ProcessGroupLease;
 use crate::executor::rootfs;
 
 pub(super) fn run_container_exec_if_requested() -> Option<Result<()>> {
@@ -165,6 +166,10 @@ fn run_container_exec(arguments: HelperArguments) -> Result<()> {
             format!("failed to connect container exec control socket: {error}"),
         )
     })?;
+    let process_group = match ProcessGroupLease::open_for_snapshot_sync(&snapshot) {
+        Ok(process_group) => process_group,
+        Err(error) => return reject_exec(&mut control, error),
+    };
     let prepared = prepare_helper(&snapshot);
     let (plan, host_proc) = match prepared {
         Ok(prepared) => prepared,
@@ -213,7 +218,11 @@ fn run_container_exec(arguments: HelperArguments) -> Result<()> {
     drop(host_proc);
     drop(rootfs);
     drop(namespaces);
-    let outcome = pid_supervisor::supervise_exec_payload(payload_pid, init_pidfd.as_raw_fd())?;
+    let outcome = pid_supervisor::supervise_exec_payload(
+        payload_pid,
+        init_pidfd.as_raw_fd(),
+        &process_group,
+    )?;
     pid_supervisor::mirror_child_outcome(outcome)
 }
 
@@ -260,10 +269,8 @@ fn run_exec_payload(
         Ok(pid) => pid,
         Err(error) => return reject_exec(control, error),
     };
-    // SAFETY: the child is single-threaded and becomes leader of a dedicated
-    // process group before any untrusted program is released.
-    if unsafe { libc::setpgid(0, 0) } != 0 {
-        return reject_exec(control, last_exec_os_error("create exec process group"));
+    if let Err(error) = pid_supervisor::establish_process_group() {
+        return reject_exec(control, error);
     }
     if let Err(error) = crate::executor::terminal::make_foreground_process_group(plan.terminal) {
         return reject_exec(

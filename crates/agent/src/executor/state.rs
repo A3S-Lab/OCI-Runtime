@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::cgroup::CgroupManager;
 use super::exec_process::ExecProcess;
+use super::pidfd::SignalOutcome;
 use super::process::PreparedProcess;
 use super::{executor_error, MAX_OPERATION_RECORDS};
 
@@ -250,6 +251,26 @@ impl ContainerRecord {
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
+        }
+    }
+
+    pub(super) fn signal_all(&self, signal: i32) -> Result<SignalOutcome> {
+        let mut first_error = None;
+        for process in self.processes.values() {
+            if let Err(error) = process.signal_all(signal) {
+                first_error.get_or_insert(error);
+            }
+        }
+        let init_outcome = match self.process.signal_all(signal) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                SignalOutcome::Exited
+            }
+        };
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(init_outcome),
         }
     }
 }

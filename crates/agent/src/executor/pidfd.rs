@@ -79,6 +79,10 @@ impl PidFd {
     pub(super) fn raw_descriptor(&self) -> RawFd {
         self.descriptor.as_raw_fd()
     }
+
+    pub(super) const fn pid(&self) -> i32 {
+        self.pid
+    }
 }
 
 pub(crate) fn verify_support() -> Result<()> {

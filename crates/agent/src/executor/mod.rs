@@ -14,11 +14,16 @@ mod mount_tests;
 mod namespace;
 mod pid;
 mod pid_supervisor;
+#[cfg(test)]
+mod pid_supervisor_tests;
 mod pidfd;
 mod plan;
 #[cfg(test)]
 mod plan_tests;
 mod process;
+mod process_group;
+#[cfg(test)]
+mod process_group_tests;
 mod process_io;
 mod rlimit;
 mod rootfs;
@@ -558,12 +563,6 @@ impl LinuxExecutor {
 
     fn kill_new(state: &mut ExecutorState, request: &AgentKillRequest) -> Result<AgentState> {
         validate_deadline(&request.context)?;
-        if request.all {
-            return Err(executor_error(
-                ErrorCode::Unsupported,
-                "process-group signaling is not implemented by the bootstrap executor",
-            ));
-        }
         let key = ContainerKey::from_target(&request.target)?;
         let record = state.containers.get_mut(&key).ok_or_else(|| {
             executor_error(
@@ -581,7 +580,12 @@ impl LinuxExecutor {
                 "cannot signal a stopped container",
             ));
         }
-        match record.process.signal(request.signal.get())? {
+        let outcome = if request.all {
+            record.signal_all(request.signal.get())?
+        } else {
+            record.process.signal(request.signal.get())?
+        };
+        match outcome {
             SignalOutcome::Delivered => record.refresh()?,
             SignalOutcome::Exited => record.status = ContainerState::Stopped,
         }

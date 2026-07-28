@@ -234,10 +234,12 @@ same operation ID fails closed.
 
 Terminal execution adapts the A3S Box PTY design. `openpty` supplies one
 runtime-owned master and child descriptors 0-2 use the slave. The launcher
-creates a session, acquires the slave as its controlling terminal, and places
-the workload process group in the foreground. Terminal output is merged into
-the existing stdout cursor, `resize` applies `TIOCSWINSZ`, and close-stdin
-delivers the active `VEOF` byte while retaining the readable master.
+creates a session and acquires the slave as its controlling terminal. The
+configured payload then becomes the leader of its dedicated supervised
+process group and moves that group into the foreground before untrusted code
+runs. Terminal output is merged into the existing stdout cursor, `resize`
+applies `TIOCSWINSZ`, and close-stdin delivers the active `VEOF` byte while
+retaining the readable master.
 
 Create retains descriptors for the configured process's root and every
 configured namespace. A fresh single-threaded exec helper inherits only those
@@ -259,6 +261,16 @@ remaining group members, preserving the leader PID/PGID until cleanup is
 issued—the same ownership mechanism proven by A3S Box's PID 1 reaper. Delete,
 shutdown, and session EOF also force-stop and reap every registered exec
 helper and process group before removing state.
+
+A container-wide kill first authenticates every registered exec leader and the
+configured leader through their retained pidfds, then delivers the requested
+Linux signal to each owned process group, with init signaled last. Supervisors
+keep exited leaders waitable with `waitid(WNOWAIT)` until descendant cleanup;
+the direct launcher remains wait-owned by the executor. Numeric PID/PGID reuse
+therefore cannot redirect the group signal: a cross-process advisory lease on
+the private process directory serializes pidfd validation and group delivery
+against final cleanup/reap. The path works without delegated cgroup v2 and
+retains exact operation replay.
 
 The executor creates one private controller-enabled cgroup-v2 root and places
 each init and exec pair in the same owned leaf. This permits a later update
@@ -286,11 +298,10 @@ agent-owned runtime root. Agent restart recovery is not implemented yet.
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,
-unsupported cgroup I/O, hugetlb, RDMA, and unified resources, process-group
-signals, and every other unimplemented OCI
-property. Rootless cgroup-v2 and device delegation, hook rollback/recovery,
-security-negative, and soak certification remain release blockers rather than
-silently accepted compatibility gaps.
+unsupported cgroup I/O, hugetlb, RDMA, and unified resources, and every other
+unimplemented OCI property. Rootless cgroup-v2 and device delegation, hook
+rollback/recovery, security-negative, and soak certification remain release
+blockers rather than silently accepted compatibility gaps.
 
 ## Build And Evidence
 
