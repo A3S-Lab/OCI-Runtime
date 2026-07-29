@@ -127,6 +127,13 @@ struct ControlWorkloadCgroup {
     workload_procs: File,
 }
 
+#[derive(Debug)]
+struct ControlWorkloadMembership {
+    init_procs: File,
+    control_procs: File,
+    workload_procs: File,
+}
+
 impl CgroupHandle {
     pub(super) fn create(
         plan: &CgroupPlan,
@@ -179,9 +186,9 @@ impl CgroupHandle {
         }
         let configured = (|| {
             initialize_cpuset(&current)?;
-            let init_procs = open_cgroup_procs(&current)?;
             let Some(headroom) = plan.control_headroom() else {
                 apply_settings(&current, &plan.settings())?;
+                let init_procs = open_cgroup_procs(&current)?;
                 return Ok((current.clone(), init_procs, None));
             };
 
@@ -200,13 +207,18 @@ impl CgroupHandle {
             initialize_cpuset(&workload)?;
             apply_settings(&workload, &plan.settings_with_oom_group(false))?;
 
+            // The management cgroup delegates domain controllers to its fixed
+            // children and therefore cannot contain processes. Start the
+            // trusted init directly in control; FD 6 keeps that membership
+            // authoritative after exec while FD 7 is reserved for workloads.
+            let membership = open_control_workload_membership(&control, &workload)?;
             let control_workload = ControlWorkloadCgroup {
                 management: current.clone(),
                 headroom: headroom.clone(),
-                control_procs: open_cgroup_procs(&control)?,
-                workload_procs: open_cgroup_procs(&workload)?,
+                control_procs: membership.control_procs,
+                workload_procs: membership.workload_procs,
             };
-            Ok((workload, init_procs, Some(control_workload)))
+            Ok((workload, membership.init_procs, Some(control_workload)))
         })();
         match configured {
             Ok((leaf, init_procs, control_workload)) => Ok(Some(Self {
@@ -357,6 +369,17 @@ fn create_cgroup_directory(path: &Path, created: &mut Vec<PathBuf>) -> Result<()
     })?;
     created.push(path.to_path_buf());
     Ok(())
+}
+
+fn open_control_workload_membership(
+    control: &Path,
+    workload: &Path,
+) -> Result<ControlWorkloadMembership> {
+    Ok(ControlWorkloadMembership {
+        init_procs: open_cgroup_procs(control)?,
+        control_procs: open_cgroup_procs(control)?,
+        workload_procs: open_cgroup_procs(workload)?,
+    })
 }
 
 fn open_cgroup_procs(path: &Path) -> Result<File> {
@@ -670,8 +693,35 @@ mod tests {
 
     use super::{
         cgroup2_mountpoint, cgroup_event_value, install_control_workload_descriptors_from_pre_exec,
-        open_cgroup_procs,
+        open_cgroup_procs, open_control_workload_membership,
     };
+
+    #[test]
+    fn places_trusted_init_and_control_in_the_control_leaf() {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = tempfile::tempdir().expect("temporary cgroup topology");
+        let control_path = directory.path().join("control");
+        let workload_path = directory.path().join("workload");
+        std::fs::create_dir(&control_path).expect("control directory");
+        std::fs::create_dir(&workload_path).expect("workload directory");
+        let control_file = control_path.join("cgroup.procs");
+        let workload_file = workload_path.join("cgroup.procs");
+        std::fs::write(&control_file, "").expect("control descriptor file");
+        std::fs::write(&workload_file, "").expect("workload descriptor file");
+
+        let membership = open_control_workload_membership(&control_path, &workload_path)
+            .expect("control/workload membership");
+        let inode = |file: &std::fs::File| file.metadata().expect("membership metadata").ino();
+        assert_eq!(
+            inode(&membership.init_procs),
+            inode(&membership.control_procs)
+        );
+        assert_ne!(
+            inode(&membership.init_procs),
+            inode(&membership.workload_procs)
+        );
+    }
 
     #[test]
     fn installs_fixed_control_workload_descriptors_across_exec() {
