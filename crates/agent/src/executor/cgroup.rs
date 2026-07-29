@@ -125,13 +125,7 @@ struct ControlWorkloadCgroup {
     headroom: ControlHeadroom,
     control_procs: File,
     workload_procs: File,
-}
-
-#[derive(Debug)]
-struct ControlWorkloadMembership {
-    init_procs: File,
-    control_procs: File,
-    workload_procs: File,
+    activated: bool,
 }
 
 impl CgroupHandle {
@@ -186,39 +180,34 @@ impl CgroupHandle {
         }
         let configured = (|| {
             initialize_cpuset(&current)?;
+            let init_procs = open_cgroup_procs(&current)?;
             let Some(headroom) = plan.control_headroom() else {
                 apply_settings(&current, &plan.settings())?;
-                let init_procs = open_cgroup_procs(&current)?;
                 return Ok((current.clone(), init_procs, None));
             };
 
-            // The OCI leaf is an empty management envelope at create time, so
-            // controllers can be delegated once to the two fixed children.
+            // Stage the fixed children without enabling domain controllers in
+            // the management cgroup. Linux rejects moving the prepared init
+            // into a cgroup with domain controllers delegated to children.
+            // Activation therefore happens only after that process has made
+            // the management cgroup the root of its new cgroup namespace.
             let management = plan.management_plan(headroom)?;
             apply_settings(&current, &management.settings())?;
-            enable_controllers(&current, controllers)?;
 
             let control = current.join(CONTROL_CGROUP_NAME);
             create_cgroup_directory(&control, &mut created)?;
-            initialize_cpuset(&control)?;
 
             let workload = current.join(WORKLOAD_CGROUP_NAME);
             create_cgroup_directory(&workload, &mut created)?;
-            initialize_cpuset(&workload)?;
-            apply_settings(&workload, &plan.settings_with_oom_group(false))?;
 
-            // The management cgroup delegates domain controllers to its fixed
-            // children and therefore cannot contain processes. Start the
-            // trusted init directly in control; FD 6 keeps that membership
-            // authoritative after exec while FD 7 is reserved for workloads.
-            let membership = open_control_workload_membership(&control, &workload)?;
             let control_workload = ControlWorkloadCgroup {
                 management: current.clone(),
                 headroom: headroom.clone(),
-                control_procs: membership.control_procs,
-                workload_procs: membership.workload_procs,
+                control_procs: open_cgroup_procs(&control)?,
+                workload_procs: open_cgroup_procs(&workload)?,
+                activated: false,
             };
-            Ok((workload, membership.init_procs, Some(control_workload)))
+            Ok((workload, init_procs, Some(control_workload)))
         })();
         match configured {
             Ok((leaf, init_procs, control_workload)) => Ok(Some(Self {
@@ -252,6 +241,107 @@ impl CgroupHandle {
                 layout.workload_procs.as_raw_fd(),
             )
         })
+    }
+
+    pub(super) fn activate_control_workload(
+        &mut self,
+        plan: &CgroupPlan,
+        manager: Option<&CgroupManager>,
+        init_pid: i32,
+    ) -> Result<()> {
+        let manager = manager.ok_or_else(|| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                "staged control/workload activation requires a private cgroup manager",
+            )
+        })?;
+        let (management, control_descriptor, activated) = self
+            .control_workload
+            .as_ref()
+            .map(|layout| {
+                (
+                    layout.management.clone(),
+                    layout.control_procs.as_raw_fd(),
+                    layout.activated,
+                )
+            })
+            .ok_or_else(|| {
+                cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    "container does not use the staged control/workload cgroup layout",
+                )
+            })?;
+        if activated {
+            return Err(cgroup_error(
+                ErrorCode::Conflict,
+                "staged control/workload cgroup layout is already active",
+            ));
+        }
+        if init_pid <= 0 {
+            return Err(cgroup_error(
+                ErrorCode::InvalidArgument,
+                format!("prepared container init PID {init_pid} must be positive"),
+            ));
+        }
+        let runtime_namespace = std::fs::read_link("/proc/self/ns/cgroup").map_err(|error| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!("failed to inspect the runtime cgroup namespace: {error}"),
+            )
+        })?;
+        let init_namespace =
+            std::fs::read_link(format!("/proc/{init_pid}/ns/cgroup")).map_err(|error| {
+                cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to inspect prepared container init PID {init_pid} cgroup namespace: {error}"
+                    ),
+                )
+            })?;
+        if init_namespace == runtime_namespace {
+            return Err(cgroup_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "prepared container init PID {init_pid} requested activation before creating its cgroup namespace"
+                ),
+            ));
+        }
+
+        write_cgroup_membership(control_descriptor, init_pid.to_string().as_bytes()).map_err(
+            |error| {
+                cgroup_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "failed to move prepared container init PID {init_pid} into {CONTROL_CGROUP_NAME}: {error}"
+                    ),
+                )
+            },
+        )?;
+        let remaining =
+            std::fs::read_to_string(management.join(CGROUP_PROCS)).map_err(|error| {
+                cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    format!("failed to verify the staged management cgroup is empty: {error}"),
+                )
+            })?;
+        if !remaining.trim().is_empty() {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "staged management cgroup remained populated by {:?}",
+                    remaining.split_ascii_whitespace().collect::<Vec<_>>()
+                ),
+            ));
+        }
+
+        enable_controllers(&management, &manager.controllers)?;
+        initialize_cpuset(&management.join(CONTROL_CGROUP_NAME))?;
+        initialize_cpuset(&self.leaf)?;
+        apply_settings(&self.leaf, &plan.settings_with_oom_group(false))?;
+        if let Some(layout) = self.control_workload.as_mut() {
+            layout.activated = true;
+        }
+        Ok(())
     }
 
     pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {
@@ -313,19 +403,30 @@ impl Drop for CgroupHandle {
 }
 
 pub(super) fn join_from_pre_exec(descriptor: RawFd) -> io::Result<()> {
-    let payload = b"0";
     // SAFETY: the descriptor is a live cgroup.procs file inherited across
     // fork, and writing `0` moves only the calling process.
-    let written = unsafe { libc::write(descriptor, payload.as_ptr().cast(), payload.len()) };
-    if written == payload.len() as isize {
-        Ok(())
-    } else if written < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Err(io::Error::new(
+    write_cgroup_membership(descriptor, b"0")
+}
+
+fn write_cgroup_membership(descriptor: RawFd, payload: &[u8]) -> io::Result<()> {
+    loop {
+        // SAFETY: `payload` is valid for its declared length and the caller
+        // provides a live cgroup.procs descriptor.
+        let written = unsafe { libc::write(descriptor, payload.as_ptr().cast(), payload.len()) };
+        if written == payload.len() as isize {
+            return Ok(());
+        }
+        if written < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        return Err(io::Error::new(
             io::ErrorKind::WriteZero,
             "partial write to cgroup.procs",
-        ))
+        ));
     }
 }
 
@@ -369,17 +470,6 @@ fn create_cgroup_directory(path: &Path, created: &mut Vec<PathBuf>) -> Result<()
     })?;
     created.push(path.to_path_buf());
     Ok(())
-}
-
-fn open_control_workload_membership(
-    control: &Path,
-    workload: &Path,
-) -> Result<ControlWorkloadMembership> {
-    Ok(ControlWorkloadMembership {
-        init_procs: open_cgroup_procs(control)?,
-        control_procs: open_cgroup_procs(control)?,
-        workload_procs: open_cgroup_procs(workload)?,
-    })
 }
 
 fn open_cgroup_procs(path: &Path) -> Result<File> {
@@ -693,35 +783,8 @@ mod tests {
 
     use super::{
         cgroup2_mountpoint, cgroup_event_value, install_control_workload_descriptors_from_pre_exec,
-        open_cgroup_procs, open_control_workload_membership,
+        open_cgroup_procs,
     };
-
-    #[test]
-    fn places_trusted_init_and_control_in_the_control_leaf() {
-        use std::os::unix::fs::MetadataExt;
-
-        let directory = tempfile::tempdir().expect("temporary cgroup topology");
-        let control_path = directory.path().join("control");
-        let workload_path = directory.path().join("workload");
-        std::fs::create_dir(&control_path).expect("control directory");
-        std::fs::create_dir(&workload_path).expect("workload directory");
-        let control_file = control_path.join("cgroup.procs");
-        let workload_file = workload_path.join("cgroup.procs");
-        std::fs::write(&control_file, "").expect("control descriptor file");
-        std::fs::write(&workload_file, "").expect("workload descriptor file");
-
-        let membership = open_control_workload_membership(&control_path, &workload_path)
-            .expect("control/workload membership");
-        let inode = |file: &std::fs::File| file.metadata().expect("membership metadata").ino();
-        assert_eq!(
-            inode(&membership.init_procs),
-            inode(&membership.control_procs)
-        );
-        assert_ne!(
-            inode(&membership.init_procs),
-            inode(&membership.workload_procs)
-        );
-    }
 
     #[test]
     fn installs_fixed_control_workload_descriptors_across_exec() {

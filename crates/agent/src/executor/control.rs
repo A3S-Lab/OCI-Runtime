@@ -11,12 +11,15 @@ const CREATE_HOOKS_READY_BYTE: u8 = 0xC1;
 pub(super) const CREATE_CONTINUE_BYTE: u8 = 0xC2;
 const USER_MAPPING_REQUIRED_BYTE: u8 = 0xB1;
 const USER_MAPPING_APPLIED_BYTE: u8 = 0xB2;
+const CGROUP_NAMESPACE_READY_BYTE: u8 = 0xD1;
+const CGROUP_ACTIVATED_BYTE: u8 = 0xD2;
 const REJECTED_BYTE: u8 = 0xE1;
 const MAX_REJECTION_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InitOutcome {
     UserMappingRequired,
+    CgroupNamespaceReady,
     CreateHooksReady {
         pid: i32,
         namespace_init_pid: Option<i32>,
@@ -26,6 +29,49 @@ pub(super) enum InitOutcome {
         namespace_init_pid: Option<i32>,
     },
     Rejected(Error),
+}
+
+pub(super) fn request_cgroup_activation(stream: &mut StdUnixStream) -> Result<()> {
+    stream
+        .write_all(&[CGROUP_NAMESPACE_READY_BYTE])
+        .map_err(|write| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to request staged cgroup activation: {write}"),
+            )
+        })?;
+    let mut acknowledgement = [0_u8; 1];
+    stream.read_exact(&mut acknowledgement).map_err(|read| {
+        control_error(
+            ErrorCode::Unavailable,
+            format!("staged cgroup activation acknowledgement failed: {read}"),
+        )
+    })?;
+    if acknowledgement[0] == CGROUP_ACTIVATED_BYTE {
+        Ok(())
+    } else {
+        Err(control_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "staged cgroup activation returned unknown acknowledgement byte {:#04x}",
+                acknowledgement[0]
+            ),
+        ))
+    }
+}
+
+pub(super) async fn acknowledge_cgroup_activation(stream: &mut UnixStream) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    stream
+        .write_all(&[CGROUP_ACTIVATED_BYTE])
+        .await
+        .map_err(|write| {
+            control_error(
+                ErrorCode::Unavailable,
+                format!("failed to acknowledge staged cgroup activation: {write}"),
+            )
+        })
 }
 
 pub(super) fn write_create_hooks_ready(
@@ -172,6 +218,7 @@ pub(super) async fn read_outcome(stream: &mut UnixStream) -> Result<InitOutcome>
         })?;
     match discriminator[0] {
         USER_MAPPING_REQUIRED_BYTE => Ok(InitOutcome::UserMappingRequired),
+        CGROUP_NAMESPACE_READY_BYTE => Ok(InitOutcome::CgroupNamespaceReady),
         CREATE_HOOKS_READY_BYTE => {
             read_ready_pids(stream)
                 .await
@@ -312,8 +359,9 @@ mod tests {
     use a3s_oci_sdk::{Error, ErrorCode};
 
     use super::{
-        acknowledge_user_mapping, read_outcome, read_start_result, request_user_mapping,
-        write_create_hooks_ready, write_ready, write_rejection, InitOutcome,
+        acknowledge_cgroup_activation, acknowledge_user_mapping, read_outcome, read_start_result,
+        request_cgroup_activation, request_user_mapping, write_create_hooks_ready, write_ready,
+        write_rejection, InitOutcome,
     };
 
     #[tokio::test(flavor = "current_thread")]
@@ -337,6 +385,29 @@ mod tests {
             .await
             .expect("acknowledge mappings");
         child.await.expect("mapping child");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cgroup_activation_handshake_blocks_until_the_parent_acknowledges() {
+        let (mut child, parent) = StdUnixStream::pair().expect("create control socket pair");
+        parent
+            .set_nonblocking(true)
+            .expect("make control parent nonblocking");
+        let child = tokio::task::spawn_blocking(move || {
+            request_cgroup_activation(&mut child).expect("cgroup activation handshake");
+        });
+        let mut parent = tokio::net::UnixStream::from_std(parent).expect("register control parent");
+
+        assert_eq!(
+            read_outcome(&mut parent)
+                .await
+                .expect("read cgroup activation request"),
+            InitOutcome::CgroupNamespaceReady
+        );
+        acknowledge_cgroup_activation(&mut parent)
+            .await
+            .expect("acknowledge cgroup activation");
+        child.await.expect("cgroup activation child");
     }
 
     #[tokio::test(flavor = "current_thread")]

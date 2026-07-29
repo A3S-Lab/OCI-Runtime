@@ -21,8 +21,8 @@ use tokio::time::timeout;
 use super::capability::CapabilityPlan;
 use super::cgroup::{self, CgroupHandle, CgroupManager};
 use super::control::{
-    acknowledge_user_mapping, continue_create, read_outcome, read_start_result, InitOutcome,
-    START_BYTE,
+    acknowledge_cgroup_activation, acknowledge_user_mapping, continue_create, read_outcome,
+    read_start_result, InitOutcome, START_BYTE,
 };
 use super::hook::{HookPhase, HookSet, HookStateTemplate};
 use super::inherited_descriptor::InheritedDescriptorPlan;
@@ -214,6 +214,7 @@ impl PreparedProcess {
             ));
         }
         let mut user_mapping_installed = false;
+        let mut cgroup_activated = !plan.cgroup.uses_control_workload_layout();
         let mut create_hooks_ready = None;
         let runtime_pid = loop {
             match timeout(INIT_READY_TIMEOUT, read_outcome(&mut control)).await {
@@ -258,11 +259,43 @@ impl PreparedProcess {
                     }
                     user_mapping_installed = true;
                 }
+                Ok(Ok(InitOutcome::CgroupNamespaceReady)) => {
+                    if cgroup_activated
+                        || !plan.cgroup.uses_control_workload_layout()
+                        || create_hooks_ready.is_some()
+                        || (plan.namespaces.new_user() && !user_mapping_installed)
+                    {
+                        terminate(&mut child).await;
+                        return Err(process_error(
+                            ErrorCode::PermissionDenied,
+                            "container init sent an unexpected cgroup namespace readiness request",
+                        ));
+                    }
+                    let Some(cgroup) = cgroup.as_mut() else {
+                        terminate(&mut child).await;
+                        return Err(process_error(
+                            ErrorCode::Internal,
+                            "staged control/workload cgroup handle is missing",
+                        ));
+                    };
+                    if let Err(error) =
+                        cgroup.activate_control_workload(&plan.cgroup, cgroup_manager, pid)
+                    {
+                        terminate(&mut child).await;
+                        return Err(error);
+                    }
+                    if let Err(error) = acknowledge_cgroup_activation(&mut control).await {
+                        terminate(&mut child).await;
+                        return Err(error);
+                    }
+                    cgroup_activated = true;
+                }
                 Ok(Ok(InitOutcome::CreateHooksReady {
                     pid: runtime_pid,
                     namespace_init_pid,
                 })) => {
                     if create_hooks_ready.is_some()
+                        || !cgroup_activated
                         || (plan.namespaces.new_user() && !user_mapping_installed)
                     {
                         let error = process_error(
@@ -309,12 +342,13 @@ impl PreparedProcess {
                     pid: runtime_pid,
                     namespace_init_pid,
                 })) => {
-                    if plan.namespaces.new_user() && !user_mapping_installed {
+                    if !cgroup_activated || (plan.namespaces.new_user() && !user_mapping_installed)
+                    {
                         cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
                             .await;
                         return Err(process_error(
                             ErrorCode::PermissionDenied,
-                            "container init bypassed required user namespace mappings",
+                            "container init bypassed required namespace preparation",
                         ));
                     }
                     if let Err(error) =

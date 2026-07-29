@@ -14,9 +14,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
-- Start trusted native init processes in the `control` cgroup instead of the
-  empty management envelope, preserving the cgroup-v2 no-internal-process
-  invariant when domain controllers are delegated to fixed children.
+- Stage trusted native init processes in the management cgroup, then activate
+  the fixed `control` and `workload` children after the init creates its cgroup
+  namespace, preserving the cgroup-v2 no-internal-process invariant without
+  exposing the host cgroup hierarchy inside the container.
 
 ## [0.2.0] - 2026-07-27
 

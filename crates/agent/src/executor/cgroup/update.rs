@@ -542,6 +542,7 @@ mod tests {
                 },
                 control_procs,
                 workload_procs,
+                activated: true,
             }),
         };
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({

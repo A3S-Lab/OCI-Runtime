@@ -193,6 +193,13 @@ impl ExecProcess {
                     "exec helper requested an unexpected user mapping",
                 ));
             }
+            Ok(Ok(InitOutcome::CgroupNamespaceReady)) => {
+                terminate(&mut child).await;
+                return Err(exec_error(
+                    ErrorCode::PermissionDenied,
+                    "exec helper requested unexpected cgroup activation",
+                ));
+            }
             Ok(Ok(InitOutcome::CreateHooksReady { .. })) => {
                 terminate(&mut child).await;
                 return Err(exec_error(

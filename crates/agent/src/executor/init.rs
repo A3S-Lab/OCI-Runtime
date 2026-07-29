@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
 use super::control::{
-    write_create_hooks_ready, write_ready, write_rejection, CREATE_CONTINUE_BYTE, START_BYTE,
+    request_cgroup_activation, write_create_hooks_ready, write_ready, write_rejection,
+    CREATE_CONTINUE_BYTE, START_BYTE,
 };
 use super::device::{DevicePlan, PreparedDeviceSources};
 use super::hook::{HookPhase, HookStateTemplate};
@@ -147,6 +148,11 @@ fn run_container_init(
     )?;
     if let Err(error) = namespace::enter_new_namespaces(&plan.namespaces, &mut control) {
         return reject_before_ready(&mut control, error);
+    }
+    if plan.cgroup.uses_control_workload_layout() {
+        if let Err(error) = request_cgroup_activation(&mut control) {
+            return reject_before_ready(&mut control, error);
+        }
     }
     let create = CreateContext {
         plan: &plan,
