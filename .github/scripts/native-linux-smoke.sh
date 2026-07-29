@@ -214,6 +214,12 @@ jq \
           )
         )
       )
+    | .hooks.startContainer[].env |= map(
+        if startswith("A3S_HOOK_TRACE=")
+        then "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+        else .
+        end
+      )
   ' \
   "$bundle/config.json" >"$control_bundle/config.json.tmp"
 mv "$control_bundle/config.json.tmp" "$control_bundle/config.json"
