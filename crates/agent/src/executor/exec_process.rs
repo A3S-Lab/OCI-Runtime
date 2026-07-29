@@ -67,7 +67,7 @@ impl ExecProcess {
         unsafe {
             command.pre_exec(move || {
                 if let Some(descriptor) = cgroup_procs {
-                    cgroup::join_from_pre_exec(descriptor)?;
+                    cgroup::join_current_process(descriptor)?;
                 }
                 make_descriptors_inheritable(&inherited)?;
                 super::terminal::prepare_child_terminal(terminal_io)

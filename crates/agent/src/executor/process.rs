@@ -113,7 +113,7 @@ impl PreparedProcess {
         unsafe {
             command.pre_exec(move || {
                 if let Some(descriptor) = init_cgroup_procs {
-                    cgroup::join_from_pre_exec(descriptor)?;
+                    cgroup::join_current_process(descriptor)?;
                 }
                 if let Some((control, workload)) = control_workload_descriptors {
                     cgroup::install_control_workload_descriptors_from_pre_exec(control, workload)?;
@@ -279,6 +279,22 @@ impl PreparedProcess {
                         cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
                             .await;
                         return Err(error);
+                    }
+                    if plan.cgroup.uses_control_workload_layout() {
+                        let finalized = match (cgroup.as_mut(), cgroup_manager) {
+                            (Some(cgroup), Some(manager)) => {
+                                cgroup.finalize_control_workload(&plan.cgroup, manager)
+                            }
+                            _ => Err(process_error(
+                                ErrorCode::Internal,
+                                "control/workload cgroup finalization lost its runtime manager",
+                            )),
+                        };
+                        if let Err(error) = finalized {
+                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                                .await;
+                            return Err(error);
+                        }
                     }
                     let creating = match hook_state.encode(
                         a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating,

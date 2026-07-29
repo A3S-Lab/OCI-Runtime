@@ -14,9 +14,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
-- Start trusted native init processes in the `control` cgroup instead of the
-  empty management envelope, preserving the cgroup-v2 no-internal-process
-  invariant when domain controllers are delegated to fixed children.
+- Root the native init's cgroup namespace at the empty management envelope,
+  move trusted bootstrap processes into `control` through the inherited
+  descriptor, and only then delegate domain controllers and apply exact
+  workload limits. This preserves both namespace visibility and the cgroup-v2
+  no-internal-process invariant. The native Linux gate now executes this exact
+  layout and proves management-root visibility plus control/workload
+  membership before the normal lifecycle, update, freeze, stats, and cleanup
+  checks.
 
 ## [0.2.0] - 2026-07-27
 

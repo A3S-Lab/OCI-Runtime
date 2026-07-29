@@ -148,6 +148,26 @@ fn run_container_init(
     if let Err(error) = namespace::enter_new_namespaces(&plan.namespaces, &mut control) {
         return reject_before_ready(&mut control, error);
     }
+    if plan.cgroup.uses_control_workload_layout() {
+        // Creating the cgroup namespace while init is still in management
+        // anchors /sys/fs/cgroup at the complete container topology. Move the
+        // trusted init into control immediately afterwards; the parent will
+        // enable domain controllers only after the create-hook barrier proves
+        // that management is empty again.
+        if let Err(error) =
+            super::cgroup::join_current_process(a3s_oci_sdk::CONTROL_CGROUP_PROCS_FD)
+        {
+            return reject_before_ready(
+                &mut control,
+                init_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "move trusted init into the delegated control cgroup after namespace creation failed: {error}"
+                    ),
+                ),
+            );
+        }
+    }
     let create = CreateContext {
         plan: &plan,
         bundle_directory: &canonical_bundle,

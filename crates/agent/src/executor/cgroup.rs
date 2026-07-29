@@ -192,26 +192,24 @@ impl CgroupHandle {
                 return Ok((current.clone(), init_procs, None));
             };
 
-            // The OCI leaf is an empty management envelope at create time, so
-            // controllers can be delegated once to the two fixed children.
+            // Keep the OCI leaf free of delegated controllers until init has
+            // created its cgroup namespace while rooted here, then moved into
+            // control. The create-hook barrier finalizes delegation only after
+            // the management envelope is empty again.
             let management = plan.management_plan(headroom)?;
             apply_settings(&current, &management.settings())?;
-            enable_controllers(&current, controllers)?;
 
             let control = current.join(CONTROL_CGROUP_NAME);
             create_cgroup_directory(&control, &mut created)?;
-            initialize_cpuset(&control)?;
 
             let workload = current.join(WORKLOAD_CGROUP_NAME);
             create_cgroup_directory(&workload, &mut created)?;
-            initialize_cpuset(&workload)?;
-            apply_settings(&workload, &plan.settings_with_oom_group(false))?;
 
-            // The management cgroup delegates domain controllers to its fixed
-            // children and therefore cannot contain processes. Start the
-            // trusted init directly in control; FD 6 keeps that membership
-            // authoritative after exec while FD 7 is reserved for workloads.
-            let membership = open_control_workload_membership(&control, &workload)?;
+            // Init enters management only long enough to create a cgroup
+            // namespace rooted at the complete container topology. It then
+            // moves through the protected control descriptor before the parent
+            // enables domain controllers on this envelope.
+            let membership = open_control_workload_membership(&current, &control, &workload)?;
             let control_workload = ControlWorkloadCgroup {
                 management: current.clone(),
                 headroom: headroom.clone(),
@@ -232,6 +230,49 @@ impl CgroupHandle {
                 Err(error)
             }
         }
+    }
+
+    pub(super) fn finalize_control_workload(
+        &mut self,
+        plan: &CgroupPlan,
+        manager: &CgroupManager,
+    ) -> Result<()> {
+        let Some(layout) = &self.control_workload else {
+            return Ok(());
+        };
+        if plan.control_headroom().is_none() {
+            return Err(cgroup_error(
+                ErrorCode::Internal,
+                "control/workload cgroup handle lost its versioned plan",
+            ));
+        }
+
+        let management_procs = layout.management.join(CGROUP_PROCS);
+        let remaining = std::fs::read_to_string(&management_procs).map_err(|error| {
+            cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to verify empty cgroup management envelope {}: {error}",
+                    management_procs.display()
+                ),
+            )
+        })?;
+        if !remaining.trim().is_empty() {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "trusted init has not left cgroup management envelope {}",
+                    layout.management.display()
+                ),
+            ));
+        }
+
+        enable_controllers(&layout.management, &manager.controllers)?;
+        let control = layout.management.join(CONTROL_CGROUP_NAME);
+        let workload = layout.management.join(WORKLOAD_CGROUP_NAME);
+        initialize_cpuset(&control)?;
+        initialize_cpuset(&workload)?;
+        apply_settings(&workload, &plan.settings_with_oom_group(false))
     }
 
     pub(super) fn init_procs_descriptor(&self) -> RawFd {
@@ -312,10 +353,11 @@ impl Drop for CgroupHandle {
     }
 }
 
-pub(super) fn join_from_pre_exec(descriptor: RawFd) -> io::Result<()> {
+pub(super) fn join_current_process(descriptor: RawFd) -> io::Result<()> {
     let payload = b"0";
     // SAFETY: the descriptor is a live cgroup.procs file inherited across
-    // fork, and writing `0` moves only the calling process.
+    // fork, and writing `0` moves only the calling process. This stays valid
+    // both in pre-exec hooks and immediately after cgroup namespace creation.
     let written = unsafe { libc::write(descriptor, payload.as_ptr().cast(), payload.len()) };
     if written == payload.len() as isize {
         Ok(())
@@ -372,11 +414,12 @@ fn create_cgroup_directory(path: &Path, created: &mut Vec<PathBuf>) -> Result<()
 }
 
 fn open_control_workload_membership(
+    management: &Path,
     control: &Path,
     workload: &Path,
 ) -> Result<ControlWorkloadMembership> {
     Ok(ControlWorkloadMembership {
-        init_procs: open_cgroup_procs(control)?,
+        init_procs: open_cgroup_procs(management)?,
         control_procs: open_cgroup_procs(control)?,
         workload_procs: open_cgroup_procs(workload)?,
     })
@@ -697,23 +740,26 @@ mod tests {
     };
 
     #[test]
-    fn places_trusted_init_and_control_in_the_control_leaf() {
+    fn roots_init_in_management_until_the_cgroup_namespace_exists() {
         use std::os::unix::fs::MetadataExt;
 
         let directory = tempfile::tempdir().expect("temporary cgroup topology");
+        let management_file = directory.path().join("cgroup.procs");
         let control_path = directory.path().join("control");
         let workload_path = directory.path().join("workload");
         std::fs::create_dir(&control_path).expect("control directory");
         std::fs::create_dir(&workload_path).expect("workload directory");
         let control_file = control_path.join("cgroup.procs");
         let workload_file = workload_path.join("cgroup.procs");
+        std::fs::write(&management_file, "").expect("management descriptor file");
         std::fs::write(&control_file, "").expect("control descriptor file");
         std::fs::write(&workload_file, "").expect("workload descriptor file");
 
-        let membership = open_control_workload_membership(&control_path, &workload_path)
-            .expect("control/workload membership");
+        let membership =
+            open_control_workload_membership(directory.path(), &control_path, &workload_path)
+                .expect("control/workload membership");
         let inode = |file: &std::fs::File| file.metadata().expect("membership metadata").ino();
-        assert_eq!(
+        assert_ne!(
             inode(&membership.init_procs),
             inode(&membership.control_procs)
         );
