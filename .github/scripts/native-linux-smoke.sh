@@ -116,6 +116,7 @@ jq --exit-status \
 qualification_root="$(mktemp -d /var/tmp/a3s-oci-native.XXXXXXXX)"
 bundle="$qualification_root/bundle"
 bundle_b="$qualification_root/bundle-b"
+control_bundle="$qualification_root/control-bundle"
 rootless_bundle="$qualification_root/rootless-bundle"
 rootless_bin="$qualification_root/rootless-bin"
 work_parent="$qualification_root/work"
@@ -123,9 +124,11 @@ rootless_work_parent="$qualification_root/rootless-work"
 mkdir -p \
   "$bundle/rootfs/bin" "$bundle/rootfs/proc" \
   "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
+  "$control_bundle/rootfs/bin" "$control_bundle/rootfs/proc" \
+  "$control_bundle/rootfs/sys/fs/cgroup" \
   "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/proc" \
   "$rootless_bin" "$work_parent" "$rootless_work_parent"
-for candidate in "$bundle" "$bundle_b"; do
+for candidate in "$bundle" "$bundle_b" "$control_bundle"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
@@ -173,7 +176,54 @@ jq \
   ' \
   "$bundle/config.json" >"$bundle/config.json.tmp"
 mv "$bundle/config.json.tmp" "$bundle/config.json"
-for candidate in "$bundle" "$bundle_b"; do
+control_hook_trace="$control_bundle/rootfs/.a3s-oci-hook-trace"
+# shellcheck disable=SC2016 # Expanded by the trusted configured init.
+control_command_prefix='test "$A3S_CONTROL_CGROUP_PROCS_FD" = 6; test "$A3S_WORKLOAD_CGROUP_PROCS_FD" = 7; test -d /sys/fs/cgroup/a3s-control; test -d /sys/fs/cgroup/a3s-workload; test -z "$(/bin/busybox cat /sys/fs/cgroup/cgroup.procs)"; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-control"; printf 0 >&7; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-workload"; exec 6>&- 7>&-; '
+jq \
+  --arg command_prefix "$control_command_prefix" \
+  --arg hook_trace "$control_hook_trace" \
+  '
+    .process.args[2] = ($command_prefix + .process.args[2])
+    | .mounts += [{
+        destination: "/sys/fs/cgroup",
+        type: "cgroup2",
+        source: "cgroup2",
+        options: ["ro", "nosuid", "noexec", "nodev"]
+      }]
+    | .linux.cgroupsPath = "a3s-oci-control-workload-smoke"
+    | .linux.resources = {
+        memory: {
+          limit: 268435456,
+          reservation: 67108864,
+          swap: 536870912
+        },
+        cpu: {shares: 512, quota: 50000, period: 100000},
+        pids: {limit: 64}
+      }
+    | .annotations["dev.a3s.oci.cgroup.layout"] = "control-workload-v1"
+    | .annotations["dev.a3s.oci.cgroup.control-memory-headroom-bytes"] = "67108864"
+    | .annotations["dev.a3s.oci.cgroup.control-cpu-headroom-micros"] = "25000"
+    | .annotations["dev.a3s.oci.cgroup.control-pids-headroom"] = "32"
+    | .hooks |= with_entries(
+        .value |= map(
+          .env |= map(
+            if startswith("A3S_HOOK_TRACE=")
+            then "A3S_HOOK_TRACE=" + $hook_trace
+            else .
+            end
+          )
+        )
+      )
+    | .hooks.startContainer[].env |= map(
+        if startswith("A3S_HOOK_TRACE=")
+        then "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+        else .
+        end
+      )
+  ' \
+  "$bundle/config.json" >"$control_bundle/config.json.tmp"
+mv "$control_bundle/config.json.tmp" "$control_bundle/config.json"
+for candidate in "$bundle" "$bundle_b" "$control_bundle"; do
   jq --exit-status \
     '.linux.uidMappings
          == [{"containerID": 0, "hostID": 100000, "size": 65536}]
@@ -182,6 +232,7 @@ for candidate in "$bundle" "$bundle_b"; do
     "$candidate/config.json" >/dev/null
 done
 sudo chown -R 100000:200000 "$bundle/rootfs" "$bundle_b/rootfs"
+sudo chown -R 100000:200000 "$control_bundle/rootfs"
 for candidate in "${soak_bundles[@]}"; do
   sudo chown -R 100000:200000 "$candidate/rootfs"
   test "$(stat --format '%u:%g' "$candidate/rootfs")" = '100000:200000'
@@ -189,9 +240,13 @@ done
 sudo touch "$hook_trace"
 sudo chown 100000:200000 "$hook_trace"
 sudo chmod 0666 "$hook_trace"
+sudo touch "$control_hook_trace"
+sudo chown 100000:200000 "$control_hook_trace"
+sudo chmod 0666 "$control_hook_trace"
 sudo chmod 0755 "$qualification_root"
 test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
+test "$(stat --format '%u:%g' "$control_bundle/rootfs")" = '100000:200000'
 
 if getent passwd "$rootless_uid" >/dev/null; then
   printf 'Required rootless smoke UID %s is already allocated\n' "$rootless_uid" >&2
@@ -381,12 +436,14 @@ verify_single_container_report() {
 
 run_smoke() {
   local expected_kvm_present="$1"
+  local smoke_bundle="${2:-$bundle}"
+  local smoke_hook_trace="${3:-$hook_trace}"
   local output
   local status
-  sudo truncate --size 0 "$hook_trace"
+  sudo truncate --size 0 "$smoke_hook_trace"
   if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
       --agent "$PWD/target/debug/a3s-oci-agent" \
-      --bundle "$bundle" \
+      --bundle "$smoke_bundle" \
       --work-parent "$work_parent")"; then
     status=0
   else
@@ -394,7 +451,7 @@ run_smoke() {
   fi
   printf '%s\n' "$output"
   if ((status != 0)); then
-    report_native_failure "$bundle/rootfs"
+    report_native_failure "$smoke_bundle/rootfs"
     return "$status"
   fi
   verify_single_container_report "$expected_kvm_present" "$output"
@@ -892,6 +949,7 @@ fi
 
 run_rootless_smoke
 run_smoke false
+run_smoke false "$control_bundle" "$control_hook_trace"
 run_service_smoke false
 run_service_signal_cleanup
 run_multi_container_smoke false

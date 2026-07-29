@@ -268,8 +268,10 @@ security ceiling plus its owned cgroup-v2 topology. Every later exec applies
 exact capability sets, joins the selected workload target, and installs the
 same architecture-bound seccomp policy immediately before `execve`. Init also
 joins that target in the default layout. With `control-workload-v1`, init
-starts in the outer envelope and receives pre-opened control/workload
-membership descriptors while OCI exec joins the workload child directly. The
+starts in the outer envelope, creates the cgroup namespace there, moves into
+the control child through its pre-opened descriptor, and crosses the create
+barrier before the runtime delegates controllers. OCI exec joins the workload
+child directly. The
 bounded A3S Box profile additionally creates and verifies its exact device
 nodes after the `/dev` mount. These controls have focused Linux tests;
 complete native/utility-VM lifecycle evidence remains a promotion gate.

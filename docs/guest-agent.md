@@ -290,7 +290,12 @@ This layout requires finite memory, CPU, and PID limits in
 `linux.resources` plus a newly created cgroup namespace. The runtime creates
 an outer management cgroup and fixed `a3s-control` and `a3s-workload`
 children before spawning init. It starts the namespace root in the empty
-outer cgroup, then installs pre-opened `cgroup.procs` files at FD 6 and FD 7.
+outer cgroup and installs pre-opened `cgroup.procs` files at FD 6 and FD 7.
+Init creates the cgroup namespace, moves itself into `a3s-control`, and reports
+the create barrier; only then does the runtime delegate domain controllers and
+apply the exact workload settings. This ordering keeps the management envelope
+visible as the namespace root without violating cgroup v2's no-internal-process
+rule.
 The trusted configured init receives those descriptor numbers through
 `A3S_CONTROL_CGROUP_PROCS_FD` and `A3S_WORKLOAD_CGROUP_PROCS_FD`; conflicting
 environment variables or inherited descriptor targets fail create. The
