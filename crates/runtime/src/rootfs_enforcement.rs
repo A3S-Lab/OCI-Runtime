@@ -1062,7 +1062,7 @@ fn mount_private_tmpfs(target: &Path) -> Result<(), String> {
             source.as_ptr(),
             target_c.as_ptr(),
             filesystem.as_ptr(),
-            libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+            libc::MS_NOSUID | libc::MS_NODEV,
             data.as_ptr().cast(),
         )
     };
