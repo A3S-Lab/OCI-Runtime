@@ -398,11 +398,12 @@ impl MountPlan {
     ) -> Result<()> {
         let target = self.prepare_target(bundle_directory, rootfs)?;
         let target = path_cstring(self.index, "destination", &target)?;
-        let detached_destination = self
-            .uses_detached_source()
+        let detached_bind = self.detached_bind && detached_sources.contains(self.index);
+        let uses_detached_source = self.idmap.is_some() || detached_bind;
+        let detached_destination = uses_detached_source
             .then(|| detached_sources.open_destination(self.index, &target))
             .transpose()?;
-        let source = if self.uses_detached_source() {
+        let source = if uses_detached_source {
             None
         } else {
             self.source
@@ -444,7 +445,7 @@ impl MountPlan {
                 "apply",
             )?;
         }
-        if self.bind && self.remount_bind && !self.detached_bind {
+        if self.bind && self.remount_bind && !detached_bind {
             let remount_flags = (self.flags & !(libc::MS_REC | libc::MS_REMOUNT))
                 | libc::MS_BIND
                 | libc::MS_REMOUNT;
@@ -458,7 +459,7 @@ impl MountPlan {
                 "remount bind attributes for",
             )?;
         }
-        if !self.detached_bind {
+        if !detached_bind {
             if let Some(attributes) = self.recursive_attributes {
                 attributes::apply(self.index, &target, attributes)?;
             }
@@ -475,10 +476,6 @@ impl MountPlan {
             )?;
         }
         Ok(())
-    }
-
-    fn uses_detached_source(&self) -> bool {
-        self.idmap.is_some() || self.detached_bind
     }
 }
 
@@ -596,17 +593,21 @@ fn resolve_bind_source_path(
     bundle_directory: &Path,
     source: &Path,
 ) -> Result<PathBuf> {
-    let source = if source.is_absolute() {
-        source.to_path_buf()
-    } else {
-        bundle_directory.join(source)
-    };
+    let source = bind_source_candidate_path(bundle_directory, source);
     let source = source.canonicalize().map_err(|error| {
         invalid(format!(
             "mounts[{index}].source does not resolve in the runtime namespace: {error}"
         ))
     })?;
     Ok(source)
+}
+
+fn bind_source_candidate_path(bundle_directory: &Path, source: &Path) -> PathBuf {
+    if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        bundle_directory.join(source)
+    }
 }
 
 fn path_cstring(index: usize, field: &str, path: &Path) -> Result<CString> {

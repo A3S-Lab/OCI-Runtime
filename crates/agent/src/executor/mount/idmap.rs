@@ -12,7 +12,7 @@ use super::attributes::{
     MOUNT_ATTR_NOEXEC, MOUNT_ATTR_NOSUID, MOUNT_ATTR_NOSYMFOLLOW, MOUNT_ATTR_RDONLY,
     MOUNT_ATTR_STRICTATIME,
 };
-use super::{path_cstring, resolve_bind_source_path, MountPlan};
+use super::{bind_source_candidate_path, path_cstring, resolve_bind_source_path, MountPlan};
 use crate::executor::namespace::IdmapNamespaceHandles;
 
 #[derive(Debug, Default)]
@@ -39,6 +39,21 @@ impl DetachedMountSources {
                         "detached bind mount is missing its source",
                     )
                 })?;
+                if plan.idmap.is_none() && plan.detached_bind {
+                    let candidate = bind_source_candidate_path(bundle_directory, source);
+                    match std::fs::metadata(candidate) {
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            // A source produced by an earlier mount in this
+                            // plan does not exist until namespace entry. Keep
+                            // it on the existing in-namespace path; only an
+                            // already-existing foreign source needs parent
+                            // user-namespace preparation.
+                            continue;
+                        }
+                        Err(_) => {}
+                    }
+                }
                 let source = resolve_bind_source_path(plan.index, bundle_directory, source)?;
                 let source = path_cstring(plan.index, "source", &source)?;
                 clone_mount(plan.index, &source, plan.flags & libc::MS_REC != 0)?
@@ -65,6 +80,10 @@ impl DetachedMountSources {
             }
         }
         Ok(Self { sources })
+    }
+
+    pub(in crate::executor) fn contains(&self, index: usize) -> bool {
+        self.sources.contains_key(&index)
     }
 
     pub(in crate::executor) fn open_destination(
@@ -528,9 +547,15 @@ fn apply_error(code: ErrorCode, index: usize, message: impl Into<String>) -> Err
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use a3s_oci_sdk::ErrorCode;
 
-    use super::{bind_mount_attributes, classify_errno, filesystem_mount_attributes};
+    use super::{
+        bind_mount_attributes, classify_errno, filesystem_mount_attributes, DetachedMountSources,
+    };
+    use crate::executor::mount::MountPlan;
+    use crate::executor::namespace::IdmapNamespaceHandles;
 
     #[test]
     fn idmapped_mount_syscall_errors_have_stable_types() {
@@ -595,5 +620,33 @@ mod tests {
                 | libc::MOUNT_ATTR_NOSYMFOLLOW
         );
         assert_eq!(attr_clr, libc::MOUNT_ATTR__ATIME);
+    }
+
+    #[test]
+    fn defers_readonly_bind_sources_created_by_earlier_mounts() {
+        let bundle = tempfile::tempdir().expect("temporary bundle");
+        let plan = MountPlan {
+            index: 7,
+            destination: PathBuf::from("/generated-readonly"),
+            source: Some(PathBuf::from("rootfs/generated-source")),
+            filesystem_type: Some("none".into()),
+            flags: libc::MS_BIND | libc::MS_REC | libc::MS_RDONLY,
+            bind: true,
+            remount_bind: true,
+            detached_bind: true,
+            propagation: None,
+            recursive_attributes: None,
+            idmap: None,
+            data: Vec::new(),
+        };
+
+        let sources = DetachedMountSources::prepare(
+            &[plan],
+            bundle.path(),
+            &IdmapNamespaceHandles::default(),
+        )
+        .expect("deferred generated bind source");
+
+        assert!(!sources.contains(7));
     }
 }
