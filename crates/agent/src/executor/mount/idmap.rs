@@ -7,16 +7,20 @@ use std::path::Path;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
-use super::attributes::MountAttr;
-use super::{path_cstring, resolve_bind_source_path, MountPlan};
+use super::attributes::{
+    MountAttr, MOUNT_ATTR_ATIME, MOUNT_ATTR_NOATIME, MOUNT_ATTR_NODEV, MOUNT_ATTR_NODIRATIME,
+    MOUNT_ATTR_NOEXEC, MOUNT_ATTR_NOSUID, MOUNT_ATTR_NOSYMFOLLOW, MOUNT_ATTR_RDONLY,
+    MOUNT_ATTR_STRICTATIME,
+};
+use super::{bind_source_candidate_path, path_cstring, resolve_bind_source_path, MountPlan};
 use crate::executor::namespace::IdmapNamespaceHandles;
 
 #[derive(Debug, Default)]
-pub(in crate::executor) struct IdmappedMountSources {
+pub(in crate::executor) struct DetachedMountSources {
     sources: BTreeMap<usize, OwnedFd>,
 }
 
-impl IdmappedMountSources {
+impl DetachedMountSources {
     pub(in crate::executor) fn prepare(
         plans: &[MountPlan],
         bundle_directory: &Path,
@@ -24,38 +28,62 @@ impl IdmappedMountSources {
     ) -> Result<Self> {
         let mut sources = BTreeMap::new();
         for plan in plans {
-            let Some(idmap) = &plan.idmap else {
+            if plan.idmap.is_none() && !plan.detached_bind {
                 continue;
-            };
+            }
             let detached = if plan.bind {
                 let source = plan.source.as_deref().ok_or_else(|| {
                     apply_error(
                         ErrorCode::InvalidArgument,
                         plan.index,
-                        "ID-mapped bind mount is missing its source",
+                        "detached bind mount is missing its source",
                     )
                 })?;
+                if plan.idmap.is_none() && plan.detached_bind {
+                    let candidate = bind_source_candidate_path(bundle_directory, source);
+                    match std::fs::metadata(candidate) {
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            // A source produced by an earlier mount in this
+                            // plan does not exist until namespace entry. Keep
+                            // it on the existing in-namespace path; only an
+                            // already-existing foreign source needs parent
+                            // user-namespace preparation.
+                            continue;
+                        }
+                        Err(_) => {}
+                    }
+                }
                 let source = resolve_bind_source_path(plan.index, bundle_directory, source)?;
                 let source = path_cstring(plan.index, "source", &source)?;
                 clone_mount(plan.index, &source, plan.flags & libc::MS_REC != 0)?
             } else {
                 create_filesystem_mount(plan)?
             };
-            apply_idmap_attribute(
-                plan.index,
-                &detached,
-                namespaces.namespace_fd(idmap)?,
-                idmap.recursive,
-            )?;
+            if let Some(idmap) = &plan.idmap {
+                apply_idmap_attribute(
+                    plan.index,
+                    &detached,
+                    namespaces.namespace_fd(idmap)?,
+                    idmap.recursive,
+                )?;
+            }
+            if plan.detached_bind {
+                apply_detached_bind_attributes(plan, &detached)?;
+            }
             if sources.insert(plan.index, detached).is_some() {
                 return Err(apply_error(
                     ErrorCode::Internal,
                     plan.index,
-                    "duplicate detached ID-mapped mount source",
+                    "duplicate detached mount source",
                 ));
             }
         }
         Ok(Self { sources })
+    }
+
+    pub(in crate::executor) fn contains(&self, index: usize) -> bool {
+        self.sources.contains_key(&index)
     }
 
     pub(in crate::executor) fn open_destination(
@@ -67,10 +95,10 @@ impl IdmappedMountSources {
             return Err(apply_error(
                 ErrorCode::FailedPrecondition,
                 index,
-                "detached ID-mapped mount source was not prepared",
+                "detached mount source was not prepared",
             ));
         }
-        open_path(index, target, "retain the ID-mapped mount destination")
+        open_path(index, target, "retain the detached mount destination")
     }
 
     pub(in crate::executor) fn attach(
@@ -82,7 +110,7 @@ impl IdmappedMountSources {
             apply_error(
                 ErrorCode::FailedPrecondition,
                 index,
-                "detached ID-mapped mount source is missing or was already attached",
+                "detached mount source is missing or was already attached",
             )
         })?;
         let empty_path = c"";
@@ -105,7 +133,7 @@ impl IdmappedMountSources {
         } else {
             Err(syscall_error(
                 index,
-                "attach the detached ID-mapped mount",
+                "attach the detached mount",
                 io::Error::last_os_error(),
             ))
         }
@@ -118,7 +146,7 @@ impl IdmappedMountSources {
             Err(Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "detached ID-mapped mount sources were not attached for mount indexes {:?}",
+                    "detached mount sources were not attached for mount indexes {:?}",
                     self.sources.keys().collect::<Vec<_>>()
                 ),
             )
@@ -347,7 +375,7 @@ fn clone_mount(index: usize, source: &CString, recursive: bool) -> Result<OwnedF
     if descriptor < 0 {
         return Err(syscall_error(
             index,
-            "clone the ID-mapped bind source with open_tree",
+            "clone the bind source with open_tree",
             io::Error::last_os_error(),
         ));
     }
@@ -381,14 +409,86 @@ fn apply_idmap_attribute(
         propagation: 0,
         userns_fd,
     };
+    apply_mount_attributes(
+        index,
+        mount,
+        attributes,
+        recursive,
+        "apply MOUNT_ATTR_IDMAP",
+    )
+}
+
+fn apply_detached_bind_attributes(plan: &MountPlan, mount: &OwnedFd) -> Result<()> {
+    let (attr_set, attr_clr) = bind_mount_attributes(plan.flags);
+    let attributes = MountAttr {
+        attr_set,
+        attr_clr,
+        propagation: 0,
+        userns_fd: 0,
+    };
+    apply_mount_attributes(
+        plan.index,
+        mount,
+        attributes,
+        false,
+        "apply detached bind attributes",
+    )?;
+    if let Some(recursive) = plan.recursive_attributes {
+        apply_mount_attributes(
+            plan.index,
+            mount,
+            MountAttr {
+                attr_set: recursive.attr_set,
+                attr_clr: recursive.attr_clr,
+                propagation: 0,
+                userns_fd: 0,
+            },
+            true,
+            "apply detached recursive bind attributes",
+        )?;
+    }
+    Ok(())
+}
+
+fn bind_mount_attributes(flags: libc::c_ulong) -> (u64, u64) {
+    let mut attr_set = 0;
+    let mut attr_clr = 0;
+    for (mount_flag, attribute) in [
+        (libc::MS_RDONLY, MOUNT_ATTR_RDONLY),
+        (libc::MS_NOSUID, MOUNT_ATTR_NOSUID),
+        (libc::MS_NODEV, MOUNT_ATTR_NODEV),
+        (libc::MS_NOEXEC, MOUNT_ATTR_NOEXEC),
+        (libc::MS_NODIRATIME, MOUNT_ATTR_NODIRATIME),
+        (libc::MS_NOSYMFOLLOW, MOUNT_ATTR_NOSYMFOLLOW),
+    ] {
+        if flags & mount_flag != 0 {
+            attr_set |= attribute;
+        }
+    }
+    if flags & libc::MS_NOATIME != 0 {
+        attr_set |= MOUNT_ATTR_NOATIME;
+        attr_clr |= MOUNT_ATTR_ATIME;
+    } else if flags & libc::MS_STRICTATIME != 0 {
+        attr_set |= MOUNT_ATTR_STRICTATIME;
+        attr_clr |= MOUNT_ATTR_ATIME;
+    }
+    (attr_set, attr_clr)
+}
+
+fn apply_mount_attributes(
+    index: usize,
+    mount: &OwnedFd,
+    attributes: MountAttr,
+    recursive: bool,
+    action: &str,
+) -> Result<()> {
     let empty_path = c"";
     let mut flags = libc::AT_EMPTY_PATH;
     if recursive {
         flags |= libc::AT_RECURSIVE;
     }
-    // SAFETY: mount and user_namespace remain live, empty_path is
-    // NUL-terminated, and attributes is the complete version-0 mount_attr
-    // layout.
+    // SAFETY: mount remains live, empty_path is NUL-terminated, and
+    // attributes is the complete version-0 mount_attr layout.
     let applied = unsafe {
         libc::syscall(
             libc::SYS_mount_setattr,
@@ -402,11 +502,7 @@ fn apply_idmap_attribute(
     if applied == 0 {
         Ok(())
     } else {
-        Err(syscall_error(
-            index,
-            "apply MOUNT_ATTR_IDMAP",
-            io::Error::last_os_error(),
-        ))
+        Err(syscall_error(index, action, io::Error::last_os_error()))
     }
 }
 
@@ -430,7 +526,7 @@ fn syscall_error(index: usize, action: &str, error: io::Error) -> Error {
     apply_error(
         code,
         index,
-        format!("{action} failed for ID-mapped mount: {error}"),
+        format!("{action} failed for detached mount: {error}"),
     )
 }
 
@@ -451,9 +547,15 @@ fn apply_error(code: ErrorCode, index: usize, message: impl Into<String>) -> Err
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use a3s_oci_sdk::ErrorCode;
 
-    use super::{classify_errno, filesystem_mount_attributes};
+    use super::{
+        bind_mount_attributes, classify_errno, filesystem_mount_attributes, DetachedMountSources,
+    };
+    use crate::executor::mount::MountPlan;
+    use crate::executor::namespace::IdmapNamespaceHandles;
 
     #[test]
     fn idmapped_mount_syscall_errors_have_stable_types() {
@@ -494,5 +596,57 @@ mod tests {
             .expect_err("unrepresentable fsmount flag");
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error.message.contains("cannot be represented"));
+    }
+
+    #[test]
+    fn detached_bind_flags_preserve_requested_security_attributes() {
+        let (attr_set, attr_clr) = bind_mount_attributes(
+            libc::MS_RDONLY
+                | libc::MS_NOSUID
+                | libc::MS_NODEV
+                | libc::MS_NOEXEC
+                | libc::MS_NOATIME
+                | libc::MS_NODIRATIME
+                | libc::MS_NOSYMFOLLOW,
+        );
+        assert_eq!(
+            attr_set,
+            libc::MOUNT_ATTR_RDONLY
+                | libc::MOUNT_ATTR_NOSUID
+                | libc::MOUNT_ATTR_NODEV
+                | libc::MOUNT_ATTR_NOEXEC
+                | libc::MOUNT_ATTR_NOATIME
+                | libc::MOUNT_ATTR_NODIRATIME
+                | libc::MOUNT_ATTR_NOSYMFOLLOW
+        );
+        assert_eq!(attr_clr, libc::MOUNT_ATTR__ATIME);
+    }
+
+    #[test]
+    fn defers_readonly_bind_sources_created_by_earlier_mounts() {
+        let bundle = tempfile::tempdir().expect("temporary bundle");
+        let plan = MountPlan {
+            index: 7,
+            destination: PathBuf::from("/generated-readonly"),
+            source: Some(PathBuf::from("rootfs/generated-source")),
+            filesystem_type: Some("none".into()),
+            flags: libc::MS_BIND | libc::MS_REC | libc::MS_RDONLY,
+            bind: true,
+            remount_bind: true,
+            detached_bind: true,
+            propagation: None,
+            recursive_attributes: None,
+            idmap: None,
+            data: Vec::new(),
+        };
+
+        let sources = DetachedMountSources::prepare(
+            &[plan],
+            bundle.path(),
+            &IdmapNamespaceHandles::default(),
+        )
+        .expect("deferred generated bind source");
+
+        assert!(!sources.contains(7));
     }
 }

@@ -501,7 +501,7 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v13"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v14"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -572,6 +572,7 @@ run_multi_container_smoke() {
      and .rootfs_mount.recursive_mount_attributes_enforced
      and .rootfs_mount.idmapped_mounts_enforced
      and .rootfs_mount.idmap_source_ownership_unchanged
+     and .rootfs_mount.foreign_readonly_bind_enforced
      and .rootfs_mount.idmap_nonrecursive_enforced
      and .rootfs_mount.ridmap_recursive_enforced
      and .rootfs_mount.readonly_rootfs_enforced

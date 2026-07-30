@@ -15,7 +15,7 @@ use super::control::{
 };
 use super::device::{DevicePlan, PreparedDeviceSources};
 use super::hook::{HookPhase, HookStateTemplate};
-use super::mount::{self, IdmappedMountSources};
+use super::mount::{self, DetachedMountSources};
 use super::namespace::{self, IdmapNamespaceHandles};
 use super::pid_supervisor;
 use super::plan::InitPlan;
@@ -133,8 +133,8 @@ fn run_container_init(
         Ok(namespaces) => namespaces,
         Err(error) => return reject_before_ready(&mut control, error),
     };
-    let idmapped_sources =
-        match IdmappedMountSources::prepare(&plan.mounts, &canonical_bundle, &idmap_namespaces) {
+    let detached_sources =
+        match DetachedMountSources::prepare(&plan.mounts, &canonical_bundle, &idmap_namespaces) {
             Ok(sources) => sources,
             Err(error) => return reject_before_ready(&mut control, error),
         };
@@ -179,7 +179,7 @@ fn run_container_init(
     supervision::run_supervised_init(
         &create,
         &host_proc,
-        idmapped_sources,
+        detached_sources,
         control,
         process_group,
     )
@@ -196,7 +196,7 @@ pub(super) struct CreateContext<'a> {
 
 pub(super) fn complete_create_and_wait_for_start(
     create: &CreateContext<'_>,
-    mut idmapped_sources: IdmappedMountSources,
+    mut detached_sources: DetachedMountSources,
     runtime_pid: i32,
     namespace_init_pid: Option<i32>,
     mut control: UnixStream,
@@ -209,11 +209,11 @@ pub(super) fn complete_create_and_wait_for_start(
         create.bundle_directory,
         create.rootfs,
         create.prepared_devices,
-        &mut idmapped_sources,
+        &mut detached_sources,
     ) {
         return reject_before_ready(&mut control, error);
     }
-    drop(idmapped_sources);
+    drop(detached_sources);
     let creating = match create.hook_state.encode(
         a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating,
         Some(runtime_pid),
@@ -419,7 +419,7 @@ fn prepare_create_environment_before_pivot(
     bundle_directory: &Path,
     rootfs: &Path,
     prepared_devices: &PreparedDeviceSources,
-    idmapped_sources: &mut IdmappedMountSources,
+    detached_sources: &mut DetachedMountSources,
 ) -> Result<()> {
     if let Some(hostname) = &plan.hostname {
         if !plan.namespaces.has_uts() {
@@ -453,7 +453,7 @@ fn prepare_create_environment_before_pivot(
     if plan.namespaces.new_mount() {
         plan.devices.validate_rootfs(rootfs)?;
         rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
-        mount::apply_all(&plan.mounts, bundle_directory, rootfs, idmapped_sources)?;
+        mount::apply_all(&plan.mounts, bundle_directory, rootfs, detached_sources)?;
         plan.devices
             .bind_prepared_sources(rootfs, prepared_devices)?;
     }

@@ -14,6 +14,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Prepare read-only bind mounts from parent-namespace filesystems as detached
+  mount objects before entering a container user namespace. Requested kernel
+  security attributes are applied with `mount_setattr` and the prepared mount
+  is attached with `move_mount`, avoiding an impossible less-privileged bind
+  remount without falling back to a writable Secret mount. Native Linux
+  conformance now proves this boundary with a real private tmpfs source, and
+  its multi-container report advances to
+  `a3s.oci.native-linux-multi-container-smoke.v14`.
 - Root the native init's cgroup namespace at the empty management envelope,
   move trusted bootstrap processes into `control` through the inherited
   descriptor, and only then delegate domain controllers and apply exact

@@ -4,7 +4,7 @@ use std::os::unix::net::UnixStream;
 use a3s_oci_sdk::{ErrorCode, Result};
 
 use super::{complete_create_and_wait_for_start, init_error, reject_before_ready, CreateContext};
-use crate::executor::mount::IdmappedMountSources;
+use crate::executor::mount::DetachedMountSources;
 use crate::executor::pid;
 use crate::executor::pid_supervisor::{self, ChildOutcome, NamespaceForkRole, PayloadForkRole};
 use crate::executor::process_group::ProcessGroupLease;
@@ -12,7 +12,7 @@ use crate::executor::process_group::ProcessGroupLease;
 pub(super) fn run_supervised_init(
     create: &CreateContext<'_>,
     host_proc: &File,
-    idmapped_sources: IdmappedMountSources,
+    detached_sources: DetachedMountSources,
     mut control: UnixStream,
     process_group: ProcessGroupLease,
 ) -> Result<()> {
@@ -22,7 +22,7 @@ pub(super) fn run_supervised_init(
             mut outcome_channel,
         }) => {
             drop(control);
-            drop(idmapped_sources);
+            drop(detached_sources);
             if create.plan.namespaces.new_pid() {
                 match pid_supervisor::read_supervised_outcome(&mut outcome_channel) {
                     Ok(Some(payload_outcome)) => {
@@ -57,14 +57,14 @@ pub(super) fn run_supervised_init(
                     create,
                     host_proc,
                     host_pid,
-                    idmapped_sources,
+                    detached_sources,
                     control,
                     outcome_channel,
                     &process_group,
                 );
             }
             drop(outcome_channel);
-            complete_create_and_wait_for_start(create, idmapped_sources, host_pid, None, control)
+            complete_create_and_wait_for_start(create, detached_sources, host_pid, None, control)
         }
         Err(error) => reject_before_ready(&mut control, error),
     }
@@ -74,7 +74,7 @@ fn run_pid_namespace_init(
     create: &CreateContext<'_>,
     host_proc: &File,
     namespace_init_host_pid: libc::pid_t,
-    idmapped_sources: IdmappedMountSources,
+    detached_sources: DetachedMountSources,
     mut control: UnixStream,
     mut outcome_channel: UnixStream,
     process_group: &ProcessGroupLease,
@@ -105,7 +105,7 @@ fn run_pid_namespace_init(
             };
             complete_create_and_wait_for_start(
                 create,
-                idmapped_sources,
+                detached_sources,
                 runtime_pid,
                 Some(namespace_init_host_pid),
                 control,
