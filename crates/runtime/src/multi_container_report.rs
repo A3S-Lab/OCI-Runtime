@@ -6,7 +6,7 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v13";
+    "a3s.oci.native-linux-multi-container-smoke.v14";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
 pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v9";
 /// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.
@@ -39,6 +39,11 @@ pub struct RootfsMountEvidence {
     /// exact UID/GID after mapped clones were attached.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idmap_source_ownership_unchanged: Option<bool>,
+    /// Whether a bind source mounted by the initial user namespace was cloned,
+    /// attached read-only, and rejected writes inside the container user
+    /// namespace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreign_readonly_bind_enforced: Option<bool>,
     /// Whether `idmap` changed only the top-level rbind mount and left its
     /// nested submount unmapped.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,11 +90,12 @@ impl RootfsMountEvidence {
             && self.artifacts_removed
     }
 
-    /// Return whether native Linux proved bind/rbind ID-map recursion without
-    /// mutating the source mount tree.
+    /// Return whether native Linux proved parent-mount read-only enforcement
+    /// and bind/rbind ID-map recursion without mutating the source mount tree.
     #[must_use]
-    pub fn native_idmap_bind_is_success(&self) -> bool {
+    pub fn native_bind_is_success(&self) -> bool {
         self.idmap_source_ownership_unchanged == Some(true)
+            && self.foreign_readonly_bind_enforced == Some(true)
             && self.idmap_nonrecursive_enforced == Some(true)
             && self.ridmap_recursive_enforced == Some(true)
     }
@@ -587,7 +593,7 @@ impl NativeLinuxMultiContainerSmokeReport {
             && self.namespace_join.is_success()
             && self.network_modes.is_success()
             && self.rootfs_mount.is_success()
-            && self.rootfs_mount.native_idmap_bind_is_success()
+            && self.rootfs_mount.native_bind_is_success()
             && self.storage_volumes.is_success()
             && self.initialization.is_success()
             && self.pid_supervision.is_success()
@@ -824,6 +830,7 @@ mod tests {
             recursive_mount_attributes_enforced: true,
             idmapped_mounts_enforced: true,
             idmap_source_ownership_unchanged: Some(true),
+            foreign_readonly_bind_enforced: Some(true),
             idmap_nonrecursive_enforced: Some(true),
             ridmap_recursive_enforced: Some(true),
             readonly_rootfs_enforced: true,
@@ -833,11 +840,11 @@ mod tests {
             artifacts_removed: true,
         };
         assert!(complete.is_success());
-        assert!(complete.native_idmap_bind_is_success());
+        assert!(complete.native_bind_is_success());
 
         let mut incomplete = complete;
         incomplete.idmap_nonrecursive_enforced = Some(false);
-        assert!(!incomplete.native_idmap_bind_is_success());
+        assert!(!incomplete.native_bind_is_success());
         incomplete.idmapped_mounts_enforced = false;
         assert!(!incomplete.is_success());
     }

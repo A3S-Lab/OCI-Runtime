@@ -323,7 +323,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v13` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v14` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -370,8 +370,11 @@ requires:
 7. the original nested bind source to remain owned by `0:0`, non-recursive
    `idmap` to map only the rbind top level to `1000:1000`, and recursive
    `ridmap` to map both the top level and real nested submount to `2000:2000`;
-8. the rootfs to be read-only and reject a write;
-9. exact ordered evidence, a normal zero exit, deleted state, and removal of
+8. a file on an initial-user-namespace tmpfs to remain readable with its exact
+   mode through a kernel-enforced read-only, nosuid, nodev, and noexec bind in
+   the container user namespace, while rejecting a write;
+9. the rootfs to be read-only and reject a write;
+10. exact ordered evidence, a normal zero exit, deleted state, and removal of
    all host-side fixture paths.
 
 The same real-driver invocation also retains two product-facing configuration

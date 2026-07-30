@@ -12,7 +12,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::namespace::{collect_mappings, IdmapPlan, NamespacePlan};
 
-pub(super) use idmap::IdmappedMountSources;
+pub(super) use idmap::DetachedMountSources;
 
 const MAX_MOUNTS: usize = 1_024;
 const MAX_MOUNT_STRING_BYTES: usize = 64 * 1_024;
@@ -33,6 +33,7 @@ pub(super) struct MountPlan {
     pub(super) flags: libc::c_ulong,
     pub(super) bind: bool,
     pub(super) remount_bind: bool,
+    pub(super) detached_bind: bool,
     pub(super) propagation: Option<libc::c_ulong>,
     pub(super) recursive_attributes: Option<attributes::RecursiveMountAttributes>,
     pub(super) idmap: Option<IdmapPlan>,
@@ -81,12 +82,12 @@ pub(super) fn apply_all(
     plans: &[MountPlan],
     bundle_directory: &Path,
     rootfs: &Path,
-    idmapped_sources: &mut IdmappedMountSources,
+    detached_sources: &mut DetachedMountSources,
 ) -> Result<()> {
     for plan in plans {
-        plan.apply(bundle_directory, rootfs, idmapped_sources)?;
+        plan.apply(bundle_directory, rootfs, detached_sources)?;
     }
-    idmapped_sources.ensure_consumed()
+    detached_sources.ensure_consumed()
 }
 
 impl MountPlan {
@@ -157,6 +158,7 @@ impl MountPlan {
         let mut flags = 0;
         let mut bind = false;
         let mut remount_bind = false;
+        let mut detached_bind_compatible = true;
         let mut propagation = None;
         let mut recursive_attributes = None;
         let mut idmap_recursive = None;
@@ -173,51 +175,105 @@ impl MountPlan {
             match option.as_str() {
                 "defaults" => {}
                 "ro" => set_flag(&mut flags, libc::MS_RDONLY, true, &mut remount_bind),
-                "rw" => set_flag(&mut flags, libc::MS_RDONLY, false, &mut remount_bind),
-                "suid" => set_flag(&mut flags, libc::MS_NOSUID, false, &mut remount_bind),
+                "rw" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_RDONLY, false, &mut remount_bind);
+                }
+                "suid" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_NOSUID, false, &mut remount_bind);
+                }
                 "nosuid" => set_flag(&mut flags, libc::MS_NOSUID, true, &mut remount_bind),
-                "dev" => set_flag(&mut flags, libc::MS_NODEV, false, &mut remount_bind),
+                "dev" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_NODEV, false, &mut remount_bind);
+                }
                 "nodev" => set_flag(&mut flags, libc::MS_NODEV, true, &mut remount_bind),
-                "exec" => set_flag(&mut flags, libc::MS_NOEXEC, false, &mut remount_bind),
+                "exec" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_NOEXEC, false, &mut remount_bind);
+                }
                 "noexec" => set_flag(&mut flags, libc::MS_NOEXEC, true, &mut remount_bind),
-                "sync" => set_flag(&mut flags, libc::MS_SYNCHRONOUS, true, &mut remount_bind),
-                "async" => set_flag(&mut flags, libc::MS_SYNCHRONOUS, false, &mut remount_bind),
-                "dirsync" => set_flag(&mut flags, libc::MS_DIRSYNC, true, &mut remount_bind),
-                "remount" => flags |= libc::MS_REMOUNT,
-                "mand" => set_flag(&mut flags, libc::MS_MANDLOCK, true, &mut remount_bind),
-                "nomand" => set_flag(&mut flags, libc::MS_MANDLOCK, false, &mut remount_bind),
-                "atime" => set_flag(&mut flags, libc::MS_NOATIME, false, &mut remount_bind),
+                "sync" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_SYNCHRONOUS, true, &mut remount_bind);
+                }
+                "async" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_SYNCHRONOUS, false, &mut remount_bind);
+                }
+                "dirsync" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_DIRSYNC, true, &mut remount_bind);
+                }
+                "remount" => {
+                    detached_bind_compatible = false;
+                    flags |= libc::MS_REMOUNT;
+                }
+                "mand" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_MANDLOCK, true, &mut remount_bind);
+                }
+                "nomand" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_MANDLOCK, false, &mut remount_bind);
+                }
+                "atime" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_NOATIME, false, &mut remount_bind);
+                }
                 "noatime" => set_flag(&mut flags, libc::MS_NOATIME, true, &mut remount_bind),
                 "diratime" => {
+                    detached_bind_compatible = false;
                     set_flag(&mut flags, libc::MS_NODIRATIME, false, &mut remount_bind);
                 }
                 "nodiratime" => {
                     set_flag(&mut flags, libc::MS_NODIRATIME, true, &mut remount_bind);
                 }
-                "relatime" => set_flag(&mut flags, libc::MS_RELATIME, true, &mut remount_bind),
+                "relatime" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_RELATIME, true, &mut remount_bind);
+                }
                 "norelatime" => {
+                    detached_bind_compatible = false;
                     set_flag(&mut flags, libc::MS_RELATIME, false, &mut remount_bind);
                 }
                 "strictatime" => {
                     set_flag(&mut flags, libc::MS_STRICTATIME, true, &mut remount_bind);
                 }
                 "nostrictatime" => {
+                    detached_bind_compatible = false;
                     set_flag(&mut flags, libc::MS_STRICTATIME, false, &mut remount_bind);
                 }
-                "lazytime" => set_flag(&mut flags, libc::MS_LAZYTIME, true, &mut remount_bind),
+                "lazytime" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_LAZYTIME, true, &mut remount_bind);
+                }
                 "nolazytime" => {
+                    detached_bind_compatible = false;
                     set_flag(&mut flags, libc::MS_LAZYTIME, false, &mut remount_bind);
                 }
-                "iversion" => set_flag(&mut flags, libc::MS_I_VERSION, true, &mut remount_bind),
+                "iversion" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_I_VERSION, true, &mut remount_bind);
+                }
                 "noiversion" => {
+                    detached_bind_compatible = false;
                     set_flag(&mut flags, libc::MS_I_VERSION, false, &mut remount_bind);
                 }
-                "silent" => set_flag(&mut flags, libc::MS_SILENT, true, &mut remount_bind),
-                "loud" => set_flag(&mut flags, libc::MS_SILENT, false, &mut remount_bind),
+                "silent" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_SILENT, true, &mut remount_bind);
+                }
+                "loud" => {
+                    detached_bind_compatible = false;
+                    set_flag(&mut flags, libc::MS_SILENT, false, &mut remount_bind);
+                }
                 "nosymfollow" => {
                     set_flag(&mut flags, libc::MS_NOSYMFOLLOW, true, &mut remount_bind);
                 }
                 "symfollow" => {
+                    detached_bind_compatible = false;
                     set_flag(&mut flags, libc::MS_NOSYMFOLLOW, false, &mut remount_bind);
                 }
                 "bind" => {
@@ -264,7 +320,10 @@ impl MountPlan {
                         "moving an existing mount is not implemented",
                     ));
                 }
-                _ => data.push(option.clone()),
+                _ => {
+                    detached_bind_compatible = false;
+                    data.push(option.clone());
+                }
             }
         }
         let data_bytes = data.iter().try_fold(0_usize, |bytes, option| {
@@ -306,6 +365,11 @@ impl MountPlan {
             }
             (None, None) => None,
         };
+        let requests_readonly = flags & libc::MS_RDONLY != 0
+            || recursive_attributes
+                .is_some_and(|attributes| attributes.attr_set & attributes::MOUNT_ATTR_RDONLY != 0);
+        let detached_bind =
+            namespaces.new_user() && bind && requests_readonly && detached_bind_compatible;
         Ok(Self {
             index,
             destination,
@@ -314,6 +378,7 @@ impl MountPlan {
             flags,
             bind,
             remount_bind,
+            detached_bind,
             propagation,
             recursive_attributes,
             idmap,
@@ -329,16 +394,15 @@ impl MountPlan {
         &self,
         bundle_directory: &Path,
         rootfs: &Path,
-        idmapped_sources: &mut IdmappedMountSources,
+        detached_sources: &mut DetachedMountSources,
     ) -> Result<()> {
         let target = self.prepare_target(bundle_directory, rootfs)?;
         let target = path_cstring(self.index, "destination", &target)?;
-        let idmap_destination = self
-            .idmap
-            .as_ref()
-            .map(|_| idmapped_sources.open_destination(self.index, &target))
+        let detached_destination = self
+            .uses_detached_source()
+            .then(|| detached_sources.open_destination(self.index, &target))
             .transpose()?;
-        let source = if self.idmap.is_some() {
+        let source = if self.uses_detached_source() {
             None
         } else {
             self.source
@@ -363,8 +427,8 @@ impl MountPlan {
             Some(string_cstring(self.index, "options", &self.data.join(","))?)
         };
 
-        if let Some(destination) = idmap_destination.as_ref() {
-            idmapped_sources.attach(self.index, destination)?;
+        if let Some(destination) = detached_destination.as_ref() {
+            detached_sources.attach(self.index, destination)?;
         } else {
             mount_call(
                 self.index,
@@ -380,7 +444,7 @@ impl MountPlan {
                 "apply",
             )?;
         }
-        if self.bind && self.remount_bind {
+        if self.bind && self.remount_bind && !self.detached_bind {
             let remount_flags = (self.flags & !(libc::MS_REC | libc::MS_REMOUNT))
                 | libc::MS_BIND
                 | libc::MS_REMOUNT;
@@ -394,8 +458,10 @@ impl MountPlan {
                 "remount bind attributes for",
             )?;
         }
-        if let Some(attributes) = self.recursive_attributes {
-            attributes::apply(self.index, &target, attributes)?;
+        if !self.detached_bind {
+            if let Some(attributes) = self.recursive_attributes {
+                attributes::apply(self.index, &target, attributes)?;
+            }
         }
         if let Some(propagation) = self.propagation {
             mount_call(
@@ -409,6 +475,10 @@ impl MountPlan {
             )?;
         }
         Ok(())
+    }
+
+    fn uses_detached_source(&self) -> bool {
+        self.idmap.is_some() || self.detached_bind
     }
 }
 

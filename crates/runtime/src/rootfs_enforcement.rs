@@ -8,7 +8,7 @@ use std::{
         fd::AsRawFd,
         unix::{
             ffi::OsStrExt,
-            fs::{MetadataExt, OpenOptionsExt},
+            fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
         },
     },
 };
@@ -22,7 +22,10 @@ use crate::{PidSupervisionEvidence, RootfsMountEvidence};
 const EVIDENCE_FILE: &str = "evidence";
 const BIND_SOURCE_FILE: &str = "bind-source";
 const IDMAP_BIND_SOURCE_DIRECTORY: &str = "idmap-bind-source";
+const FOREIGN_READONLY_BIND_SOURCE_FILE: &str = "foreign-readonly-secret";
 const BIND_SOURCE_CONTENTS: &[u8] = b"a3s-oci-bind-source-v1";
+#[cfg(target_os = "linux")]
+const FOREIGN_READONLY_BIND_CONTENTS: &[u8] = b"a3s-oci-foreign-readonly-bind-v1";
 const MAX_EVIDENCE_BYTES: u64 = 1_024;
 const IDMAP_VISIBLE_ID_RANGE: u32 = 65_536;
 const EXPECTED_COMMON_EVIDENCE: &[u8] = b"pid1-supervision-enforced\n\
@@ -52,6 +55,7 @@ masked-path-enforced\n\
 recursive-mount-attributes-enforced\n\
 idmapped-mounts-enforced\n\
 idmap-source-ownership-unchanged\n\
+foreign-readonly-bind-enforced\n\
 idmap-nonrecursive-enforced\n\
 ridmap-recursive-enforced\n\
 readonly-rootfs-enforced\n";
@@ -183,6 +187,7 @@ impl RootfsEnforcementFixture {
         }
         Ok(common_targets_created
             && real_directory(&self.target_directory.join("idmap/bind/source")).await?
+            && real_file(&self.target_directory.join("idmap/bind/foreign-readonly")).await?
             && real_directory(&self.target_directory.join("idmap/bind/nonrecursive")).await?
             && real_directory(&self.target_directory.join("idmap/bind/recursive")).await?)
     }
@@ -247,6 +252,8 @@ impl RootfsEnforcementFixture {
         if self.native_idmap_bind_expected {
             rootfs_report.idmap_source_ownership_unchanged =
                 Some(lines.contains(&"idmap-source-ownership-unchanged"));
+            rootfs_report.foreign_readonly_bind_enforced =
+                Some(lines.contains(&"foreign-readonly-bind-enforced"));
             rootfs_report.idmap_nonrecursive_enforced =
                 Some(lines.contains(&"idmap-nonrecursive-enforced"));
             rootfs_report.ridmap_recursive_enforced =
@@ -563,7 +570,9 @@ fn build_bundle(
     let mut native_idmap_bind_paths = None;
     if native_idmap_bind_expected {
         let source = format!("{output_name}/{IDMAP_BIND_SOURCE_DIRECTORY}");
+        let foreign_readonly_source = format!("{source}/{FOREIGN_READONLY_BIND_SOURCE_FILE}");
         let source_target = format!("{target_root}/idmap/bind/source");
+        let foreign_readonly_target = format!("{target_root}/idmap/bind/foreign-readonly");
         let idmap_bind_target = format!("{target_root}/idmap/bind/nonrecursive");
         let ridmap_bind_target = format!("{target_root}/idmap/bind/recursive");
         mounts.extend([
@@ -572,6 +581,12 @@ fn build_bundle(
                 "type": "none",
                 "source": source,
                 "options": ["rbind", "rw", "nosuid", "nodev"]
+            }),
+            json!({
+                "destination": foreign_readonly_target,
+                "type": "none",
+                "source": foreign_readonly_source,
+                "options": ["bind", "ro", "nosuid", "nodev", "noexec"]
             }),
             json!({
                 "destination": idmap_bind_target,
@@ -590,7 +605,12 @@ fn build_bundle(
                 "gidMappings": [bind_gid_2000]
             }),
         ]);
-        native_idmap_bind_paths = Some((source_target, idmap_bind_target, ridmap_bind_target));
+        native_idmap_bind_paths = Some((
+            source_target,
+            foreign_readonly_target,
+            idmap_bind_target,
+            ridmap_bind_target,
+        ));
     }
     root.insert("mounts".into(), Value::Array(mounts));
 
@@ -617,15 +637,14 @@ fn build_bundle(
             ridmap_target: &ridmap_target,
             write_probe: &write_probe,
         },
-        native_idmap_bind_paths
-            .as_ref()
-            .map(
-                |(source_target, idmap_target, ridmap_target)| NativeIdmapBindPaths {
-                    source: source_target,
-                    idmap: idmap_target,
-                    ridmap: ridmap_target,
-                },
-            ),
+        native_idmap_bind_paths.as_ref().map(
+            |(source_target, foreign_readonly, idmap_target, ridmap_target)| NativeIdmapBindPaths {
+                source: source_target,
+                foreign_readonly,
+                idmap: idmap_target,
+                ridmap: ridmap_target,
+            },
+        ),
     );
     *process_command_mut(root)? = command;
 
@@ -638,6 +657,7 @@ fn build_bundle(
 #[derive(Debug, Clone, Copy)]
 struct NativeIdmapBindPaths<'a> {
     source: &'a str,
+    foreign_readonly: &'a str,
     idmap: &'a str,
     ridmap: &'a str,
 }
@@ -680,6 +700,16 @@ fn enforcement_command(
              /bin/busybox awk '$5 == \"{source_child}\" {{ ok = 1 }} \
                END {{ exit !ok }}' /proc/self/mountinfo; \
              printf 'idmap-source-ownership-unchanged\\n' >> \"$evidence\"; \
+             test \"$(/bin/busybox cat '{foreign_readonly}')\" = \
+               'a3s-oci-foreign-readonly-bind-v1'; \
+             test \"$(/bin/busybox stat -c '%a' '{foreign_readonly}')\" = '400'; \
+             /bin/busybox awk '$5 == \"{foreign_readonly}\" && \
+               $6 ~ /(^|,)ro(,|$)/ && $6 ~ /(^|,)nosuid(,|$)/ && \
+               $6 ~ /(^|,)nodev(,|$)/ && $6 ~ /(^|,)noexec(,|$)/ \
+               {{ ok = 1 }} END {{ exit !ok }}' /proc/self/mountinfo; \
+             if printf 'forbidden\\n' > '{foreign_readonly}' 2>/dev/null; then \
+               exit 46; fi; \
+             printf 'foreign-readonly-bind-enforced\\n' >> \"$evidence\"; \
              test \"$(/bin/busybox stat -c '%u:%g' '{idmap}')\" = '1000:1000'; \
              test \"$(/bin/busybox stat -c '%u:%g' '{idmap_child}')\" = '0:0'; \
              /bin/busybox awk '$5 == \"{idmap_child}\" {{ ok = 1 }} \
@@ -691,6 +721,7 @@ fn enforcement_command(
                END {{ exit !ok }}' /proc/self/mountinfo; \
              printf 'ridmap-recursive-enforced\\n' >> \"$evidence\"; ",
             source = paths.source,
+            foreign_readonly = paths.foreign_readonly,
             idmap = paths.idmap,
             ridmap = paths.ridmap,
         )
@@ -915,6 +946,7 @@ fn set_native_owner(path: &Path, uid: u32, gid: u32) -> Result<(), String> {
 struct NativeIdmapBindSource {
     root: PathBuf,
     child: PathBuf,
+    readonly_file: PathBuf,
 }
 
 #[cfg(target_os = "linux")]
@@ -922,18 +954,47 @@ impl NativeIdmapBindSource {
     fn prepare(output_directory: &Path, uid: u32, gid: u32) -> Result<Self, String> {
         let root = output_directory.join(IDMAP_BIND_SOURCE_DIRECTORY);
         let child = root.join("child");
+        let readonly_file = root.join(FOREIGN_READONLY_BIND_SOURCE_FILE);
         std::fs::create_dir(&root).map_err(|error| {
             format!(
                 "failed to create native ID-map bind source {}: {error}",
                 root.display()
             )
         })?;
-        let source = Self { root, child };
+        let source = Self {
+            root,
+            child,
+            readonly_file,
+        };
         if let Err(reason) = mount_private_tmpfs(&source.root) {
             let _ = std::fs::remove_dir(&source.root);
             return Err(reason);
         }
         if let Err(reason) = set_native_owner(&source.root, uid, gid) {
+            source.detach();
+            let _ = std::fs::remove_dir_all(&source.root);
+            return Err(reason);
+        }
+        if let Err(error) = std::fs::write(&source.readonly_file, FOREIGN_READONLY_BIND_CONTENTS) {
+            source.detach();
+            let _ = std::fs::remove_dir_all(&source.root);
+            return Err(format!(
+                "failed to create foreign read-only bind source {}: {error}",
+                source.readonly_file.display()
+            ));
+        }
+        if let Err(reason) = set_native_owner(&source.readonly_file, uid, gid).and_then(|()| {
+            std::fs::set_permissions(
+                &source.readonly_file,
+                std::fs::Permissions::from_mode(0o400),
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to set foreign read-only bind mode on {}: {error}",
+                    source.readonly_file.display()
+                )
+            })
+        }) {
             source.detach();
             let _ = std::fs::remove_dir_all(&source.root);
             return Err(reason);
@@ -1001,7 +1062,7 @@ fn mount_private_tmpfs(target: &Path) -> Result<(), String> {
             source.as_ptr(),
             target_c.as_ptr(),
             filesystem.as_ptr(),
-            libc::MS_NOSUID | libc::MS_NODEV,
+            libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
             data.as_ptr().cast(),
         )
     };

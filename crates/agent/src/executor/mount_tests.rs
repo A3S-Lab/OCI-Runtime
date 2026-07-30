@@ -63,6 +63,17 @@ fn with_bind_source(config: &str) -> String {
     )
 }
 
+fn with_user_namespace(config: &str) -> String {
+    config.replace(
+        r#""linux": {"namespaces": [{"type": "mount"}]}"#,
+        r#""linux": {
+    "namespaces": [{"type": "mount"}, {"type": "user"}],
+    "uidMappings": [{"containerID": 0, "hostID": 100000, "size": 65536}],
+    "gidMappings": [{"containerID": 0, "hostID": 200000, "size": 65536}]
+  }"#,
+    )
+}
+
 #[test]
 fn preserves_mount_order_and_normalizes_relative_destinations() {
     let plan = InitPlan::from_bundle(&bundle(MOUNT_CONFIG), &null_io())
@@ -104,6 +115,35 @@ fn parses_bind_remount_and_propagation_options_without_silent_loss() {
     assert_ne!(mount.flags & libc::MS_REC, 0);
     assert_ne!(mount.flags & libc::MS_RDONLY, 0);
     assert_eq!(mount.propagation, Some(libc::MS_PRIVATE | libc::MS_REC));
+    assert!(!mount.detached_bind);
+}
+
+#[test]
+fn prepares_readonly_binds_before_entering_a_new_user_namespace() {
+    for options in [
+        r#"["rbind", "ro", "nosuid", "nodev", "noexec", "rprivate"]"#,
+        r#"["rbind", "rro", "rnosuid", "rnodev", "rnoexec", "rprivate"]"#,
+    ] {
+        let config = with_user_namespace(&with_bind_source(
+            &MOUNT_CONFIG.replace(r#"["nosuid", "nodev", "mode=1777", "size=16m"]"#, options),
+        ));
+        let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+            .expect("read-only bind in a new user namespace");
+        assert!(plan.mounts[1].detached_bind, "options: {options}");
+    }
+}
+
+#[test]
+fn keeps_legacy_remount_for_unrepresentable_bind_attributes() {
+    let config = with_user_namespace(&with_bind_source(&MOUNT_CONFIG.replace(
+        r#"["nosuid", "nodev", "mode=1777", "size=16m"]"#,
+        r#"["rbind", "ro", "sync"]"#,
+    )));
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("legacy-compatible read-only bind plan");
+
+    assert!(plan.mounts[1].remount_bind);
+    assert!(!plan.mounts[1].detached_bind);
 }
 
 #[test]
