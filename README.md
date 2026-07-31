@@ -605,6 +605,28 @@ cargo run -p a3s-oci-cli -- oci-vm-smoke \
   --console C:\path\to\new-oci-console.log
 ```
 
+Run the repeatable Windows lifecycle, workload, negative, concurrency, and
+owner-fault matrix with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  scripts\windows-whpx-soak.ps1 `
+  -RootfsArchive C:\path\to\rootfs.tar
+```
+
+The default run covers serial and parallel lifecycle reuse, isolated and
+inherited network namespaces, RW and read-only bind volumes, recursive bind
+mounts with a nested proc mount, bounded tmpfs with `noexec`, successful and
+nonzero-exit volume-provided init scripts, fail-closed unsupported OCI
+properties, and four owner-termination points. Use `-WorkloadIterations N` to
+repeat the network, storage, and init-script matrix. Every run writes a
+versioned summary, binary hashes, per-command reports, consoles, resource
+samples, and cleanup evidence beneath `target\windows-whpx-soak`.
+
+The network cases qualify namespace isolation and inheritance only. They do
+not claim configured interfaces, address assignment, DNS, routing, or external
+connectivity, which remain outside the bootstrap executor slice.
+
 Cross-check the non-Windows capability path when the target is installed:
 
 ```sh
