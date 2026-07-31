@@ -7,11 +7,11 @@ use xz2::read::XzDecoder;
 
 const RUNTIME_ARCHIVE: &str = "runtime/windows-x86_64/krun-windows-x64.tar.xz";
 const RUNTIME_ARCHIVE_SHA256: &str =
-    "c8d14bd0ceb86190effac9c9af12892f1dbb5b82f22123e8524dd375014d5493";
+    "99329b39d23ba8462d63a448af267bcd8fcd238ed2ea1b2656d4cdf84ebf1e5c";
 const RUNTIME_FILES: &[(&str, &str)] = &[
     (
         "krun.dll",
-        "e5debc685ae171e3f60a6e3b9c1c4e12a7c3eb943a68ceb1169e153f0cc6c255",
+        "ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9",
     ),
     (
         "krun.lib",

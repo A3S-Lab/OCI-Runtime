@@ -14,8 +14,9 @@ The runtime:
 3. queries `WHvCapabilityCodeHypervisorPresent`;
 4. optionally creates and deletes a WHPX partition object as a smoke test;
 5. links the `a3s-libkrun-sys 3.1.0` FFI ABI only into an isolated shim and
-   stages a runtime-owned, checksum-verified native bundle imported from
-   `A3S-Lab/Box@46e17a8`;
+   stages a runtime-owned, checksum-verified native bundle with firmware
+   provenance from `A3S-Lab/Box@46e17a8` and WHPX stream transport from
+   `A3S-Lab/libkrun@9480ee3`;
 6. creates, configures for one vCPU and 128 MiB, replaces implicit TSI with a
    zero-feature plain-vsock device, maps guest port 4093 to a validated bare
    Windows pipe name, and releases one real libkrun context without entering a
@@ -34,7 +35,9 @@ The runtime:
 10. runs a fixed OCI bundle through distinct create, start, signal, and delete
     calls, verifies lifecycle replay and cleanup, and keeps the built-in
     driver disabled;
-11. emits stable JSON evidence through `a3s-oci features`,
+11. runs a repeatable serial, two-lane parallel, workload, negative, and
+    owner-termination matrix against a real WHPX host;
+12. emits stable JSON evidence through `a3s-oci features`,
    `a3s-oci whpx-smoke`, `a3s-oci-krun-shim context-smoke`, and
    `a3s-oci-krun-shim vm-smoke`, plus nested host/shim evidence through
    `a3s-oci agent-vm-smoke` and `a3s-oci oci-vm-smoke`.
@@ -173,18 +176,35 @@ passed, and the VM exited cleanly. A companion bundle joined
 `/proc/1/ns/pid`; create retained `Unsupported` at
 `linux.namespaces[5].path` and left no guest runtime directory.
 
+The August 1, 2026 full-matrix qualification used the Alpine minirootfs
+SHA-256
+`4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`,
+guest-agent SHA-256
+`e78261ee3c6628045692003d59c948e965eafbf44291797ce705319dccfc9826`,
+and `krun.dll` SHA-256
+`ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9`.
+In 63.970 seconds it passed one serial lifecycle, two parallel lifecycles,
+isolated and inherited network namespaces, the full bind/rbind/proc/tmpfs
+storage matrix, init success and exact failure, nine typed negative cases, and
+owner termination at four timing points. The storage create request crossed
+the 4 KiB WHPX stream boundary. Every case left zero A3S host processes and
+zero guest bootstrap/runtime directories.
+
 The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
 does not build it.
 
-The smokes do not prove that:
+The smokes and matrix do not prove that:
 
 - the pinned immutable A3S system image boots;
-- configured networking or complete process I/O works;
+- configured interfaces, addresses, DNS, routing, external connectivity, or
+  complete process I/O work;
 - user/time namespaces, namespace joins, advanced mount semantics,
   resources, capabilities, seccomp, or hooks work;
-- restart recovery, concurrent containers, or shared-guest-kernel isolation
-  work;
+- restart recovery or multiple containers inside one shared guest work; the
+  parallel qualification uses independent utility VMs;
+- native handles are reclaimed before process teardown rather than by Windows
+  when the owning process exits;
 - the driver is production ready.
 
 For that reason, driver readiness remains `probe-only` even after all smokes
@@ -201,8 +221,10 @@ The next vertical slice must:
    resource, seccomp, and hook enforcement;
 4. return stdout, stderr, and the natural exit code;
 5. reconcile stopped state after host runtime restart;
-6. add concurrent-container and negative isolation evidence;
-7. prove cleanup under fault injection and repeated soak runs.
+6. add concurrent-container evidence inside one shared guest and exhaustive
+   negative isolation coverage;
+7. prove native handle reclamation and durable-boundary recovery beyond the
+   current owner-termination matrix.
 
 Only completion of that gate may promote Windows driver readiness to
 `experimental`.

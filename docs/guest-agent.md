@@ -131,8 +131,8 @@ identities differed from guest PID 1 before producing its marker. A
 joined-network negative bundle retained its typed `Unsupported` error and left
 no guest runtime state. This proves the fixed bootstrap slice, not the
 immutable A3S system image, complete OCI enforcement, process I/O, configured
-networking, restart recovery, or fault-injected cleanup. The WHPX driver
-therefore remains `probe-only`.
+networking, or restart recovery. The WHPX driver therefore remains
+`probe-only`.
 
 The PID qualification used the 6,371,704-byte static agent with SHA-256
 `45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.
@@ -141,3 +141,12 @@ before producing its marker. The agent returned authenticated host-visible PID
 396, and the complete create/state/start/kill/delete lifecycle and cleanup
 passed through WHPX. A joined-PID companion bundle retained `Unsupported` at
 `linux.namespaces[5].path` and left no guest runtime state.
+
+The August 1, 2026 full matrix used guest-agent SHA-256
+`e78261ee3c6628045692003d59c948e965eafbf44291797ce705319dccfc9826`
+and passed serial and two-lane parallel lifecycle, network namespace, ordered
+storage, volume-init success/failure, nine negative, and four owner-termination
+cases. Each case left no A3S host process and no guest bootstrap/runtime
+directory. This adds bounded concurrency and fault-cleanup evidence without
+claiming restart reconciliation, shared-guest multi-container isolation, or
+complete OCI enforcement.

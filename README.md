@@ -97,7 +97,9 @@ The project is experimental. The current Windows milestone implements:
 - `WHvCapabilityCodeHypervisorPresent` probing;
 - a real WHPX partition-object create/delete smoke;
 - an isolated shim pinned to the `a3s-libkrun-sys 3.1.0` FFI ABI and a
-  runtime-owned native bundle imported from `A3S-Lab/Box@46e17a8`;
+  runtime-owned native bundle whose firmware provenance is recorded by
+  `A3S-Lab/Box@46e17a8` and whose WHPX stream transport is pinned to
+  `A3S-Lab/libkrun@9480ee3`;
 - a real libkrun context create/configure/release smoke that replaces implicit
   TSI with plain vsock and configures the fixed guest port-to-pipe mapping;
 - a real local Windows agent-pipe test covering OS-generated session tokens,
@@ -115,6 +117,10 @@ The project is experimental. The current Windows milestone implements:
   start, observes it running, delivers and replays `SIGTERM`, observes
   stopped, verifies and removes its marker, returns NotFound after delete, and
   leaves no new guest runtime directory;
+- a repeatable real-host WHPX matrix covering serial and two-lane parallel
+  lifecycle runs, isolated and inherited network namespaces, ordered bind,
+  recursive bind, nested proc, and tmpfs mounts, init success and exact
+  failure, nine fail-closed negative cases, and four owner-termination points;
 - the pure OCI `creating -> created -> running -> stopped` state contract;
 - Windows and Linux CI scaffolding.
 
@@ -424,17 +430,41 @@ The fixed OCI VM smoke additionally verifies:
 - state returns `NotFound` after delete;
 - VM shutdown leaves no new guest-agent runtime directory or host process.
 
-The smokes do not yet verify:
+The repeatable real-host matrix additionally verifies:
+
+- one serial lifecycle run and two independent utility VMs running in
+  parallel;
+- isolated and inherited network-namespace identity;
+- read-write and read-only bind mounts, recursive bind with a nested proc
+  mount, and bounded `noexec` tmpfs;
+- volume-provided init success and exact nonzero failure;
+- nine typed host/guest negative cases without crossing an unsupported
+  mutation boundary;
+- cleanup after owner termination at 0, 250, 1,000, and 2,500 milliseconds.
+
+The August 1, 2026 qualification passed all of those cases in 63.970 seconds
+with the Alpine archive SHA-256
+`4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`
+and `krun.dll` SHA-256
+`ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9`.
+The storage create request remained above the 4 KiB WHPX stream boundary, and
+every case left zero A3S host processes and zero guest bootstrap/runtime
+directories.
+
+The smokes and matrix do not yet verify:
 
 - a pinned immutable A3S system image;
-- networking or full process I/O;
+- configured guest interfaces, addresses, DNS, routing, external
+  connectivity, or complete process I/O;
 - complete OCI configuration enforcement, hooks, or recovery;
-- multiple concurrent containers or shared-guest-kernel execution.
+- multiple containers inside one shared guest; the parallel evidence uses
+  independent utility VMs.
 
 The next Windows gate replaces the diagnostic share with a protected,
 runtime-owned immutable system image and expands the shared Linux executor
 through process I/O, user/time namespaces and namespace joins, advanced
-mount semantics, resources, hooks, recovery, and negative isolation cases.
+mount semantics, resources, hooks, recovery, and exhaustive negative
+isolation cases.
 WHPX remains `probe-only` until those gates pass.
 
 ## Target Architecture
@@ -482,7 +512,7 @@ state, and cleanup.
 
 | Host | Execution path | Current state |
 | --- | --- | --- |
-| Windows x86_64 | libkrun + WHPX utility VM | Fixed OCI create/start/kill/delete vertical slice passes; complete enforcement and recovery pending; driver is `probe-only` |
+| Windows x86_64 | libkrun + WHPX utility VM | Serial/parallel lifecycle, storage, init, negative, and owner-fault matrix passes; complete enforcement and restart recovery remain pending; driver is `probe-only` |
 | Linux x86_64/aarch64 without KVM | Native Linux executor | Required before `crun` removal; not implemented |
 | Linux x86_64/aarch64 with KVM | libkrun + KVM utility VM | Planned after the shared executor contract |
 | macOS arm64 | libkrun + HVF utility VM | Planned after the shared executor contract |
@@ -622,6 +652,11 @@ properties, and four owner-termination points. Use `-WorkloadIterations N` to
 repeat the network, storage, and init-script matrix. Every run writes a
 versioned summary, binary hashes, per-command reports, consoles, resource
 samples, and cleanup evidence beneath `target\windows-whpx-soak`.
+
+The August 1, 2026 full matrix completed one serial run, two parallel runs,
+five workload cases, nine negative cases, and four owner-fault cases with no
+residual A3S process. Its evidence pinned the fixed native DLL hash
+`ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9`.
 
 The network cases qualify namespace isolation and inheritance only. They do
 not claim configured interfaces, address assignment, DNS, routing, or external

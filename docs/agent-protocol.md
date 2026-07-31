@@ -110,6 +110,8 @@ without trusting a pathname socket.
 This is the first Linux executor vertical slice, not complete OCI
 enforcement. A pinned immutable system image, complete process I/O, remaining
 user/time namespace creation, namespace joins, advanced mount semantics,
-resources, hooks, recovery, negative isolation cases, fault cleanup, and full
-lifecycle evidence remain required before the WHPX driver can advance beyond
-`probe-only`.
+resources, hooks, and restart recovery remain required before the WHPX driver
+can advance beyond `probe-only`. The repeatable real-host matrix now covers
+serial and two-lane parallel lifecycle, a bounded nine-case negative set, and
+four owner-termination cleanup points, but not exhaustive durable-boundary
+fault injection or multiple containers inside one shared guest.

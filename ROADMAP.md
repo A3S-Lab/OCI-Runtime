@@ -58,6 +58,11 @@ Completed:
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
   checks;
+- repeatable real-host WHPX serial and two-lane parallel lifecycle evidence,
+  plus network-namespace, storage, volume-init, nine-case negative, and
+  four-point owner-termination cleanup coverage;
+- a runtime-owned Windows libkrun bundle pinned to the 3 KiB host-to-guest
+  stream segmentation fix, with deterministic archive and payload checksums;
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
@@ -159,8 +164,9 @@ and host/agent transition.
 - [x] Load and probe Windows Hypervisor Platform securely.
 - [x] Create and delete a real WHPX partition object.
 - [x] Pin the `a3s-libkrun-sys 3.1.0` FFI ABI and stage a runtime-owned,
-  checksum-verified Windows bundle imported from `A3S-Lab/Box@46e17a8` only
-  for the isolated shim.
+  checksum-verified Windows bundle for the isolated shim, with firmware
+  provenance from `A3S-Lab/Box@46e17a8` and WHPX stream transport from
+  `A3S-Lab/libkrun@9480ee3`.
 - [x] Create, configure, and release a real context using the Windows WHPX
   libkrun build.
 - [x] Configure a plain-vsock device and the fixed guest control port through
@@ -184,7 +190,11 @@ and host/agent transition.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest
   runtime directory on the nominal path.
-- [ ] Prove deterministic VM, handle, process, and filesystem cleanup.
+- [x] Qualify serial and two-lane parallel lifecycle, network namespace,
+  storage, volume-init, typed negative, and four-point owner-termination
+  cleanup paths without residual host processes or guest runtime directories.
+- [ ] Prove in-process native handle reclamation independently of Windows
+  process teardown.
 
 Exit gate: a fresh Windows host test boots a utility VM, runs the fixed OCI
 bundle, validates negative isolation cases, and leaves no process, handle, or
