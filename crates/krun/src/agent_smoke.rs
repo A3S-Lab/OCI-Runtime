@@ -1,8 +1,8 @@
 use std::path::Path;
 
+use a3s_oci_agent_protocol::AgentVsockEndpoint;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-use a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_ENV;
-use a3s_oci_agent_protocol::{AgentVsockEndpoint, SessionToken};
+use a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_FILE_ENV;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
@@ -15,7 +15,7 @@ pub fn agent_vm_smoke(
     rootfs: &Path,
     console: &Path,
     endpoint: &AgentVsockEndpoint,
-    token: &SessionToken,
+    guest_token_file: &str,
 ) -> KrunAgentVmSmokeReport {
     let config = match VmConfig::new(1, 512) {
         Ok(config) => config,
@@ -29,12 +29,12 @@ pub fn agent_vm_smoke(
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        agent_vm_smoke_windows(rootfs, console, endpoint, token, config)
+        agent_vm_smoke_windows(rootfs, console, endpoint, guest_token_file, config)
     }
 
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
-        let _ = (rootfs, console, endpoint, token);
+        let _ = (rootfs, console, endpoint, guest_token_file);
         KrunAgentVmSmokeReport::unsupported(HostPlatform::current(), config)
     }
 }
@@ -44,14 +44,12 @@ fn agent_vm_smoke_windows(
     rootfs: &Path,
     console: &Path,
     endpoint: &AgentVsockEndpoint,
-    token: &SessionToken,
+    guest_token_file: &str,
     config: VmConfig,
 ) -> KrunAgentVmSmokeReport {
     use std::fs;
 
     use crate::context::KrunContext;
-    use zeroize::Zeroizing;
-
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Windows, config);
     let rootfs = match rootfs.canonicalize() {
         Ok(path) if path.is_dir() => path,
@@ -122,11 +120,10 @@ fn agent_vm_smoke_windows(
         return report;
     }
 
-    let token_hex = token.expose_hex();
-    let environment = Zeroizing::new(vec![(
-        AGENT_SESSION_TOKEN_ENV.to_string(),
-        token_hex.as_str().to_string(),
-    )]);
+    let environment = vec![(
+        AGENT_SESSION_TOKEN_FILE_ENV.to_string(),
+        guest_token_file.to_string(),
+    )];
     if let Err(error) = context.set_exec("/usr/bin/a3s-oci-agent", &[], &environment) {
         report.reason = Some(error.to_string());
         return report;

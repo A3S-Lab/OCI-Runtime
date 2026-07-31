@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
     AgentClient, AgentOperation, AgentVsockEndpoint, SessionToken, AGENT_PROTOCOL_VERSION_MAX,
-    AGENT_SESSION_TOKEN_ENV,
+    AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_NAME,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde_json::Value;
@@ -65,6 +65,7 @@ impl WindowsAgentVmSession {
             Ok(endpoint) => endpoint,
             Err(error) => return Err(failed(report, error.to_string())),
         };
+        let bootstrap_cleanup = BootstrapTokenCleanup::new(&rootfs, &endpoint);
         let listener = match WindowsAgentPipeListener::bind(endpoint.clone()) {
             Ok(listener) => {
                 report.endpoint_bound = true;
@@ -87,6 +88,8 @@ impl WindowsAgentVmSession {
             .arg(&console)
             .arg("--pipe-name")
             .arg(endpoint.pipe_name())
+            .arg("--owner-pid")
+            .arg(std::process::id().to_string())
             .env(AGENT_SESSION_TOKEN_ENV, encoded_token.as_str())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -176,6 +179,12 @@ impl WindowsAgentVmSession {
                 ));
             }
         };
+        if let Err(reason) = bootstrap_cleanup.cleanup() {
+            drop(client);
+            let completed = running.terminate_and_collect().await;
+            apply_completed(&mut report, &completed);
+            return Err(failed_with_output(report, &reason, &completed));
+        }
         report.protocol_negotiated = true;
         report.selected_protocol = Some(client.hello().selected_version());
         report.agent_version = Some(client.hello().capabilities().agent_version().to_string());
@@ -272,6 +281,65 @@ impl WindowsAgentVmSession {
         report.status = CapabilityStatus::Available;
         report.reason = None;
         report
+    }
+}
+
+struct BootstrapTokenCleanup {
+    file: PathBuf,
+    directory: PathBuf,
+    cleaned: bool,
+}
+
+impl BootstrapTokenCleanup {
+    fn new(rootfs: &Path, endpoint: &AgentVsockEndpoint) -> Self {
+        let directory = rootfs.join(format!(
+            "{AGENT_SESSION_TOKEN_DIRECTORY_PREFIX}{}",
+            endpoint.pipe_name()
+        ));
+        Self {
+            file: directory.join(AGENT_SESSION_TOKEN_FILE_NAME),
+            directory,
+            cleaned: false,
+        }
+    }
+
+    fn cleanup(mut self) -> Result<(), String> {
+        let result = self.remove();
+        self.cleaned = result.is_ok();
+        result
+    }
+
+    fn remove(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+        match std::fs::remove_file(&self.file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!(
+                "failed to remove one-time guest bootstrap file {}: {error}",
+                self.file.display()
+            )),
+        }
+        match std::fs::remove_dir(&self.directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!(
+                "failed to remove one-time guest bootstrap directory {}: {error}",
+                self.directory.display()
+            )),
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+}
+
+impl Drop for BootstrapTokenCleanup {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            let _ = self.remove();
+        }
     }
 }
 

@@ -1,10 +1,16 @@
 use std::io;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use zeroize::Zeroizing;
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod bootstrap_token;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod owner_process;
 
 #[derive(Debug, Parser)]
 #[command(name = "a3s-oci-krun-shim", version, about)]
@@ -38,6 +44,9 @@ enum Command {
         /// Bare Windows pipe name shared with the host runtime.
         #[arg(long, value_name = "NAME")]
         pipe_name: String,
+        /// Runtime process whose exit must terminate this shim and its VM.
+        #[arg(long, value_name = "PID")]
+        owner_pid: NonZeroU32,
     },
 }
 
@@ -73,6 +82,7 @@ fn main() -> ExitCode {
             rootfs,
             console,
             pipe_name,
+            owner_pid,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
                 Ok(endpoint) => endpoint,
@@ -96,7 +106,51 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let report = a3s_oci_krun::agent_vm_smoke(&rootfs, &console, &endpoint, &token);
+
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            let report = {
+                let bootstrap =
+                    match bootstrap_token::BootstrapTokenFile::create(&rootfs, &endpoint, &token) {
+                        Ok(bootstrap) => bootstrap,
+                        Err(error) => {
+                            eprintln!(
+                                "a3s-oci-krun-shim: failed to stage guest bootstrap token: {error}"
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                    };
+                let owner_monitor = match owner_process::start(owner_pid, bootstrap.cleanup_paths())
+                {
+                    Ok(owner_monitor) => owner_monitor,
+                    Err(error) => {
+                        eprintln!("a3s-oci-krun-shim: failed to monitor runtime owner: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                drop(token);
+                drop(encoded);
+
+                let mut report = a3s_oci_krun::agent_vm_smoke(
+                    &rootfs,
+                    &console,
+                    &endpoint,
+                    bootstrap.guest_path(),
+                );
+                owner_monitor.mark_vm_finished();
+                if let Err(error) = bootstrap.cleanup() {
+                    report.status = a3s_oci_core::CapabilityStatus::Unavailable;
+                    report.reason = Some(format!(
+                        "failed to clean one-time guest bootstrap token: {error}"
+                    ));
+                }
+                report
+            };
+            #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+            let report = {
+                let _ = (owner_pid, token, encoded);
+                a3s_oci_krun::agent_vm_smoke(&rootfs, &console, &endpoint, "")
+            };
+
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
                 eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");
