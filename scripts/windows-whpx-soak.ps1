@@ -756,7 +756,17 @@ function New-SoakFixture {
                 -Asset 'init-failure.sh' -Scenario 'expected-failure'
         }
     }
-    Write-JsonFile -Path (Join-Path $bundle 'config.json') -Value $config
+    $configPath = Join-Path $bundle 'config.json'
+    Write-JsonFile -Path $configPath -Value $config
+    if ($Variant -eq 'storage-matrix') {
+        $configBytes = (Get-Item -LiteralPath $configPath).Length
+        if ($configBytes -le 4096) {
+            throw (
+                'The storage matrix must keep its create request above the ' +
+                "4 KiB WHPX transport boundary; config.json is $configBytes bytes."
+            )
+        }
+    }
 
     [pscustomobject]@{
         Name = $Name

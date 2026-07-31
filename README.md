@@ -669,6 +669,17 @@ seconds. `summary.json`, `verify.out`, inventories, capability results,
 operation rows, resource samples, and per-case JSON/logs form the retained
 evidence contract.
 
+The packaged Windows runtime uses `A3S-Lab/libkrun@9480ee3`, whose 3 KiB
+host-to-guest read segmentation prevents a request larger than one guest
+receive descriptor from stalling. A focused August 1, 2026 transport
+qualification completed one serial lifecycle, two parallel lifecycles, five
+workload cases, nine fail-closed negatives, and four owner-termination cases
+in 63.970 seconds. Its storage request was larger than 4 KiB, every case left
+zero A3S host processes and guest runtime directories, and it pinned
+`krun.dll` SHA-256
+`ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9`.
+The current default gate above remains the broader release profile.
+
 The Windows fixture intentionally omits user and time namespaces and the swap
 controller, which the current WHPX utility kernel has not qualified. Those
 omissions are not reported as passing coverage. See

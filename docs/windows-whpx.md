@@ -14,8 +14,9 @@ The runtime:
 3. queries `WHvCapabilityCodeHypervisorPresent`;
 4. optionally creates and deletes a WHPX partition object as a smoke test;
 5. links the `a3s-libkrun-sys 3.1.0` FFI ABI only into an isolated shim and
-   stages a runtime-owned, checksum-verified native bundle imported from
-   `A3S-Lab/Box@46e17a8`;
+   stages a runtime-owned, checksum-verified native bundle with firmware
+   provenance from `A3S-Lab/Box@46e17a8` and WHPX stream transport from
+   `A3S-Lab/libkrun@9480ee3`;
 6. creates, configures for one vCPU and 128 MiB, replaces implicit TSI with a
    zero-feature plain-vsock device, maps guest port 4093 to a validated bare
    Windows pipe name, and releases one real libkrun context without entering a
@@ -190,6 +191,20 @@ and bounded host working-set and log growth. The evidence directory contains
 `host.json`, start/final process inventories, `capability-results.tsv`,
 `operations.tsv`, `resource-samples.tsv`, every command report and console,
 `summary.json`, and a final `verify.out`.
+
+The focused August 1, 2026 transport qualification used the Alpine minirootfs
+SHA-256
+`4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`,
+guest-agent SHA-256
+`e78261ee3c6628045692003d59c948e965eafbf44291797ce705319dccfc9826`,
+and `krun.dll` SHA-256
+`ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9`.
+In 63.970 seconds it passed one serial lifecycle, two parallel lifecycles,
+five workload cases, nine typed negative cases, and owner termination at four
+timing points. Its storage create request crossed the 4 KiB WHPX stream
+boundary, and every case left zero A3S host processes and zero guest
+bootstrap/runtime directories. This is focused transport regression evidence;
+the default profile above remains the broader hardware gate.
 
 `fixtures/utility-vm/config.windows.json` is an explicit Windows qualification
 profile. It requests UTS, mount, IPC, network, cgroup, and PID namespaces. It
