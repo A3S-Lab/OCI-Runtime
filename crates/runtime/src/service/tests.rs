@@ -32,9 +32,9 @@ use crate::DriverCreateAttachments;
 use crate::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
     DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
+    DriverReadOutputRequest, DriverRecovery, DriverResizeRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 
 mod fault_matrix;
@@ -98,7 +98,7 @@ struct RecordingDriver {
     close_stdin_replays: Mutex<HashMap<OperationId, DriverCloseStdinRequest>>,
     resize_replays: Mutex<HashMap<OperationId, DriverResizeRequest>>,
     output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
-    recovery_observation: Mutex<Option<DriverState>>,
+    recovery: Mutex<DriverRecovery>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
 }
 
@@ -133,7 +133,7 @@ impl RecordingDriver {
             close_stdin_replays: Mutex::new(HashMap::new()),
             resize_replays: Mutex::new(HashMap::new()),
             output_responses: Mutex::new(VecDeque::new()),
-            recovery_observation: Mutex::new(None),
+            recovery: Mutex::new(DriverRecovery::none()),
             failures: Mutex::new(HashMap::new()),
         }
     }
@@ -218,10 +218,13 @@ impl RecordingDriver {
     }
 
     fn set_recovery_observation(&self, observation: DriverState) {
-        *self
-            .recovery_observation
-            .lock()
-            .expect("driver recovery observation lock") = Some(observation);
+        *self.recovery.lock().expect("driver recovery lock") =
+            DriverRecovery::observed(observation);
+    }
+
+    fn set_recovery_exit(&self, status: ExitStatus) {
+        *self.recovery.lock().expect("driver recovery lock") =
+            DriverRecovery::stopped_with_exit(status).expect("valid recovery exit status");
     }
 
     fn take_failure(&self, operation: &'static str) -> Option<Error> {
@@ -266,18 +269,15 @@ impl RuntimeDriver for RecordingDriver {
         &self.hooks
     }
 
-    async fn recover(&self, record: &ContainerRecord) -> Result<Option<DriverState>> {
-        let observation = *self
-            .recovery_observation
-            .lock()
-            .expect("driver recovery observation lock");
-        if observation.is_some() {
+    async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
+        let recovery = self.recovery.lock().expect("driver recovery lock").clone();
+        if recovery != DriverRecovery::none() {
             self.calls
                 .lock()
                 .expect("driver calls lock")
                 .push(DriverCall::Recover(record.clone()));
         }
-        Ok(observation)
+        Ok(recovery)
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {

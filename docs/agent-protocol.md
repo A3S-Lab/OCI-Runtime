@@ -236,8 +236,18 @@ Missing or partial cleanup produces no usable report. On Windows, the
 owner-PID-aware shim stages the one-time path, preserves it throughout the
 bounded owner-death grace, rejects reparse points and guest-root destinations,
 verifies the HMAC, removes the guest copy, and atomically commits only the
-normalized report into the protected host recovery directory. WHPX remains
-`probe-only` until the durable recovery path consumes that evidence.
+normalized report into the protected host recovery directory. A protected
+empty `.pending` marker exists from VM launch until either that commit or
+terminal handoff failure. WHPX remains `probe-only` while real-host
+qualification remains pending. The durable
+recovery path now reads the normalized report, requires the exact target and
+configuration digest, commits the stopped observation, and caches the init
+result for repeated wait calls. If a report is absent while its plain pending
+marker exists, a replacement host waits through the shim's owner-death grace;
+an overrun fails retryably instead of racing ahead. It retains the artifact
+across startup faults and deletes it only with the exact container generation.
+If both files are absent, recovery keeps the stopped tombstone and `wait` fails
+explicitly.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified

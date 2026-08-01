@@ -62,9 +62,9 @@ pub use cleanup_report::{
 pub use driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
     DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
-    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
-    DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
+    DriverReadOutputRequest, DriverRecovery, DriverResizeRequest, DriverSignalProcessRequest,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 pub use multi_container_report::{
     InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,

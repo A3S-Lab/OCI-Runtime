@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use a3s_oci_agent_protocol::{
     AgentRecoveryReport, AgentVsockEndpoint, AuthenticatedAgentRecoveryReport, SessionToken,
     AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX, AGENT_RECOVERY_REPORT_FILE_NAME,
-    AGENT_RECOVERY_REPORT_MAX_BYTES,
+    AGENT_RECOVERY_REPORT_MAX_BYTES, AGENT_RECOVERY_REPORT_PENDING_SUFFIX,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
@@ -36,23 +36,52 @@ impl RecoveryReportHandoff {
             ));
         }
 
+        let pending = pending_path(&destination);
+        let pending_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&pending)
+            .map_err(|error| {
+                contextual(
+                    error,
+                    format!(
+                        "failed to create trusted recovery pending marker {}",
+                        pending.display()
+                    ),
+                )
+            })?;
+        if let Err(error) = pending_file.sync_all() {
+            drop(pending_file);
+            let _ = fs::remove_file(&pending);
+            return Err(contextual(
+                error,
+                format!(
+                    "failed to flush trusted recovery pending marker {}",
+                    pending.display()
+                ),
+            ));
+        }
+        drop(pending_file);
+
         let directory_name = format!(
             "{AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX}{}",
             endpoint.pipe_name()
         );
         let directory = rootfs.join(&directory_name);
-        fs::create_dir(&directory).map_err(|error| {
-            contextual(
+        if let Err(error) = fs::create_dir(&directory) {
+            let _ = fs::remove_file(&pending);
+            return Err(contextual(
                 error,
                 format!(
                     "failed to create one-time guest recovery directory {}",
                     directory.display()
                 ),
-            )
-        })?;
+            ));
+        }
         let paths = RecoveryCleanupPaths {
             file: directory.join(AGENT_RECOVERY_REPORT_FILE_NAME),
             directory,
+            pending,
         };
 
         Ok(Self {
@@ -153,6 +182,7 @@ impl Drop for RecoveryReportHandoff {
 pub(crate) struct RecoveryCleanupPaths {
     file: PathBuf,
     directory: PathBuf,
+    pending: PathBuf,
 }
 
 impl RecoveryCleanupPaths {
@@ -160,6 +190,7 @@ impl RecoveryCleanupPaths {
         let mut errors = Vec::new();
         remove_file_if_present(&self.file, &mut errors);
         remove_dir_if_present(&self.directory, &mut errors);
+        remove_pending_if_present(&self.pending, &mut errors);
         if errors.is_empty() {
             Ok(())
         } else {
@@ -206,7 +237,26 @@ fn prepare_destination(destination: &Path) -> io::Result<PathBuf> {
                 destination.display()
             ),
         )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(destination),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let pending = pending_path(&destination);
+            match fs::symlink_metadata(&pending) {
+                Ok(_) => Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "refusing to replace trusted recovery pending marker {}",
+                        pending.display()
+                    ),
+                )),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(destination),
+                Err(error) => Err(contextual(
+                    error,
+                    format!(
+                        "failed to inspect trusted recovery pending marker {}",
+                        pending.display()
+                    ),
+                )),
+            }
+        }
         Err(error) => Err(contextual(
             error,
             format!(
@@ -215,6 +265,12 @@ fn prepare_destination(destination: &Path) -> io::Result<PathBuf> {
             ),
         )),
     }
+}
+
+fn pending_path(destination: &Path) -> PathBuf {
+    let mut path = destination.as_os_str().to_os_string();
+    path.push(AGENT_RECOVERY_REPORT_PENDING_SUFFIX);
+    PathBuf::from(path)
 }
 
 fn canonical_plain_directory(path: &Path, label: &str) -> io::Result<PathBuf> {
@@ -313,6 +369,17 @@ fn remove_dir_if_present(path: &Path, errors: &mut Vec<String>) {
     }
 }
 
+fn remove_pending_if_present(path: &Path, errors: &mut Vec<String>) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => errors.push(format!(
+            "failed to remove trusted recovery pending marker {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 fn contextual(error: io::Error, context: String) -> io::Error {
     io::Error::new(error.kind(), format!("{context}: {error}"))
 }
@@ -325,7 +392,7 @@ mod tests {
     };
     use a3s_oci_sdk::{ContainerId, ContainerTarget, ExitStatus, Generation};
 
-    use super::RecoveryReportHandoff;
+    use super::{pending_path, RecoveryReportHandoff};
 
     fn token(byte: u8) -> SessionToken {
         SessionToken::from_bytes([byte; 32]).expect("nonzero token")
@@ -352,6 +419,7 @@ mod tests {
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-recovery-test").unwrap();
         let handoff =
             RecoveryReportHandoff::create(&rootfs, &endpoint, &destination).expect("handoff");
+        assert!(pending_path(&destination).is_file());
         let guest_path = rootfs.join(handoff.guest_path().trim_start_matches('/'));
         let encoded = report().authenticate(&token(4)).unwrap().to_json().unwrap();
         std::fs::write(&guest_path, encoded).unwrap();
@@ -364,6 +432,7 @@ mod tests {
         );
         assert!(!guest_path.exists());
         assert!(!guest_path.parent().unwrap().exists());
+        assert!(!pending_path(&destination).exists());
     }
 
     #[test]
@@ -386,6 +455,7 @@ mod tests {
         assert!(handoff.persist(&token(4)).is_err());
         assert!(!destination.exists());
         assert!(!guest_path.exists());
+        assert!(!pending_path(&destination).exists());
     }
 
     #[test]
@@ -397,6 +467,28 @@ mod tests {
         assert!(
             RecoveryReportHandoff::create(&rootfs, &endpoint, &rootfs.join("box-7.json")).is_err()
         );
+    }
+
+    #[test]
+    fn drop_cleans_the_guest_path_and_pending_marker() {
+        let base = tempfile::tempdir().expect("temporary base");
+        let rootfs = base.path().join("rootfs");
+        let trusted = base.path().join("trusted");
+        std::fs::create_dir(&rootfs).unwrap();
+        std::fs::create_dir(&trusted).unwrap();
+        let destination = trusted.join("box-7.json");
+        let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-drop-test").unwrap();
+        let handoff =
+            RecoveryReportHandoff::create(&rootfs, &endpoint, &destination).expect("handoff");
+        let guest_directory = rootfs
+            .join(handoff.guest_path().trim_start_matches('/'))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert!(pending_path(&destination).is_file());
+        drop(handoff);
+        assert!(!pending_path(&destination).exists());
+        assert!(!guest_directory.exists());
     }
 
     #[test]

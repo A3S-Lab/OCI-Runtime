@@ -3,15 +3,21 @@ use std::fmt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
-use a3s_oci_agent_protocol::{GuestAgentService, GuestPath};
+use a3s_oci_agent_protocol::{
+    AgentRecoveryReport, GuestAgentService, GuestPath, AGENT_RECOVERY_REPORT_MAX_BYTES,
+    AGENT_RECOVERY_REPORT_PENDING_SUFFIX,
+};
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode,
     ExitStatus, OutputChunk, ProcessRecord, Result, RuntimeOperation,
 };
+use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+use tokio::time::{sleep, Instant};
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
@@ -26,6 +32,8 @@ use crate::driver::{
 
 const CONSOLE_DIRECTORY: &str = "console";
 const RECOVERY_DIRECTORY: &str = "recovery";
+const RECOVERY_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const RECOVERY_HANDOFF_TIMEOUT: Duration = Duration::from_secs(16);
 
 /// Protected host paths used by the one-VM-per-container WHPX driver candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +91,7 @@ impl WhpxRuntimeDriverConfig {
 pub struct WhpxRuntimeDriver {
     capability: DriverCapability,
     vm_rootfs: PathBuf,
+    recovery_directory: PathBuf,
     factory: Arc<dyn UtilityVmFactory>,
     sessions: Mutex<BTreeMap<ContainerId, WhpxAttachment>>,
     create_gates: Mutex<BTreeMap<ContainerId, Weak<Mutex<()>>>>,
@@ -122,12 +131,14 @@ impl WhpxRuntimeDriver {
         capability
             .evidence
             .insert("runtime_root_protected".to_string(), "true".to_string());
-        capability
-            .evidence
-            .insert("owner_death_recovery".to_string(), "stopped".to_string());
-        capability
-            .evidence
-            .insert("restart_exit_evidence".to_string(), "pending".to_string());
+        capability.evidence.insert(
+            "owner_death_recovery".to_string(),
+            "stopped-with-authenticated-exit".to_string(),
+        );
+        capability.evidence.insert(
+            "restart_exit_evidence".to_string(),
+            "implemented-unqualified".to_string(),
+        );
         capability
             .evidence
             .insert("opt_in".to_string(), "qualification-only".to_string());
@@ -136,11 +147,12 @@ impl WhpxRuntimeDriver {
             shim: prepared.shim,
             vm_rootfs: prepared.vm_rootfs.clone(),
             console_directory: prepared.console_directory,
-            recovery_directory: prepared.recovery_directory,
+            recovery_directory: prepared.recovery_directory.clone(),
         });
         Ok(Self {
             capability,
             vm_rootfs: prepared.vm_rootfs,
+            recovery_directory: prepared.recovery_directory,
             factory,
             sessions: Mutex::new(BTreeMap::new()),
             create_gates: Mutex::new(BTreeMap::new()),
@@ -156,7 +168,7 @@ impl WhpxRuntimeDriver {
                 .values()
                 .filter_map(|attachment| match attachment {
                     WhpxAttachment::Live(session) => Some(Arc::clone(session)),
-                    WhpxAttachment::RecoveredStopped(_) => None,
+                    WhpxAttachment::RecoveredStopped { .. } => None,
                 })
                 .collect::<Vec<_>>()
         };
@@ -239,7 +251,9 @@ impl WhpxRuntimeDriver {
     ) -> Result<Arc<WhpxContainer>> {
         match self.attachment_for(target, operation).await? {
             WhpxAttachment::Live(session) => Ok(session),
-            WhpxAttachment::RecoveredStopped(_) => Err(recovered_stopped_error(target, operation)),
+            WhpxAttachment::RecoveredStopped { .. } => {
+                Err(recovered_stopped_error(target, operation))
+            }
         }
     }
 
@@ -263,7 +277,10 @@ impl WhpxRuntimeDriver {
         if replace {
             sessions.insert(
                 expected.target.id.clone(),
-                WhpxAttachment::RecoveredStopped(expected.target.clone()),
+                WhpxAttachment::RecoveredStopped {
+                    target: expected.target.clone(),
+                    init_exit_status: None,
+                },
             );
         }
     }
@@ -272,11 +289,221 @@ impl WhpxRuntimeDriver {
         let mut sessions = self.sessions.lock().await;
         let remove = matches!(
             sessions.get(&expected.id),
-            Some(WhpxAttachment::RecoveredStopped(current)) if current == expected
+            Some(WhpxAttachment::RecoveredStopped { target, .. }) if target == expected
         );
         if remove {
             sessions.remove(&expected.id);
         }
+    }
+
+    async fn load_recovery_exit(
+        &self,
+        target: &ContainerTarget,
+        expected_config_digest: &str,
+    ) -> Result<Option<ExitStatus>> {
+        let path = self.recovery_report_path(target)?;
+        let Some(metadata) = self.wait_for_recovery_report(&path).await? else {
+            return Ok(None);
+        };
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || metadata.len() > AGENT_RECOVERY_REPORT_MAX_BYTES as u64
+        {
+            return Err(recovery_artifact_error(format!(
+                "WHPX recovery report must be a plain file of at most {} bytes: {}",
+                AGENT_RECOVERY_REPORT_MAX_BYTES,
+                path.display()
+            )));
+        }
+        let file = tokio::fs::File::open(&path).await.map_err(|error| {
+            recovery_artifact_error(format!(
+                "failed to open WHPX recovery report {}: {error}",
+                path.display()
+            ))
+        })?;
+        let mut encoded = Vec::with_capacity(metadata.len() as usize);
+        file.take((AGENT_RECOVERY_REPORT_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut encoded)
+            .await
+            .map_err(|error| {
+                recovery_artifact_error(format!(
+                    "failed to read WHPX recovery report {}: {error}",
+                    path.display()
+                ))
+            })?;
+        if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
+            return Err(recovery_artifact_error(format!(
+                "WHPX recovery report grew beyond {} bytes: {}",
+                AGENT_RECOVERY_REPORT_MAX_BYTES,
+                path.display()
+            )));
+        }
+        let report = AgentRecoveryReport::from_json(&encoded).map_err(|error| {
+            recovery_artifact_error(format!(
+                "WHPX recovery report {} is invalid: {error}",
+                path.display()
+            ))
+        })?;
+        if report.records().is_empty() {
+            return Ok(None);
+        }
+        let record = report
+            .records()
+            .iter()
+            .find(|record| &record.target == target)
+            .ok_or_else(|| {
+                recovery_artifact_error(format!(
+                    "WHPX recovery report {} does not contain container {} generation {:?}",
+                    path.display(),
+                    target.id,
+                    target.generation
+                ))
+            })?;
+        if record.config_digest != expected_config_digest {
+            return Err(recovery_artifact_error(format!(
+                "WHPX recovery report config digest mismatch for container {} generation {:?}: durable {}, report {}",
+                target.id,
+                target.generation,
+                expected_config_digest,
+                record.config_digest
+            )));
+        }
+        Ok(Some(record.init_exit_status.clone()))
+    }
+
+    async fn remove_recovery_report(&self, target: &ContainerTarget) -> Result<()> {
+        let path = self.recovery_report_path(target)?;
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => {
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                {
+                    return Err(recovery_artifact_error(format!(
+                        "refusing to delete a non-plain WHPX recovery report: {}",
+                        path.display()
+                    )));
+                }
+                tokio::fs::remove_file(&path).await.map_err(|error| {
+                    recovery_artifact_error(format!(
+                        "failed to delete WHPX recovery report {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(recovery_artifact_error(format!(
+                    "failed to inspect WHPX recovery report {} before delete: {error}",
+                    path.display()
+                )))
+            }
+        }
+        self.remove_recovery_pending(&path).await
+    }
+
+    async fn wait_for_recovery_report(&self, path: &Path) -> Result<Option<std::fs::Metadata>> {
+        self.wait_for_recovery_report_until(path, Instant::now() + RECOVERY_HANDOFF_TIMEOUT)
+            .await
+    }
+
+    async fn wait_for_recovery_report_until(
+        &self,
+        path: &Path,
+        deadline: Instant,
+    ) -> Result<Option<std::fs::Metadata>> {
+        let pending = recovery_pending_path(path);
+        loop {
+            match tokio::fs::symlink_metadata(path).await {
+                Ok(metadata) => return Ok(Some(metadata)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(recovery_artifact_error(format!(
+                        "failed to inspect WHPX recovery report {}: {error}",
+                        path.display()
+                    )))
+                }
+            }
+            match tokio::fs::symlink_metadata(&pending).await {
+                Ok(metadata) => {
+                    if !metadata.is_file()
+                        || metadata.file_type().is_symlink()
+                        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                        || metadata.len() != 0
+                    {
+                        return Err(recovery_artifact_error(format!(
+                            "WHPX recovery pending marker must be a plain empty file: {}",
+                            pending.display()
+                        )));
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return match tokio::fs::symlink_metadata(path).await {
+                        Ok(metadata) => Ok(Some(metadata)),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                        Err(error) => Err(recovery_artifact_error(format!(
+                            "failed to recheck WHPX recovery report {}: {error}",
+                            path.display()
+                        ))),
+                    };
+                }
+                Err(error) => {
+                    return Err(recovery_artifact_error(format!(
+                        "failed to inspect WHPX recovery pending marker {}: {error}",
+                        pending.display()
+                    )))
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::new(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "timed out waiting for WHPX recovery handoff marker {}",
+                        pending.display()
+                    ),
+                )
+                .for_operation("whpx-recover")
+                .retryable(true));
+            }
+            sleep(RECOVERY_HANDOFF_POLL_INTERVAL).await;
+        }
+    }
+
+    async fn remove_recovery_pending(&self, report: &Path) -> Result<()> {
+        let pending = recovery_pending_path(report);
+        match tokio::fs::symlink_metadata(&pending).await {
+            Ok(metadata) => {
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                    || metadata.len() != 0
+                {
+                    return Err(recovery_artifact_error(format!(
+                        "refusing to delete a non-plain WHPX recovery pending marker: {}",
+                        pending.display()
+                    )));
+                }
+                tokio::fs::remove_file(&pending).await.map_err(|error| {
+                    recovery_artifact_error(format!(
+                        "failed to delete WHPX recovery pending marker {}: {error}",
+                        pending.display()
+                    ))
+                })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(recovery_artifact_error(format!(
+                "failed to inspect WHPX recovery pending marker {} before delete: {error}",
+                pending.display()
+            ))),
+        }
+    }
+
+    fn recovery_report_path(&self, target: &ContainerTarget) -> Result<PathBuf> {
+        let generation = require_exact_generation(target, "whpx-recovery-report-path")?;
+        Ok(self
+            .recovery_directory
+            .join(format!("{}-{}.json", target.id, generation.0)))
     }
 
     async fn cleanup_terminal_create_error(
@@ -322,19 +549,30 @@ impl RuntimeDriver for WhpxRuntimeDriver {
         &AGENT_DRIVER_HOOKS
     }
 
-    async fn recover(&self, record: &ContainerRecord) -> Result<Option<DriverState>> {
+    async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
         let target =
             ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
         let can_commit_stopped =
             *record.state.status() != a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating;
-        let attachment = {
-            let mut sessions = self.sessions.lock().await;
-            match sessions.get(&target.id) {
-                Some(attachment) => attachment.clone(),
-                None => {
-                    sessions.insert(target.id.clone(), WhpxAttachment::RecoveredStopped(target));
-                    return Ok(can_commit_stopped.then_some(DriverState::stopped()));
-                }
+        let attachment = self.sessions.lock().await.get(&target.id).cloned();
+        let attachment = match attachment {
+            Some(attachment) => attachment,
+            None => {
+                let init_exit_status = if can_commit_stopped {
+                    self.load_recovery_exit(&target, &record.config_digest)
+                        .await?
+                } else {
+                    None
+                };
+                let recovered = WhpxAttachment::RecoveredStopped {
+                    target: target.clone(),
+                    init_exit_status,
+                };
+                let mut sessions = self.sessions.lock().await;
+                sessions
+                    .entry(target.id.clone())
+                    .or_insert_with(|| recovered.clone())
+                    .clone()
             }
         };
         if attachment.target() != &target {
@@ -355,11 +593,15 @@ impl RuntimeDriver for WhpxRuntimeDriver {
                     .client
                     .state_with_digest(target, Some(&record.config_digest))
                     .await?;
-                Ok(can_commit_stopped.then_some(observed))
+                Ok(if can_commit_stopped {
+                    crate::DriverRecovery::observed(observed)
+                } else {
+                    crate::DriverRecovery::none()
+                })
             }
-            WhpxAttachment::RecoveredStopped(_) => {
-                Ok(can_commit_stopped.then_some(DriverState::stopped()))
-            }
+            WhpxAttachment::RecoveredStopped {
+                init_exit_status, ..
+            } => recovery_result(can_commit_stopped, init_exit_status),
         }
     }
 
@@ -405,7 +647,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
         match self.attachment_for(&target, "whpx-state").await? {
             WhpxAttachment::Live(session) => session.client.state(target).await,
-            WhpxAttachment::RecoveredStopped(_) => Ok(DriverState::stopped()),
+            WhpxAttachment::RecoveredStopped { .. } => Ok(DriverState::stopped()),
         }
     }
 
@@ -420,7 +662,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
         match self.attachment_for(&request.target, "whpx-kill").await? {
             WhpxAttachment::Live(session) => session.client.kill(request).await,
-            WhpxAttachment::RecoveredStopped(_) => Ok(DriverState::stopped()),
+            WhpxAttachment::RecoveredStopped { .. } => Ok(DriverState::stopped()),
         }
     }
 
@@ -429,10 +671,13 @@ impl RuntimeDriver for WhpxRuntimeDriver {
             WhpxAttachment::Live(session) => {
                 session.client.delete(request).await?;
                 session.owner.shutdown().await?;
-                self.remove_live_session(&session).await;
+                self.replace_with_stopped(&session).await;
+                self.remove_recovery_report(&session.target).await?;
+                self.remove_stopped(&session.target).await;
                 Ok(())
             }
-            WhpxAttachment::RecoveredStopped(target) => {
+            WhpxAttachment::RecoveredStopped { target, .. } => {
+                self.remove_recovery_report(&target).await?;
                 self.remove_stopped(&target).await;
                 Ok(())
             }
@@ -442,9 +687,14 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
         match self.attachment_for(&request.target, "whpx-wait").await? {
             WhpxAttachment::Live(session) => session.client.wait(request).await,
-            WhpxAttachment::RecoveredStopped(_) => {
-                Err(recovered_exit_evidence_error(&request.target, "whpx-wait"))
-            }
+            WhpxAttachment::RecoveredStopped {
+                init_exit_status: Some(status),
+                ..
+            } => Ok(status),
+            WhpxAttachment::RecoveredStopped {
+                init_exit_status: None,
+                ..
+            } => Err(recovered_exit_evidence_error(&request.target, "whpx-wait")),
         }
     }
 
@@ -491,7 +741,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
         match self.attachment_for(&target, "whpx-processes").await? {
             WhpxAttachment::Live(session) => session.client.processes(target).await,
-            WhpxAttachment::RecoveredStopped(_) => Ok(Vec::new()),
+            WhpxAttachment::RecoveredStopped { .. } => Ok(Vec::new()),
         }
     }
 
@@ -566,7 +816,7 @@ impl WhpxRuntimeDriver {
         }
         match attachment {
             WhpxAttachment::Live(session) => Ok(Some(Arc::clone(session))),
-            WhpxAttachment::RecoveredStopped(_) => {
+            WhpxAttachment::RecoveredStopped { .. } => {
                 Err(recovered_stopped_error(target, "whpx-create"))
             }
         }
@@ -576,14 +826,17 @@ impl WhpxRuntimeDriver {
 #[derive(Clone)]
 enum WhpxAttachment {
     Live(Arc<WhpxContainer>),
-    RecoveredStopped(ContainerTarget),
+    RecoveredStopped {
+        target: ContainerTarget,
+        init_exit_status: Option<ExitStatus>,
+    },
 }
 
 impl WhpxAttachment {
     fn target(&self) -> &ContainerTarget {
         match self {
             Self::Live(session) => &session.target,
-            Self::RecoveredStopped(target) => target,
+            Self::RecoveredStopped { target, .. } => target,
         }
     }
 }
@@ -873,6 +1126,29 @@ fn require_exact_generation(
     })
 }
 
+fn recovery_result(
+    can_commit_stopped: bool,
+    init_exit_status: Option<ExitStatus>,
+) -> Result<crate::DriverRecovery> {
+    if !can_commit_stopped {
+        return Ok(crate::DriverRecovery::none());
+    }
+    match init_exit_status {
+        Some(status) => crate::DriverRecovery::stopped_with_exit(status),
+        None => Ok(crate::DriverRecovery::observed(DriverState::stopped())),
+    }
+}
+
+fn recovery_artifact_error(message: impl Into<String>) -> Error {
+    Error::new(ErrorCode::FailedPrecondition, message).for_operation("whpx-recover")
+}
+
+fn recovery_pending_path(report: &Path) -> PathBuf {
+    let mut path = report.as_os_str().to_os_string();
+    path.push(AGENT_RECOVERY_REPORT_PENDING_SUFFIX);
+    PathBuf::from(path)
+}
+
 fn recovered_stopped_error(target: &ContainerTarget, operation: &'static str) -> Error {
     Error::new(
         ErrorCode::FailedPrecondition,
@@ -914,12 +1190,15 @@ fn path_error(code: ErrorCode, message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
 
     use a3s_oci_agent_protocol::{
         AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest,
-        AgentStartRequest, AgentState, AgentStateRequest, GuestAgentService,
+        AgentRecoveryRecord, AgentRecoveryReport, AgentStartRequest, AgentState, AgentStateRequest,
+        GuestAgentService,
     };
     use a3s_oci_core::{
         CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -927,15 +1206,15 @@ mod tests {
     use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
     use a3s_oci_sdk::{
         async_trait, ContainerId, ContainerRecord, ContainerTarget, DeleteMode, Error, ErrorCode,
-        Generation, IsolationRequest, OciBundle, OperationContext, OperationId, ProcessIo, Result,
-        Signal,
+        ExitStatus, Generation, IsolationRequest, OciBundle, OperationContext, OperationId,
+        ProcessIo, Result, Signal,
     };
     use tokio::sync::Mutex;
 
     use super::{
-        AgentDriverClient, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
-        DriverWaitRequest, LaunchedUtilityVm, RuntimeDriver, UtilityVmFactory, UtilityVmOwner,
-        WhpxRuntimeDriver,
+        recovery_pending_path, AgentDriverClient, DriverCreateRequest, DriverDeleteRequest,
+        DriverKillRequest, DriverWaitRequest, LaunchedUtilityVm, RuntimeDriver, UtilityVmFactory,
+        UtilityVmOwner, WhpxRuntimeDriver,
     };
     use crate::DriverCreateAttachments;
 
@@ -1125,6 +1404,7 @@ mod tests {
         guest: Arc<FakeGuest>,
         owner: Arc<FakeOwner>,
         factory: Arc<FakeFactory>,
+        recovery_directory: PathBuf,
         driver: WhpxRuntimeDriver,
     }
 
@@ -1132,8 +1412,10 @@ mod tests {
         fn new() -> Self {
             let temporary = tempfile::tempdir().expect("temporary WHPX fixture");
             let vm_rootfs = temporary.path().join("vm-root");
+            let recovery_directory = temporary.path().join("recovery");
             let bundle_directory = vm_rootfs.join("workloads/test");
             std::fs::create_dir_all(&bundle_directory).expect("bundle directory");
+            std::fs::create_dir(&recovery_directory).expect("recovery directory");
             let vm_rootfs = std::fs::canonicalize(vm_rootfs).expect("canonical WHPX fixture root");
             let bundle_directory = vm_rootfs.join("workloads/test");
             let bundle = OciBundle::from_json(bundle_directory, TEST_CONFIG).expect("OCI bundle");
@@ -1151,6 +1433,7 @@ mod tests {
             let driver = WhpxRuntimeDriver {
                 capability: candidate_capability(),
                 vm_rootfs: vm_rootfs.clone(),
+                recovery_directory: recovery_directory.clone(),
                 factory: factory_dyn,
                 sessions: Mutex::new(BTreeMap::new()),
                 create_gates: Mutex::new(BTreeMap::new()),
@@ -1161,6 +1444,7 @@ mod tests {
                 guest,
                 owner,
                 factory,
+                recovery_directory,
                 driver,
             }
         }
@@ -1193,6 +1477,29 @@ mod tests {
                 isolation: IsolationClass::DedicatedVm,
                 config_digest: self.bundle.config_digest().to_string(),
             }
+        }
+
+        fn write_recovery(
+            &self,
+            generation: u64,
+            config_digest: &str,
+            status: ExitStatus,
+        ) -> PathBuf {
+            let target = target(generation);
+            let report = AgentRecoveryReport::new(vec![AgentRecoveryRecord::new(
+                target.clone(),
+                config_digest,
+                status,
+            )
+            .expect("recovery record")])
+            .expect("recovery report")
+            .to_json()
+            .expect("normalized recovery report");
+            let path = self
+                .recovery_directory
+                .join(format!("{}-{generation}.json", target.id));
+            std::fs::write(&path, report).expect("write recovery report");
+            path
         }
     }
 
@@ -1377,9 +1684,10 @@ mod tests {
             .driver
             .recover(&record)
             .await
-            .expect("recover missing live session")
-            .expect("recovery observation");
-        assert_eq!(recovered, super::DriverState::stopped());
+            .expect("recover missing live session");
+        let (observation, init_exit_status) = recovered.into_parts();
+        assert_eq!(observation, Some(super::DriverState::stopped()));
+        assert_eq!(init_exit_status, None);
         assert_eq!(fixture.driver.active_session_count().await, 0);
 
         let target = target(1);
@@ -1439,6 +1747,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_death_recovery_replays_and_deletes_exact_init_exit() {
+        let fixture = Fixture::new();
+        let expected = ExitStatus::exited(37).expect("exit status");
+        let report_path =
+            fixture.write_recovery(1, fixture.bundle.config_digest(), expected.clone());
+        let recovered = fixture
+            .driver
+            .recover(&fixture.record(1, ContainerState::Running))
+            .await
+            .expect("recover exact exit evidence");
+        assert_eq!(
+            recovered.into_parts(),
+            (Some(super::DriverState::stopped()), Some(expected.clone()))
+        );
+        assert!(
+            report_path.is_file(),
+            "recovery faults must remain replayable"
+        );
+        assert_eq!(
+            fixture
+                .driver
+                .wait(DriverWaitRequest {
+                    target: target(1),
+                    timeout_ms: Some(0),
+                })
+                .await
+                .expect("wait recovered exit"),
+            expected
+        );
+        fixture
+            .driver
+            .delete(delete_request(1))
+            .await
+            .expect("delete recovered evidence");
+        assert!(!report_path.exists());
+    }
+
+    #[tokio::test]
+    async fn recovery_waits_for_an_in_progress_shim_handoff() {
+        let fixture = Fixture::new();
+        let expected = ExitStatus::exited(41).expect("exit status");
+        let report_path =
+            fixture.write_recovery(1, fixture.bundle.config_digest(), expected.clone());
+        let encoded = std::fs::read(&report_path).expect("read staged report");
+        std::fs::remove_file(&report_path).expect("remove staged report");
+        let pending = recovery_pending_path(&report_path);
+        std::fs::write(&pending, b"").expect("pending marker");
+
+        let writer_report = report_path.clone();
+        let writer_pending = pending.clone();
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::fs::write(&writer_report, encoded)
+                .await
+                .expect("commit delayed report");
+            tokio::fs::remove_file(&writer_pending)
+                .await
+                .expect("remove delayed pending marker");
+        });
+        let recovered = fixture
+            .driver
+            .recover(&fixture.record(1, ContainerState::Running))
+            .await
+            .expect("wait for recovery handoff");
+        writer.await.expect("recovery writer task");
+        assert_eq!(
+            recovered.into_parts(),
+            (Some(super::DriverState::stopped()), Some(expected))
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_handoff_timeout_is_retryable() {
+        let fixture = Fixture::new();
+        let report = fixture.recovery_directory.join("whpx-test-1.json");
+        let pending = recovery_pending_path(&report);
+        std::fs::write(&pending, b"").expect("pending marker");
+        let error = fixture
+            .driver
+            .wait_for_recovery_report_until(&report, tokio::time::Instant::now())
+            .await
+            .expect_err("stuck handoff must fail service startup");
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert!(error.retryable);
+        assert!(
+            pending.is_file(),
+            "stuck marker must not be removed blindly"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_rejects_a_mismatched_durable_config_digest() {
+        let fixture = Fixture::new();
+        fixture.write_recovery(
+            1,
+            &format!("sha256:{}", "c".repeat(64)),
+            ExitStatus::exited(0).expect("exit status"),
+        );
+        let error = fixture
+            .driver
+            .recover(&fixture.record(1, ContainerState::Running))
+            .await
+            .expect_err("mismatched recovery digest must fail closed");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(error.message.contains("config digest mismatch"));
+    }
+
+    #[tokio::test]
     async fn recovery_queries_an_existing_live_generation() {
         let fixture = Fixture::new();
         fixture
@@ -1450,8 +1866,10 @@ mod tests {
             .driver
             .recover(&fixture.record(1, ContainerState::Created))
             .await
-            .expect("recover live generation")
-            .expect("live recovery observation");
+            .expect("recover live generation");
+        let (recovered, init_exit_status) = recovered.into_parts();
+        let recovered = recovered.expect("live recovery observation");
+        assert_eq!(init_exit_status, None);
         assert_eq!(recovered.status(), ContainerState::Created);
         assert_eq!(recovered.pid(), Some(101));
         assert_eq!(fixture.guest.state_calls.load(Ordering::Relaxed), 1);
@@ -1472,7 +1890,11 @@ mod tests {
             .recover(&fixture.record(1, ContainerState::Creating))
             .await
             .expect("recover interrupted create");
-        assert_eq!(observation, None, "creating cannot transition to stopped");
+        assert_eq!(
+            observation,
+            crate::DriverRecovery::none(),
+            "creating cannot transition to stopped"
+        );
         let error = fixture
             .driver
             .create(fixture.create_request(1, "recovered-create-retry"))

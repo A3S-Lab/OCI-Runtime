@@ -162,20 +162,32 @@ impl HostRuntimeService {
                 operation: DriverOperation::Recover,
                 stage: DriverBoundaryStage::BeforeCall,
             })?;
-            let observation = registered.driver().recover(&record).await?;
+            let recovery = registered.driver().recover(&record).await?;
             faults.check(FaultPoint::DriverBoundary {
                 operation: DriverOperation::Recover,
                 stage: DriverBoundaryStage::AfterCall,
             })?;
+            let target =
+                ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
+            let (observation, init_exit_status) = recovery.into_parts();
             if let Some(observation) = observation {
-                let target =
-                    ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
                 store
                     .observe_state_with_pause(
                         &target,
                         observation.status(),
                         observation.pid(),
                         observation.paused(),
+                    )
+                    .await?;
+            }
+            if let Some(status) = init_exit_status {
+                store
+                    .complete_process_wait(
+                        &ProcessTarget {
+                            container: target,
+                            process_id: ProcessId::init(),
+                        },
+                        status,
                     )
                     .await?;
             }

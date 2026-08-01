@@ -14,15 +14,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
   malformed, stale-generation, and tampered reports remain unusable. The
   owner-PID-aware Windows shim verifies that tag during its bounded owner-death
   grace, removes the guest copy, and atomically writes only the normalized
-  result into a protected host-only directory. Durable host consumption
-  remains the next gate.
+  result into a protected host-only directory. WHPX startup validates the exact
+  target and durable configuration digest, commits `stopped`, durably caches
+  the init result, retains the source artifact across recovery faults, and
+  removes it only with container deletion. A protected empty pending marker
+  spans VM launch through shim handoff, so a racing replacement host waits only
+  when the exact old shim can still be publishing evidence and fails retryably
+  if the owner-death grace is exceeded.
 - An idempotent startup `RuntimeDriver::recover` handshake that dispatches each
   durable generation only to its recorded driver, commits an optional exact
   state observation before the host accepts requests, and is covered by the
   same typed before/after fault matrix as every lifecycle call. The WHPX
   candidate now converts owner-death cleanup into a stopped, generation-fenced
   tombstone that supports state, idempotent kill, empty process inventory, and
-  delete without inventing an init exit status or relaunching the generation.
+  delete without relaunching the generation. When authenticated evidence is
+  present, repeated `wait` now returns its exact exit result; otherwise it
+  retains the original fail-closed error instead of inventing one.
 - Clone-wide, idempotent guest-agent client shutdown that waits for an
   in-flight request, blocks every later dispatch, and actively closes the
   shared transport before a utility-VM owner reaps its shim process.
@@ -36,8 +43,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   launching distinct container VMs concurrently, reuses the VM for retryable
   create, reaps terminal create failures and successful deletes once, requires
   bundles below a protected runtime-owned guest root, and intentionally remains
-  non-registerable at `probe-only` readiness while restart-stable exact exit
-  evidence and immutable-system-root qualification are pending.
+  non-registerable at `probe-only` readiness while real-host restart recovery
+  and immutable-system-root qualification are pending.
 - Target-correct KVM ioctl request typing so both glibc (`c_ulong`) and musl
   (`c_int`) Linux builds compile against their actual libc ABI.
 - A protected Windows host SDK service that binds the first local named-pipe

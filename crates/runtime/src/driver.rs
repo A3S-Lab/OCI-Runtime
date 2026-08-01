@@ -162,6 +162,52 @@ impl DriverState {
     }
 }
 
+/// Idempotent driver evidence returned while the host opens durable state.
+///
+/// A state observation is committed before the service accepts requests. An
+/// exact init exit result is valid only with a stopped observation and is then
+/// cached through the normal durable process-wait path.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DriverRecovery {
+    observation: Option<DriverState>,
+    init_exit_status: Option<ExitStatus>,
+}
+
+impl DriverRecovery {
+    /// Leave the durable record unchanged so its active operation can resume.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            observation: None,
+            init_exit_status: None,
+        }
+    }
+
+    /// Commit one exact driver state without claiming terminal evidence.
+    #[must_use]
+    pub const fn observed(observation: DriverState) -> Self {
+        Self {
+            observation: Some(observation),
+            init_exit_status: None,
+        }
+    }
+
+    /// Commit a stopped observation plus the exact init terminal result.
+    pub fn stopped_with_exit(init_exit_status: ExitStatus) -> Result<Self> {
+        init_exit_status.validate()?;
+        Ok(Self {
+            observation: Some(DriverState::stopped()),
+            init_exit_status: Some(init_exit_status),
+        })
+    }
+
+    /// Consume the recovery result into its durable components.
+    #[must_use]
+    pub fn into_parts(self) -> (Option<DriverState>, Option<ExitStatus>) {
+        (self.observation, self.init_exit_status)
+    }
+}
+
 /// Exact create input passed from durable host orchestration to one driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverCreateRequest {
@@ -388,13 +434,15 @@ pub trait RuntimeDriver: Send + Sync {
     /// host service opens.
     ///
     /// Returning an observation asks the host to commit that exact state
-    /// before accepting requests. `None` leaves the durable record unchanged.
-    /// A driver must return `None` when reconciliation must resume through the
-    /// original operation, such as an interrupted OCI `creating` transition.
+    /// before accepting requests. [`DriverRecovery::none`] leaves the durable
+    /// record unchanged. Exact init exit evidence may accompany only a stopped
+    /// observation. A driver must return no observation when reconciliation
+    /// must resume through the original operation, such as an interrupted OCI
+    /// `creating` transition.
     /// Implementations must make this hook idempotent because a host failure
     /// may repeat it after the driver-side reconciliation already happened.
-    async fn recover(&self, _record: &ContainerRecord) -> Result<Option<DriverState>> {
-        Ok(None)
+    async fn recover(&self, _record: &ContainerRecord) -> Result<DriverRecovery> {
+        Ok(DriverRecovery::none())
     }
 
     /// Prepare all OCI create-time resources and return the blocked init PID.

@@ -291,10 +291,8 @@ the shim's existing owner-PID watcher as its fail-closed contract: when a new
 host process has no live in-process session for a durable generation, the old
 VM is treated as owner-death-terminated and an exact stopped tombstone is
 installed. `state`, idempotent `kill`, empty `processes`, and `delete` remain
-safe. Live-only operations fail with `FailedPrecondition`, and `wait` refuses
-to fabricate an exit code because that evidence is not yet retained. A live
-session in the same process is queried through the authenticated agent and its
-generation plus configuration digest are revalidated.
+safe. A live session in the same process is queried through the authenticated
+agent and its generation plus configuration digest are revalidated.
 An interrupted durable `creating` transition cannot legally become `stopped`
 directly, so recovery retains its tombstone without committing an observation;
 replaying the original create then returns a terminal error and the existing
@@ -307,9 +305,17 @@ ephemeral session token. The owner-PID shim preserves the one-time guest path
 during its 15-second cleanup grace, validates the authentication tag after the
 VM exits, removes the guest copy, and atomically commits only the normalized
 report into a protected host recovery directory outside the guest root. A
-restarted host deliberately does not consume that file yet; until durable
-consumption exists, recovered `wait` continues to fail instead of inventing a
-result.
+plain, protected pending marker spans VM launch through successful or failed
+handoff. A restarted host now parses only the normalized report, rechecks the
+exact target and durable configuration digest, commits `stopped`, and caches
+the real init result through the durable wait path. When only the marker is
+present it waits through the shim's bounded owner-death grace and fails
+retryably on overrun instead of racing ahead. The report is retained across
+both sides of the recovery fault boundary and removed only by exact-generation
+delete. If neither authenticated evidence nor a pending handoff exists, the
+stopped tombstone remains usable for cleanup while `wait` still fails instead
+of inventing a result. This path has unit and fault-matrix coverage; fresh-host
+WHPX qualification remains pending.
 
 ## Next Windows gate
 

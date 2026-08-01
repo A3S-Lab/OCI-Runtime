@@ -244,11 +244,20 @@ Production uses a non-configurable no-op injector.
 
 Startup now audits each durable driver binding and calls only that exact
 driver's idempotent recovery hook. An optional observation is committed through
-the normal durable state transition before requests are accepted. The WHPX
-candidate uses this to record owner-death termination as stopped without
-claiming an unavailable exit result.
+the normal durable state transition before requests are accepted. A stopped
+observation may also carry an exact init exit result, which is committed
+through the same durable wait cache used by a live driver. The WHPX candidate
+loads that result only from its shim-authenticated, protected report after
+matching the exact generation and durable configuration digest. The source
+report remains available across before/after recovery faults and is removed
+only with container deletion. A host-only pending marker closes the race with
+an old shim still publishing its report: startup waits through the bounded
+owner-death grace and returns a retryable error if it overruns. If neither a
+report nor marker exists, recovery still yields a stopped cleanup tombstone
+without fabricated exit evidence.
 
 The remaining persistence gates are startup-wide orphan scanning,
-descriptor-relative path operations, restart-stable exact exit evidence (or
-qualified reattachment where a driver promises it), and fault injection inside
-the utility-VM host/agent transport below the `RuntimeDriver` boundary.
+descriptor-relative path operations, real-host qualification of restart-stable
+WHPX exit evidence (or qualified reattachment where another driver promises
+it), and fault injection inside the utility-VM host/agent transport below the
+`RuntimeDriver` boundary.

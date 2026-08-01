@@ -12,6 +12,8 @@ pub const AGENT_RECOVERY_REPORT_ENV: &str = "A3S_OCI_AGENT_RECOVERY_REPORT";
 pub const AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX: &str = ".a3s-oci-recovery-";
 /// Fixed file name inside a one-time guest recovery directory.
 pub const AGENT_RECOVERY_REPORT_FILE_NAME: &str = "report.json";
+/// Suffix on the protected host marker while a shim owns report handoff.
+pub const AGENT_RECOVERY_REPORT_PENDING_SUFFIX: &str = ".pending";
 /// Maximum number of exact container generations in one report.
 pub const AGENT_RECOVERY_REPORT_MAX_RECORDS: usize = 1_024;
 /// Maximum encoded recovery report accepted from the guest.
@@ -341,8 +343,8 @@ mod tests {
     use a3s_oci_sdk::{ContainerId, ContainerTarget, ExitStatus, Generation};
 
     use super::{
-        AgentRecoveryRecord, AgentRecoveryReport, AuthenticatedAgentRecoveryReport,
-        AGENT_RECOVERY_REPORT_MAX_BYTES,
+        encode_hex, hmac_sha256, AgentRecoveryRecord, AgentRecoveryReport,
+        AuthenticatedAgentRecoveryReport, AGENT_RECOVERY_REPORT_MAX_BYTES,
     };
     use crate::SessionToken;
 
@@ -423,5 +425,13 @@ mod tests {
     fn decoder_enforces_the_wire_size_before_parsing() {
         let oversized = vec![b' '; AGENT_RECOVERY_REPORT_MAX_BYTES + 1];
         assert!(AuthenticatedAgentRecoveryReport::verify_json(&oversized, &token(1)).is_err());
+    }
+
+    #[test]
+    fn hmac_matches_an_independently_calculated_sha256_vector() {
+        assert_eq!(
+            encode_hex(&hmac_sha256(&[0x0b; 20], b"Hi There")),
+            "667e80517383f25b96741e116a06805a61a6418bc05a03a94107024bf75971f0"
+        );
     }
 }

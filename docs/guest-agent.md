@@ -423,10 +423,11 @@ private/inherited networking, RW/RO bind volumes, init success/failure, ten
 typed negatives, lifecycle cleanup faults, and owner-death cleanup. It retains
 start/final inventories, operation and resource tables, and a hard-gated
 verification result. User/time namespaces, recursive and ID-mapped mounts,
-tmpfs, restart-stable exact exit evidence, and the immutable A3S system image
-remain outside that evidence. Host-side unit tests now reconcile owner-death
-cleanup to a stopped tombstone, but they do not make agent session state
-durable, so the WHPX driver remains `probe-only`.
+tmpfs, fresh-host qualification of restart-stable exact exit evidence, and the
+immutable A3S system image remain outside that evidence. The implemented
+guest/shim/host recovery chain authenticates and durably caches exact init
+termination when present, with a stopped-only fallback when it is absent, but
+the WHPX driver remains `probe-only` until the real-host gate passes.
 
 The PID qualification used the 6,371,704-byte static agent with SHA-256
 `45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.

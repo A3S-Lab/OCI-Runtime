@@ -121,7 +121,7 @@ async fn exercise_driver_boundary(point: FaultPoint) {
     };
 
     if operation == DriverOperation::Recover {
-        driver.set_recovery_observation(DriverState::stopped());
+        driver.set_recovery_exit(ExitStatus::exited(37).expect("recovery exit status"));
     }
 
     let injector = Arc::new(RecordingFaultInjector::fail_once(point));
@@ -165,11 +165,24 @@ async fn exercise_driver_boundary(point: FaultPoint) {
     if operation == DriverOperation::Delete {
         let missing = recovered
             .state(StateRequest {
-                target: target.expect("delete target"),
+                target: target.as_ref().expect("delete target").clone(),
             })
             .await
             .expect_err("recovered delete must remove live state");
         assert_eq!(missing.code, ErrorCode::NotFound);
+    }
+    if operation == DriverOperation::Recover {
+        let status = recovered
+            .wait(WaitRequest {
+                target: target.as_ref().expect("recovery target").clone(),
+                timeout_ms: Some(0),
+            })
+            .await
+            .expect("recovered init exit must be durably replayable");
+        assert_eq!(
+            status,
+            ExitStatus::exited(37).expect("recovery exit status")
+        );
     }
     if operation != DriverOperation::Capability {
         let call_count = driver

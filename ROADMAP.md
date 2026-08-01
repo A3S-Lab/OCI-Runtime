@@ -427,8 +427,12 @@ the utility-VM host/agent transport portion remains open.
     guest executor shutdown.
   - [x] Have the owner-PID shim verify and copy the normalized report into
     protected host storage before its owner-death grace expires.
-  - [ ] Consume the report through durable startup recovery and before/after
-    fault gates.
+  - [x] Consume the report through durable startup recovery, cache exact wait
+    replay, retain the artifact through before/after recovery fault gates, and
+    close the replacement-host/shim handoff race with a protected pending
+    marker plus bounded retryable wait.
+  - [ ] Run the complete owner-death and service-restart gate on a fresh
+    WHPX-enabled Windows host and retain its machine-readable evidence.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest
   runtime directory on the nominal path.
