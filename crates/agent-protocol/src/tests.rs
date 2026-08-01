@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
@@ -9,7 +11,7 @@ use a3s_oci_sdk::{
     OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
     Result, Signal, TerminalSize,
 };
-use tokio::io::{AsyncWriteExt, DuplexStream};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 
 use crate::model::{
     AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
@@ -628,6 +630,52 @@ fn spawn_server_with_agent(
     tokio::spawn(serve_agent_connection(stream, expected_token, agent))
 }
 
+#[derive(Debug)]
+struct DropObservedStream {
+    inner: DuplexStream,
+    dropped: Arc<AtomicBool>,
+}
+
+impl DropObservedStream {
+    fn new(inner: DuplexStream, dropped: Arc<AtomicBool>) -> Self {
+        Self { inner, dropped }
+    }
+}
+
+impl Drop for DropObservedStream {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+impl AsyncRead for DropObservedStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_read(context, buffer)
+    }
+}
+
+impl AsyncWrite for DropObservedStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(context, buffer)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(context)
+    }
+}
+
 #[tokio::test]
 async fn negotiates_and_round_trips_the_core_oci_lifecycle() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
@@ -715,6 +763,31 @@ async fn explicit_close_is_clone_wide_idempotent_and_stops_the_server() {
         .await
         .expect("server task")
         .expect("explicit client close must stop the server cleanly");
+}
+
+#[tokio::test]
+async fn explicit_close_drops_the_transport_while_client_clones_remain() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let dropped = Arc::new(AtomicBool::new(false));
+    let host = DropObservedStream::new(host, Arc::clone(&dropped));
+    let server = spawn_server(guest, token(32));
+    let client = AgentClient::connect(host, token(32))
+        .await
+        .expect("connect agent client");
+    let clone = client.clone();
+
+    assert!(!dropped.load(Ordering::SeqCst));
+    client.close().await.expect("close shared connection");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "close must release the transport even while client clones remain"
+    );
+    clone.close().await.expect("repeat close through clone");
+
+    server
+        .await
+        .expect("server task")
+        .expect("transport drop must stop the server cleanly");
 }
 
 #[tokio::test]

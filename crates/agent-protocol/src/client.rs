@@ -39,7 +39,7 @@ impl<T> fmt::Debug for AgentClient<T> {
 }
 
 struct ClientConnection<T> {
-    stream: T,
+    stream: Option<T>,
     selected_version: u16,
     next_request_id: u64,
     poisoned: bool,
@@ -87,7 +87,7 @@ where
 
         Ok(Self {
             connection: Arc::new(Mutex::new(ClientConnection {
-                stream,
+                stream: Some(stream),
                 selected_version,
                 next_request_id: 1,
                 poisoned: false,
@@ -115,7 +115,10 @@ where
         }
         connection.closed = true;
         connection.poisoned = true;
-        match connection.stream.shutdown().await {
+        let Some(mut stream) = connection.stream.take() else {
+            return Ok(());
+        };
+        let result = match stream.shutdown().await {
             Ok(()) => Ok(()),
             Err(error)
                 if matches!(
@@ -132,7 +135,9 @@ where
                 ErrorCode::Internal,
                 format!("failed to close the guest-agent transport: {error}"),
             )),
-        }
+        };
+        drop(stream);
+        result
     }
 
     /// Perform OCI create without releasing the configured user process.
@@ -385,11 +390,26 @@ where
             request_id,
             request: request.clone(),
         };
-        if let Err(error) = write_frame(&mut connection.stream, &envelope).await {
+        let selected_version = connection.selected_version;
+        let Some(stream) = connection.stream.as_mut() else {
+            connection.poisoned = true;
+            return Err(protocol_error(
+                ErrorCode::Unavailable,
+                "guest-agent connection lost its transport",
+            ));
+        };
+        if let Err(error) = write_frame(stream, &envelope).await {
             connection.poisoned = true;
             return Err(error);
         }
-        let response: ResponseEnvelope = match read_frame(&mut connection.stream).await {
+        let Some(stream) = connection.stream.as_mut() else {
+            connection.poisoned = true;
+            return Err(protocol_error(
+                ErrorCode::Unavailable,
+                "guest-agent connection lost its transport",
+            ));
+        };
+        let response: ResponseEnvelope = match read_frame(stream).await {
             Ok(Some(response)) => response,
             Ok(None) => {
                 connection.poisoned = true;
@@ -404,7 +424,7 @@ where
                 return Err(error);
             }
         };
-        if let Err(error) = response.validate(connection.selected_version, request_id) {
+        if let Err(error) = response.validate(selected_version, request_id) {
             connection.poisoned = true;
             return Err(error);
         }
