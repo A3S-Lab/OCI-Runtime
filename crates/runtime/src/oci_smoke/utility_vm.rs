@@ -8,7 +8,7 @@ use a3s_oci_sdk::{ContainerId, ContainerTarget, Generation, OciBundle};
 use tokio::io::AsyncReadExt;
 
 use super::OciVmSmokeReport;
-use crate::agent_session::AgentVmSession;
+use crate::agent_session::UtilityVmSession;
 
 const MARKER_NAME: &str = ".a3s-oci-create-start-smoke";
 const MAX_MARKER_BYTES: u64 = 1_024;
@@ -152,7 +152,7 @@ pub(super) async fn run(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let session = match AgentVmSession::connect(shim, &vm_rootfs, console).await {
+    let session = match UtilityVmSession::connect(shim, &vm_rootfs, console).await {
         Ok(session) => session,
         Err(bridge) => {
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -167,8 +167,9 @@ pub(super) async fn run(
         }
     };
 
+    let client = session.client();
     let exercise = exercise(
-        session.client(),
+        &client,
         &bundle,
         guest_bundle,
         &target,
@@ -178,11 +179,11 @@ pub(super) async fn run(
     )
     .await;
     if exercise.is_err() {
-        best_effort_delete(session.client(), &target, &nonce).await;
+        best_effort_delete(&client, &target, &nonce).await;
     }
     report.bridge = match &exercise {
-        Ok(()) => session.finish().await,
-        Err(reason) => session.finish_with_failure(reason).await,
+        Ok(()) => session.shutdown().await,
+        Err(reason) => session.shutdown_with_failure(reason).await,
     };
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     cleanup.apply(&mut report.bridge).await;

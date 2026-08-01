@@ -207,7 +207,9 @@ eighteen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 Before the utility-VM owner waits for the shim, it explicitly closes the
 shared client transport. This waits for an in-flight request and invalidates
 all retained clones, so a forgotten client handle cannot keep the guest or
-hypervisor process alive.
+hypervisor process alive. The host wraps that owner in one shareable session:
+operations receive cloned clients, while concurrent shutdown callers observe
+the same cached cleanup report and can never reap the VM more than once.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified

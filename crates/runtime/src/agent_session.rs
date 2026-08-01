@@ -16,6 +16,7 @@ use tokio::net::windows::named_pipe::NamedPipeServer;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use tokio::net::UnixStream;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -52,6 +53,74 @@ pub(crate) struct AgentVmSession {
     client: AgentClient<PlatformAgentStream>,
     running: RunningShim,
     console: PathBuf,
+}
+
+/// Shareable guest client with single-owner, idempotent VM shutdown.
+///
+/// Driver operations may retain cloned clients. Shutdown actively closes the
+/// shared transport, consumes the sole VM owner once, and caches the exact
+/// cleanup report for repeated callers.
+pub(crate) struct UtilityVmSession {
+    client: AgentClient<PlatformAgentStream>,
+    state: Mutex<UtilityVmSessionState>,
+}
+
+struct UtilityVmSessionState {
+    owner: Option<AgentVmSession>,
+    completed: Option<AgentVmSmokeReport>,
+}
+
+impl UtilityVmSession {
+    pub(crate) async fn connect(
+        shim: &Path,
+        rootfs: &Path,
+        console: &Path,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let owner = AgentVmSession::connect(shim, rootfs, console).await?;
+        Ok(Self {
+            client: owner.client().clone(),
+            state: Mutex::new(UtilityVmSessionState {
+                owner: Some(owner),
+                completed: None,
+            }),
+        })
+    }
+
+    pub(crate) fn client(&self) -> AgentClient<PlatformAgentStream> {
+        self.client.clone()
+    }
+
+    pub(crate) async fn shutdown(&self) -> AgentVmSmokeReport {
+        self.shutdown_inner(None).await
+    }
+
+    pub(crate) async fn shutdown_with_failure(
+        &self,
+        reason: impl Into<String>,
+    ) -> AgentVmSmokeReport {
+        self.shutdown_inner(Some(reason.into())).await
+    }
+
+    async fn shutdown_inner(&self, reason: Option<String>) -> AgentVmSmokeReport {
+        let mut state = self.state.lock().await;
+        if let Some(report) = &state.completed {
+            return report.clone();
+        }
+        let Some(owner) = state.owner.take() else {
+            let report = failed(
+                AgentVmSmokeReport::initial(HostPlatform::current()),
+                "utility-VM session lost its sole owner before shutdown",
+            );
+            state.completed = Some(report.clone());
+            return report;
+        };
+        let report = match reason {
+            Some(reason) => owner.finish_with_failure(reason).await,
+            None => owner.finish().await,
+        };
+        state.completed = Some(report.clone());
+        report
+    }
 }
 
 impl AgentVmSession {

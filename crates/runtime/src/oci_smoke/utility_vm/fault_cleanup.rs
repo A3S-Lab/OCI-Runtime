@@ -8,7 +8,7 @@ use super::{
     canonical_directory, fixed_rootfs, guest_path, path_exists, remove_marker, runtime_entries,
     target, unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
 };
-use crate::agent_session::AgentVmSession;
+use crate::agent_session::UtilityVmSession;
 use crate::{LifecycleFaultPoint, OciVmFaultCleanupReport};
 
 pub(super) async fn run(
@@ -83,7 +83,7 @@ pub(super) async fn run(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let session = match AgentVmSession::connect(shim, &vm_rootfs, console).await {
+    let session = match UtilityVmSession::connect(shim, &vm_rootfs, console).await {
         Ok(session) => session,
         Err(bridge) => {
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -98,8 +98,9 @@ pub(super) async fn run(
         }
     };
 
+    let client = session.client();
     let exercise = exercise_until_fault(
-        session.client(),
+        &client,
         &bundle,
         guest_bundle,
         &target,
@@ -109,8 +110,8 @@ pub(super) async fn run(
     )
     .await;
     report.bridge = match &exercise {
-        Ok(()) => session.finish().await,
-        Err(reason) => session.finish_with_failure(reason).await,
+        Ok(()) => session.shutdown().await,
+        Err(reason) => session.shutdown_with_failure(reason).await,
     };
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     cleanup.apply(&mut report.bridge).await;

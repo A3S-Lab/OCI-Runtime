@@ -106,6 +106,8 @@ Completed:
   DACL, remote-client rejection, concurrency, and shutdown-release gates;
 - explicit clone-wide guest-agent transport shutdown before utility-VM shim
   reap, providing the ownership boundary required by a long-lived VM driver;
+- single-owner utility-VM sessions with clone-safe guest access and idempotent
+  retained cleanup evidence, exercised by WHPX/HVF lifecycle harnesses;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;

@@ -123,7 +123,8 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 - **Authenticated Guest Protocol**: Bind exact bundles and generations to a
   version-negotiated host/guest session with one-time token authentication;
   explicit clone-wide shutdown closes the transport before the utility-VM
-  owner waits for its guest and hypervisor shim
+  owner waits for its guest and hypervisor shim. A single-owner utility-VM
+  session exposes cloned concurrent clients and caches one exact cleanup result
 - **Retained Conformance Evidence**: Lock the OCI schemas and normative
   requirement inventory in CI so unreviewed coverage changes fail closed
 - **Cross-Platform Soak Evidence**: Repeatedly keep independent native Linux
