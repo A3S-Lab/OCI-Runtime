@@ -7,13 +7,13 @@ The Windows x86_64 shim carries one deterministic native runtime archive:
 `runtime/windows-x86_64/krun-windows-x64.tar.xz`
 
 Its SHA-256 is
-`99329b39d23ba8462d63a448af267bcd8fcd238ed2ea1b2656d4cdf84ebf1e5c`.
+`ce178184bc9e309c9f8fef181312cd6c398fc825807124e31afab949b790627e`.
 The build script verifies the archive and every extracted file before linking
 or staging them:
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `krun.dll` | 7,428,608 | `ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9` |
+| `krun.dll` | 7,428,608 | `f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e` |
 | `krun.lib` | 11,870 | `3ac760758158bd4d2d6570db58037d47cd370a8e6ea04ccf54a8b24fd1fdec3d` |
 | `libkrunfw.dll` | 21,473,280 | `44f25540f58155c01258fe123617636fdc6cff27873e38e71dbc75f139602077` |
 
@@ -30,12 +30,13 @@ Repacking the prior archive with this command reproduced its SHA-256 exactly;
 two independent staging directories produced the new hash above.
 
 `krun.dll` and `krun.lib` were built from
-[`A3S-Lab/libkrun@9480ee3`](https://github.com/A3S-Lab/libkrun/commit/9480ee360cdfcf0855ca4fa0951743ea09d2f550).
-That revision splits Windows host-to-guest stream reads into 3 KiB chunks so a
-message larger than the guest's receive descriptor is delivered without
-stalling. The native build controls are in that revision. License notices,
-firmware provenance, and the corresponding kernel source are recorded by
-[`A3S-Lab/Box@46e17a8`](https://github.com/A3S-Lab/Box/commit/46e17a82e9a1034a627b2eebd01503c9d1f0e7bb)
+[`A3S-Lab/libkrun@dc5519f`](https://github.com/A3S-Lab/libkrun/commit/dc5519faeabd8bf38d984ed29c44e6da977f0b5c).
+That revision retains segmented Windows host-to-guest stream reads and opens
+writable virtio-fs files with write access before `fsync`, allowing the guest
+to durably publish its authenticated shutdown report. The native build
+controls are in that revision. License notices, firmware provenance, and the
+corresponding kernel source are recorded by
+[`A3S-Lab/Box@93fc281`](https://github.com/A3S-Lab/Box/commit/93fc281a798cdfd8ee463f69add3f6989d561ee3)
 under `src/deps/libkrun-sys`.
 
 The Rust FFI declarations remain pinned to `a3s-libkrun-sys 3.1.0`. The import
