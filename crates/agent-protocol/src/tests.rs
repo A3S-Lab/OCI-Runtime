@@ -692,6 +692,120 @@ async fn negotiates_and_round_trips_the_core_oci_lifecycle() {
 }
 
 #[tokio::test]
+async fn explicit_close_is_clone_wide_idempotent_and_stops_the_server() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let server = spawn_server(guest, token(31));
+    let client = AgentClient::connect(host, token(31))
+        .await
+        .expect("connect agent client");
+    let clone = client.clone();
+
+    client.close().await.expect("close shared connection");
+    clone.close().await.expect("repeat close through clone");
+    let error = clone
+        .state(AgentStateRequest {
+            target: create_request().target,
+        })
+        .await
+        .expect_err("closed clone must reject later dispatch");
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    assert!(error.message.contains("explicitly closed"));
+
+    server
+        .await
+        .expect("server task")
+        .expect("explicit client close must stop the server cleanly");
+}
+
+#[tokio::test]
+async fn explicit_close_waits_for_an_in_flight_request_before_closing_the_stream() {
+    let (host, mut guest) = tokio::io::duplex(1024 * 1024);
+    let (request_seen_send, request_seen_receive) = tokio::sync::oneshot::channel();
+    let (release_send, release_receive) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let _hello: HostHello = read_frame(&mut guest)
+            .await?
+            .ok_or_else(|| Error::new(ErrorCode::Unavailable, "missing hello"))?;
+        write_frame(
+            &mut guest,
+            &HelloOutcome::Accepted {
+                hello: AgentHello::new(
+                    1,
+                    AgentCapabilities::core("close-test", std::env::consts::ARCH)?,
+                ),
+            },
+        )
+        .await?;
+        let request: RequestEnvelope = read_frame(&mut guest)
+            .await?
+            .ok_or_else(|| Error::new(ErrorCode::Unavailable, "missing create request"))?;
+        let AgentRequest::Create(create) = request.request else {
+            return Err(Error::new(ErrorCode::Internal, "expected create request"));
+        };
+        request_seen_send
+            .send(())
+            .map_err(|()| Error::new(ErrorCode::Internal, "request observer disappeared"))?;
+        release_receive
+            .await
+            .map_err(|error| Error::new(ErrorCode::Internal, error.to_string()))?;
+        let state = AgentState::new(
+            create.target,
+            ContainerState::Created,
+            Some(101),
+            create.bundle.config_digest(),
+        )?;
+        write_frame(
+            &mut guest,
+            &ResponseEnvelope {
+                version: 1,
+                request_id: request.request_id,
+                outcome: ResponseOutcome::Succeeded {
+                    response: AgentResponse::State(state),
+                },
+            },
+        )
+        .await?;
+        let after_close = read_frame::<RequestEnvelope, _>(&mut guest).await?;
+        if after_close.is_some() {
+            return Err(Error::new(
+                ErrorCode::Internal,
+                "client dispatched a request after explicit close",
+            ));
+        }
+        Ok::<_, Error>(())
+    });
+
+    let client = AgentClient::connect(host, token(32))
+        .await
+        .expect("connect agent client");
+    let request_client = client.clone();
+    let request = tokio::spawn(async move { request_client.create(create_request()).await });
+    request_seen_receive
+        .await
+        .expect("server must observe in-flight request");
+    let close_client = client.clone();
+    let close = tokio::spawn(async move { close_client.close().await });
+    tokio::task::yield_now().await;
+    assert!(
+        !close.is_finished(),
+        "close must wait for the in-flight request"
+    );
+    release_send.send(()).expect("release in-flight request");
+    request
+        .await
+        .expect("request task")
+        .expect("in-flight request must finish before close");
+    close
+        .await
+        .expect("close task")
+        .expect("close shared connection");
+    server
+        .await
+        .expect("server task")
+        .expect("server must observe transport close");
+}
+
+#[tokio::test]
 async fn protocol_v2_wait_returns_and_replays_the_exact_exit_status() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let server = spawn_server(guest, token(18));

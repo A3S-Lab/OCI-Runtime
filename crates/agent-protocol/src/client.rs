@@ -6,7 +6,7 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerStats, Error, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use crate::model::{
@@ -42,6 +42,7 @@ struct ClientConnection<T> {
     selected_version: u16,
     next_request_id: u64,
     poisoned: bool,
+    closed: bool,
 }
 
 impl<T> Clone for AgentClient<T> {
@@ -89,6 +90,7 @@ where
                 selected_version,
                 next_request_id: 1,
                 poisoned: false,
+                closed: false,
             })),
             hello: Arc::new(hello),
         })
@@ -98,6 +100,38 @@ where
     #[must_use]
     pub fn hello(&self) -> &AgentHello {
         &self.hello
+    }
+
+    /// Close the shared guest-agent transport for every client clone.
+    ///
+    /// The operation waits for any in-flight request, prevents all later
+    /// dispatch, and is idempotent. Utility-VM owners use this explicit
+    /// boundary before waiting for the guest and hypervisor shim to exit.
+    pub async fn close(&self) -> Result<()> {
+        let mut connection = self.connection.lock().await;
+        if connection.closed {
+            return Ok(());
+        }
+        connection.closed = true;
+        connection.poisoned = true;
+        match connection.stream.shutdown().await {
+            Ok(()) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::UnexpectedEof
+                ) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(protocol_error(
+                ErrorCode::Internal,
+                format!("failed to close the guest-agent transport: {error}"),
+            )),
+        }
     }
 
     /// Perform OCI create without releasing the configured user process.
@@ -321,6 +355,12 @@ where
         ensure_advertised(self.hello.capabilities().operations(), &request)?;
 
         let mut connection = self.connection.lock().await;
+        if connection.closed {
+            return Err(protocol_error(
+                ErrorCode::Unavailable,
+                "guest-agent connection was explicitly closed",
+            ));
+        }
         if connection.poisoned {
             return Err(protocol_error(
                 ErrorCode::Unavailable,

@@ -6,6 +6,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Clone-wide, idempotent guest-agent client shutdown that waits for an
+  in-flight request, blocks every later dispatch, and actively closes the
+  shared transport before a utility-VM owner reaps its shim process.
 - A protected Windows host SDK service that binds the first local named-pipe
   instance with a verified current-user/LocalSystem DACL, rejects remote
   clients, serves bounded concurrent connections, and releases the endpoint

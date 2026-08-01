@@ -178,6 +178,8 @@ In-memory duplex tests cover:
 - oversized-frame rejection from the header alone;
 - configuration-digest tampering;
 - response correlation failure and permanent connection poisoning;
+- clone-wide explicit close, idempotent repeat close, and rejection of every
+  later request through any retained client clone;
 - secret redaction and guest-path normalization.
 
 Windows tests create the real host-side named-pipe endpoint, verify its live
@@ -202,6 +204,10 @@ bounded host and shim evidence. The current guest must advertise the exact
 eighteen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
 `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, and `resize`.
+Before the utility-VM owner waits for the shim, it explicitly closes the
+shared client transport. This waits for an in-flight request and invalidates
+all retained clones, so a forgotten client handle cannot keep the guest or
+hypervisor process alive.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified

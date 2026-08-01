@@ -121,7 +121,9 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
   the first local pipe instance, verifies its current-user/LocalSystem DACL,
   rejects remote clients, and serves a bounded concurrent client set
 - **Authenticated Guest Protocol**: Bind exact bundles and generations to a
-  version-negotiated host/guest session with one-time token authentication
+  version-negotiated host/guest session with one-time token authentication;
+  explicit clone-wide shutdown closes the transport before the utility-VM
+  owner waits for its guest and hypervisor shim
 - **Retained Conformance Evidence**: Lock the OCI schemas and normative
   requirement inventory in CI so unreviewed coverage changes fail closed
 - **Cross-Platform Soak Evidence**: Repeatedly keep independent native Linux

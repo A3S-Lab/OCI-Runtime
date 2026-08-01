@@ -275,6 +275,7 @@ impl AgentVmSession {
             running,
             console,
         } = self;
+        let close_error = client.close().await.err();
         drop(client);
         let completed = running.wait_and_collect().await;
         apply_completed(&mut report, &completed);
@@ -308,6 +309,13 @@ impl AgentVmSession {
                     "libkrun did not create the requested guest console file {}",
                     console.display()
                 ),
+                &completed,
+            );
+        }
+        if let Some(error) = close_error {
+            return failed_with_output(
+                report,
+                &format!("failed to close the shared guest-agent session: {error}"),
                 &completed,
             );
         }

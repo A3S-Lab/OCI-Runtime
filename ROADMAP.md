@@ -104,6 +104,8 @@ Completed:
   including fail-closed startup audit for missing or isolation-drifted drivers;
 - protected Windows SDK host serving over a local named pipe with first-owner,
   DACL, remote-client rejection, concurrency, and shutdown-release gates;
+- explicit clone-wide guest-agent transport shutdown before utility-VM shim
+  reap, providing the ownership boundary required by a long-lived VM driver;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;
