@@ -6,6 +6,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- An idempotent startup `RuntimeDriver::recover` handshake that dispatches each
+  durable generation only to its recorded driver, commits an optional exact
+  state observation before the host accepts requests, and is covered by the
+  same typed before/after fault matrix as every lifecycle call. The WHPX
+  candidate now converts owner-death cleanup into a stopped, generation-fenced
+  tombstone that supports state, idempotent kill, empty process inventory, and
+  delete without inventing an init exit status or relaunching the generation.
 - Clone-wide, idempotent guest-agent client shutdown that waits for an
   in-flight request, blocks every later dispatch, and actively closes the
   shared transport before a utility-VM owner reaps its shim process.
@@ -19,8 +26,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   launching distinct container VMs concurrently, reuses the VM for retryable
   create, reaps terminal create failures and successful deletes once, requires
   bundles below a protected runtime-owned guest root, and intentionally remains
-  non-registerable at `probe-only` readiness while restart reattachment and
-  immutable-system-root qualification are pending.
+  non-registerable at `probe-only` readiness while restart-stable exact exit
+  evidence and immutable-system-root qualification are pending.
 - Target-correct KVM ioctl request typing so both glibc (`c_ulong`) and musl
   (`c_int`) Linux builds compile against their actual libc ABI.
 - A protected Windows host SDK service that binds the first local named-pipe

@@ -7,8 +7,8 @@ use std::sync::{Arc, Weak};
 use a3s_oci_agent_protocol::{GuestAgentService, GuestPath};
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus,
-    OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    async_trait, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode,
+    ExitStatus, OutputChunk, ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -83,7 +83,7 @@ pub struct WhpxRuntimeDriver {
     capability: DriverCapability,
     vm_rootfs: PathBuf,
     factory: Arc<dyn UtilityVmFactory>,
-    sessions: Mutex<BTreeMap<ContainerId, Arc<WhpxContainer>>>,
+    sessions: Mutex<BTreeMap<ContainerId, WhpxAttachment>>,
     create_gates: Mutex<BTreeMap<ContainerId, Weak<Mutex<()>>>>,
 }
 
@@ -123,7 +123,10 @@ impl WhpxRuntimeDriver {
             .insert("runtime_root_protected".to_string(), "true".to_string());
         capability
             .evidence
-            .insert("restart_reattachment".to_string(), "pending".to_string());
+            .insert("owner_death_recovery".to_string(), "stopped".to_string());
+        capability
+            .evidence
+            .insert("restart_exit_evidence".to_string(), "pending".to_string());
         capability
             .evidence
             .insert("opt_in".to_string(), "qualification-only".to_string());
@@ -142,11 +145,18 @@ impl WhpxRuntimeDriver {
         })
     }
 
-    /// Close every attached guest transport and reap each owned VM once.
+    /// Close every attached guest transport, reap each owned VM once, and
+    /// retain stopped tombstones for durable host reconciliation.
     pub async fn shutdown(&self) -> Result<()> {
         let sessions = {
             let sessions = self.sessions.lock().await;
-            sessions.values().cloned().collect::<Vec<_>>()
+            sessions
+                .values()
+                .filter_map(|attachment| match attachment {
+                    WhpxAttachment::Live(session) => Some(Arc::clone(session)),
+                    WhpxAttachment::RecoveredStopped(_) => None,
+                })
+                .collect::<Vec<_>>()
         };
         let mut shutdowns = JoinSet::new();
         for session in sessions {
@@ -158,7 +168,7 @@ impl WhpxRuntimeDriver {
         let mut failures = Vec::new();
         while let Some(completed) = shutdowns.join_next().await {
             match completed {
-                Ok((session, Ok(()))) => self.remove_session(&session).await,
+                Ok((session, Ok(()))) => self.replace_with_stopped(&session).await,
                 Ok((_session, Err(error))) => failures.push(error.to_string()),
                 Err(error) => failures.push(format!("utility VM shutdown task failed: {error}")),
             }
@@ -180,7 +190,44 @@ impl WhpxRuntimeDriver {
 
     /// Number of container generations with an attached utility VM.
     pub async fn active_session_count(&self) -> usize {
-        self.sessions.lock().await.len()
+        self.sessions
+            .lock()
+            .await
+            .values()
+            .filter(|attachment| matches!(attachment, WhpxAttachment::Live(_)))
+            .count()
+    }
+
+    async fn attachment_for(
+        &self,
+        target: &ContainerTarget,
+        operation: &'static str,
+    ) -> Result<WhpxAttachment> {
+        require_exact_generation(target, operation)?;
+        let sessions = self.sessions.lock().await;
+        let attachment = sessions.get(&target.id).cloned().ok_or_else(|| {
+            Error::new(
+                ErrorCode::Unavailable,
+                format!(
+                    "container {} has neither an attached WHPX utility VM nor a recovered stop record",
+                    target.id
+                ),
+            )
+            .for_operation(operation)
+        })?;
+        if attachment.target() != target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                format!(
+                    "container {} is attached at generation {:?}, not {:?}",
+                    target.id,
+                    attachment.target().generation,
+                    target.generation
+                ),
+            )
+            .for_operation(operation));
+        }
+        Ok(attachment)
     }
 
     async fn session_for(
@@ -188,38 +235,45 @@ impl WhpxRuntimeDriver {
         target: &ContainerTarget,
         operation: &'static str,
     ) -> Result<Arc<WhpxContainer>> {
-        require_exact_generation(target, operation)?;
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(&target.id).ok_or_else(|| {
-            Error::new(
-                ErrorCode::Unavailable,
-                format!(
-                    "container {} has no attached WHPX utility VM; runtime-process restart reattachment is not yet qualified",
-                    target.id
-                ),
-            )
-            .for_operation(operation)
-        })?;
-        if session.target != *target {
-            return Err(Error::new(
-                ErrorCode::Conflict,
-                format!(
-                    "container {} is attached at generation {:?}, not {:?}",
-                    target.id, session.target.generation, target.generation
-                ),
-            )
-            .for_operation(operation));
+        match self.attachment_for(target, operation).await? {
+            WhpxAttachment::Live(session) => Ok(session),
+            WhpxAttachment::RecoveredStopped(_) => Err(recovered_stopped_error(target, operation)),
         }
-        Ok(Arc::clone(session))
     }
 
-    async fn remove_session(&self, expected: &Arc<WhpxContainer>) {
+    async fn remove_live_session(&self, expected: &Arc<WhpxContainer>) {
         let mut sessions = self.sessions.lock().await;
-        if sessions
-            .get(&expected.target.id)
-            .is_some_and(|current| Arc::ptr_eq(current, expected))
-        {
+        let remove = matches!(
+            sessions.get(&expected.target.id),
+            Some(WhpxAttachment::Live(current)) if Arc::ptr_eq(current, expected)
+        );
+        if remove {
             sessions.remove(&expected.target.id);
+        }
+    }
+
+    async fn replace_with_stopped(&self, expected: &Arc<WhpxContainer>) {
+        let mut sessions = self.sessions.lock().await;
+        let replace = matches!(
+            sessions.get(&expected.target.id),
+            Some(WhpxAttachment::Live(current)) if Arc::ptr_eq(current, expected)
+        );
+        if replace {
+            sessions.insert(
+                expected.target.id.clone(),
+                WhpxAttachment::RecoveredStopped(expected.target.clone()),
+            );
+        }
+    }
+
+    async fn remove_stopped(&self, expected: &ContainerTarget) {
+        let mut sessions = self.sessions.lock().await;
+        let remove = matches!(
+            sessions.get(&expected.id),
+            Some(WhpxAttachment::RecoveredStopped(current)) if current == expected
+        );
+        if remove {
+            sessions.remove(&expected.id);
         }
     }
 
@@ -229,7 +283,7 @@ impl WhpxRuntimeDriver {
         mut error: Error,
     ) -> Error {
         match session.owner.shutdown().await {
-            Ok(()) => self.remove_session(session).await,
+            Ok(()) => self.remove_live_session(session).await,
             Err(cleanup) => {
                 error.message = format!(
                     "{}; failed to reap the dedicated utility VM: {}",
@@ -266,6 +320,47 @@ impl RuntimeDriver for WhpxRuntimeDriver {
         &AGENT_DRIVER_HOOKS
     }
 
+    async fn recover(&self, record: &ContainerRecord) -> Result<Option<DriverState>> {
+        let target =
+            ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
+        let can_commit_stopped =
+            *record.state.status() != a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating;
+        let attachment = {
+            let mut sessions = self.sessions.lock().await;
+            match sessions.get(&target.id) {
+                Some(attachment) => attachment.clone(),
+                None => {
+                    sessions.insert(target.id.clone(), WhpxAttachment::RecoveredStopped(target));
+                    return Ok(can_commit_stopped.then_some(DriverState::stopped()));
+                }
+            }
+        };
+        if attachment.target() != &target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                format!(
+                    "container {} is attached at generation {:?}, not durable generation {:?}",
+                    target.id,
+                    attachment.target().generation,
+                    target.generation
+                ),
+            )
+            .for_operation("whpx-recover"));
+        }
+        match attachment {
+            WhpxAttachment::Live(session) => {
+                let observed = session
+                    .client
+                    .state_with_digest(target, Some(&record.config_digest))
+                    .await?;
+                Ok(can_commit_stopped.then_some(observed))
+            }
+            WhpxAttachment::RecoveredStopped(_) => {
+                Ok(can_commit_stopped.then_some(DriverState::stopped()))
+            }
+        }
+    }
+
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
         if request.isolation.class() != IsolationClass::DedicatedVm {
             return Err(Error::new(
@@ -290,10 +385,10 @@ impl RuntimeDriver for WhpxRuntimeDriver {
                     client: launched.client,
                     owner: launched.owner,
                 });
-                self.sessions
-                    .lock()
-                    .await
-                    .insert(target.id.clone(), Arc::clone(&session));
+                self.sessions.lock().await.insert(
+                    target.id.clone(),
+                    WhpxAttachment::Live(Arc::clone(&session)),
+                );
                 session
             }
         };
@@ -306,11 +401,10 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
-        self.session_for(&target, "whpx-state")
-            .await?
-            .client
-            .state(target)
-            .await
+        match self.attachment_for(&target, "whpx-state").await? {
+            WhpxAttachment::Live(session) => session.client.state(target).await,
+            WhpxAttachment::RecoveredStopped(_) => Ok(DriverState::stopped()),
+        }
     }
 
     async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
@@ -322,27 +416,34 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
-        self.session_for(&request.target, "whpx-kill")
-            .await?
-            .client
-            .kill(request)
-            .await
+        match self.attachment_for(&request.target, "whpx-kill").await? {
+            WhpxAttachment::Live(session) => session.client.kill(request).await,
+            WhpxAttachment::RecoveredStopped(_) => Ok(DriverState::stopped()),
+        }
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
-        let session = self.session_for(&request.target, "whpx-delete").await?;
-        session.client.delete(request).await?;
-        session.owner.shutdown().await?;
-        self.remove_session(&session).await;
-        Ok(())
+        match self.attachment_for(&request.target, "whpx-delete").await? {
+            WhpxAttachment::Live(session) => {
+                session.client.delete(request).await?;
+                session.owner.shutdown().await?;
+                self.remove_live_session(&session).await;
+                Ok(())
+            }
+            WhpxAttachment::RecoveredStopped(target) => {
+                self.remove_stopped(&target).await;
+                Ok(())
+            }
+        }
     }
 
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
-        self.session_for(&request.target, "whpx-wait")
-            .await?
-            .client
-            .wait(request)
-            .await
+        match self.attachment_for(&request.target, "whpx-wait").await? {
+            WhpxAttachment::Live(session) => session.client.wait(request).await,
+            WhpxAttachment::RecoveredStopped(_) => {
+                Err(recovered_exit_evidence_error(&request.target, "whpx-wait"))
+            }
+        }
     }
 
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
@@ -386,11 +487,10 @@ impl RuntimeDriver for WhpxRuntimeDriver {
     }
 
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
-        self.session_for(&target, "whpx-processes")
-            .await?
-            .client
-            .processes(target)
-            .await
+        match self.attachment_for(&target, "whpx-processes").await? {
+            WhpxAttachment::Live(session) => session.client.processes(target).await,
+            WhpxAttachment::RecoveredStopped(_) => Ok(Vec::new()),
+        }
     }
 
     async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
@@ -448,20 +548,41 @@ impl WhpxRuntimeDriver {
         target: &ContainerTarget,
     ) -> Result<Option<Arc<WhpxContainer>>> {
         let sessions = self.sessions.lock().await;
-        let Some(session) = sessions.get(&target.id) else {
+        let Some(attachment) = sessions.get(&target.id) else {
             return Ok(None);
         };
-        if session.target != *target {
+        if attachment.target() != target {
             return Err(Error::new(
                 ErrorCode::Conflict,
                 format!(
-                    "container {} already owns a WHPX VM at generation {:?}",
-                    target.id, session.target.generation
+                    "container {} already owns a WHPX attachment at generation {:?}",
+                    target.id,
+                    attachment.target().generation
                 ),
             )
             .for_operation("whpx-create"));
         }
-        Ok(Some(Arc::clone(session)))
+        match attachment {
+            WhpxAttachment::Live(session) => Ok(Some(Arc::clone(session))),
+            WhpxAttachment::RecoveredStopped(_) => {
+                Err(recovered_stopped_error(target, "whpx-create"))
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+enum WhpxAttachment {
+    Live(Arc<WhpxContainer>),
+    RecoveredStopped(ContainerTarget),
+}
+
+impl WhpxAttachment {
+    fn target(&self) -> &ContainerTarget {
+        match self {
+            Self::Live(session) => &session.target,
+            Self::RecoveredStopped(target) => target,
+        }
     }
 }
 
@@ -737,6 +858,28 @@ fn require_exact_generation(
     })
 }
 
+fn recovered_stopped_error(target: &ContainerTarget, operation: &'static str) -> Error {
+    Error::new(
+        ErrorCode::FailedPrecondition,
+        format!(
+            "container {} generation {:?} was recovered as stopped after its WHPX owner exited; no live utility VM remains, so this generation must be deleted before another live operation",
+            target.id, target.generation
+        ),
+    )
+    .for_operation(operation)
+}
+
+fn recovered_exit_evidence_error(target: &ContainerTarget, operation: &'static str) -> Error {
+    Error::new(
+        ErrorCode::FailedPrecondition,
+        format!(
+            "container {} generation {:?} was stopped by WHPX owner-death cleanup, but its exact init exit status was not retained",
+            target.id, target.generation
+        ),
+    )
+    .for_operation(operation)
+}
+
 fn vm_launch_error(report: crate::AgentVmSmokeReport) -> Error {
     let retryable = !report.protocol_negotiated;
     vm_report_error("launch-whpx-utility-vm", report).retryable(retryable)
@@ -766,16 +909,18 @@ mod tests {
     use a3s_oci_core::{
         CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
     };
-    use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+    use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
     use a3s_oci_sdk::{
-        async_trait, ContainerId, ContainerTarget, DeleteMode, Error, ErrorCode, Generation,
-        IsolationRequest, OciBundle, OperationContext, OperationId, ProcessIo, Result,
+        async_trait, ContainerId, ContainerRecord, ContainerTarget, DeleteMode, Error, ErrorCode,
+        Generation, IsolationRequest, OciBundle, OperationContext, OperationId, ProcessIo, Result,
+        Signal,
     };
     use tokio::sync::Mutex;
 
     use super::{
-        AgentDriverClient, DriverCreateRequest, DriverDeleteRequest, LaunchedUtilityVm,
-        RuntimeDriver, UtilityVmFactory, UtilityVmOwner, WhpxRuntimeDriver,
+        AgentDriverClient, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
+        DriverWaitRequest, LaunchedUtilityVm, RuntimeDriver, UtilityVmFactory, UtilityVmOwner,
+        WhpxRuntimeDriver,
     };
     use crate::DriverCreateAttachments;
 
@@ -796,6 +941,7 @@ mod tests {
     struct FakeGuest {
         create_calls: AtomicUsize,
         delete_calls: AtomicUsize,
+        state_calls: AtomicUsize,
         next_create_failure: StdMutex<Option<Error>>,
         state: StdMutex<Option<AgentState>>,
     }
@@ -836,6 +982,7 @@ mod tests {
         }
 
         async fn state(&self, request: AgentStateRequest) -> Result<AgentState> {
+            self.state_calls.fetch_add(1, Ordering::Relaxed);
             self.state
                 .lock()
                 .expect("state lock")
@@ -974,6 +1121,25 @@ mod tests {
                 isolation: IsolationRequest::DedicatedVm,
                 io: ProcessIo::default(),
                 attachments: DriverCreateAttachments::None,
+            }
+        }
+
+        fn record(&self, generation: u64, status: ContainerState) -> ContainerRecord {
+            let target = target(generation);
+            let mut builder = StateBuilder::default()
+                .version(self.bundle.spec().version())
+                .id(target.id.as_str())
+                .status(status)
+                .bundle(self.bundle.directory().to_path_buf());
+            if matches!(status, ContainerState::Created | ContainerState::Running) {
+                builder = builder.pid(101);
+            }
+            ContainerRecord {
+                state: builder.build().expect("recovery OCI state"),
+                generation: Generation(generation),
+                driver: DriverKind::LibkrunWhpx,
+                isolation: IsolationClass::DedicatedVm,
+                config_digest: self.bundle.config_digest().to_string(),
             }
         }
     }
@@ -1147,6 +1313,152 @@ mod tests {
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
         assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 1);
         fixture.driver.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn owner_death_recovery_exposes_a_stopped_cleanup_tombstone() {
+        let fixture = Fixture::new();
+        let record = fixture.record(1, ContainerState::Running);
+        let recovered = fixture
+            .driver
+            .recover(&record)
+            .await
+            .expect("recover missing live session")
+            .expect("recovery observation");
+        assert_eq!(recovered, super::DriverState::stopped());
+        assert_eq!(fixture.driver.active_session_count().await, 0);
+
+        let target = target(1);
+        assert_eq!(
+            fixture
+                .driver
+                .state(target.clone())
+                .await
+                .expect("state recovered tombstone"),
+            super::DriverState::stopped()
+        );
+        assert_eq!(
+            fixture
+                .driver
+                .kill(DriverKillRequest {
+                    context: context("recovered-kill"),
+                    target: target.clone(),
+                    signal: Signal::new(9).expect("signal"),
+                    all: true,
+                })
+                .await
+                .expect("kill recovered tombstone"),
+            super::DriverState::stopped()
+        );
+        assert!(fixture
+            .driver
+            .processes(target.clone())
+            .await
+            .expect("processes recovered tombstone")
+            .is_empty());
+
+        let wait_error = fixture
+            .driver
+            .wait(DriverWaitRequest {
+                target: target.clone(),
+                timeout_ms: None,
+            })
+            .await
+            .expect_err("recovery must not invent an exit status");
+        assert_eq!(wait_error.code, ErrorCode::FailedPrecondition);
+        assert!(!wait_error.retryable);
+        assert!(wait_error.message.contains("exact init exit status"));
+
+        fixture
+            .driver
+            .delete(delete_request(1))
+            .await
+            .expect("delete recovered tombstone");
+        assert_eq!(fixture.guest.delete_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 0);
+        let missing = fixture
+            .driver
+            .state(target)
+            .await
+            .expect_err("deleted tombstone must be absent");
+        assert_eq!(missing.code, ErrorCode::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn recovery_queries_an_existing_live_generation() {
+        let fixture = Fixture::new();
+        fixture
+            .driver
+            .create(fixture.create_request(1, "live-recovery-create"))
+            .await
+            .expect("create live generation");
+        let recovered = fixture
+            .driver
+            .recover(&fixture.record(1, ContainerState::Created))
+            .await
+            .expect("recover live generation")
+            .expect("live recovery observation");
+        assert_eq!(recovered.status(), ContainerState::Created);
+        assert_eq!(recovered.pid(), Some(101));
+        assert_eq!(fixture.guest.state_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 1);
+        assert_eq!(fixture.driver.active_session_count().await, 1);
+        fixture
+            .driver
+            .shutdown()
+            .await
+            .expect("shutdown live recovery");
+    }
+
+    #[tokio::test]
+    async fn interrupted_create_cannot_replace_a_recovered_generation() {
+        let fixture = Fixture::new();
+        let observation = fixture
+            .driver
+            .recover(&fixture.record(1, ContainerState::Creating))
+            .await
+            .expect("recover interrupted create");
+        assert_eq!(observation, None, "creating cannot transition to stopped");
+        let error = fixture
+            .driver
+            .create(fixture.create_request(1, "recovered-create-retry"))
+            .await
+            .expect_err("recovered generation must not be recreated");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert!(!error.retryable);
+        assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 0);
+        fixture
+            .driver
+            .delete(delete_request(1))
+            .await
+            .expect("delete interrupted create tombstone");
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_reaps_live_vms_into_stopped_tombstones() {
+        let fixture = Fixture::new();
+        fixture
+            .driver
+            .create(fixture.create_request(1, "shutdown-create"))
+            .await
+            .expect("create before shutdown");
+        fixture.driver.shutdown().await.expect("first shutdown");
+        assert_eq!(fixture.driver.active_session_count().await, 0);
+        assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            fixture
+                .driver
+                .state(target(1))
+                .await
+                .expect("state after shutdown"),
+            super::DriverState::stopped()
+        );
+        fixture
+            .driver
+            .shutdown()
+            .await
+            .expect("idempotent shutdown");
+        assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]

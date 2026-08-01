@@ -164,7 +164,10 @@ impl DriverRegistry {
             })
     }
 
-    pub(super) fn validate_durable_record(&self, record: &ContainerRecord) -> Result<()> {
+    pub(super) fn validate_durable_record(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<&RegisteredDriver> {
         let registered = self
             .entries
             .iter()
@@ -184,7 +187,7 @@ impl DriverRegistry {
             .isolation_classes
             .contains(&record.isolation)
         {
-            return Ok(());
+            return Ok(registered);
         }
 
         Err(Error::new(

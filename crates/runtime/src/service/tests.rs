@@ -16,14 +16,14 @@ use a3s_oci_sdk::oci_spec::runtime::{
     Arch, ContainerState, LinuxNamespaceType, LinuxResources, LinuxSeccompAction, Process,
 };
 use a3s_oci_sdk::{
-    async_trait, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerStats,
-    ContainerTarget, CpuStats, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    EventsRequest, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest, KillRequest,
-    ListRequest, MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext,
-    OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
-    Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
-    TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    async_trait, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord,
+    ContainerStats, ContainerTarget, CpuStats, CreateRequest, DeleteMode, DeleteRequest, Error,
+    ErrorCode, EventsRequest, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest,
+    KillRequest, ListRequest, MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator,
+    OperationContext, OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord,
+    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind,
+    RuntimeOperation, Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
@@ -58,6 +58,7 @@ const TEST_CONFIG: &str = concat!(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DriverCall {
+    Recover(ContainerRecord),
     Create(DriverCreateRequest),
     State(ContainerTarget),
     Start(DriverStartRequest),
@@ -97,6 +98,7 @@ struct RecordingDriver {
     close_stdin_replays: Mutex<HashMap<OperationId, DriverCloseStdinRequest>>,
     resize_replays: Mutex<HashMap<OperationId, DriverResizeRequest>>,
     output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
+    recovery_observation: Mutex<Option<DriverState>>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
 }
 
@@ -131,6 +133,7 @@ impl RecordingDriver {
             close_stdin_replays: Mutex::new(HashMap::new()),
             resize_replays: Mutex::new(HashMap::new()),
             output_responses: Mutex::new(VecDeque::new()),
+            recovery_observation: Mutex::new(None),
             failures: Mutex::new(HashMap::new()),
         }
     }
@@ -214,6 +217,13 @@ impl RecordingDriver {
             .push_back(chunks);
     }
 
+    fn set_recovery_observation(&self, observation: DriverState) {
+        *self
+            .recovery_observation
+            .lock()
+            .expect("driver recovery observation lock") = Some(observation);
+    }
+
     fn take_failure(&self, operation: &'static str) -> Option<Error> {
         let mut failures = self.failures.lock().expect("driver failures lock");
         let queue = failures.get_mut(operation)?;
@@ -254,6 +264,20 @@ impl RuntimeDriver for RecordingDriver {
 
     fn hooks(&self) -> &[OciHookPhase] {
         &self.hooks
+    }
+
+    async fn recover(&self, record: &ContainerRecord) -> Result<Option<DriverState>> {
+        let observation = *self
+            .recovery_observation
+            .lock()
+            .expect("driver recovery observation lock");
+        if observation.is_some() {
+            self.calls
+                .lock()
+                .expect("driver calls lock")
+                .push(DriverCall::Recover(record.clone()));
+        }
+        Ok(observation)
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
@@ -2250,6 +2274,87 @@ async fn multi_driver_service_routes_create_and_reopen_by_durable_driver() {
             .readiness,
         DriverReadiness::Supported
     );
+}
+
+#[tokio::test]
+async fn service_open_reconciles_each_record_with_its_recorded_driver() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("recovery-routing-state");
+    let dedicated = Arc::new(RecordingDriver::supported());
+    let shared = Arc::new(RecordingDriver::shared_guest_supported());
+    let drivers: Vec<Arc<dyn RuntimeDriver>> = vec![dedicated.clone(), shared.clone()];
+    let service = HostRuntimeService::open_with_drivers(&state_root, drivers)
+        .await
+        .expect("open recovery routing service");
+
+    let mut dedicated_request = create_request(&bundle_directory, "recovery-create-dedicated");
+    dedicated_request.id = container_id("recovery-dedicated");
+    let dedicated_record = service
+        .create(dedicated_request.clone())
+        .await
+        .expect("create dedicated recovery record");
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("recovery-start-dedicated")),
+            target: ContainerTarget::exact(
+                dedicated_request.id.clone(),
+                dedicated_record.generation,
+            ),
+        })
+        .await
+        .expect("start dedicated recovery record");
+
+    let mut shared_request = create_request(&bundle_directory, "recovery-create-shared");
+    shared_request.id = container_id("recovery-shared");
+    shared_request.isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: identifier("recovery-domain", TrustDomainId::new),
+    };
+    let shared_record = service
+        .create(shared_request.clone())
+        .await
+        .expect("create shared recovery record");
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("recovery-start-shared")),
+            target: ContainerTarget::exact(shared_request.id.clone(), shared_record.generation),
+        })
+        .await
+        .expect("start shared recovery record");
+    drop(service);
+
+    dedicated.set_recovery_observation(DriverState::stopped());
+    let reversed: Vec<Arc<dyn RuntimeDriver>> = vec![shared, dedicated.clone()];
+    let reopened = HostRuntimeService::open_with_drivers(&state_root, reversed)
+        .await
+        .expect("reopen recovery routing service");
+    let records = reopened
+        .list(ListRequest::default())
+        .await
+        .expect("list reconciled records");
+    let recovered_dedicated = records
+        .iter()
+        .find(|record| record.state.id() == dedicated_request.id.as_str())
+        .expect("recovered dedicated record");
+    let unchanged_shared = records
+        .iter()
+        .find(|record| record.state.id() == shared_request.id.as_str())
+        .expect("unchanged shared record");
+    assert_eq!(recovered_dedicated.state.status(), &ContainerState::Stopped);
+    assert_eq!(unchanged_shared.state.status(), &ContainerState::Running);
+
+    let recovery_calls = dedicated
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            DriverCall::Recover(record) => Some(record),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(recovery_calls.len(), 1);
+    assert_eq!(recovery_calls[0].driver, DriverKind::LibkrunWhpx);
+    assert_eq!(recovery_calls[0].state.id(), dedicated_request.id.as_str());
 }
 
 #[tokio::test]

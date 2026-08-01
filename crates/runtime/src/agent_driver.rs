@@ -113,13 +113,21 @@ impl AgentDriverClient {
     }
 
     pub(crate) async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
+        self.state_with_digest(target, None).await
+    }
+
+    pub(crate) async fn state_with_digest(
+        &self,
+        target: ContainerTarget,
+        expected_digest: Option<&str>,
+    ) -> Result<DriverState> {
         let state = self
             .service
             .state(AgentStateRequest {
                 target: target.clone(),
             })
             .await?;
-        self.map_state(&target, None, state)
+        self.map_state(&target, expected_digest, state)
     }
 
     pub(crate) async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {

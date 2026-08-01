@@ -113,7 +113,8 @@ Completed:
   exact dedicated-VM generation, serializes same-ID launch without blocking
   distinct container VMs, retains retryable create sessions, reaps terminal
   failures and deletes once, and refuses bundles outside a protected
-  runtime-owned guest root;
+  runtime-owned guest root; owner-death restart reconciliation retains an
+  exact-generation stopped tombstone without fabricating exit evidence;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;
@@ -284,7 +285,8 @@ Completed:
   terminal failure replay, active-operation claims, and stable init/exec
   exit-status caching across host-service reopen;
 - typed, exhaustive recovery injection at all 657 registered durable commit
-  stages and all 38 before/after `RuntimeDriver` method boundaries;
+  stages and all 40 before/after `RuntimeDriver` boundaries, including startup
+  recovery;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -363,6 +365,9 @@ enforce it. No property is silently ignored.
   ambiguous isolation ownership and inconsistent advertised surfaces before
   state creation, and route every post-create operation by the durable driver
   identity rather than registration order.
+- [x] Invoke an idempotent startup recovery handshake on each record's exact
+  persisted driver, commit optional state observations before serving, and
+  fault-inject both sides of that boundary.
 - [x] Preserve the exact create/start barrier in the durable host/driver
   contract.
 - [x] Verify the barrier against the real Linux guest bootstrap executor.
@@ -411,6 +416,12 @@ the utility-VM host/agent transport portion remains open.
   exact-generation routing, retry/terminal-failure ownership, delete and
   whole-driver cleanup, and protected-root bundle containment tests. Keep it
   `probe-only` and non-registerable until the remaining exit gates pass.
+- [x] Reconcile owner-death cleanup after host restart as an exact-generation
+  stopped tombstone. Permit state, idempotent kill, empty process inventory,
+  and delete while rejecting live-only operations and never synthesizing an
+  exit status.
+- [ ] Retain exact init exit evidence across WHPX owner death and host-service
+  restart, including before/after recovery faults.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest
   runtime directory on the nominal path.
@@ -422,8 +433,9 @@ the utility-VM host/agent transport portion remains open.
   process teardown.
 
 Exit gate: a fresh Windows host test boots a utility VM, runs the fixed OCI
-bundle, validates negative isolation cases, and leaves no process, handle, or
-runtime-root leak. Only then may WHPX become `experimental`.
+bundle, validates negative isolation cases, retains exact terminal evidence
+across host restart, and leaves no process, handle, or runtime-root leak. Only
+then may WHPX become `experimental`.
 
 ### R2M — macOS HVF Utility VM
 

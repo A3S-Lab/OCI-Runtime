@@ -5,16 +5,14 @@ use std::sync::Arc;
 
 use a3s_oci_core::{DriverKind, RuntimeFeatures};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-#[cfg(target_os = "linux")]
-use a3s_oci_sdk::ContainerId;
 use a3s_oci_sdk::{
-    async_trait, CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch,
-    EventsRequest, ExecRequest, ExitStatus, KillRequest, ListRequest, OciRuntimeService,
-    OutputChunk, ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest,
-    ResizeRequest, RestoreRequest, Result, RuntimeInfo, RuntimeOperation, SignalProcessRequest,
-    StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest,
-    WaitRequest, WriteStdinRequest,
+    async_trait, CheckpointRequest, CloseStdinRequest, ContainerId, ContainerOperationRequest,
+    ContainerRecord, ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error,
+    ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus, KillRequest, ListRequest,
+    OciRuntimeService, OutputChunk, ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo, RuntimeOperation,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
+    WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 use crate::driver::{
@@ -159,7 +157,28 @@ impl HostRuntimeService {
         let store =
             DurableStateStore::open_with_fault_injector(state_root, Arc::clone(&faults)).await?;
         for record in store.list(&ListRequest::default()).await? {
-            drivers.validate_durable_record(&record)?;
+            let registered = drivers.validate_durable_record(&record)?;
+            faults.check(FaultPoint::DriverBoundary {
+                operation: DriverOperation::Recover,
+                stage: DriverBoundaryStage::BeforeCall,
+            })?;
+            let observation = registered.driver().recover(&record).await?;
+            faults.check(FaultPoint::DriverBoundary {
+                operation: DriverOperation::Recover,
+                stage: DriverBoundaryStage::AfterCall,
+            })?;
+            if let Some(observation) = observation {
+                let target =
+                    ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
+                store
+                    .observe_state_with_pause(
+                        &target,
+                        observation.status(),
+                        observation.pid(),
+                        observation.paused(),
+                    )
+                    .await?;
+            }
         }
         Ok(Self {
             lifecycle: Some(Arc::new(LifecycleHost {

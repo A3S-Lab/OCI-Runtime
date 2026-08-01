@@ -261,6 +261,7 @@ impl DirectoryCommitStage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum DriverOperation {
     Capability,
+    Recover,
     Create,
     State,
     Start,
@@ -283,8 +284,9 @@ pub(crate) enum DriverOperation {
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 19] = [
+    pub(crate) const ALL: [Self; 20] = [
         Self::Capability,
+        Self::Recover,
         Self::Create,
         Self::State,
         Self::Start,

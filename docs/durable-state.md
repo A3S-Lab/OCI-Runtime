@@ -227,8 +227,8 @@ file replacements are exercised at all seven commit stages:
 The delete and failed-create quarantine moves are each exercised after the
 rename, source-parent sync, and destination-parent sync. This expands to 657
 durable fault points. The host matrix separately injects before and after all
-19 `RuntimeDriver` methods, including capability discovery, for another 38
-boundaries.
+20 `RuntimeDriver` boundaries, including capability discovery and startup
+recovery, for another 40 boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
 `sync_all` calls. Windows reaches the same logical checkpoints after its
@@ -242,7 +242,13 @@ journals, avoid duplicate live and quarantined generations, and remove every
 `.next` transaction file. The matrices run in Linux, macOS, and Windows CI.
 Production uses a non-configurable no-op injector.
 
+Startup now audits each durable driver binding and calls only that exact
+driver's idempotent recovery hook. An optional observation is committed through
+the normal durable state transition before requests are accepted. The WHPX
+candidate uses this to record owner-death termination as stopped without
+claiming an unavailable exit result.
+
 The remaining persistence gates are startup-wide orphan scanning,
-descriptor-relative path operations, real-driver reattachment across runtime
-process restart, and fault injection inside the utility-VM host/agent transport
-below the `RuntimeDriver` boundary.
+descriptor-relative path operations, restart-stable exact exit evidence (or
+qualified reattachment where a driver promises it), and fault injection inside
+the utility-VM host/agent transport below the `RuntimeDriver` boundary.

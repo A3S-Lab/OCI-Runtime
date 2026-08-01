@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        38,
+        40,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -43,7 +43,8 @@ async fn exercise_driver_boundary(point: FaultPoint) {
         let target = ContainerTarget::exact(create.id.clone(), created.generation);
         if matches!(
             operation,
-            DriverOperation::Kill
+            DriverOperation::Recover
+                | DriverOperation::Kill
                 | DriverOperation::Delete
                 | DriverOperation::Wait
                 | DriverOperation::Exec
@@ -119,6 +120,10 @@ async fn exercise_driver_boundary(point: FaultPoint) {
         None
     };
 
+    if operation == DriverOperation::Recover {
+        driver.set_recovery_observation(DriverState::stopped());
+    }
+
     let injector = Arc::new(RecordingFaultInjector::fail_once(point));
     let faults: Arc<dyn FaultInjector> = injector.clone();
     let opened = HostRuntimeService::open_with_fault_injector(
@@ -128,8 +133,11 @@ async fn exercise_driver_boundary(point: FaultPoint) {
     )
     .await;
 
-    if operation == DriverOperation::Capability {
-        let error = opened.expect_err("capability boundary must inject");
+    if matches!(
+        operation,
+        DriverOperation::Capability | DriverOperation::Recover
+    ) {
+        let error = opened.expect_err("open-time driver boundary must inject");
         assert_injected(&error, point);
     } else {
         let service = opened.expect("non-capability boundary opens runtime");
@@ -145,7 +153,10 @@ async fn exercise_driver_boundary(point: FaultPoint) {
         HostRuntimeService::open(&state_root, Arc::clone(&driver) as Arc<dyn RuntimeDriver>)
             .await
             .unwrap_or_else(|error| panic!("reopen after {point}: {error}"));
-    if operation != DriverOperation::Capability {
+    if !matches!(
+        operation,
+        DriverOperation::Capability | DriverOperation::Recover
+    ) {
         invoke_operation(&recovered, operation, &create, target.as_ref())
             .await
             .unwrap_or_else(|error| panic!("recover {point}: {error}"));
@@ -178,7 +189,8 @@ async fn exercise_driver_boundary(point: FaultPoint) {
 const fn operation_requires_created_container(operation: DriverOperation) -> bool {
     matches!(
         operation,
-        DriverOperation::State
+        DriverOperation::Recover
+            | DriverOperation::State
             | DriverOperation::Start
             | DriverOperation::Kill
             | DriverOperation::Delete
@@ -201,7 +213,8 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
 const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -> bool {
     matches!(
         (call, operation),
-        (DriverCall::Create(_), DriverOperation::Create)
+        (DriverCall::Recover(_), DriverOperation::Recover)
+            | (DriverCall::Create(_), DriverOperation::Create)
             | (DriverCall::State(_), DriverOperation::State)
             | (DriverCall::Start(_), DriverOperation::Start)
             | (DriverCall::Kill(_), DriverOperation::Kill)
@@ -229,7 +242,7 @@ async fn invoke_operation(
     target: Option<&ContainerTarget>,
 ) -> Result<()> {
     match operation {
-        DriverOperation::Capability => Ok(()),
+        DriverOperation::Capability | DriverOperation::Recover => Ok(()),
         DriverOperation::Create => {
             service.create(create.clone()).await?;
             Ok(())

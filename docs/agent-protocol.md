@@ -119,8 +119,10 @@ write/close/resize replay, process-group and standard-I/O ownership, and
 session cleanup. The target is one leaf by default; the opt-in
 `control-workload-v1` layout uses a fixed workload child plus a derived outer
 management envelope. The native host driver gives every bounded chunk of a
-larger SDK stdin write a stable derived operation ID. Durable recovery across
-an agent restart remains a separate host/driver release gate.
+larger SDK stdin write a stable derived operation ID. The host can now ask an
+exact recorded driver to reconcile durable state during startup. This does not
+make session-local agent replay durable: restart-stable operation and exit
+evidence remains a separate release gate.
 
 `AgentClient` also implements the same `GuestAgentService` contract as the
 in-process executor. One runtime adapter therefore performs target, digest,
@@ -216,6 +218,11 @@ all retained clones, so a forgotten client handle cannot keep the guest or
 hypervisor process alive. The host wraps that owner in one shareable session:
 operations receive cloned clients, while concurrent shutdown callers observe
 the same cached cleanup report and can never reap the VM more than once.
+The WHPX driver converts a successfully reaped live session, or a durable
+generation recovered in a new owner process, into a stopped tombstone. This
+preserves safe state and delete semantics after owner death without claiming
+that the guest protocol supplied an exact init exit result. A live same-process
+recovery query additionally checks the durable configuration digest.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified

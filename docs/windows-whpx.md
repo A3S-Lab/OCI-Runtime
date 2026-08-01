@@ -264,13 +264,14 @@ The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
 does not build it.
 
-The smokes do not prove that:
+The smokes and candidate recovery tests do not prove that:
 
 - the pinned immutable A3S system image boots;
 - the rootful user/time namespace slice now exercised on native Linux and
   macOS, namespace joins, recursive or ID-mapped mounts, tmpfs, capabilities,
   seccomp, or hooks work through WHPX;
-- restart recovery or arbitrary shared-guest-kernel isolation policies work;
+- exact init exit evidence survives host-owner death, or arbitrary
+  shared-guest-kernel isolation policies work;
 - the driver is production ready.
 
 For that reason, driver readiness remains `probe-only` even after all smokes
@@ -285,6 +286,20 @@ Opening it requires the guest root to sit below a runtime-owned root whose
 Windows DACL is protected. Its reported readiness deliberately stays
 `probe-only`, so the durable host service cannot register it yet.
 
+The generic host now has an idempotent startup recovery handshake. WHPX uses
+the shim's existing owner-PID watcher as its fail-closed contract: when a new
+host process has no live in-process session for a durable generation, the old
+VM is treated as owner-death-terminated and an exact stopped tombstone is
+installed. `state`, idempotent `kill`, empty `processes`, and `delete` remain
+safe. Live-only operations fail with `FailedPrecondition`, and `wait` refuses
+to fabricate an exit code because that evidence is not yet retained. A live
+session in the same process is queried through the authenticated agent and its
+generation plus configuration digest are revalidated.
+An interrupted durable `creating` transition cannot legally become `stopped`
+directly, so recovery retains its tombstone without committing an observation;
+replaying the original create then returns a terminal error and the existing
+durable failure path quarantines that generation.
+
 ## Next Windows gate
 
 With the live driver boundary in place, the next vertical slice must:
@@ -295,7 +310,8 @@ With the live driver boundary in place, the next vertical slice must:
    and add advanced mount, capability, resource, seccomp, and hook enforcement;
 4. extend the current piped and terminal I/O gate with inherited-descriptor
    handling plus arbitrary natural exit-code coverage;
-5. reconcile stopped state after host runtime restart;
+5. retain exact init exit evidence across owner-death cleanup and host runtime
+   restart, with faults on both sides of the recovery call;
 6. expand the retained two-container gate into arbitrary shared-guest
    isolation and recovery evidence.
 

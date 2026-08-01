@@ -2,9 +2,9 @@ use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus,
-    IsolationRequest, OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord,
-    ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
+    async_trait, ContainerRecord, ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode,
+    ExitStatus, IsolationRequest, OciBundle, OperationContext, OutputChunk, ProcessIo,
+    ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -382,6 +382,19 @@ pub trait RuntimeDriver: Send + Sync {
     /// OCI lifecycle hook phases enforced by this exact driver.
     fn hooks(&self) -> &[OciHookPhase] {
         &[]
+    }
+
+    /// Reconcile process-local resources with one durable record while the
+    /// host service opens.
+    ///
+    /// Returning an observation asks the host to commit that exact state
+    /// before accepting requests. `None` leaves the durable record unchanged.
+    /// A driver must return `None` when reconciliation must resume through the
+    /// original operation, such as an interrupted OCI `creating` transition.
+    /// Implementations must make this hook idempotent because a host failure
+    /// may repeat it after the driver-side reconciliation already happened.
+    async fn recover(&self, _record: &ContainerRecord) -> Result<Option<DriverState>> {
+        Ok(None)
     }
 
     /// Prepare all OCI create-time resources and return the blocked init PID.
