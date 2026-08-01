@@ -848,7 +848,10 @@ isolation-filtered container enumeration and ordered runtime events around a
 validated driver registry. Each isolation class has exactly one driver owner;
 create selects that owner, persists its identity, and every later operation
 routes through the recorded driver even when the service reopens with a
-different registration order. Drivers in one service must expose the same
+different registration order. Before accepting requests after a restart, the
+service audits every durable container and refuses to open if its recorded
+driver is absent or no longer provides the recorded isolation; it never
+reroutes historical state. Drivers in one service must expose the same
 operation and Hook surfaces so discovery cannot overstate support for a
 selected workload. Both host queries remain driver-independent. The service
 conditionally exposes init wait, exact-target

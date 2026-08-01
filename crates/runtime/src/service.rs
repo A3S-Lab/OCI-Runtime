@@ -158,6 +158,9 @@ impl HostRuntimeService {
         let drivers = DriverRegistry::new(registrations)?;
         let store =
             DurableStateStore::open_with_fault_injector(state_root, Arc::clone(&faults)).await?;
+        for record in store.list(&ListRequest::default()).await? {
+            drivers.validate_durable_record(&record)?;
+        }
         Ok(Self {
             lifecycle: Some(Arc::new(LifecycleHost {
                 store,

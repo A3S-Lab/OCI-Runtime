@@ -2253,6 +2253,62 @@ async fn multi_driver_service_routes_create_and_reopen_by_durable_driver() {
 }
 
 #[tokio::test]
+async fn service_open_rejects_missing_or_drifted_durable_driver_bindings() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("driver-audit-state");
+    let dedicated = Arc::new(RecordingDriver::supported());
+    let service = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&dedicated) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("open initial service");
+    let mut request = create_request(&bundle_directory, "driver-audit-create");
+    request.id = container_id("driver-audit-container");
+    let record = service
+        .create(request)
+        .await
+        .expect("create durable container");
+    drop(service);
+
+    let missing: Vec<Arc<dyn RuntimeDriver>> =
+        vec![Arc::new(RecordingDriver::shared_guest_supported())];
+    let error = HostRuntimeService::open_with_drivers(&state_root, missing)
+        .await
+        .expect_err("missing recorded driver must fail service open");
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    assert!(error.message.contains(record.state.id().as_str()));
+    assert!(error.message.contains("LibkrunWhpx"));
+
+    let mut drifted = RecordingDriver::supported();
+    drifted.capability.isolation_classes = vec![IsolationClass::SharedGuestKernel];
+    let error = HostRuntimeService::open(&state_root, Arc::new(drifted))
+        .await
+        .expect_err("recorded driver isolation drift must fail service open");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains(record.state.id().as_str()));
+    assert!(error.message.contains("DedicatedVm"));
+
+    let calls_before_reopen = dedicated.calls().len();
+    let reopened = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&dedicated) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("matching recorded driver reopens service");
+    assert_eq!(dedicated.calls().len(), calls_before_reopen);
+    assert_eq!(
+        reopened
+            .list(ListRequest::default())
+            .await
+            .expect("list audited state"),
+        vec![record]
+    );
+}
+
+#[tokio::test]
 async fn multi_driver_registration_rejects_ambiguous_or_inconsistent_sets_before_state() {
     let temporary = tempfile::tempdir().expect("temporary directory");
 

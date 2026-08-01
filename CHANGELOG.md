@@ -11,6 +11,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   operation through the driver persisted in the container record, preserves
   routing across host-service reopen, and rejects duplicate isolation owners
   or inconsistent operation and hook surfaces before creating durable state.
+  Service startup now audits every durable container and fails closed if its
+  recorded driver is missing or no longer advertises the recorded isolation,
+  without dispatching to any driver or silently rerouting the workload.
 - An opt-in `control-workload-v1` cgroup-v2 layout that keeps
   `linux.resources` exact for the workload, derives bounded control-plane
   headroom, hands fixed membership descriptors to a trusted init, and keeps

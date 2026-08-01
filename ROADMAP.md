@@ -100,6 +100,8 @@ Completed:
 - independent `A3S-Lab/OCI-Runtime` repository and monorepo submodule;
 - pure OCI lifecycle transition contract;
 - versioned driver status, readiness, isolation, and evidence;
+- deterministic multi-driver selection and durable recorded-driver routing,
+  including fail-closed startup audit for missing or isolation-drifted drivers;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;

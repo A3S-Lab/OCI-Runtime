@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use a3s_oci_core::{DriverCapability, DriverKind, IsolationClass};
-use a3s_oci_sdk::{Error, ErrorCode, Result, RuntimeOperation};
+use a3s_oci_sdk::{ContainerRecord, Error, ErrorCode, Result, RuntimeOperation};
 
 use crate::{OciHookPhase, RuntimeDriver};
 
@@ -162,6 +162,39 @@ impl DriverRegistry {
                 )
                 .for_operation(operation)
             })
+    }
+
+    pub(super) fn validate_durable_record(&self, record: &ContainerRecord) -> Result<()> {
+        let registered = self
+            .entries
+            .iter()
+            .find(|entry| entry.kind() == record.driver)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "durable container {} generation {} requires recorded runtime driver {:?}, but that driver is not registered",
+                        record.state.id(), record.generation.0, record.driver
+                    ),
+                )
+                .for_operation("open-host-runtime")
+            })?;
+        if registered
+            .capability()
+            .isolation_classes
+            .contains(&record.isolation)
+        {
+            return Ok(());
+        }
+
+        Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "durable container {} generation {} records runtime driver {:?} for isolation {:?}, but the registered driver no longer provides that isolation",
+                record.state.id(), record.generation.0, record.driver, record.isolation
+            ),
+        )
+        .for_operation("open-host-runtime"))
     }
 
     pub(super) fn capabilities(&self) -> impl Iterator<Item = &DriverCapability> {
