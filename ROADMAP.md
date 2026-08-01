@@ -214,11 +214,12 @@ Completed:
   fail-closed executor planning for its absolute rootfs, annotations,
   capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
   mount normalization, and AArch64 seccomp policy;
-- public-SDK-only A3S Box lifecycle consumer at Box commit `70311368`, with
+- public-SDK-only A3S Box lifecycle consumer at Box commit `8402d8c8`, with
   isolation preflight before product reservation, distinct product/runtime
-  identities and generations, exact endpoint/driver/config binding, stable
-  SDK operation IDs, lost create/start response recovery without duplicate
-  create, stopped-only cleanup, graceful-signal escalation, and exact terminal
+  identities and generations, exact endpoint/driver/configuration/attachment
+  binding, attachment-schema negotiation before product mutation, stable SDK
+  operation IDs, lost create/start response recovery without duplicate create,
+  stopped-only cleanup, graceful-signal escalation, and exact terminal
   projection in its in-process contract suite; production routing,
   out-of-process restart, and real-host cutover gates remain open;
 - Linux executor enforcement for exact capability sets and exec bounding
@@ -257,6 +258,10 @@ Completed:
   normative OCI 1.3.0 documents;
 - rejection of unknown configuration properties;
 - immutable SHA-256 binding of the loaded `config.json`;
+- public `a3s.oci.attachments.v1` derivation and validation for rootfs, mounts,
+  networking, process I/O, secret classifications, and optional runtime
+  extensions, with fail-closed protocol-3 negotiation, durable manifest
+  retention, and exact digest replay;
 - exact `config.json` retention and fail-closed SDK wire deserialization;
 - OCI feature reporting for all eight Linux namespaces, 41 capability names,
   cgroup v2, x86_64/AArch64 seccomp actions and operators, and ID-mapped
@@ -315,8 +320,8 @@ Not yet complete:
   certification;
 - OCI configuration enforcement;
 - production-ready native Linux execution;
-- A3S Box production routing, versioned attachment contracts,
-  out-of-process restart qualification, and real-host cutover;
+- A3S Box production routing, out-of-process restart qualification, and
+  real-host cutover;
 - upstream conformance and security certification.
 
 The built-in WHPX driver remains `probe-only`, and the default host service
@@ -716,9 +721,10 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   completing every optional OCI field.
 - [ ] Route both Box isolation choices through the SDK: `microvm` requests
   `DedicatedVm`, while `sandbox` requests `SharedHostKernel`.
-- [ ] Persist only the exact OCI container ID, generation, endpoint, and driver
-  evidence needed for reconciliation; stop persisting runtime-owned process,
-  VM, socket, pipe, and cgroup identities in new records.
+- [x] Persist only the exact OCI container ID, generation, endpoint, driver,
+  isolation, configuration digest, and attachment digest needed for
+  reconciliation; stop persisting runtime-owned process, VM, socket, pipe, and
+  cgroup identities in new records.
 - [ ] Preserve commands, files, exec, PTY, logs, stats, pause/resume, stop,
   kill, recovery, and cleanup behavior.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI

@@ -34,7 +34,8 @@ guest agent, and runtime-scoped cleanup.
 It deliberately does not pull images, build images, implement Compose, own
 product networks or volumes, or become a Docker daemon. Those responsibilities
 remain in [A3S Box](https://github.com/A3S-Lab/Box), which supplies prepared
-bundles and an isolation requirement through the public `a3s-oci-sdk`.
+bundles, an isolation requirement, and a versioned attachment manifest through
+the public `a3s-oci-sdk`.
 
 > [!WARNING]
 > This repository is in active development. No built-in driver is currently
@@ -96,8 +97,8 @@ and `experimental` or `supported` readiness.
 
 | Layer | Implemented boundary |
 | --- | --- |
-| Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, I/O, stats, events, and stable errors |
-| Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable SHA-256 binding, and bounded versioned local IPC over Unix sockets or protected Windows named pipes |
+| Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, stats, events, and stable errors |
+| Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-3 local IPC over Unix sockets or protected Windows named pipes |
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, and ordered events |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, pause/resume, update/stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
@@ -125,6 +126,8 @@ transitions fail without weakening that barrier.
 Each durable container record retains:
 
 - the exact validated configuration and digest;
+- the complete `a3s.oci.attachments.v1` manifest and its digest for newly
+  created records;
 - a monotonically increasing runtime generation;
 - the runtime-selected driver and effective isolation;
 - active operation intent and terminal replay results;
