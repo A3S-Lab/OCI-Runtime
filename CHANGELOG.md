@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Public-SDK-only A3S Box consumer evidence at Box commit `8ea5f366` for
+  exact-generation captured and streaming exec, replay-safe keyed process and
+  stdin identities, cursor-checked stdout/stderr, signal/wait, PTY/resize,
+  exact terminal status, raw-log separation, and detached timeout cleanup.
+  Missing capabilities, stale generations, alternate rootfs, invalid IDs,
+  empty commands, and same-key changed content fail before a second runtime
+  process can start. Out-of-process restart and real-driver cutover remain
+  explicit release gates.
 - Public `a3s.oci.attachments.v1` create/restore contracts for rootfs, mounts,
   networking, process I/O, secret classifications, and optional namespaced
   runtime extensions. SDK protocol 3 rejects older peers instead of dropping
