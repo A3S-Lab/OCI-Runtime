@@ -229,12 +229,17 @@ Completed:
   exact mutation retries, pre-start non-execution, running and stopped
   observation, marker verification, post-delete NotFound, and nominal leak
   checks;
+- direct qualification-only WHPX `RuntimeDriver` evidence through the exact
+  protected per-generation share, including create/start/kill/wait replay,
+  authenticated shutdown-report publication, stopped-only delete, and
+  process/share/recovery cleanup;
 - focused real-host WHPX transport regression evidence across one serial and
   two parallel lifecycles, network namespace, storage, volume-init, nine
   negative, and four owner-termination cases, including a request above the
   4 KiB stream boundary;
 - a runtime-owned Windows libkrun bundle pinned to the 3 KiB host-to-guest
-  stream segmentation fix, with deterministic archive and payload checksums;
+  stream segmentation and writable virtio-fs `fsync` fixes, with deterministic
+  archive and payload checksums;
 - async, `Send + Sync`, transport-independent Rust SDK contract;
 - complete official OCI runtime model pass-through in the SDK;
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
@@ -388,8 +393,8 @@ the utility-VM host/agent transport portion remains open.
 - [x] Create and delete a real WHPX partition object.
 - [x] Pin the `a3s-libkrun-sys 3.1.0` FFI ABI and stage a runtime-owned,
   checksum-verified Windows bundle for the isolated shim, with firmware
-  provenance from `A3S-Lab/Box@46e17a8` and WHPX stream transport from
-  `A3S-Lab/libkrun@9480ee3`.
+  provenance from `A3S-Lab/Box@93fc281` and segmented WHPX stream plus
+  writable virtio-fs flush fixes from `A3S-Lab/libkrun@dc5519f`.
 - [x] Create, configure, and release a real context using the Windows WHPX
   libkrun build.
 - [x] Configure a plain-vsock device and the fixed guest control port through
@@ -412,7 +417,10 @@ the utility-VM host/agent transport portion remains open.
     before VM launch.
   - [x] Move one-time token and recovery-report handoff into the exact share and
     require versioned shim evidence that the device was configured.
-  - [ ] Run the fixed lifecycle and owner-death matrix through that share on a
+  - [x] Run the qualification-only `RuntimeDriver` nominal lifecycle through
+    that share on a real WHPX host and retain its versioned lifecycle, replay,
+    authenticated recovery-publication, and cleanup evidence.
+  - [ ] Run the owner-death and service-restart matrix through that share on a
     fresh WHPX-enabled Windows host and retain its machine-readable evidence.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the named-pipe/vsock bridge.

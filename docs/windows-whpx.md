@@ -15,8 +15,8 @@ The runtime:
 4. optionally creates and deletes a WHPX partition object as a smoke test;
 5. links the `a3s-libkrun-sys 3.1.0` FFI ABI only into an isolated shim and
    stages a runtime-owned, checksum-verified native bundle with firmware
-   provenance from `A3S-Lab/Box@46e17a8` and WHPX stream transport from
-   `A3S-Lab/libkrun@9480ee3`;
+   provenance from `A3S-Lab/Box@93fc281` and segmented WHPX stream plus
+   writable virtio-fs flush fixes from `A3S-Lab/libkrun@dc5519f`;
 6. creates, configures for one vCPU and 128 MiB, replaces implicit TSI with a
    zero-feature plain-vsock device, maps guest port 4093 to a validated bare
    Windows pipe name, and releases one real libkrun context without entering a
@@ -53,7 +53,11 @@ The runtime:
 15. gives each candidate-driver VM only its exact protected
     `shares/<container>/<generation>` directory through a second virtio-fs
     device, mounts the fixed `a3s-oci-runtime` tag before guest token access,
-    and leaves the system root disjoint from writable bundle and handoff data.
+    and leaves the system root disjoint from writable bundle and handoff data;
+16. exposes a versioned, qualification-only direct `RuntimeDriver` gate that
+    verifies create/start/kill/wait replay, authenticated shutdown-report
+    publication, stopped-only delete, and complete nominal cleanup while
+    preserving `probe-only` readiness.
 
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
@@ -165,6 +169,20 @@ A successful fixed OCI VM smoke additionally proves that:
 - the marker is removed and VM shutdown leaves no new agent runtime directory
   or A3S process.
 
+A successful direct WHPX `RuntimeDriver` smoke additionally proves that:
+
+- the formal driver accepts only a bundle strictly below the exact protected
+  `shares/<container>/<generation>` directory;
+- the candidate remains non-registerable and `probe-only` throughout the run;
+- create, state, create replay, start, start replay, bounded running wait,
+  kill, kill replay, exact wait, repeated wait, stopped state, and
+  stopped-only delete all cross the driver boundary;
+- the guest durably publishes its authenticated shutdown report through the
+  writable virtio-fs share and the shim verifies the v2 share contract;
+- delete removes the driver attachment, VM session, transient token/report
+  directories, normalized recovery artifacts, workload marker, and host
+  processes.
+
 ## Hardware soak gate
 
 Run the complete gate from an x86-64 Windows host with WHPX enabled:
@@ -172,6 +190,14 @@ Run the complete gate from an x86-64 Windows host with WHPX enabled:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\windows-whpx-soak.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+```
+
+Run the nominal formal-driver gate separately:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-driver-smoke.ps1 `
   -RootfsArchive C:\path\to\alpine-minirootfs.tar
 ```
 
@@ -195,6 +221,22 @@ and bounded host working-set and log growth. The evidence directory contains
 `host.json`, start/final process inventories, `capability-results.tsv`,
 `operations.tsv`, `resource-samples.tsv`, every command report and console,
 `summary.json`, and a final `verify.out`.
+
+The August 1, 2026 direct-driver qualification ran from clean commit
+`7bb09dff81b5445e275c31faff6592ad4c32a45f` and emitted
+`a3s.oci.whpx-driver-smoke-run.v1`. From 12:50:37Z through 12:51:08Z it built
+the pinned artifacts and passed every nominal lifecycle, replay, exact-share,
+authenticated recovery-publication, and cleanup field. It used rootfs SHA-256
+`4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`,
+agent SHA-256
+`b97ba3f0989432a13873f825e37d66cbb4244bbe7c126d537b0518190ff4091d`,
+shim SHA-256
+`e41c337f8454d3276f8062a92458e7eb8e264fa90e10cc452c96d5c5f4728eb3`,
+and `krun.dll` SHA-256
+`f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e`.
+The retained report and summary SHA-256 values are respectively
+`b9442b1d8da3d091f5a1b4099697fdf50dda932fe3bcb31a95c100fd361aec6e`
+and `64d898fcad1f1ad597e8ad98a19233dec260a3d7831de39178ef24562766047f`.
 
 The focused August 1, 2026 transport qualification used the Alpine minirootfs
 SHA-256
@@ -325,16 +367,17 @@ retryably on overrun instead of racing ahead. The report is retained across
 both sides of the recovery fault boundary and removed only by exact-generation
 delete. If neither authenticated evidence nor a pending handoff exists, the
 stopped tombstone remains usable for cleanup while `wait` still fails instead
-of inventing a result. This path has unit and fault-matrix coverage; fresh-host
-WHPX qualification remains pending.
+of inventing a result. The nominal direct-driver path now has real WHPX
+evidence; the owner-death and service-restart path has unit and fault-matrix
+coverage but still needs its fresh-host WHPX qualification.
 
 ## Next Windows gate
 
 With the live driver boundary in place, the next vertical slice must:
 
 1. boot a version-pinned A3S system image;
-2. qualify the implemented protected per-generation runtime share on a fresh
-   WHPX host, including owner-death and service restart;
+2. complete fresh-host owner-death and service-restart qualification through
+   the implemented protected per-generation runtime share;
 3. qualify the shared rootful user/time and existing-namespace slices on WHPX
    and add advanced mount, capability, resource, seccomp, and hook enforcement;
 4. extend the current piped and terminal I/O gate with inherited-descriptor

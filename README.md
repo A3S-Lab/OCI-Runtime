@@ -663,6 +663,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -RootfsArchive C:\path\to\alpine-minirootfs.tar
 ```
 
+The qualification-only formal driver has a separate nominal gate:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-driver-smoke.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+```
+
 The default gate runs 25 serial lifecycles, three two-VM parallel waves,
 three two-container lifecycles inside one VM, cleanup faults after create,
 start, and kill, private and inherited network profiles, read-write and
@@ -674,16 +682,23 @@ seconds. `summary.json`, `verify.out`, inventories, capability results,
 operation rows, resource samples, and per-case JSON/logs form the retained
 evidence contract.
 
-The packaged Windows runtime uses `A3S-Lab/libkrun@9480ee3`, whose 3 KiB
-host-to-guest read segmentation prevents a request larger than one guest
-receive descriptor from stalling. A focused August 1, 2026 transport
-qualification completed one serial lifecycle, two parallel lifecycles, five
-workload cases, nine fail-closed negatives, and four owner-termination cases
-in 63.970 seconds. Its storage request was larger than 4 KiB, every case left
-zero A3S host processes and guest runtime directories, and it pinned
-`krun.dll` SHA-256
+The focused August 1, 2026 transport qualification used
+`A3S-Lab/libkrun@9480ee3`, whose 3 KiB host-to-guest read segmentation prevents
+a request larger than one guest receive descriptor from stalling. It completed
+one serial lifecycle, two parallel lifecycles, five workload cases, nine
+fail-closed negatives, and four owner-termination cases in 63.970 seconds. Its
+storage request was larger than 4 KiB, every case left zero A3S host processes
+and guest runtime directories, and it pinned historical `krun.dll` SHA-256
 `ab8ceb013795fa8b43a3793f9579179c0afb9608430af1c21f6e9145cf27d7d9`.
-The current default gate above remains the broader release profile.
+
+The current runtime adds writable virtio-fs flush handling from
+`A3S-Lab/libkrun@dc5519f`; its `krun.dll` SHA-256 is
+`f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e`.
+The direct-driver gate passed from clean commit `7bb09df` with exact protected
+share containment, lifecycle and mutation replay, authenticated shutdown-report
+publication, exact exit replay, stopped-only delete, and no retained driver
+attachment, VM session, transient share entry, recovery artifact, marker, or
+host process. The default soak above remains the broader release profile.
 
 The Windows fixture intentionally omits user and time namespaces and the swap
 controller, which the current WHPX utility kernel has not qualified. Those
@@ -876,15 +891,16 @@ enforcement remain explicitly unsupported and are not advertised early.
 Native Linux and utility-VM drivers now share one agent-to-driver mapping for
 all eighteen operations. The Windows candidate additionally owns one
 authenticated VM per exact dedicated-VM generation, but remains `probe-only`
-and cannot be registered with the durable host service until real-host restart
-recovery, runtime-share, and immutable-system-root gates pass. Its fixed guest
-system root is disjoint from a protected writable share exported only for the
-exact `(container ID, generation)` and mounted at `/run/a3s-oci-runtime` before
-the agent reads its token. Bundles, one-time token files, and recovery handoff
-must remain inside that share. If the host owner dies, the guest records exact
-init termination, the surviving shim authenticates and normalizes it into
-protected host storage, and a new host validates the target generation plus
-durable configuration digest before committing `stopped` and caching `wait`.
+and cannot be registered with the durable host service until real-host
+owner-death/service-restart recovery and immutable-system-root gates pass. Its
+fixed guest system root is disjoint from a protected writable share exported
+only for the exact `(container ID, generation)` and mounted at
+`/run/a3s-oci-runtime` before the agent reads its token. Bundles, one-time token
+files, and recovery handoff must remain inside that share. If the host owner
+dies, the guest records exact init termination, the surviving shim
+authenticates and normalizes it into protected host storage, and a new host
+validates the target generation plus durable configuration digest before
+committing `stopped` and caching `wait`.
 If that evidence is absent or invalid, recovery keeps the safe stopped
 tombstone but still refuses to invent an exit result.
 
@@ -909,7 +925,7 @@ boundary.
 | Linux x86_64/aarch64 | Native Linux executor | Kernel pidfd signaling probe; real rootful lifecycle through both the in-process SDK and the private same-UID Unix SDK service, with A3S Box `0 -> 100000:200000` mapping, exec/PTY/init-log FD 3/4/5 handoff, signal-driven owner cleanup, hooks, cgroup controls, I/O, PTY, two-container isolation, private/host/shared network identity, shared/read-only bind volumes, private tmpfs, init/Hook success and failure profiles, namespace joins, mount enforcement, fault cleanup, and a retained 25-wave × 4-container soak; plus a real non-root helper-backed lifecycle with effective-ID root mappings, subordinate UID/GID ownership, `setgroups=deny`, exec/signal/wait, durable events, and cleanup; `/dev/kvm` absent and present-but-unusable | Default inventory `probe-only`; explicitly opened development instance `experimental` |
 | Linux x86_64/aarch64 | libkrun + KVM utility VM | Device access, ioctl result, and KVM API version | `probe-only`; VM driver not implemented |
 | macOS arm64 | libkrun + HVF utility VM | Direct HVF VM create/destroy, checksum-pinned context lifecycle, authenticated protocol-v8 arm64 guest agent, pidfd-backed fixed lifecycle with piped and PTY I/O, live resource update, normalized stats, pause/resume/process inventory, two-container OCI lifecycles, type-checked existing-namespace joins, rootfs, recursive-mount, and ID-mapped filesystem enforcement, exact repeated exit status and nonblocking wait evidence, no-delete cleanup after create, start, and kill, and a versioned 25-wave fresh-VM soak gate with endpoint/process/descriptor/runtime cleanup | `probe-only`; immutable system image, exhaustive recovery, and hardware qualification pending |
-| Windows x86_64 | libkrun + WHPX utility VM | Partition and context probes; authenticated protocol-v8 agent; fixed lifecycle with process/PTY I/O, update/stats and pause/resume; repeated serial and parallel VMs; two containers in one VM; private/inherited network namespaces; RW/RO bind volumes; init success/failure; typed negatives; lifecycle and owner-death cleanup with inventory/resource evidence; a non-registerable one-VM-per-container driver candidate with exact-generation protected virtio-fs shares, authenticated exit reports, durable wait replay, stopped-tombstone restart reconciliation, and cleanup/fault tests | `probe-only`; per-generation share enforcement and safe owner-death recovery are implemented, while their fresh-host qualification, user/time namespaces, advanced mounts, and immutable system-image qualification remain pending |
+| Windows x86_64 | libkrun + WHPX utility VM | Partition and context probes; authenticated protocol-v8 agent; fixed lifecycle with process/PTY I/O, update/stats and pause/resume; repeated serial and parallel VMs; two containers in one VM; private/inherited network namespaces; RW/RO bind volumes; init success/failure; typed negatives; lifecycle and owner-death cleanup with inventory/resource evidence; a non-registerable one-VM-per-container driver candidate with exact-generation protected virtio-fs shares, a real direct-driver nominal lifecycle, authenticated exit reports, durable wait replay, stopped-tombstone restart reconciliation, and cleanup/fault tests | `probe-only`; nominal per-generation share use is qualified on WHPX, while fresh-host owner-death/service-restart, user/time namespaces, advanced mounts, and immutable system-image qualification remain pending |
 
 Linux installation, feature inspection, and the native SDK path must work when
 KVM is missing or inaccessible. KVM is an optional VM backend, not a Linux
