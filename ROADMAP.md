@@ -30,6 +30,69 @@ The SDK is also a release blocker. A3S Box must be able to perform the complete
 supported lifecycle without constructing CLI commands or importing platform
 driver internals.
 
+## Repository Boundary
+
+A3S OCI Runtime is the sole low-level execution engine. It owns exact OCI
+validation, actual container state, durable operation replay, process control,
+platform drivers, utility VMs, the guest agent, and runtime-scoped cleanup.
+
+A3S Box owns product configuration and desired state, image distribution and
+builds, named volumes and product snapshots, network/IPAM/DNS policy, Compose,
+health and restart policy, log retention, and secret authorization. Box passes
+prepared, immutable execution inputs through `a3s-oci-sdk`; OCI Runtime does
+not pull images, build images, implement Compose, or become a Docker daemon.
+
+The dependency direction is strict:
+
+```text
+A3S Box or containerd shim
+          |
+          | a3s-oci-sdk over bounded local IPC
+          v
+OCI Runtime host service
+          |
+          +-- native Linux driver
+          `-- utility-VM drivers (KVM / HVF / WHPX)
+                          |
+                          `-- authenticated Linux guest agent
+```
+
+Boundary rules:
+
+1. OCI Runtime must not depend on Box product crates or durable state types.
+   Box-specific fixtures may test compatibility but cannot define runtime
+   semantics.
+2. Box requests `DedicatedVm`, `SharedGuestKernel`, or `SharedHostKernel`.
+   Runtime selects an enforcing driver and never silently weakens isolation.
+3. Runtime owns actual OCI state, process/VM identity, generation, exit status,
+   operation journals, recovery, and quarantine. Callers own desired state and
+   retain only an exact runtime reference.
+4. Image, storage, network, secret, and TEE policy stay outside the OCI core.
+   Versioned extensions may attach already-authorized resources or expose
+   runtime mechanisms without moving product policy into this repository.
+5. The containerd runtime-v2 shim belongs here and calls the SDK directly. It
+   must not shell out to A3S Box or duplicate lifecycle state.
+
+## Delivery Milestones
+
+The detailed workstreams below are not a strict waterfall. Integration begins
+with an early vertical slice so contract problems are found before every OCI
+field and platform feature is implemented.
+
+| Milestone | Runtime delivery | Cross-repository exit gate |
+| --- | --- | --- |
+| M0 - Boundary freeze | Generic public contracts, attachment schemas, driver/isolation vocabulary, and state ownership | Box depends only on `a3s-oci-sdk`; runtime behavior does not depend on Box types |
+| M1 - Host service | Multi-driver registry, secure Unix/Windows service endpoints, durable routing, state migration, restart reconciliation, and reattachment/cleanup | A service restart at every lifecycle boundary preserves or safely terminates the exact workload |
+| M2 - Windows experimental | Launch-ready WHPX driver, protected runtime storage, pinned kernel, immutable system root, authenticated protocol-v8 agent, and leak gates | A fresh Windows host passes complete SDK lifecycle, I/O, resource, recovery, and multi-container suites |
+| M3 - Box cutover | Stable SDK surface and Linux/KVM/HVF drivers needed by the unified Box adapter | Box routes `microvm` and `sandbox` through the SDK with no silent fallback |
+| M4 - containerd | Runtime-v2 shim using OCI bundles and SDK operations directly | containerd task, restart, I/O, and cleanup suites pass without invoking the Box CLI |
+| M5 - parity extensions | Storage/network attachments, reusable guest sessions, checkpoint/restore, and TEE mechanisms | Box storage, networking, warm-pool, snapshot, and security gates pass through public extensions |
+| M6 - supported release | OCI 1.3 evidence, adversarial security, upgrade compatibility, signed packages, and long-running real-host qualification | Every advertised driver and operation has evidence from the exact release artifacts |
+
+Conformance is continuous across M1-M6. R5 is the final audit, not the first
+time normative requirements are enforced. Box migration starts after the M1
+vertical slice and does not wait for every optional OCI feature.
+
 ## Current Baseline
 
 Completed:
@@ -229,7 +292,7 @@ advertises only `features`. A host explicitly opened around a launch-ready
 host-owned durable `list` and `events`, plus only the optional operations that
 driver implements.
 
-## Delivery Sequence
+## Detailed Workstreams
 
 ### R0 — Contract And Spec Ingestion
 
@@ -570,6 +633,14 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
 
 - [x] Add the pinned `a3s-oci-sdk` dependency to A3S Box.
 - [x] Implement the Box adapter using SDK types only.
+- [ ] Add an early cross-platform vertical slice for create, state, start,
+  wait, kill, delete, exact exit status, and runtime-service restart before
+  completing every optional OCI field.
+- [ ] Route both Box isolation choices through the SDK: `microvm` requests
+  `DedicatedVm`, while `sandbox` requests `SharedHostKernel`.
+- [ ] Persist only the exact OCI container ID, generation, endpoint, and driver
+  evidence needed for reconciliation; stop persisting runtime-owned process,
+  VM, socket, pipe, and cgroup identities in new records.
 - [ ] Preserve commands, files, exec, PTY, logs, stats, pause/resume, stop,
   kill, recovery, and cleanup behavior.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
@@ -579,6 +650,8 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   workload OOM pressure, and zero leaked processes or cgroups.
 - [x] Remove external-runtime discovery, direct invocation, configuration, and
   fallback paths.
+- [ ] Remove Box's direct libkrun, VMM, guest-init, and containerd-shim paths
+  only after their replacement gates pass through the packaged OCI Runtime.
 
 ## Platform Promotion
 
