@@ -12,7 +12,7 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     let registry = FaultPoint::driver_registry();
     assert_eq!(
         registry.len(),
-        40,
+        44,
         "update the host/driver fault contract when the registry changes"
     );
     for point in registry {
@@ -220,6 +220,8 @@ const fn operation_requires_created_container(operation: DriverOperation) -> boo
             | DriverOperation::WriteStdin
             | DriverOperation::CloseStdin
             | DriverOperation::Resize
+            | DriverOperation::File
+            | DriverOperation::Filesystem
     )
 }
 
@@ -245,6 +247,8 @@ const fn call_matches_operation(call: &DriverCall, operation: DriverOperation) -
             | (DriverCall::WriteStdin(_), DriverOperation::WriteStdin)
             | (DriverCall::CloseStdin(_), DriverOperation::CloseStdin)
             | (DriverCall::Resize(_), DriverOperation::Resize)
+            | (DriverCall::File(_), DriverOperation::File)
+            | (DriverCall::Filesystem(_), DriverOperation::Filesystem)
     )
 }
 
@@ -434,6 +438,33 @@ async fn invoke_operation(
                     },
                 })
                 .await
+        }
+        DriverOperation::File => {
+            service
+                .file(FileRequest {
+                    target: target.expect("file target").clone(),
+                    op: FileOp::Download,
+                    path: "/fixture".to_string(),
+                    data: None,
+                    user: None,
+                    context: None,
+                })
+                .await?;
+            Ok(())
+        }
+        DriverOperation::Filesystem => {
+            service
+                .filesystem(FilesystemRequest {
+                    target: target.expect("filesystem target").clone(),
+                    op: FilesystemOp::Remove,
+                    path: "/fixture".to_string(),
+                    destination: None,
+                    depth: 0,
+                    user: None,
+                    context: Some(OperationContext::new(operation_id("boundary-filesystem"))),
+                })
+                .await?;
+            Ok(())
         }
     }
 }

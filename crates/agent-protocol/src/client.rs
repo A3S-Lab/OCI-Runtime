@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
+    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -234,6 +235,28 @@ where
         }
     }
 
+    /// Upload or download one bounded file in an exact container root.
+    pub async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        match self.call(AgentRequest::File(request)).await? {
+            AgentResponse::File(response) => Ok(response),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a file request",
+            )),
+        }
+    }
+
+    /// Inspect or mutate one exact container filesystem.
+    pub async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        match self.call(AgentRequest::Filesystem(request)).await? {
+            AgentResponse::Filesystem(response) => Ok(response),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for a filesystem request",
+            )),
+        }
+    }
+
     /// Release a prepared init process.
     pub async fn start(&self, request: AgentStartRequest) -> Result<AgentState> {
         expect_state(self.call(AgentRequest::Start(request)).await?, "start")
@@ -430,6 +453,7 @@ where
         }
         match response.outcome {
             ResponseOutcome::Succeeded { response } => {
+                let response = *response;
                 if let Err(error) = validate_response_for_request(&request, &response) {
                     connection.poisoned = true;
                     return Err(error);
@@ -445,7 +469,7 @@ where
 ///
 /// Runtime drivers can therefore share one executor adapter between an
 /// in-process Linux executor and a utility-VM protocol connection without
-/// duplicating the eighteen-operation mapping contract.
+/// duplicating the twenty-operation mapping contract.
 #[async_trait]
 impl<T> GuestAgentService for AgentClient<T>
 where
@@ -526,6 +550,14 @@ where
     async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
         AgentClient::resize(self, request).await
     }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        AgentClient::file(self, request).await
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        AgentClient::filesystem(self, request).await
+    }
 }
 
 fn duration_millis(duration: Duration) -> u64 {
@@ -552,6 +584,8 @@ fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> R
         AgentRequest::WriteStdin(_) => AgentOperation::WriteStdin,
         AgentRequest::CloseStdin(_) => AgentOperation::CloseStdin,
         AgentRequest::Resize(_) => AgentOperation::Resize,
+        AgentRequest::File(_) => AgentOperation::File,
+        AgentRequest::Filesystem(_) => AgentOperation::Filesystem,
     };
     if operations.contains(&required) {
         Ok(())
@@ -725,6 +759,12 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
         (AgentRequest::Resize(request), AgentResponse::TerminalResized(target)) => {
             validate_process_target(&request.process, target)
         }
+        (AgentRequest::File(request), AgentResponse::File(response)) => {
+            validate_container_target(&request.target, &response.target)
+        }
+        (AgentRequest::Filesystem(request), AgentResponse::Filesystem(response)) => {
+            validate_container_target(&request.target, &response.target)
+        }
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
             format!(
@@ -748,6 +788,20 @@ fn validate_state_target(
                 "guest state target {:?} does not match request target {expected:?}",
                 state.target()
             ),
+        ))
+    }
+}
+
+fn validate_container_target(
+    expected: &a3s_oci_sdk::ContainerTarget,
+    actual: &a3s_oci_sdk::ContainerTarget,
+) -> Result<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(protocol_error(
+            ErrorCode::Conflict,
+            format!("guest container target {actual:?} does not match request target {expected:?}"),
         ))
     }
 }
@@ -810,6 +864,8 @@ const fn request_name(request: &AgentRequest) -> &'static str {
         AgentRequest::WriteStdin(_) => "write-stdin",
         AgentRequest::CloseStdin(_) => "close-stdin",
         AgentRequest::Resize(_) => "resize",
+        AgentRequest::File(_) => "file",
+        AgentRequest::Filesystem(_) => "filesystem",
     }
 }
 

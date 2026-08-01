@@ -8,11 +8,12 @@ use tokio::sync::Mutex;
 
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, CreateRequest, DeleteRequest, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessRecord,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ContainerStats, CreateRequest, DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest,
+    ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
+    KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessRecord, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo, SignalProcessRequest,
+    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest,
 };
 
 use super::wire::{
@@ -112,6 +113,7 @@ impl RuntimeTransportClient {
 
     async fn call(&self, request: WireRequest) -> Result<WireResponse> {
         request.validate()?;
+        let minimum_protocol = request.minimum_protocol();
         let request_id = self
             .inner
             .next_request_id
@@ -123,6 +125,16 @@ impl RuntimeTransportClient {
         let mut connection_guard = self.inner.connection.lock().await;
         self.reconnect_locked(&mut connection_guard).await?;
         let protocol = self.inner.protocol.load(Ordering::Acquire);
+        if protocol < minimum_protocol {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "SDK operation requires protocol {minimum_protocol}, but the local service \
+                     negotiated protocol {protocol}"
+                ),
+            )
+            .for_operation("sdk-transport"));
+        }
         let connection = connection_guard
             .as_mut()
             .expect("reconnect_locked publishes a negotiated connection");
@@ -350,6 +362,14 @@ impl OciRuntimeService for RuntimeTransportClient {
 
     async fn wait_process(&self, request: WaitProcessRequest) -> Result<ExitStatus> {
         typed_call!(self, WireRequest::WaitProcess(request), WaitProcess)
+    }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        typed_call!(self, WireRequest::File(request), File)
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        typed_call!(self, WireRequest::Filesystem(request), Filesystem)
     }
 
     async fn checkpoint(&self, request: CheckpointRequest) -> Result<ContainerRecord> {

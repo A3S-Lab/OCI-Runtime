@@ -12,8 +12,9 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, OperationContext, OperationId,
-    OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, OperationContext, OperationId, OutputChunk,
+    ProcessRecord, Result, RuntimeOperation,
 };
 use sha2::{Digest, Sha256};
 
@@ -27,7 +28,7 @@ use crate::driver::{
     OciHookPhase,
 };
 
-pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 18] = [
+pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 20] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -46,6 +47,8 @@ pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 18] = [
     RuntimeOperation::WriteStdin,
     RuntimeOperation::CloseStdin,
     RuntimeOperation::Resize,
+    RuntimeOperation::File,
+    RuntimeOperation::Filesystem,
 ];
 
 pub(crate) const AGENT_DRIVER_HOOKS: [OciHookPhase; 6] = OciHookPhase::ALL;
@@ -359,6 +362,17 @@ impl AgentDriverClient {
                 size: request.size,
             })
             .await
+    }
+
+    pub(crate) async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.service.file(request).await
+    }
+
+    pub(crate) async fn filesystem(
+        &self,
+        request: FilesystemRequest,
+    ) -> Result<FilesystemResponse> {
+        self.service.filesystem(request).await
     }
 
     pub(crate) fn map_state(

@@ -438,10 +438,32 @@ async fn protocol_v8_requires_durable_context_for_process_io_mutations() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let agent = Arc::new(TestAgent::default());
     let server = spawn_server_with_agent(guest, token(29), Arc::clone(&agent));
-    let client = AgentClient::connect(host, token(29))
+    let client = AgentClient::connect_for_test(host, token(29), 8, 8)
         .await
         .expect("connect protocol-v8 client");
     assert_eq!(client.hello().selected_version(), 8);
+    assert!(!client
+        .hello()
+        .capabilities()
+        .operations()
+        .contains(&crate::AgentOperation::File));
+    assert!(!client
+        .hello()
+        .capabilities()
+        .operations()
+        .contains(&crate::AgentOperation::Filesystem));
+    let file_error = client
+        .file(FileRequest {
+            target: ContainerTarget::exact(container_id("legacy-file"), Generation(1)),
+            op: FileOp::Download,
+            path: "/file".to_string(),
+            data: None,
+            user: None,
+            context: None,
+        })
+        .await
+        .expect_err("protocol-v8 client must reject protocol-v9 file operations");
+    assert_eq!(file_error.code, ErrorCode::Unsupported);
 
     let mut create = create_request_for("durable-io-container", 11, "durable-io-create");
     create.io.stdin = IoMode::Pipe;
@@ -790,7 +812,7 @@ async fn mismatched_exec_process_response_permanently_poisons_the_connection() {
                 version: 3,
                 request_id: request.request_id,
                 outcome: ResponseOutcome::Succeeded {
-                    response: AgentResponse::Process(wrong),
+                    response: Box::new(AgentResponse::Process(wrong)),
                 },
             },
         )

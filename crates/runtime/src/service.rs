@@ -8,12 +8,15 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, CheckpointRequest, CloseStdinRequest, ContainerId,
     ContainerOperationRequest, ContainerRecord, ContainerStats, ContainerTarget, CreateRequest,
-    DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus,
-    KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessId, ProcessRecord,
-    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
-    RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus, FileOp,
+    FileRequest, FileResponse, FilesystemOp, FilesystemRequest, FilesystemResponse, KillRequest,
+    ListRequest, OciRuntimeService, OutputChunk, ProcessId, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo,
+    RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
     UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    MAX_FILE_TRANSFER_BYTES,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
@@ -1047,6 +1050,57 @@ impl OciRuntimeService for HostRuntimeService {
         lifecycle.complete_process_wait(&target, status).await
     }
 
+    async fn file(&self, mut request: FileRequest) -> Result<FileResponse> {
+        let lifecycle = self.lifecycle("file")?;
+        lifecycle.ensure_operation(RuntimeOperation::File, "file")?;
+        request.validate()?;
+        let record = lifecycle.store.state(&request.target).await?;
+        ensure_live_filesystem(&record, "file")?;
+        let registered = lifecycle.driver(record.driver, "file")?;
+        registered.ensure_operation(RuntimeOperation::File, "file")?;
+        request.target = ContainerTarget::exact(request.target.id, record.generation);
+        let expected_target = request.target.clone();
+        let operation = request.op;
+        let expected_upload_size = request
+            .data
+            .as_deref()
+            .map(|data| STANDARD.decode(data))
+            .transpose()
+            .map_err(|error| {
+                Error::new(
+                    ErrorCode::InvalidArgument,
+                    format!("file upload data is not valid base64: {error}"),
+                )
+                .for_operation("file")
+            })?
+            .map(|data| data.len() as u64);
+        lifecycle.driver_boundary(DriverOperation::File, DriverBoundaryStage::BeforeCall)?;
+        let result = registered.driver().file(request).await;
+        lifecycle.driver_boundary(DriverOperation::File, DriverBoundaryStage::AfterCall)?;
+        let response = result?;
+        validate_file_response(&response, &expected_target, operation, expected_upload_size)?;
+        Ok(response)
+    }
+
+    async fn filesystem(&self, mut request: FilesystemRequest) -> Result<FilesystemResponse> {
+        let lifecycle = self.lifecycle("filesystem")?;
+        lifecycle.ensure_operation(RuntimeOperation::Filesystem, "filesystem")?;
+        request.validate()?;
+        let record = lifecycle.store.state(&request.target).await?;
+        ensure_live_filesystem(&record, "filesystem")?;
+        let registered = lifecycle.driver(record.driver, "filesystem")?;
+        registered.ensure_operation(RuntimeOperation::Filesystem, "filesystem")?;
+        request.target = ContainerTarget::exact(request.target.id, record.generation);
+        let expected_target = request.target.clone();
+        let operation = request.op;
+        lifecycle.driver_boundary(DriverOperation::Filesystem, DriverBoundaryStage::BeforeCall)?;
+        let result = registered.driver().filesystem(request).await;
+        lifecycle.driver_boundary(DriverOperation::Filesystem, DriverBoundaryStage::AfterCall)?;
+        let response = result?;
+        validate_filesystem_response(&response, &expected_target, operation)?;
+        Ok(response)
+    }
+
     async fn checkpoint(&self, _request: CheckpointRequest) -> Result<ContainerRecord> {
         Err(Error::unsupported("checkpoint"))
     }
@@ -1054,6 +1108,138 @@ impl OciRuntimeService for HostRuntimeService {
     async fn restore(&self, _request: RestoreRequest) -> Result<ContainerRecord> {
         Err(Error::unsupported("restore"))
     }
+}
+
+fn ensure_live_filesystem(record: &ContainerRecord, operation: &'static str) -> Result<()> {
+    if matches!(
+        record.state.status(),
+        ContainerState::Created | ContainerState::Running
+    ) {
+        Ok(())
+    } else {
+        Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "container {} generation {:?} cannot serve {operation} while {}",
+                record.state.id(),
+                record.generation,
+                record.state.status()
+            ),
+        )
+        .for_operation(operation))
+    }
+}
+
+fn validate_file_response(
+    response: &FileResponse,
+    expected_target: &ContainerTarget,
+    operation: FileOp,
+    expected_upload_size: Option<u64>,
+) -> Result<()> {
+    if &response.target != expected_target {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "runtime driver returned a file response for a different container generation",
+        )
+        .for_operation("file"));
+    }
+    if response.size > MAX_FILE_TRANSFER_BYTES as u64 {
+        return Err(Error::new(
+            ErrorCode::ResourceExhausted,
+            format!(
+                "runtime driver returned a {}-byte file; maximum is {MAX_FILE_TRANSFER_BYTES}",
+                response.size
+            ),
+        )
+        .for_operation("file"));
+    }
+    match operation {
+        FileOp::Upload => {
+            if response.data.is_some() || Some(response.size) != expected_upload_size {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    "runtime driver returned an invalid upload acknowledgement",
+                )
+                .for_operation("file"));
+            }
+        }
+        FileOp::Download => {
+            let data = response.data.as_deref().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::Conflict,
+                    "runtime driver omitted the downloaded file payload",
+                )
+                .for_operation("file")
+            })?;
+            let decoded = STANDARD.decode(data).map_err(|error| {
+                Error::new(
+                    ErrorCode::Conflict,
+                    format!("runtime driver returned invalid base64 file data: {error}"),
+                )
+                .for_operation("file")
+            })?;
+            if decoded.len() as u64 != response.size {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    "runtime driver file size does not match its decoded payload",
+                )
+                .for_operation("file"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_filesystem_response(
+    response: &FilesystemResponse,
+    expected_target: &ContainerTarget,
+    operation: FilesystemOp,
+) -> Result<()> {
+    const MAX_ENTRIES: usize = 4_096;
+    const MAX_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
+    if &response.target != expected_target {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "runtime driver returned filesystem data for a different container generation",
+        )
+        .for_operation("filesystem"));
+    }
+    let shape_is_valid = match operation {
+        FilesystemOp::Stat | FilesystemOp::MakeDir | FilesystemOp::Move => {
+            response.entry.is_some() && response.entries.is_empty()
+        }
+        FilesystemOp::ListDir => response.entry.is_none(),
+        FilesystemOp::Remove => response.entry.is_none() && response.entries.is_empty(),
+    };
+    if !shape_is_valid {
+        return Err(Error::new(
+            ErrorCode::Conflict,
+            "runtime driver returned an invalid filesystem response shape",
+        )
+        .for_operation("filesystem"));
+    }
+    if response.entries.len() > MAX_ENTRIES {
+        return Err(Error::new(
+            ErrorCode::ResourceExhausted,
+            format!("runtime driver returned more than {MAX_ENTRIES} filesystem entries"),
+        )
+        .for_operation("filesystem"));
+    }
+    let encoded = serde_json::to_vec(response).map_err(|error| {
+        Error::new(
+            ErrorCode::Internal,
+            format!("failed to size runtime filesystem response: {error}"),
+        )
+        .for_operation("filesystem")
+    })?;
+    if encoded.len() > MAX_RESPONSE_BYTES {
+        return Err(Error::new(
+            ErrorCode::ResourceExhausted,
+            format!("runtime filesystem response exceeds {MAX_RESPONSE_BYTES} bytes"),
+        )
+        .for_operation("filesystem"));
+    }
+    Ok(())
 }
 
 fn validate_output_chunks(

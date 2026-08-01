@@ -3,8 +3,9 @@ use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerStats, ContainerTarget, CreateAttachments, DeleteMode,
-    Error, ErrorCode, ExitStatus, IsolationRequest, OciBundle, OperationContext, OutputChunk,
-    ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
+    Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
+    IsolationRequest, OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord,
+    ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -525,5 +526,15 @@ pub trait RuntimeDriver: Send + Sync {
     /// Resize one exact process terminal.
     async fn resize(&self, _request: DriverResizeRequest) -> Result<()> {
         Err(Error::unsupported("resize"))
+    }
+
+    /// Upload or download one bounded file through the exact retained root.
+    async fn file(&self, _request: FileRequest) -> Result<FileResponse> {
+        Err(Error::unsupported("file"))
+    }
+
+    /// Inspect or mutate one exact retained container filesystem.
+    async fn filesystem(&self, _request: FilesystemRequest) -> Result<FilesystemResponse> {
+        Err(Error::unsupported("filesystem"))
     }
 }

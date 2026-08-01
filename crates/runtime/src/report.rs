@@ -10,7 +10,7 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v8";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
@@ -336,6 +336,8 @@ impl AgentVmSmokeReport {
                     AgentOperation::WriteStdin,
                     AgentOperation::CloseStdin,
                     AgentOperation::Resize,
+                    AgentOperation::File,
+                    AgentOperation::Filesystem,
                 ]
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)

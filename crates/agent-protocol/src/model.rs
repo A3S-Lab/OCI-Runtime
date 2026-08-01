@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, OciBundle,
-    OperationContext, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal,
-    TerminalSize,
+    ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest,
+    FileResponse, FilesystemRequest, FilesystemResponse, OciBundle, OperationContext, OutputChunk,
+    ProcessIo, ProcessRecord, ProcessTarget, Result, Signal, TerminalSize,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -13,7 +13,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 8;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 9;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Maximum binary process-I/O payload carried by one agent request or response.
@@ -289,6 +289,10 @@ pub enum AgentOperation {
     /// Resize a process terminal. Available from protocol version 7.
     /// Protocol version 8 adds durable idempotency metadata.
     Resize,
+    /// Bounded file upload/download. Available from protocol version 9.
+    File,
+    /// Descriptor-confined filesystem metadata and mutations. Available from protocol version 9.
+    Filesystem,
 }
 
 impl AgentOperation {
@@ -301,6 +305,7 @@ impl AgentOperation {
             Self::Update | Self::Stats => 5,
             Self::ReadOutput | Self::WriteStdin | Self::CloseStdin => 6,
             Self::Resize => 7,
+            Self::File | Self::Filesystem => 9,
         }
     }
 }
@@ -369,6 +374,8 @@ impl AgentCapabilities {
                 AgentOperation::WriteStdin,
                 AgentOperation::CloseStdin,
                 AgentOperation::Resize,
+                AgentOperation::File,
+                AgentOperation::Filesystem,
             ],
         )
     }
@@ -713,6 +720,8 @@ pub enum AgentRequest {
     WriteStdin(AgentWriteStdinRequest),
     CloseStdin(AgentCloseStdinRequest),
     Resize(AgentResizeRequest),
+    File(FileRequest),
+    Filesystem(FilesystemRequest),
 }
 
 /// Guest-observed init-process state for one exact generation.
@@ -898,6 +907,8 @@ pub enum AgentResponse {
     StdinWritten(ProcessTarget),
     StdinClosed(ProcessTarget),
     TerminalResized(ProcessTarget),
+    File(FileResponse),
+    Filesystem(FilesystemResponse),
 }
 
 const fn is_false(value: &bool) -> bool {
@@ -953,7 +964,7 @@ pub(crate) struct RequestEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub(crate) enum ResponseOutcome {
-    Succeeded { response: AgentResponse },
+    Succeeded { response: Box<AgentResponse> },
     Failed { error: Error },
 }
 

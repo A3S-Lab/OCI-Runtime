@@ -4,6 +4,7 @@ mod control;
 mod device;
 mod exec;
 mod exec_process;
+mod filesystem;
 mod hook;
 mod inherited_descriptor;
 mod init;
@@ -49,8 +50,9 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, OperationContext,
-    OutputChunk, ProcessRecord, Result,
+    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest,
+    FileResponse, FilesystemRequest, FilesystemResponse, OperationContext, OutputChunk,
+    ProcessRecord, Result,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -855,6 +857,14 @@ impl GuestAgentService for LinuxExecutor {
 
     async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
         self.resize_recorded(request).await
+    }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.file_recorded(request).await
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.filesystem_recorded(request).await
     }
 }
 

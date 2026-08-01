@@ -280,11 +280,13 @@ pub(crate) enum DriverOperation {
     WriteStdin,
     CloseStdin,
     Resize,
+    File,
+    Filesystem,
 }
 
 impl DriverOperation {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 20] = [
+    pub(crate) const ALL: [Self; 22] = [
         Self::Capability,
         Self::Recover,
         Self::Create,
@@ -305,6 +307,8 @@ impl DriverOperation {
         Self::WriteStdin,
         Self::CloseStdin,
         Self::Resize,
+        Self::File,
+        Self::Filesystem,
     ];
 }
 

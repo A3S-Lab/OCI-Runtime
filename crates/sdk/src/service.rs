@@ -3,10 +3,10 @@ use async_trait::async_trait;
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
     ContainerStats, CreateRequest, DeleteRequest, Error, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, KillRequest, ListRequest, OutputChunk, ProcessRecord, ProcessesRequest,
-    ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo, SignalProcessRequest,
-    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest,
+    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, KillRequest,
+    ListRequest, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest,
+    RestoreRequest, Result, RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest,
+    StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 /// Complete asynchronous runtime contract consumed by [`crate::RuntimeClient`].
@@ -107,6 +107,16 @@ pub trait OciRuntimeService: Send + Sync {
     /// Wait for one init or exec process.
     async fn wait_process(&self, _request: WaitProcessRequest) -> Result<ExitStatus> {
         Err(Error::unsupported("wait-process"))
+    }
+
+    /// Upload or download one bounded file payload in an exact container root.
+    async fn file(&self, _request: FileRequest) -> Result<FileResponse> {
+        Err(Error::unsupported("file"))
+    }
+
+    /// Inspect or mutate metadata inside an exact container root.
+    async fn filesystem(&self, _request: FilesystemRequest) -> Result<FilesystemResponse> {
+        Err(Error::unsupported("filesystem"))
     }
 
     /// Checkpoint a container.

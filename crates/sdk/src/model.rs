@@ -36,6 +36,8 @@ pub enum RuntimeOperation {
     Resize,
     SignalProcess,
     WaitProcess,
+    File,
+    Filesystem,
     Checkpoint,
     Restore,
 }
@@ -134,6 +136,125 @@ impl OperationContext {
             deadline_unix_ms: None,
         }
     }
+}
+
+/// File payload operation inside one exact container root filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileOp {
+    /// Replace one regular file with the supplied base64 payload.
+    Upload,
+    /// Read one regular file and return its base64 payload.
+    Download,
+}
+
+/// Generation-fenced file transfer request.
+///
+/// Uploads carry a stable operation context so an explicitly retried request
+/// cannot append, duplicate, or redirect a partially acknowledged write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileRequest {
+    pub target: ContainerTarget,
+    pub op: FileOp,
+    /// Absolute path, home-relative path, or `~/` path inside the container.
+    pub path: String,
+    /// Base64-encoded upload payload. Downloads must omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    /// Optional container account used for home expansion and new ownership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// Required for uploads and omitted for read-only downloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<OperationContext>,
+}
+
+/// Result of one generation-fenced file transfer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileResponse {
+    pub target: ContainerTarget,
+    /// Base64-encoded download payload. Upload responses omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    pub size: u64,
+}
+
+/// Metadata or mutation operation inside one exact container filesystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FilesystemOp {
+    Stat,
+    MakeDir,
+    Move,
+    ListDir,
+    Remove,
+}
+
+impl FilesystemOp {
+    /// Whether this operation changes the container filesystem.
+    #[must_use]
+    pub const fn is_mutating(self) -> bool {
+        matches!(self, Self::MakeDir | Self::Move | Self::Remove)
+    }
+}
+
+/// Generation-fenced filesystem metadata or mutation request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesystemRequest {
+    pub target: ContainerTarget,
+    pub op: FilesystemOp,
+    /// Source or primary path inside the container.
+    pub path: String,
+    /// Destination path required only by [`FilesystemOp::Move`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// Descendant depth for [`FilesystemOp::ListDir`]; zero means one level.
+    #[serde(default)]
+    pub depth: u32,
+    /// Optional container account used for home expansion and new ownership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// Required for mutating operations and omitted for read-only operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<OperationContext>,
+}
+
+/// Portable file type returned by filesystem metadata operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FilesystemEntryKind {
+    Unspecified,
+    File,
+    Directory,
+}
+
+/// Portable metadata for one entry inside a container filesystem.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesystemEntry {
+    pub name: String,
+    pub kind: FilesystemEntryKind,
+    pub path: String,
+    pub size: i64,
+    pub mode: u32,
+    pub permissions: String,
+    pub owner: String,
+    pub group: String,
+    pub modified_seconds: i64,
+    pub modified_nanos: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symlink_target: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Result of one generation-fenced filesystem operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesystemResponse {
+    pub target: ContainerTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<FilesystemEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<FilesystemEntry>,
 }
 
 /// Host-side standard-I/O disposition for an OCI process.

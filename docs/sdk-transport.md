@@ -7,9 +7,13 @@
 runtime calls. The transport maps every trait method; it does not invoke the
 CLI or expose WHPX, libkrun, or native Linux driver internals.
 
-The current wire contract is protocol version 3. Version 3 makes the complete
-`a3s.oci.attachments.v1` manifest mandatory for create and restore, moves init
-process I/O inside that versioned contract, and returns its durable digest.
+The current wire contract is protocol version 4. Version 4 adds exact-target
+file upload/download and filesystem stat/mkdir/move/list/remove. Mutations
+carry stable `OperationContext` identities, payloads and recursive listings
+are bounded, and protocol-3 peers reject these operations before dispatch.
+Version 3 made the complete `a3s.oci.attachments.v1` manifest mandatory for
+create and restore, moved init process I/O inside that versioned contract, and
+returned its durable digest.
 The transport rejects protocol-2 peers rather than silently dropping rootfs,
 mount, network, I/O, secret, or runtime-extension evidence. Version 2 had
 already made `OperationContext` mandatory for write-stdin, close-stdin, and
@@ -168,13 +172,14 @@ duplication.
 The host also requires the five core driver operations and advertises
 `wait`, `exec`, `signal-process`, `wait-process`, `pause`, `resume`, and
 `processes`, `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`,
-and `resize` only when the selected driver implements each one. `WaitRequest`
+`resize`, `file`, and `filesystem` only when the selected driver implements
+each one. `WaitRequest`
 targets one exact generation, accepts an optional
 millisecond timeout, and returns an `ExitStatus` containing either an exit
 code in `0..=255` or a positive signal. Repeated waits must return the same
-terminal result. The native Linux driver and the protocol-v8 utility-VM guest
-path implement this contract while retaining agent protocol-v1 through protocol-v7
-compatibility; unsupported drivers fail before dispatch.
+terminal result. The native Linux driver and the protocol-v9 utility-VM guest
+path implement this contract while retaining agent protocol-v1 through
+protocol-v8 compatibility; unsupported drivers fail before dispatch.
 
 Poll from the beginning with cursor zero, then pass each returned
 `next_sequence` to the next request. A filter without a generation follows
@@ -205,7 +210,7 @@ async fn poll_events(
 }
 ```
 
-The protocol-v8 shared Linux executor implements exact-target exec,
+The protocol-v9 shared Linux executor implements exact-target exec,
 pidfd-backed per-process signal, stable per-process wait, cgroup-v2
 pause/resume, exact live process inventory, partial live CPU/memory/cpuset/PID
 updates, normalized resource statistics, piped stdin, and bounded captured
@@ -226,6 +231,14 @@ call replays completed chunks without duplicating their bytes. Native Linux
 exposes that complete path through `RuntimeClient`. Utility-VM host drivers
 still need to opt into these process, control, resource, and I/O operations
 before their host services may advertise them.
+
+File downloads and uploads are limited to 32 MiB decoded payloads. Directory
+listings are limited to depth 64, 4,096 entries, and a 12 MiB serialized
+response. The shared executor resolves every path from a retained rootfs file
+descriptor with Linux `openat2(RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS)` and
+descriptor-relative mutation syscalls; it never constructs a host path from
+untrusted guest text. Upload, mkdir, move, and remove replay by exact
+`OperationId`, while read-only requests carry no mutation context.
 
 ## Runtime Server
 
@@ -269,7 +282,8 @@ Every request implements `ValidateRequest`. The in-process `RuntimeClient`,
 transport client, and server call it independently. The server-side check is
 the trust boundary: manually encoded wire requests cannot bypass OCI
 process/resource semantics, terminal consistency, absolute checkpoint paths,
-or the 4,096-event and 16 MiB output/stdin limits.
+or the 4,096-event, 16 MiB output/stdin, 32 MiB file, and bounded filesystem
+response limits.
 
 Bundle construction also applies the configuration phase of
 `OciSemanticValidator`. The start phase adds the OCI requirement for a

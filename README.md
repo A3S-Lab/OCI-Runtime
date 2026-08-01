@@ -97,12 +97,12 @@ and `experimental` or `supported` readiness.
 
 | Layer | Implemented boundary |
 | --- | --- |
-| Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, stats, events, and stable errors |
-| Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-3 local IPC over Unix sockets or protected Windows named pipes |
+| Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
+| Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, and ordered events |
-| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, pause/resume, update/stats, and scoped cleanup for the qualified profile |
+| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, descriptor-confined file/filesystem sessions, pause/resume, update/stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
-| A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process sessions and I/O; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; production routing and real-host cutover remain open |
+| A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; production routing and real-host cutover remain open |
 | Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
 The current Box adapter at `A3S-Lab/Box@09a9e5d3` rechecks every read against
@@ -227,8 +227,8 @@ candidate while the two gates named above remain open.
 ```text
 A3S Box (current Sandbox consumer; SDK-only unified adapter landed for
          exact-generation lifecycle, attachments, pause/resume, and process
-         sessions plus inventory/resources/stats/events; file sessions,
-         production routing, and real-host cutover remain in progress)
+         and filesystem sessions plus inventory/resources/stats/events;
+         production routing and real-host cutover remain in progress)
 a3s-oci CLI
 future containerd runtime-v2 shim
                          │
@@ -258,7 +258,7 @@ future containerd runtime-v2 shim
                          ▼
                    LinuxExecutor
           namespaces · mounts · hooks · pidfds
-          cgroups · process I/O · exact cleanup
+          cgroups · process I/O · confined filesystem · exact cleanup
 ```
 
 Only the isolated `a3s-oci-krun-shim` loads checksum-pinned native libkrun
@@ -302,8 +302,8 @@ The repository turns release claims into checked inventories:
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Registered durable commit fault stages | 657 |
-| Before/after `RuntimeDriver` fault boundaries | 40 |
-| Guest operations behind protocol v8 | 18 |
+| Before/after `RuntimeDriver` fault boundaries | 44 |
+| Guest operations behind protocol v9 | 20 |
 
 The locks prove inventory and exercised boundaries, not full conformance by
 themselves. Remaining normative enforcement, upstream lifecycle suites,
@@ -313,7 +313,8 @@ qualification must all pass before a driver becomes `supported`.
 ### Still intentionally open
 
 - complete review and enforcement of pending OCI normative entries;
-- descriptor-relative filesystem operations on every host;
+- real-host qualification of descriptor-confined filesystem sessions on
+  native Linux and each utility-VM driver;
 - production-ready Native Linux and utility-VM drivers;
 - pinned immutable utility-VM system roots;
 - remaining utility-VM transport fault injection and hook recovery/security

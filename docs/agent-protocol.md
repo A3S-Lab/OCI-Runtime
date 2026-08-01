@@ -91,6 +91,13 @@ payload, target, size, or mutation kind fails closed. Version-6 and version-7
 process-I/O requests omit this field for wire compatibility; a version-8 peer
 rejects a missing context, and an older peer rejects a version-8 context.
 
+Protocol version 9 adds `file` and `filesystem`. File upload and
+mkdir/move/remove requests carry exact mutation contexts; downloads and
+stat/list requests are read-only. Every request names an exact container
+generation. The shared executor bounds decoded payloads, path/user text,
+listing depth and response size, and resolves paths from the retained rootfs
+descriptor with `openat2` plus descriptor-relative mutation syscalls.
+
 The client breaks a long init or process wait into bounded 25-millisecond
 guest requests. The single correlated connection therefore remains available
 to query or control another container between polls. Negotiation filters
@@ -104,14 +111,15 @@ advertise nor accept the version-5 resource operations. Protocol-v1 through
 protocol-v5 peers neither advertise nor accept the version-6 process-I/O
 operations. Protocol-v1 through protocol-v6 peers neither advertise nor accept
 the version-7 terminal resize operation. Protocol-v1 through protocol-v7 peers
-reject version-8 process-I/O mutation context.
+reject version-8 process-I/O mutation context. Protocol-v1 through protocol-v8
+peers neither advertise nor accept version-9 file or filesystem operations.
 
 Protocol support and executor capability remain separate. The current shared
-Linux executor negotiates version 8 and advertises the exact eighteen
+Linux executor negotiates version 9 and advertises the exact twenty
 implemented operations: the six lifecycle/init-wait operations; exec,
-per-process signal, and per-process wait; pause, resume, and processes; and
-update and stats; plus captured-output polling, stdin write/close, and terminal
-resize. It
+per-process signal, and per-process wait; pause, resume, and processes; update
+and stats; captured-output polling, stdin write/close, and terminal resize;
+plus file transfer and filesystem metadata/mutations. It
 retains an exact-generation process registry, one pidfd per authenticated init
 or exec process, the private controller-enabled cgroup-v2 root and owned
 workload target, stable replay and wait results, exact session-local
@@ -126,9 +134,9 @@ evidence remains a separate release gate.
 
 `AgentClient` also implements the same `GuestAgentService` contract as the
 in-process executor. One runtime adapter therefore performs target, digest,
-state, process, stats, and chunked-I/O mapping for both native Linux and WHPX;
-the transport boundary cannot grow a second interpretation of the eighteen
-operations.
+state, process, stats, chunked-I/O, and filesystem mapping for both native
+Linux and WHPX; the transport boundary cannot grow a second interpretation of
+the twenty operations.
 
 OCI hooks do not add guest protocol operations: they travel inside the exact
 digest-bound `config.json` and execute in the shared Linux executor. Native
@@ -177,6 +185,8 @@ In-memory duplex tests cover:
   capability filtering, and pre-dispatch rejection of forged v7 requests;
 - protocol-v8 required process-I/O mutation context, successful exact dispatch,
   missing-context rejection, and rejection of v8 context by protocol-v7 peers;
+- protocol-v9 file upload and filesystem-list round trips with exact target
+  correlation, plus protocol-v8 capability filtering;
 - filtering and pre-dispatch rejection of forged version-3 process operations
   on a protocol-v2 connection;
 - rejection of a forged protocol-v1 wait before service dispatch;
@@ -219,11 +229,12 @@ step.
 
 The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
 carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 8, and retains
+pipe, authenticates the token, negotiates protocol version 9, and retains
 bounded host and shim evidence. The current guest must advertise the exact
-eighteen operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
+twenty operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
-`update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, and `resize`.
+`update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
+`file`, and `filesystem`.
 Before the utility-VM owner waits for the shim, it explicitly closes the
 shared client transport. This waits for an in-flight request and invalidates
 all retained clones, so a forgotten client handle cannot keep the guest or
@@ -267,8 +278,8 @@ explicitly.
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in `a3s.oci.agent-vm-smoke.v8`. The signed path must negotiate protocol version
-8 and the exact eighteen implemented operations. The missing-entitlement path
+in `a3s.oci.agent-vm-smoke.v9`. The signed path must negotiate protocol version
+9 and the exact twenty implemented operations. The missing-entitlement path
 must exit with status `2`, report no negotiation, terminate the shim process
 group, and leave no private endpoint residue. Both paths also retain
 in-process evidence that the exact runtime-owned endpoint was removed, the

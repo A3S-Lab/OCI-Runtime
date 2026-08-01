@@ -70,7 +70,7 @@ where
             ));
         }
 
-        let result = if request_protocol == protocol {
+        let result = if request_protocol == protocol && request.minimum_protocol() <= protocol {
             match request.validate() {
                 Ok(()) => match dispatch(service.as_ref(), request).await {
                     Ok(response) => WireResult::Ok {
@@ -80,13 +80,24 @@ where
                 },
                 Err(error) => WireResult::Error { error },
             }
-        } else {
+        } else if request_protocol != protocol {
             WireResult::Error {
                 error: Error::new(
                     ErrorCode::FailedPrecondition,
                     format!(
                         "SDK request uses protocol {request_protocol}; negotiated protocol is \
                          {protocol}"
+                    ),
+                )
+                .for_operation("sdk-transport"),
+            }
+        } else {
+            WireResult::Error {
+                error: Error::new(
+                    ErrorCode::Unsupported,
+                    format!(
+                        "SDK operation requires protocol {}, but the connection negotiated \n+                         protocol {protocol}",
+                        request.minimum_protocol()
                     ),
                 )
                 .for_operation("sdk-transport"),
@@ -174,6 +185,11 @@ async fn dispatch(service: &dyn OciRuntimeService, request: WireRequest) -> Resu
             .wait_process(request)
             .await
             .map(WireResponse::WaitProcess),
+        WireRequest::File(request) => service.file(request).await.map(WireResponse::File),
+        WireRequest::Filesystem(request) => service
+            .filesystem(request)
+            .await
+            .map(WireResponse::Filesystem),
         WireRequest::Checkpoint(request) => service
             .checkpoint(request)
             .await
@@ -192,6 +208,7 @@ mod tests {
         assert_eq!(select_protocol(2, 3), Some(3));
         assert_eq!(select_protocol(1, 1), None);
         assert_eq!(select_protocol(1, 2), None);
-        assert_eq!(select_protocol(4, 4), None);
+        assert_eq!(select_protocol(4, 4), Some(4));
+        assert_eq!(select_protocol(5, 5), None);
     }
 }

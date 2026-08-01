@@ -19,14 +19,17 @@ use a3s_oci_sdk::oci_spec::runtime::{
 use a3s_oci_sdk::{
     async_trait, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord,
     ContainerStats, ContainerTarget, CpuStats, CreateAttachments, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, Generation, IoMode,
-    IsolationRequest, KillRequest, ListRequest, MemoryStats, OciBundle, OciRuntimeService,
-    OciSchemaValidator, OperationContext, OperationId, OutputChunk, OutputStream, ProcessId,
-    ProcessIo, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest,
-    Result, RuntimeEventKind, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
-    StateRequest, StatsRequest, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest,
-    WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V1,
+    DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest,
+    FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest,
+    FilesystemResponse, Generation, IoMode, IsolationRequest, KillRequest, ListRequest,
+    MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
+    OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
+    Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
+    TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ATTACHMENT_SCHEMA_V1,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
 #[cfg(target_os = "linux")]
@@ -40,6 +43,7 @@ use crate::{
 };
 
 mod fault_matrix;
+mod filesystem_operations;
 mod io_durability;
 mod io_operations;
 mod process_operations;
@@ -79,6 +83,8 @@ enum DriverCall {
     WriteStdin(DriverWriteStdinRequest),
     CloseStdin(DriverCloseStdinRequest),
     Resize(DriverResizeRequest),
+    File(FileRequest),
+    Filesystem(FilesystemRequest),
 }
 
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
@@ -202,6 +208,8 @@ impl RecordingDriver {
             RuntimeOperation::WriteStdin,
             RuntimeOperation::CloseStdin,
             RuntimeOperation::Resize,
+            RuntimeOperation::File,
+            RuntimeOperation::Filesystem,
         ]);
         driver
     }
@@ -993,6 +1001,69 @@ impl RuntimeDriver for RecordingDriver {
             .expect("driver resize replay lock")
             .insert(request.context.operation_id.clone(), request);
         Ok(())
+    }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::File(request.clone()));
+        if let Some(error) = self.take_failure("file") {
+            return Err(error);
+        }
+        let (data, size) = match request.op {
+            FileOp::Upload => {
+                let decoded = STANDARD
+                    .decode(request.data.as_deref().unwrap_or_default())
+                    .map_err(|error| {
+                        Error::new(ErrorCode::InvalidArgument, error.to_string())
+                            .for_operation("driver-file")
+                    })?;
+                (None, decoded.len() as u64)
+            }
+            FileOp::Download => (Some(String::new()), 0),
+        };
+        Ok(FileResponse {
+            target: request.target,
+            data,
+            size,
+        })
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.calls
+            .lock()
+            .expect("driver calls lock")
+            .push(DriverCall::Filesystem(request.clone()));
+        if let Some(error) = self.take_failure("filesystem") {
+            return Err(error);
+        }
+        let entry = matches!(
+            request.op,
+            FilesystemOp::Stat | FilesystemOp::MakeDir | FilesystemOp::Move
+        )
+        .then(|| FilesystemEntry {
+            name: "fixture".to_string(),
+            kind: FilesystemEntryKind::File,
+            path: request
+                .destination
+                .clone()
+                .unwrap_or_else(|| request.path.clone()),
+            size: 0,
+            mode: 0o644,
+            permissions: "-rw-r--r--".to_string(),
+            owner: "root".to_string(),
+            group: "root".to_string(),
+            modified_seconds: 0,
+            modified_nanos: 0,
+            symlink_target: None,
+            metadata: BTreeMap::new(),
+        });
+        Ok(FilesystemResponse {
+            target: request.target,
+            entry,
+            entries: Vec::new(),
+        })
     }
 }
 

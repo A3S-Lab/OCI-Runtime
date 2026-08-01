@@ -4,7 +4,8 @@ use crate::oci_spec::runtime::ContainerState;
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
     ContainerStats, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    EventBatch, EventsRequest, ExecRequest, ExitStatus, KillRequest, ListRequest, LocalIpcEndpoint,
+    EventBatch, EventsRequest, ExecRequest, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, KillRequest, ListRequest, LocalIpcEndpoint,
     OciRuntimeService, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest,
     ResizeRequest, RestoreRequest, Result, RunRequest, RuntimeInfo, RuntimeTransportClient,
     SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
@@ -195,6 +196,16 @@ impl RuntimeClient {
     pub async fn wait_process(&self, request: WaitProcessRequest) -> Result<ExitStatus> {
         request.validate()?;
         self.service.wait_process(request).await
+    }
+
+    pub async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        request.validate()?;
+        self.service.file(request).await
+    }
+
+    pub async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        request.validate()?;
+        self.service.filesystem(request).await
     }
 
     pub async fn checkpoint(&self, request: CheckpointRequest) -> Result<ContainerRecord> {

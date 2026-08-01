@@ -745,6 +745,8 @@ fn expected_operations() -> Vec<AgentOperation> {
         AgentOperation::WriteStdin,
         AgentOperation::CloseStdin,
         AgentOperation::Resize,
+        AgentOperation::File,
+        AgentOperation::Filesystem,
     ]
 }
 

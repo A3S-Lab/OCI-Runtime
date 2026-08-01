@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -6,9 +7,11 @@ use serde_json::json;
 
 use crate::{
     AttachmentCapabilities, ContainerId, ContainerRecord, CreateAttachments, CreateRequest,
-    DeleteRequest, DriverKind, Error, ErrorCode, EventsRequest, Generation, IsolationClass,
-    IsolationRequest, KillRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
-    ProcessIo, Result, RuntimeFeatures, RuntimeInfo, RuntimeOperation, StartRequest, StateRequest,
+    DeleteRequest, DriverKind, Error, ErrorCode, EventsRequest, FileOp, FileRequest, FileResponse,
+    FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest, FilesystemResponse,
+    Generation, IsolationClass, IsolationRequest, KillRequest, OciBundle, OciRuntimeService,
+    OperationContext, OperationId, ProcessIo, Result, RuntimeFeatures, RuntimeInfo,
+    RuntimeOperation, StartRequest, StateRequest,
 };
 
 use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireResult};
@@ -30,7 +33,12 @@ impl OciRuntimeService for EchoService {
         Ok(RuntimeInfo {
             oci,
             drivers: RuntimeFeatures::current(Vec::new()),
-            operations: vec![RuntimeOperation::Features, RuntimeOperation::Create],
+            operations: vec![
+                RuntimeOperation::Features,
+                RuntimeOperation::Create,
+                RuntimeOperation::File,
+                RuntimeOperation::Filesystem,
+            ],
             attachments: AttachmentCapabilities::base_v1(),
         })
     }
@@ -73,6 +81,39 @@ impl OciRuntimeService for EchoService {
     async fn delete(&self, _request: DeleteRequest) -> Result<()> {
         Err(Error::unsupported("delete-test"))
     }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        Ok(FileResponse {
+            target: request.target,
+            data: (request.op == FileOp::Download).then(String::new),
+            size: 0,
+        })
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        let entries = (request.op == FilesystemOp::ListDir)
+            .then(|| FilesystemEntry {
+                name: "transport.txt".to_string(),
+                kind: FilesystemEntryKind::File,
+                path: "/transport.txt".to_string(),
+                size: 0,
+                mode: 0o644,
+                permissions: "-rw-r--r--".to_string(),
+                owner: "root".to_string(),
+                group: "root".to_string(),
+                modified_seconds: 0,
+                modified_nanos: 0,
+                symlink_target: None,
+                metadata: BTreeMap::new(),
+            })
+            .into_iter()
+            .collect();
+        Ok(FilesystemResponse {
+            target: request.target,
+            entry: None,
+            entries,
+        })
+    }
 }
 
 #[tokio::test]
@@ -86,12 +127,17 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 3);
+    assert_eq!(client.protocol_version(), 4);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
         info.operations,
-        vec![RuntimeOperation::Features, RuntimeOperation::Create]
+        vec![
+            RuntimeOperation::Features,
+            RuntimeOperation::Create,
+            RuntimeOperation::File,
+            RuntimeOperation::Filesystem,
+        ]
     );
 
     let bundle_directory = std::env::current_dir()
@@ -125,6 +171,43 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
         Some(exact_config)
     );
 
+    let target = crate::ContainerTarget::exact(
+        ContainerId::new(record.state.id()).expect("response container ID"),
+        record.generation,
+    );
+    let upload = client
+        .file(FileRequest {
+            target: target.clone(),
+            op: FileOp::Upload,
+            path: "/transport.txt".to_string(),
+            data: Some(String::new()),
+            user: None,
+            context: Some(OperationContext::new(
+                OperationId::new("transport-file").expect("operation ID"),
+            )),
+        })
+        .await
+        .expect("transport file upload");
+    assert_eq!(upload.target, target);
+    assert_eq!(upload.size, 0);
+    assert!(upload.data.is_none());
+
+    let listed = client
+        .filesystem(FilesystemRequest {
+            target: target.clone(),
+            op: FilesystemOp::ListDir,
+            path: "/".to_string(),
+            destination: None,
+            depth: 1,
+            user: None,
+            context: None,
+        })
+        .await
+        .expect("transport filesystem listing");
+    assert_eq!(listed.target, target);
+    assert_eq!(listed.entries.len(), 1);
+    assert_eq!(listed.entries[0].path, "/transport.txt");
+
     let error = client
         .state(StateRequest {
             target: crate::ContainerTarget::current(
@@ -141,6 +224,47 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
         .await
         .expect("server task must join")
         .expect("server connection must close cleanly");
+}
+
+#[tokio::test]
+async fn protocol_three_rejects_file_operations_before_dispatch() {
+    let (client_io, mut server_io) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let hello = read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read client hello")
+            .expect("client hello frame");
+        assert!(matches!(hello, ClientMessage::Hello { .. }));
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 3 })
+            .await
+            .expect("write protocol-three welcome");
+        assert!(read_frame::<ClientMessage>(&mut server_io)
+            .await
+            .expect("read protocol-three connection close")
+            .is_none());
+    });
+
+    let client = RuntimeTransportClient::from_io(client_io)
+        .await
+        .expect("negotiate protocol three");
+    let error = client
+        .file(FileRequest {
+            target: crate::ContainerTarget::exact(
+                ContainerId::new("legacy-file").expect("container ID"),
+                Generation(1),
+            ),
+            op: FileOp::Download,
+            path: "/file".to_string(),
+            data: None,
+            user: None,
+            context: None,
+        })
+        .await
+        .expect_err("protocol three must reject file operations");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("requires protocol 4"));
+    drop(client);
+    server.await.expect("server task must join");
 }
 
 #[test]

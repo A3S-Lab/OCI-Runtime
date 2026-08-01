@@ -5,8 +5,9 @@ use a3s_oci_agent::{InheritedDescriptorPlan, LinuxExecutor};
 use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestAgentService, GuestPath};
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, OutputChunk,
-    ProcessRecord, Result, RuntimeOperation,
+    async_trait, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest,
+    FileResponse, FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
+    RuntimeOperation,
 };
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
@@ -199,6 +200,14 @@ impl RuntimeDriver for NativeLinuxDriver {
 
     async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
         self.client.resize(request).await
+    }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.client.file(request).await
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.client.filesystem(request).await
     }
 }
 

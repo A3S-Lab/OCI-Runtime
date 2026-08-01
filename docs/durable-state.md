@@ -227,8 +227,8 @@ file replacements are exercised at all seven commit stages:
 The delete and failed-create quarantine moves are each exercised after the
 rename, source-parent sync, and destination-parent sync. This expands to 657
 durable fault points. The host matrix separately injects before and after all
-20 `RuntimeDriver` boundaries, including capability discovery and startup
-recovery, for another 40 boundaries.
+22 `RuntimeDriver` boundaries, including capability discovery, startup
+recovery, file transfer, and filesystem operations, for another 44 boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
 `sync_all` calls. Windows reaches the same logical checkpoints after its

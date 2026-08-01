@@ -4,10 +4,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, ContainerRecord,
     ContainerStats, CreateRequest, DeleteRequest, Error, EventBatch, EventsRequest, ExecRequest,
-    ExitStatus, KillRequest, ListRequest, OutputChunk, ProcessRecord, ProcessesRequest,
-    ReadOutputRequest, ResizeRequest, RestoreRequest, RuntimeInfo, SignalProcessRequest,
-    StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest, WaitProcessRequest,
-    WaitRequest, WriteStdinRequest,
+    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, KillRequest,
+    ListRequest, OutputChunk, ProcessRecord, ProcessesRequest, ReadOutputRequest, ResizeRequest,
+    RestoreRequest, RuntimeInfo, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 use super::{protocol_error, transport_error};
@@ -77,6 +77,8 @@ pub(super) enum WireRequest {
     Resize(ResizeRequest),
     SignalProcess(SignalProcessRequest),
     WaitProcess(WaitProcessRequest),
+    File(FileRequest),
+    Filesystem(FilesystemRequest),
     Checkpoint(CheckpointRequest),
     Restore(RestoreRequest),
 }
@@ -104,8 +106,17 @@ impl WireRequest {
             Self::Resize(request) => request.validate(),
             Self::SignalProcess(request) => request.validate(),
             Self::WaitProcess(request) => request.validate(),
+            Self::File(request) => request.validate(),
+            Self::Filesystem(request) => request.validate(),
             Self::Checkpoint(request) => request.validate(),
             Self::Restore(request) => request.validate(),
+        }
+    }
+
+    pub(super) const fn minimum_protocol(&self) -> u16 {
+        match self {
+            Self::File(_) | Self::Filesystem(_) => 4,
+            _ => 3,
         }
     }
 }
@@ -134,6 +145,8 @@ pub(super) enum WireResponse {
     Resize,
     SignalProcess,
     WaitProcess(ExitStatus),
+    File(FileResponse),
+    Filesystem(FilesystemResponse),
     Checkpoint(ContainerRecord),
     Restore(ContainerRecord),
 }

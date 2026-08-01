@@ -926,6 +926,8 @@ mod tests {
             AgentOperation::WriteStdin,
             AgentOperation::CloseStdin,
             AgentOperation::Resize,
+            AgentOperation::File,
+            AgentOperation::Filesystem,
         ];
         report.shim_report_verified = true;
         report.shim_exit_code = Some(0);

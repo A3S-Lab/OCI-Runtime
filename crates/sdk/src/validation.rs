@@ -1,11 +1,14 @@
 use std::path::Path;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, CreateRequest, DeleteRequest,
-    Error, ErrorCode, EventsRequest, ExecRequest, IoMode, KillRequest, ListRequest, ProcessIo,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RunRequest,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    Error, ErrorCode, EventsRequest, ExecRequest, FileOp, FileRequest, FilesystemOp,
+    FilesystemRequest, IoMode, KillRequest, ListRequest, ProcessIo, ProcessesRequest,
+    ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RunRequest, SignalProcessRequest,
+    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest,
+    WriteStdinRequest,
 };
 use crate::{OciSemanticPhase, OciSemanticValidator};
 
@@ -15,6 +18,14 @@ pub const MAX_EVENT_BATCH_ITEMS: u32 = 4_096;
 pub const MAX_OUTPUT_READ_BYTES: u32 = 16 * 1024 * 1024;
 /// Maximum stdin payload carried by one SDK request.
 pub const MAX_STDIN_WRITE_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum decoded payload accepted by one file upload or download.
+pub const MAX_FILE_TRANSFER_BYTES: usize = 32 * 1024 * 1024;
+/// Maximum recursive directory listing depth.
+pub const MAX_FILESYSTEM_DEPTH: u32 = 64;
+/// Maximum UTF-8 length of a container filesystem path.
+pub const MAX_FILESYSTEM_PATH_BYTES: usize = 4_096;
+/// Maximum UTF-8 length of a container account selector.
+pub const MAX_FILESYSTEM_USER_BYTES: usize = 256;
 
 /// Fail-closed validation performed before a request reaches runtime state.
 pub trait ValidateRequest {
@@ -99,6 +110,97 @@ impl ValidateRequest for WriteStdinRequest {
 impl ValidateRequest for ResizeRequest {
     fn validate(&self) -> Result<()> {
         validate_terminal_size(self.size.width, self.size.height, "resize.size")
+    }
+}
+
+impl ValidateRequest for FileRequest {
+    fn validate(&self) -> Result<()> {
+        validate_container_path(&self.path, "file.path")?;
+        validate_file_user(self.user.as_deref())?;
+        match self.op {
+            FileOp::Upload => {
+                if self.context.is_none() {
+                    return Err(invalid_request(
+                        "file upload requires an idempotency operation context",
+                    ));
+                }
+                let encoded = self
+                    .data
+                    .as_deref()
+                    .ok_or_else(|| invalid_request("file upload requires base64 data"))?;
+                let maximum_encoded = MAX_FILE_TRANSFER_BYTES.div_ceil(3) * 4;
+                if encoded.len() > maximum_encoded {
+                    return Err(invalid_request(format!(
+                        "file upload payload exceeds {MAX_FILE_TRANSFER_BYTES} decoded bytes"
+                    )));
+                }
+                let decoded = STANDARD.decode(encoded).map_err(|error| {
+                    invalid_request(format!("file upload data is not valid base64: {error}"))
+                })?;
+                if decoded.len() > MAX_FILE_TRANSFER_BYTES {
+                    return Err(invalid_request(format!(
+                        "file upload payload is {} bytes; maximum is {MAX_FILE_TRANSFER_BYTES}",
+                        decoded.len()
+                    )));
+                }
+            }
+            FileOp::Download => {
+                if self.data.is_some() {
+                    return Err(invalid_request(
+                        "file download must not carry an upload payload",
+                    ));
+                }
+                if self.context.is_some() {
+                    return Err(invalid_request(
+                        "file download must not carry a mutation context",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ValidateRequest for FilesystemRequest {
+    fn validate(&self) -> Result<()> {
+        validate_container_path(&self.path, "filesystem.path")?;
+        validate_file_user(self.user.as_deref())?;
+        match self.op {
+            FilesystemOp::Move => {
+                let destination = self.destination.as_deref().ok_or_else(|| {
+                    invalid_request("filesystem move requires a destination path")
+                })?;
+                validate_container_path(destination, "filesystem.destination")?;
+            }
+            _ if self.destination.is_some() => {
+                return Err(invalid_request(
+                    "filesystem.destination is valid only for move",
+                ));
+            }
+            _ => {}
+        }
+        if self.op == FilesystemOp::ListDir {
+            if self.depth > MAX_FILESYSTEM_DEPTH {
+                return Err(invalid_request(format!(
+                    "filesystem.depth must not exceed {MAX_FILESYSTEM_DEPTH}"
+                )));
+            }
+        } else if self.depth != 0 {
+            return Err(invalid_request(
+                "filesystem.depth is valid only for list-dir",
+            ));
+        }
+        if self.op.is_mutating() && self.context.is_none() {
+            return Err(invalid_request(
+                "mutating filesystem requests require an idempotency operation context",
+            ));
+        }
+        if !self.op.is_mutating() && self.context.is_some() {
+            return Err(invalid_request(
+                "read-only filesystem requests must not carry a mutation context",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -235,6 +337,41 @@ fn validate_absolute_path(path: &Path, field: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_container_path(path: &str, field: &str) -> Result<()> {
+    if path.is_empty() {
+        return Err(invalid_request(format!("{field} must not be empty")));
+    }
+    if path.len() > MAX_FILESYSTEM_PATH_BYTES {
+        return Err(invalid_request(format!(
+            "{field} is {} bytes; maximum is {MAX_FILESYSTEM_PATH_BYTES}",
+            path.len()
+        )));
+    }
+    if path.as_bytes().contains(&0) {
+        return Err(invalid_request(format!(
+            "{field} must not contain a NUL byte"
+        )));
+    }
+    if path.starts_with('~') && path != "~" && !path.starts_with("~/") {
+        return Err(invalid_request(format!(
+            "{field} supports only the selected user's ~/ expansion"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_file_user(user: Option<&str>) -> Result<()> {
+    let Some(user) = user else {
+        return Ok(());
+    };
+    if user.is_empty() || user.len() > MAX_FILESYSTEM_USER_BYTES || user.as_bytes().contains(&0) {
+        return Err(invalid_request(format!(
+            "file user must contain 1 through {MAX_FILESYSTEM_USER_BYTES} non-NUL bytes"
+        )));
+    }
+    Ok(())
+}
+
 fn invalid_request(message: impl Into<String>) -> Error {
     Error::new(ErrorCode::InvalidArgument, message).for_operation("validate-sdk-request")
 }
@@ -247,12 +384,14 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ValidateRequest, MAX_EVENT_BATCH_ITEMS, MAX_OUTPUT_READ_BYTES, MAX_STDIN_WRITE_BYTES,
+        ValidateRequest, MAX_EVENT_BATCH_ITEMS, MAX_FILESYSTEM_DEPTH, MAX_OUTPUT_READ_BYTES,
+        MAX_STDIN_WRITE_BYTES,
     };
     use crate::{
-        CheckpointRequest, ContainerId, ContainerTarget, EventsRequest, ExecRequest, Generation,
-        IoMode, OperationContext, OperationId, ProcessId, ProcessIo, ReadOutputRequest,
-        ResizeRequest, TerminalSize, UpdateRequest, WriteStdinRequest,
+        CheckpointRequest, ContainerId, ContainerTarget, EventsRequest, ExecRequest, FileOp,
+        FileRequest, FilesystemOp, FilesystemRequest, Generation, IoMode, OperationContext,
+        OperationId, ProcessId, ProcessIo, ReadOutputRequest, ResizeRequest, TerminalSize,
+        UpdateRequest, WriteStdinRequest,
     };
 
     fn target() -> ContainerTarget {
@@ -293,6 +432,131 @@ mod tests {
             data: vec![0; MAX_STDIN_WRITE_BYTES + 1],
         };
         assert!(write.validate().is_err());
+    }
+
+    #[test]
+    fn validates_exact_file_transfer_shapes() {
+        FileRequest {
+            target: target(),
+            op: FileOp::Upload,
+            path: "/tmp/empty".to_string(),
+            data: Some(String::new()),
+            user: Some("1000:1000".to_string()),
+            context: Some(context()),
+        }
+        .validate()
+        .expect("empty file upload is valid");
+
+        for invalid in [
+            FileRequest {
+                target: target(),
+                op: FileOp::Upload,
+                path: "/tmp/file".to_string(),
+                data: Some("not base64".to_string()),
+                user: None,
+                context: Some(context()),
+            },
+            FileRequest {
+                target: target(),
+                op: FileOp::Upload,
+                path: "/tmp/file".to_string(),
+                data: Some(String::new()),
+                user: None,
+                context: None,
+            },
+            FileRequest {
+                target: target(),
+                op: FileOp::Download,
+                path: "/tmp/file".to_string(),
+                data: Some(String::new()),
+                user: None,
+                context: None,
+            },
+            FileRequest {
+                target: target(),
+                op: FileOp::Download,
+                path: "/tmp/file".to_string(),
+                data: None,
+                user: None,
+                context: Some(context()),
+            },
+            FileRequest {
+                target: target(),
+                op: FileOp::Download,
+                path: String::new(),
+                data: None,
+                user: None,
+                context: None,
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn validates_exact_filesystem_operation_shapes() {
+        FilesystemRequest {
+            target: target(),
+            op: FilesystemOp::ListDir,
+            path: "/".to_string(),
+            destination: None,
+            depth: MAX_FILESYSTEM_DEPTH,
+            user: None,
+            context: None,
+        }
+        .validate()
+        .expect("maximum bounded listing depth is valid");
+
+        let invalid = [
+            FilesystemRequest {
+                target: target(),
+                op: FilesystemOp::Move,
+                path: "/old".to_string(),
+                destination: None,
+                depth: 0,
+                user: None,
+                context: Some(context()),
+            },
+            FilesystemRequest {
+                target: target(),
+                op: FilesystemOp::Remove,
+                path: "/old".to_string(),
+                destination: Some("/new".to_string()),
+                depth: 0,
+                user: None,
+                context: Some(context()),
+            },
+            FilesystemRequest {
+                target: target(),
+                op: FilesystemOp::ListDir,
+                path: "/".to_string(),
+                destination: None,
+                depth: MAX_FILESYSTEM_DEPTH + 1,
+                user: None,
+                context: None,
+            },
+            FilesystemRequest {
+                target: target(),
+                op: FilesystemOp::Stat,
+                path: "/file".to_string(),
+                destination: None,
+                depth: 0,
+                user: None,
+                context: Some(context()),
+            },
+            FilesystemRequest {
+                target: target(),
+                op: FilesystemOp::MakeDir,
+                path: "/dir".to_string(),
+                destination: None,
+                depth: 0,
+                user: None,
+                context: None,
+            },
+        ];
+        for request in invalid {
+            assert!(request.validate().is_err());
+        }
     }
 
     #[test]

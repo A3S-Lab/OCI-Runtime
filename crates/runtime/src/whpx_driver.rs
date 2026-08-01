@@ -12,7 +12,8 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode,
-    ExitStatus, OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, OutputChunk,
+    ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
@@ -94,7 +95,7 @@ impl WhpxRuntimeDriverConfig {
 
 /// Candidate WHPX driver that owns one authenticated utility VM per container.
 ///
-/// The complete live eighteen-operation contract is implemented and
+/// The complete live twenty-operation contract is implemented and
 /// qualification tests may invoke it directly. Its capability deliberately
 /// remains `probe-only`, so
 /// [`crate::HostRuntimeService`] rejects production registration until the
@@ -828,6 +829,22 @@ impl RuntimeDriver for WhpxRuntimeDriver {
             .await?
             .client
             .resize(request)
+            .await
+    }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.session_for(&request.target, "whpx-file")
+            .await?
+            .client
+            .file(request)
+            .await
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.session_for(&request.target, "whpx-filesystem")
+            .await?
+            .client
+            .filesystem(request)
             .await
     }
 }

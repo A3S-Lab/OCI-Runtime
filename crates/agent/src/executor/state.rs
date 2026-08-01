@@ -6,8 +6,8 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
-    ContainerStats, ErrorCode, ExitStatus, OperationId, ProcessId, ProcessRecord, ProcessTarget,
-    Result,
+    ContainerStats, ErrorCode, ExitStatus, FileResponse, FilesystemResponse, OperationId,
+    ProcessId, ProcessRecord, ProcessTarget, Result,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -51,9 +51,7 @@ impl ExecutorState {
             record.validate_request(request)?;
             match &record.outcome {
                 RecordedOutcome::State(result) => result.clone(),
-                RecordedOutcome::Unit(_) | RecordedOutcome::Process(_) => {
-                    Err(reused_operation(operation_id))
-                }
+                _ => Err(reused_operation(operation_id)),
             }
         })
     }
@@ -67,9 +65,7 @@ impl ExecutorState {
             record.validate_request(request)?;
             match &record.outcome {
                 RecordedOutcome::Unit(result) => result.clone(),
-                RecordedOutcome::State(_) | RecordedOutcome::Process(_) => {
-                    Err(reused_operation(operation_id))
-                }
+                _ => Err(reused_operation(operation_id)),
             }
         })
     }
@@ -83,9 +79,35 @@ impl ExecutorState {
             record.validate_request(request)?;
             match &record.outcome {
                 RecordedOutcome::Process(result) => result.clone(),
-                RecordedOutcome::State(_) | RecordedOutcome::Unit(_) => {
-                    Err(reused_operation(operation_id))
-                }
+                _ => Err(reused_operation(operation_id)),
+            }
+        })
+    }
+
+    pub(super) fn replay_file(
+        &self,
+        operation_id: &OperationId,
+        request: &RecordedRequest,
+    ) -> Option<Result<FileResponse>> {
+        self.operations.get(operation_id).map(|record| {
+            record.validate_request(request)?;
+            match &record.outcome {
+                RecordedOutcome::File(result) => result.clone(),
+                _ => Err(reused_operation(operation_id)),
+            }
+        })
+    }
+
+    pub(super) fn replay_filesystem(
+        &self,
+        operation_id: &OperationId,
+        request: &RecordedRequest,
+    ) -> Option<Result<FilesystemResponse>> {
+        self.operations.get(operation_id).map(|record| {
+            record.validate_request(request)?;
+            match &record.outcome {
+                RecordedOutcome::Filesystem(result) => result.clone(),
+                _ => Err(reused_operation(operation_id)),
             }
         })
     }
@@ -308,6 +330,8 @@ pub(super) enum MutationKind {
     WriteStdin,
     CloseStdin,
     Resize,
+    File,
+    Filesystem,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -375,6 +399,8 @@ pub(super) enum RecordedOutcome {
     State(Result<AgentState>),
     Unit(Result<()>),
     Process(Result<AgentProcess>),
+    File(Result<FileResponse>),
+    Filesystem(Result<FilesystemResponse>),
 }
 
 fn reused_operation(operation_id: &OperationId) -> a3s_oci_sdk::Error {

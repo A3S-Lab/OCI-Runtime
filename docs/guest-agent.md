@@ -351,7 +351,8 @@ cargo zigbuild -p a3s-oci-agent --release `
 
 `a3s-oci agent-vm-smoke` proves the authenticated
 guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact
-eighteen-operation advertisement. `a3s-oci oci-vm-smoke` additionally loads a
+twenty-operation advertisement, including `file` and `filesystem`.
+`a3s-oci oci-vm-smoke` additionally loads a
 bundle below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, bounded running wait, exact
 repeated init status, exact-target exec replay, duplicate process-ID rejection,

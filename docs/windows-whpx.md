@@ -30,7 +30,7 @@ The runtime:
    Linux rootfs, and verifies a guest-written marker through virtiofs;
 9. boots `/usr/bin/a3s-oci-agent`, carries its host-CID port 4093 connection
    through libkrun to the protected pipe, authenticates the exact shim PID and
-   one-time token, negotiates protocol version 8, and waits for zero
+   one-time token, negotiates protocol version 9, and waits for zero
    guest/shim exit;
 10. runs a fixed OCI bundle through distinct create, start, init signal/wait,
     exact-target exec, process signal/wait, live resource update and stats,
@@ -119,11 +119,11 @@ A successful end-to-end agent VM smoke additionally proves that:
 - guest AF_VSOCK reaches the protected Windows named pipe through libkrun;
 - only the exact spawned shim PID is accepted before the token is sent;
 - the real guest authenticates the one-time token and negotiates protocol
-  version 8;
+  version 9;
 - the agent version and `x86_64` guest architecture are reported;
 - the guest advertises exactly create, state, start, kill, delete, wait, exec,
   signal-process, wait-process, pause, resume, processes, update, stats,
-  read-output, write-stdin, close-stdin, and resize;
+  read-output, write-stdin, close-stdin, resize, file, and filesystem;
 - the shim reports every VM configuration stage and a zero guest exit;
 - the host rejects an existing console destination rather than overwriting
   it.
@@ -235,7 +235,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 The default profile requires:
 
-- 25 consecutive full protocol-v8 OCI lifecycles;
+- 25 consecutive full protocol-v9 OCI lifecycles;
 - three waves of two independent VMs and three two-container lifecycles inside
   one authenticated VM;
 - cleanup without a normal delete after create, start, and kill;
@@ -375,7 +375,7 @@ succeed. Driver resolution must reject `probe-only` readiness rather than
 silently treating host capability as runtime support.
 
 The runtime now contains a qualification-only `WhpxRuntimeDriver` candidate.
-It uses the same eighteen-operation adapter as native Linux, owns one VM per
+It uses the same twenty-operation adapter as native Linux, owns one VM per
 exact dedicated-VM generation, retains the VM across retryable create calls,
 and reaps terminal create failures, deletes, and driver shutdown exactly once.
 Opening it requires a guest system root below the runtime root, the fixed

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
+    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -106,6 +107,16 @@ pub trait GuestAgentService: Send + Sync {
     async fn resize(&self, _request: AgentResizeRequest) -> Result<()> {
         Err(Error::unsupported("agent-resize"))
     }
+
+    /// Upload or download one bounded file through the retained container root.
+    async fn file(&self, _request: FileRequest) -> Result<FileResponse> {
+        Err(Error::unsupported("agent-file"))
+    }
+
+    /// Inspect or mutate the retained container filesystem.
+    async fn filesystem(&self, _request: FilesystemRequest) -> Result<FilesystemResponse> {
+        Err(Error::unsupported("agent-filesystem"))
+    }
 }
 
 /// Authenticate, negotiate, and serve one host connection until clean EOF.
@@ -172,7 +183,9 @@ where
 
         let outcome = match dispatch(service.as_ref(), envelope.request).await {
             Ok(response) => match response.validate() {
-                Ok(()) => ResponseOutcome::Succeeded { response },
+                Ok(()) => ResponseOutcome::Succeeded {
+                    response: Box::new(response),
+                },
                 Err(error) => ResponseOutcome::Failed {
                     error: invalid_service_response(error),
                 },
@@ -262,6 +275,11 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             service.resize(request).await?;
             Ok(AgentResponse::TerminalResized(target))
         }
+        AgentRequest::File(request) => service.file(request).await.map(AgentResponse::File),
+        AgentRequest::Filesystem(request) => service
+            .filesystem(request)
+            .await
+            .map(AgentResponse::Filesystem),
     }
 }
 

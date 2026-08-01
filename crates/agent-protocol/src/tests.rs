@@ -7,9 +7,10 @@ use std::task::{Context, Poll};
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
     async_trait, ContainerId, ContainerStats, ContainerTarget, CpuStats, DeleteMode, Error,
-    ErrorCode, ExitStatus, Generation, IoMode, MemoryStats, OciBundle, OperationContext,
-    OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    Result, Signal, TerminalSize,
+    ErrorCode, ExitStatus, FileOp, FileRequest, FileResponse, FilesystemEntry, FilesystemEntryKind,
+    FilesystemOp, FilesystemRequest, FilesystemResponse, Generation, IoMode, MemoryStats,
+    OciBundle, OperationContext, OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo,
+    ProcessRecord, ProcessTarget, Result, Signal, TerminalSize,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 
@@ -87,6 +88,8 @@ impl GuestAgentService for TestAgent {
                 crate::AgentOperation::WriteStdin,
                 crate::AgentOperation::CloseStdin,
                 crate::AgentOperation::Resize,
+                crate::AgentOperation::File,
+                crate::AgentOperation::Filesystem,
             ],
         )
         .expect("valid test capabilities")
@@ -468,6 +471,47 @@ impl GuestAgentService for TestAgent {
         Ok(())
     }
 
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        ensure_test_container(
+            &self.state.lock().expect("agent state lock"),
+            &request.target,
+        )?;
+        Ok(FileResponse {
+            target: request.target,
+            data: (request.op == FileOp::Download).then(String::new),
+            size: 0,
+        })
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        ensure_test_container(
+            &self.state.lock().expect("agent state lock"),
+            &request.target,
+        )?;
+        let entries = (request.op == FilesystemOp::ListDir)
+            .then(|| FilesystemEntry {
+                name: "agent.txt".to_string(),
+                kind: FilesystemEntryKind::File,
+                path: "/agent.txt".to_string(),
+                size: 0,
+                mode: 0o644,
+                permissions: "-rw-r--r--".to_string(),
+                owner: "root".to_string(),
+                group: "root".to_string(),
+                modified_seconds: 0,
+                modified_nanos: 0,
+                symlink_target: None,
+                metadata: BTreeMap::new(),
+            })
+            .into_iter()
+            .collect();
+        Ok(FilesystemResponse {
+            target: request.target,
+            entry: None,
+            entries,
+        })
+    }
+
     async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
         let mut agent = self.state.lock().expect("agent state lock");
         let current = agent
@@ -482,6 +526,21 @@ impl GuestAgentService for TestAgent {
         }
         agent.states.remove(&request.target.id);
         Ok(())
+    }
+}
+
+fn ensure_test_container(agent: &TestAgentState, target: &ContainerTarget) -> Result<()> {
+    let state = agent
+        .states
+        .get(&target.id)
+        .ok_or_else(|| Error::new(ErrorCode::NotFound, "guest container does not exist"))?;
+    if state.target() == target {
+        Ok(())
+    } else {
+        Err(Error::new(
+            ErrorCode::Conflict,
+            "guest container generation does not match",
+        ))
     }
 }
 
@@ -740,6 +799,64 @@ async fn negotiates_and_round_trips_the_core_oci_lifecycle() {
 }
 
 #[tokio::test]
+async fn protocol_nine_round_trips_generation_fenced_filesystem_requests() {
+    let (host, guest) = tokio::io::duplex(1024 * 1024);
+    let server = spawn_server(guest, token(33));
+    let client = AgentClient::connect_for_test(host, token(33), 9, 9)
+        .await
+        .expect("connect protocol-nine agent client");
+    assert!(client
+        .hello()
+        .capabilities()
+        .operations()
+        .contains(&crate::AgentOperation::File));
+    assert!(client
+        .hello()
+        .capabilities()
+        .operations()
+        .contains(&crate::AgentOperation::Filesystem));
+
+    let create = create_request_for("filesystem-container", 5, "filesystem-create");
+    let target = create.target.clone();
+    client.create(create).await.expect("agent create");
+    let upload = client
+        .file(FileRequest {
+            target: target.clone(),
+            op: FileOp::Upload,
+            path: "/agent.txt".to_string(),
+            data: Some(String::new()),
+            user: None,
+            context: Some(OperationContext::new(operation_id("filesystem-upload"))),
+        })
+        .await
+        .expect("agent file upload");
+    assert_eq!(upload.target, target);
+    assert_eq!(upload.size, 0);
+
+    let listed = client
+        .filesystem(FilesystemRequest {
+            target: target.clone(),
+            op: FilesystemOp::ListDir,
+            path: "/".to_string(),
+            destination: None,
+            depth: 1,
+            user: None,
+            context: None,
+        })
+        .await
+        .expect("agent filesystem listing");
+    assert_eq!(listed.target, target);
+    assert_eq!(listed.entries.len(), 1);
+    assert_eq!(listed.entries[0].path, "/agent.txt");
+
+    drop(client);
+    server
+        .await
+        .expect("server task")
+        .expect("clean server shutdown");
+}
+
+#[tokio::test]
 async fn explicit_close_is_clone_wide_idempotent_and_stops_the_server() {
     let (host, guest) = tokio::io::duplex(1024 * 1024);
     let server = spawn_server(guest, token(31));
@@ -833,7 +950,7 @@ async fn explicit_close_waits_for_an_in_flight_request_before_closing_the_stream
                 version: 1,
                 request_id: request.request_id,
                 outcome: ResponseOutcome::Succeeded {
-                    response: AgentResponse::State(state),
+                    response: Box::new(AgentResponse::State(state)),
                 },
             },
         )
@@ -1152,7 +1269,7 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 9, 9)
+    let error = AgentClient::connect_for_test(host, token(9), 10, 10)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
@@ -1237,7 +1354,7 @@ async fn correlation_failure_permanently_poisoned_the_client_connection() {
                 version: 1,
                 request_id: request.request_id + 1,
                 outcome: ResponseOutcome::Succeeded {
-                    response: AgentResponse::State(state),
+                    response: Box::new(AgentResponse::State(state)),
                 },
             },
         )

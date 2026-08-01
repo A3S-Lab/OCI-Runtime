@@ -83,7 +83,7 @@ field and platform feature is implemented.
 | --- | --- | --- |
 | M0 - Boundary freeze | Generic public contracts, attachment schemas, driver/isolation vocabulary, and state ownership | Box depends only on `a3s-oci-sdk`; runtime behavior does not depend on Box types |
 | M1 - Host service | Multi-driver registry, secure Unix/Windows service endpoints, durable routing, state migration, restart reconciliation, and reattachment/cleanup | A service restart at every lifecycle boundary preserves or safely terminates the exact workload |
-| M2 - Windows experimental | Launch-ready WHPX driver, protected runtime storage, pinned kernel, immutable system root, authenticated protocol-v8 agent, and leak gates | A fresh Windows host passes complete SDK lifecycle, I/O, resource, recovery, and multi-container suites |
+| M2 - Windows experimental | Launch-ready WHPX driver, protected runtime storage, pinned kernel, immutable system root, authenticated protocol-v9 agent, and leak gates | A fresh Windows host passes complete SDK lifecycle, I/O, filesystem, resource, recovery, and multi-container suites |
 | M3 - Box cutover | Stable SDK surface and Linux/KVM/HVF drivers needed by the unified Box adapter | Box routes `microvm` and `sandbox` through the SDK with no silent fallback |
 | M4 - containerd | Runtime-v2 shim using OCI bundles and SDK operations directly | containerd task, restart, I/O, and cleanup suites pass without invoking the Box CLI |
 | M5 - parity extensions | Storage/network attachments, reusable guest sessions, checkpoint/restore, and TEE mechanisms | Box storage, networking, warm-pool, snapshot, and security gates pass through public extensions |
@@ -108,7 +108,8 @@ Completed:
   reap, providing the ownership boundary required by a long-lived VM driver;
 - single-owner utility-VM sessions with clone-safe guest access and idempotent
   retained cleanup evidence, exercised by WHPX/HVF lifecycle harnesses;
-- one shared eighteen-operation guest-to-driver adapter, plus a
+- one shared twenty-operation guest-to-driver adapter, including exact-target
+  file transfer and filesystem metadata/mutations, plus a
   qualification-only WHPX `RuntimeDriver` candidate that owns one VM per
   exact dedicated-VM generation, serializes same-ID launch without blocking
   distinct container VMs, retains retryable create sessions, reaps terminal
@@ -293,7 +294,8 @@ Completed:
   executor with version-filtered capability advertisement, plus protocol-v4
   pause, resume, and live process inventory, protocol-v5 update and stats,
   protocol-v6 bounded process I/O, protocol-v7 terminal resize, and
-  protocol-v8 durable process-I/O mutation contexts with exact session replay;
+  protocol-v8 durable process-I/O mutation contexts with exact session replay,
+  plus protocol-v9 descriptor-confined file and filesystem sessions;
 - existing `features` CLI path routed through the Rust SDK;
 - reconnectable local SDK endpoints that expose the first broken-stream result
   without hidden replay, discard the poisoned stream, and renegotiate on the
@@ -470,7 +472,7 @@ the utility-VM host/agent transport portion remains open.
 - [x] Run a fixed configured process through distinct OCI create and start
   calls.
 - [x] Factor native and transport-backed guest execution through one exact
-  eighteen-operation driver adapter.
+  twenty-operation driver adapter.
 - [x] Implement a one-VM-per-container WHPX `RuntimeDriver` candidate with
   exact-generation routing, retry/terminal-failure ownership, delete and
   whole-driver cleanup, and protected-root bundle containment tests. Keep it
@@ -762,8 +764,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   stats, and ordered events through the public SDK, including capability
   preflight, binding drift rejection, durable Box claims, and lost-response
   replay.
-- [ ] Preserve files, Box log policy, and complete stop, kill, recovery, and
-  cleanup parity.
+- [x] Preserve exact-generation file upload/download and filesystem
+  stat/mkdir/move/list/remove through the public SDK with bounded payloads,
+  capability preflight, mutation replay identities, descriptor-confined
+  rootfs resolution, and Box type conversion.
+- [ ] Preserve Box log policy and complete stop, kill, recovery, and cleanup
+  parity.
 - [ ] Prove Box process-session recovery across an out-of-process runtime
   restart on real native Linux and utility-VM drivers.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI

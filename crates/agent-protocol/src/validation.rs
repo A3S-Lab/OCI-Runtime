@@ -242,6 +242,14 @@ impl AgentRequest {
             Self::WriteStdin(request) => request.validate(),
             Self::CloseStdin(request) => request.validate(),
             Self::Resize(request) => request.validate(),
+            Self::File(request) => {
+                request.validate()?;
+                validate_exact_target(&request.target)
+            }
+            Self::Filesystem(request) => {
+                request.validate()?;
+                validate_exact_target(&request.target)
+            }
         }
     }
 
@@ -281,6 +289,7 @@ impl AgentRequest {
             Self::Update(_) | Self::Stats(_) => 5,
             Self::ReadOutput(_) | Self::WriteStdin(_) | Self::CloseStdin(_) => 6,
             Self::Resize(_) => 7,
+            Self::File(_) | Self::Filesystem(_) => 9,
         }
     }
 }
@@ -367,6 +376,8 @@ impl AgentResponse {
             Self::StdinWritten(target)
             | Self::StdinClosed(target)
             | Self::TerminalResized(target) => validate_exact_process_target(target),
+            Self::File(response) => validate_exact_target(&response.target),
+            Self::Filesystem(response) => validate_exact_target(&response.target),
         }
     }
 
@@ -379,6 +390,7 @@ impl AgentResponse {
             Self::Stats(_) => 5,
             Self::Output(_) | Self::StdinWritten(_) | Self::StdinClosed(_) => 6,
             Self::TerminalResized(_) => 7,
+            Self::File(_) | Self::Filesystem(_) => 9,
         };
         if selected_version < minimum_version {
             return Err(protocol_error(

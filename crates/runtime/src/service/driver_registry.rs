@@ -263,7 +263,7 @@ fn validate_driver_operations(
         RuntimeOperation::Kill,
         RuntimeOperation::Delete,
     ];
-    const HOST_SUPPORTED: [RuntimeOperation; 18] = [
+    const HOST_SUPPORTED: [RuntimeOperation; 20] = [
         RuntimeOperation::Create,
         RuntimeOperation::State,
         RuntimeOperation::Start,
@@ -282,6 +282,8 @@ fn validate_driver_operations(
         RuntimeOperation::WriteStdin,
         RuntimeOperation::CloseStdin,
         RuntimeOperation::Resize,
+        RuntimeOperation::File,
+        RuntimeOperation::Filesystem,
     ];
     let reported = operations.iter().copied().collect::<BTreeSet<_>>();
     if reported.len() != operations.len() {
