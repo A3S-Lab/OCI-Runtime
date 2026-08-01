@@ -6,6 +6,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A protected Windows host SDK service that binds the first local named-pipe
+  instance with a verified current-user/LocalSystem DACL, rejects remote
+  clients, serves bounded concurrent connections, and releases the endpoint
+  on graceful shutdown.
 - A deterministic multi-driver host registry that selects exactly one
   launch-ready driver for each requested isolation class, routes every later
   operation through the driver persisted in the container record, preserves

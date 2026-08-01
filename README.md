@@ -117,7 +117,9 @@ Workload calls require an explicitly supplied launch-ready `RuntimeDriver`.
 - **Typed SDK and IPC**: Expose an async `Send + Sync` Rust contract with
   bounded local IPC over Unix sockets or Windows named pipes; foreground
   `run` composes the durable create/start/wait/delete calls in the client
-  without adding a second lifecycle operation
+  without adding a second lifecycle operation. The Windows host listener owns
+  the first local pipe instance, verifies its current-user/LocalSystem DACL,
+  rejects remote clients, and serves a bounded concurrent client set
 - **Authenticated Guest Protocol**: Bind exact bundles and generations to a
   version-negotiated host/guest session with one-time token authentication
 - **Retained Conformance Evidence**: Lock the OCI schemas and normative

@@ -40,6 +40,8 @@ mod state;
 mod utility_vm_soak_report;
 #[cfg(windows)]
 mod windows_security;
+#[cfg(windows)]
+mod windows_service;
 
 #[cfg(windows)]
 pub use agent_pipe::WindowsAgentPipeListener;
@@ -94,6 +96,8 @@ pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,
     MACOS_HVF_SOAK_SCHEMA_VERSION, MAX_MACOS_HVF_SOAK_ITERATIONS,
 };
+#[cfg(windows)]
+pub use windows_service::WindowsHostService;
 
 use a3s_oci_core::RuntimeFeatures;
 

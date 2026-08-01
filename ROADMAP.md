@@ -102,6 +102,8 @@ Completed:
 - versioned driver status, readiness, isolation, and evidence;
 - deterministic multi-driver selection and durable recorded-driver routing,
   including fail-closed startup audit for missing or isolation-drifted drivers;
+- protected Windows SDK host serving over a local named pipe with first-owner,
+  DACL, remote-client rejection, concurrency, and shutdown-release gates;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;
