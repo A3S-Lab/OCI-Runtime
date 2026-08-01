@@ -166,7 +166,7 @@ enum Command {
         /// Extracted Linux system root containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
-        /// OCI bundle below shares/<container>/<generation>.
+        /// OCI bundle below `shares/<container>/<generation>`.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
         /// Exact path-safe container identity used by the candidate driver.

@@ -317,6 +317,7 @@ crates/cli/             capability inspection and real-host qualification gates
 - [Roadmap and release gates](ROADMAP.md)
 - [Durable lifecycle and recovery](docs/durable-state.md)
 - [SDK transport](docs/sdk-transport.md)
+- [Versioned attachment contracts](docs/attachment-contracts.md)
 - [Guest-agent protocol](docs/agent-protocol.md)
 - [OCI 1.3 conformance contract](docs/oci-conformance.md)
 - [Normative coverage](docs/normative-coverage.md)

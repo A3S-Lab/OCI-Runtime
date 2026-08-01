@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerRecord, CreateRequest, DeleteRequest, Error,
-    IsolationRequest, KillRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
-    ProcessIo, Result, RuntimeClient, RuntimeInfo, StartRequest, StateRequest,
+    async_trait, ContainerId, ContainerRecord, CreateAttachments, CreateRequest, DeleteRequest,
+    Error, IsolationRequest, KillRequest, OciBundle, OciRuntimeService, OperationContext,
+    OperationId, ProcessIo, Result, RuntimeClient, RuntimeInfo, StartRequest, StateRequest,
 };
 use serde_json::json;
 
@@ -84,12 +84,14 @@ async fn client_preserves_complete_oci_spec_at_service_boundary() {
         .expect("current directory")
         .join("sdk-contract-bundle");
     let bundle = OciBundle::from_spec(bundle_path, spec).expect("build immutable bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("build attachment contract");
     let request = CreateRequest {
         context: OperationContext::new(OperationId::new("operation-1").expect("operation ID")),
         id: ContainerId::new("container-1").expect("container ID"),
         bundle,
         isolation: IsolationRequest::DedicatedVm,
-        io: ProcessIo::default(),
+        attachments,
     };
 
     let service = Arc::new(RecordingService::default());

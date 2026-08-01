@@ -2,10 +2,11 @@ use std::sync::{Arc, Mutex};
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerRecord, CreateRequest, DeleteMode, DeleteRequest,
-    DriverKind, Error, ErrorCode, ExitStatus, Generation, IsolationClass, IsolationRequest,
-    KillRequest, OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo, Result,
-    RunRequest, RuntimeClient, RuntimeInfo, StartRequest, StateRequest, WaitRequest,
+    async_trait, ContainerId, ContainerRecord, CreateAttachments, CreateRequest, DeleteMode,
+    DeleteRequest, DriverKind, Error, ErrorCode, ExitStatus, Generation, IsolationClass,
+    IsolationRequest, KillRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
+    ProcessIo, Result, RunRequest, RuntimeClient, RuntimeInfo, StartRequest, StateRequest,
+    WaitRequest,
 };
 use serde_json::json;
 
@@ -257,13 +258,15 @@ fn run_request() -> RunRequest {
         spec,
     )
     .expect("construct OCI bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("construct attachment contract");
     RunRequest {
         create: CreateRequest {
             context: context("run-create"),
             id: ContainerId::new("run-container").expect("container ID"),
             bundle,
             isolation: IsolationRequest::SharedHostKernel,
-            io: ProcessIo::default(),
+            attachments,
         },
         start_context: context("run-start"),
         delete_context: context("run-delete"),
@@ -289,6 +292,7 @@ fn record(
         driver: DriverKind::NativeLinux,
         isolation: IsolationClass::SharedHostKernel,
         config_digest: "0".repeat(64),
+        attachments_digest: Some(format!("sha256:{}", "0".repeat(64))),
     })
 }
 

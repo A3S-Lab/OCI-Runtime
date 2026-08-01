@@ -1,6 +1,6 @@
 use a3s_oci_sdk::{
-    ContainerId, ContainerRecord, Error, ExitStatus, Generation, OperationId, ProcessId,
-    ProcessRecord, RuntimeEvent,
+    ContainerId, ContainerRecord, CreateAttachments, Error, ExitStatus, Generation, OperationId,
+    ProcessId, ProcessRecord, RuntimeEvent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,10 @@ pub(super) struct StoredContainer {
     pub schema_version: String,
     pub id: ContainerId,
     pub record: ContainerRecord,
+    /// Exact public attachment contract. `None` identifies a legacy record
+    /// created before SDK attachment protocol v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<CreateAttachments>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_operation: Option<OperationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

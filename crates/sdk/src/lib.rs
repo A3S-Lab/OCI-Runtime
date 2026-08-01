@@ -3,6 +3,7 @@
 //! The SDK owns the public contract. Runtime drivers, WHPX, libkrun, and
 //! durable-state implementation details remain behind [`OciRuntimeService`].
 
+mod attachment;
 mod bundle;
 mod client;
 mod conformance;
@@ -19,6 +20,10 @@ pub use a3s_oci_core::{
     DriverCapability, DriverKind, DriverReadiness, IsolationClass, RuntimeFeatures,
 };
 pub use async_trait::async_trait;
+pub use attachment::{
+    AttachmentCapabilities, AttachmentSource, ConfigurationAttachment, CreateAttachments,
+    RuntimeExtensionAttachment, ATTACHMENT_SCHEMA_V1,
+};
 pub use bundle::{
     OciBundle, CONFIG_FILE_NAME, MAX_CONFIG_BYTES, OCI_RUNTIME_SPEC_VERSION_MAX,
     OCI_RUNTIME_SPEC_VERSION_MIN,

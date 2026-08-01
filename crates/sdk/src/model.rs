@@ -6,8 +6,8 @@ use oci_spec::runtime::{Features, LinuxResources, Process, State};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use crate::{
-    ContainerId, Error, ErrorCode, Generation, OciBundle, OperationId, ProcessId, Result,
-    TrustDomainId,
+    AttachmentCapabilities, ContainerId, CreateAttachments, Error, ErrorCode, Generation,
+    OciBundle, OperationId, ProcessId, Result, TrustDomainId,
 };
 
 /// Runtime operation advertised through feature discovery.
@@ -49,6 +49,8 @@ pub struct RuntimeInfo {
     pub drivers: RuntimeFeatures,
     /// Operations implemented by this exact service and driver set.
     pub operations: Vec<RuntimeOperation>,
+    /// Versioned create-time attachment schemas and optional extensions.
+    pub attachments: AttachmentCapabilities,
 }
 
 /// Explicit isolation requirement. Drivers may never silently weaken it.
@@ -214,7 +216,8 @@ pub struct CreateRequest {
     pub id: ContainerId,
     pub bundle: OciBundle,
     pub isolation: IsolationRequest,
-    pub io: ProcessIo,
+    /// Complete versioned rootfs, mount, network, I/O, secret, and extension contract.
+    pub attachments: CreateAttachments,
 }
 
 /// Client-side composition of the complete foreground OCI lifecycle.
@@ -412,7 +415,8 @@ pub struct RestoreRequest {
     pub bundle: OciBundle,
     pub checkpoint_directory: PathBuf,
     pub isolation: IsolationRequest,
-    pub io: ProcessIo,
+    /// Complete versioned attachment contract for the restored generation.
+    pub attachments: CreateAttachments,
 }
 
 /// Durable runtime state with generation and effective isolation evidence.
@@ -423,6 +427,10 @@ pub struct ContainerRecord {
     pub driver: DriverKind,
     pub isolation: IsolationClass,
     pub config_digest: String,
+    /// Exact create-time attachment evidence. Legacy records created before
+    /// attachment protocol v1 do not contain this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments_digest: Option<String>,
 }
 
 /// OCI state annotation used to expose the runtime's freezer state without

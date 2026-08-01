@@ -17,13 +17,14 @@ use a3s_oci_sdk::oci_spec::runtime::{
 };
 use a3s_oci_sdk::{
     async_trait, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, ContainerTarget, CpuStats, CreateRequest, DeleteMode, DeleteRequest, Error,
-    ErrorCode, EventsRequest, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest,
-    KillRequest, ListRequest, MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator,
-    OperationContext, OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord,
-    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind,
-    RuntimeOperation, Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
-    TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ContainerStats, ContainerTarget, CpuStats, CreateAttachments, CreateRequest, DeleteMode,
+    DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, Generation, IoMode,
+    IsolationRequest, KillRequest, ListRequest, MemoryStats, OciBundle, OciRuntimeService,
+    OciSchemaValidator, OperationContext, OperationId, OutputChunk, OutputStream, ProcessId,
+    ProcessIo, ProcessRecord, ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest,
+    Result, RuntimeEventKind, RuntimeOperation, Signal, SignalProcessRequest, StartRequest,
+    StateRequest, StatsRequest, TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest,
+    WaitRequest, WriteStdinRequest, ATTACHMENT_SCHEMA_V1,
 };
 
 use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
@@ -59,9 +60,9 @@ const TEST_CONFIG: &str = concat!(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DriverCall {
     Recover(ContainerRecord),
-    Create(DriverCreateRequest),
+    Create(Box<DriverCreateRequest>),
     State(ContainerTarget),
-    Start(DriverStartRequest),
+    Start(Box<DriverStartRequest>),
     Kill(DriverKillRequest),
     Delete(DriverDeleteRequest),
     Wait(DriverWaitRequest),
@@ -284,7 +285,7 @@ impl RuntimeDriver for RecordingDriver {
         self.calls
             .lock()
             .expect("driver calls lock")
-            .push(DriverCall::Create(request.clone()));
+            .push(DriverCall::Create(Box::new(request.clone())));
         if let Some(error) = self.take_failure("create") {
             return Err(error);
         }
@@ -325,7 +326,7 @@ impl RuntimeDriver for RecordingDriver {
         self.calls
             .lock()
             .expect("driver calls lock")
-            .push(DriverCall::Start(request.clone()));
+            .push(DriverCall::Start(Box::new(request.clone())));
         if let Some(error) = self.take_failure("start") {
             return Err(error);
         }
@@ -950,13 +951,15 @@ fn operation_id(value: &str) -> OperationId {
 }
 
 fn create_request(bundle_directory: &Path, operation: &str) -> CreateRequest {
+    let bundle = OciBundle::from_json(bundle_directory.to_path_buf(), TEST_CONFIG)
+        .expect("valid OCI bundle");
     CreateRequest {
         context: OperationContext::new(operation_id(operation)),
         id: container_id("sdk-container"),
-        bundle: OciBundle::from_json(bundle_directory.to_path_buf(), TEST_CONFIG)
-            .expect("valid OCI bundle"),
+        attachments: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("valid attachment contract"),
+        bundle,
         isolation: IsolationRequest::DedicatedVm,
-        io: ProcessIo::default(),
     }
 }
 
@@ -1038,6 +1041,7 @@ async fn reports_only_operations_that_are_currently_implemented() {
         .expect("feature discovery must succeed");
 
     assert_eq!(info.operations, vec![RuntimeOperation::Features]);
+    assert!(info.attachments.supports_schema(ATTACHMENT_SCHEMA_V1));
     assert_eq!(info.oci.oci_version_min(), "1.0.0");
     assert_eq!(info.oci.oci_version_max(), "1.3.0");
     assert_eq!(info.oci.hooks().as_deref(), Some([].as_slice()));
@@ -1433,6 +1437,11 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
     assert_eq!(*created.state.status(), ContainerState::Created);
     assert_eq!(*created.state.pid(), Some(4_242));
     assert_eq!(created.generation, Generation(1));
+    let expected_attachments_digest = create.attachments.digest().expect("attachment digest");
+    assert_eq!(
+        created.attachments_digest.as_deref(),
+        Some(expected_attachments_digest.as_str())
+    );
     assert_eq!(
         service.create(create.clone()).await.expect("replay create"),
         created
@@ -1530,6 +1539,7 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
     };
     assert_eq!(driver_create.bundle.config_json(), TEST_CONFIG);
     assert_eq!(driver_create.target.generation, Some(Generation(1)));
+    assert_eq!(driver_create.attachment_contract, create.attachments);
 
     let error = service
         .state(StateRequest {
@@ -1538,6 +1548,53 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
         .await
         .expect_err("deleted state must not remain visible");
     assert_eq!(error.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn required_runtime_extension_fails_before_durable_or_driver_mutation() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("extension-bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+    let bundle = OciBundle::from_json(
+        bundle_directory,
+        concat!(
+            "{\n",
+            "  \"ociVersion\": \"1.3.0\",\n",
+            "  \"process\": {\"terminal\": false, \"user\": {\"uid\": 0, \"gid\": 0}, \"args\": [\"/bin/true\"], \"cwd\": \"/\"},\n",
+            "  \"root\": {\"path\": \"rootfs\", \"readonly\": true},\n",
+            "  \"annotations\": {\"dev.a3s.network.tsi\": \"proxy-v1\"}\n",
+            "}\n"
+        ),
+    )
+    .expect("extension bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("base attachments")
+        .add_extension_from_annotation(&bundle, "dev.a3s.network.tsi", 1, true)
+        .expect("required extension declaration")
+        .attach_network_extension("dev.a3s.network.tsi")
+        .expect("network extension classification");
+    let request = CreateRequest {
+        context: OperationContext::new(operation_id("required-extension-create")),
+        id: container_id("required-extension-container"),
+        bundle,
+        isolation: IsolationRequest::DedicatedVm,
+        attachments,
+    };
+
+    let error = service
+        .create(request.clone())
+        .await
+        .expect_err("unsupported required extension must fail");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("dev.a3s.network.tsi"));
+    assert!(driver.calls().is_empty());
+    assert!(!temporary
+        .path()
+        .join("state/containers")
+        .join(request.id.as_str())
+        .exists());
 }
 
 #[cfg(target_os = "linux")]

@@ -7,10 +7,13 @@
 runtime calls. The transport maps every trait method; it does not invoke the
 CLI or expose WHPX, libkrun, or native Linux driver internals.
 
-The current wire contract is protocol version 2. Version 2 makes
-`OperationContext` mandatory for write-stdin, close-stdin, and resize, so the
-transport rejects version-1 peers rather than silently accepting mutations
-without durable replay identity:
+The current wire contract is protocol version 3. Version 3 makes the complete
+`a3s.oci.attachments.v1` manifest mandatory for create and restore, moves init
+process I/O inside that versioned contract, and returns its durable digest.
+The transport rejects protocol-2 peers rather than silently dropping rootfs,
+mount, network, I/O, secret, or runtime-extension evidence. Version 2 had
+already made `OperationContext` mandatory for write-stdin, close-stdin, and
+resize:
 
 1. the client sends its inclusive supported protocol range;
 2. the server selects the highest common version or rejects the connection;
@@ -103,12 +106,13 @@ the wire protocol, so there is only one lifecycle implementation:
 
 ```rust,no_run
 use a3s_oci_sdk::{
-    ContainerId, CreateRequest, IsolationRequest, OperationContext,
-    OperationId, ProcessIo, RunRequest, RuntimeClient,
+    ContainerId, CreateAttachments, CreateRequest, IsolationRequest,
+    OperationContext, OperationId, ProcessIo, RunRequest, RuntimeClient,
 };
 
 # async fn run(client: RuntimeClient, bundle: a3s_oci_sdk::OciBundle)
 #     -> a3s_oci_sdk::Result<()> {
+let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())?;
 let status = client
     .run(RunRequest {
         create: CreateRequest {
@@ -116,7 +120,7 @@ let status = client
             id: ContainerId::new("box-42")?,
             bundle,
             isolation: IsolationRequest::SharedHostKernel,
-            io: ProcessIo::default(),
+            attachments,
         },
         start_context: OperationContext::new(OperationId::new("box-42-start")?),
         delete_context: OperationContext::new(OperationId::new("box-42-delete")?),
@@ -233,11 +237,13 @@ does not silently choose those authorization policies.
 
 ## Validation Boundary
 
-`CreateRequest` and `RestoreRequest` carry `OciBundle`. Its wire decoder
-revalidates the absolute bundle path, exact `config.json`, supported OCI
-version, official schema, unknown-property policy, and SHA-256 digest before
-the service receives the request. The transport therefore cannot be used to
-bypass the SDK's bundle checks.
+`CreateRequest` and `RestoreRequest` carry `OciBundle` plus
+`CreateAttachments`. Their wire decoders revalidate the absolute bundle path,
+exact `config.json`, supported OCI version, official schema, unknown-property
+policy, configuration SHA-256, attachment JSON Pointers, per-value digests,
+category completeness, and the process-I/O contract before the service
+receives the request. The transport therefore cannot be used to bypass either
+the SDK's bundle checks or its attachment boundary.
 
 Every request implements `ValidateRequest`. The in-process `RuntimeClient`,
 transport client, and server call it independently. The server-side check is

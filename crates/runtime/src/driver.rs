@@ -2,9 +2,9 @@ use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode,
-    ExitStatus, IsolationRequest, OciBundle, OperationContext, OutputChunk, ProcessIo,
-    ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
+    async_trait, ContainerRecord, ContainerStats, ContainerTarget, CreateAttachments, DeleteMode,
+    Error, ErrorCode, ExitStatus, IsolationRequest, OciBundle, OperationContext, OutputChunk,
+    ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -221,6 +221,8 @@ pub struct DriverCreateRequest {
     pub isolation: IsolationRequest,
     /// Host-side standard-I/O disposition for the init process.
     pub io: ProcessIo,
+    /// Versioned, digest-bound public attachment contract.
+    pub attachment_contract: CreateAttachments,
     /// Process-local native resources, excluded from the wire protocol.
     pub attachments: DriverCreateAttachments,
 }

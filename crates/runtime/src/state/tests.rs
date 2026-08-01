@@ -4,10 +4,10 @@ use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverKind;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, Generation, IoMode, IsolationRequest,
-    KillRequest, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget,
-    Signal, SignalProcessRequest, StartRequest, UpdateRequest, WaitProcessRequest,
+    ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest,
+    DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, Generation, IoMode,
+    IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo,
+    ProcessTarget, Signal, SignalProcessRequest, StartRequest, UpdateRequest, WaitProcessRequest,
 };
 use tempfile::TempDir;
 
@@ -60,9 +60,10 @@ fn create_request_with_config(
     CreateRequest {
         context: OperationContext::new(operation_id(operation)),
         id: container_id(container),
+        attachments: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("valid attachment contract"),
         bundle,
         isolation: IsolationRequest::DedicatedVm,
-        io: ProcessIo::default(),
     }
 }
 
@@ -144,6 +145,11 @@ async fn create_is_durable_idempotent_and_generation_fenced() {
     assert_eq!(prepared.generation, Generation(1));
     assert_eq!(*prepared.state.status(), ContainerState::Creating);
     assert_eq!(*prepared.state.pid(), None);
+    let attachment_digest = request.attachments.digest().expect("attachment evidence");
+    assert_eq!(
+        prepared.attachments_digest.as_deref(),
+        Some(attachment_digest.as_str())
+    );
 
     let resumed = store
         .prepare_create(&request, DriverKind::LibkrunWhpx)
@@ -200,6 +206,105 @@ async fn create_is_durable_idempotent_and_generation_fenced() {
             .expect("state must survive reopen"),
         completed
     );
+}
+
+#[tokio::test]
+async fn attachment_contract_is_fingerprinted_and_revalidated_after_reopen() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let request = create_request(
+        &bundle_directory,
+        "attachment-container",
+        "attachment-create",
+    );
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    store
+        .prepare_create(&request, DriverKind::LibkrunWhpx)
+        .await
+        .expect("prepare attachment create");
+    let created = store
+        .complete_create(&request.context.operation_id, 4_242)
+        .await
+        .expect("complete attachment create");
+    let expected_digest = request.attachments.digest().expect("attachment digest");
+    assert_eq!(
+        created.attachments_digest.as_deref(),
+        Some(expected_digest.as_str())
+    );
+    drop(store);
+
+    let reopened = DurableStateStore::open(&root)
+        .await
+        .expect("reopen state root");
+    assert_eq!(
+        reopened
+            .prepare_create(&request, DriverKind::LibkrunWhpx)
+            .await
+            .expect("replay exact attachment contract"),
+        RecordOperationPreparation::Replayed(created)
+    );
+
+    let mut changed = request.clone();
+    changed.attachments = changed.attachments.with_process_io(ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
+        terminal_size: None,
+    });
+    let error = reopened
+        .prepare_create(&changed, DriverKind::LibkrunWhpx)
+        .await
+        .expect_err("same operation ID cannot change attachment I/O");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("different request"));
+}
+
+#[tokio::test]
+async fn durable_attachment_tampering_fails_closed_after_reopen() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let request = create_request(
+        &bundle_directory,
+        "tampered-attachment-container",
+        "tampered-attachment-create",
+    );
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    create_container(&store, &request).await;
+    drop(store);
+
+    let record_path = root
+        .join("containers")
+        .join(request.id.as_str())
+        .join("record.json");
+    let mut stored: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&record_path).expect("read durable container record"),
+    )
+    .expect("decode durable container record");
+    stored["record"]["attachments_digest"] =
+        serde_json::Value::String(format!("sha256:{}", "f".repeat(64)));
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec_pretty(&stored).expect("encode tampered record"),
+    )
+    .expect("write tampered durable record");
+
+    let reopened = DurableStateStore::open(&root)
+        .await
+        .expect("reopen state root");
+    let error = reopened
+        .state(&ContainerTarget::current(request.id))
+        .await
+        .expect_err("tampered attachment evidence must fail closed");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("attachment digest"));
 }
 
 #[tokio::test]

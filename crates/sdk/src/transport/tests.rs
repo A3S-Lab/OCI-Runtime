@@ -5,10 +5,10 @@ use oci_spec::runtime::{Features, State};
 use serde_json::json;
 
 use crate::{
-    ContainerId, ContainerRecord, CreateRequest, DeleteRequest, DriverKind, Error, ErrorCode,
-    EventsRequest, Generation, IsolationClass, IsolationRequest, KillRequest, OciBundle,
-    OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, RuntimeFeatures,
-    RuntimeInfo, RuntimeOperation, StartRequest, StateRequest,
+    AttachmentCapabilities, ContainerId, ContainerRecord, CreateAttachments, CreateRequest,
+    DeleteRequest, DriverKind, Error, ErrorCode, EventsRequest, Generation, IsolationClass,
+    IsolationRequest, KillRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
+    ProcessIo, Result, RuntimeFeatures, RuntimeInfo, RuntimeOperation, StartRequest, StateRequest,
 };
 
 use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireResult};
@@ -31,6 +31,7 @@ impl OciRuntimeService for EchoService {
             oci,
             drivers: RuntimeFeatures::current(Vec::new()),
             operations: vec![RuntimeOperation::Features, RuntimeOperation::Create],
+            attachments: AttachmentCapabilities::base_v1(),
         })
     }
 
@@ -53,6 +54,7 @@ impl OciRuntimeService for EchoService {
             driver: DriverKind::NativeLinux,
             isolation: IsolationClass::SharedHostKernel,
             config_digest: request.bundle.config_digest().to_string(),
+            attachments_digest: Some(request.attachments.digest()?),
         })
     }
 
@@ -84,7 +86,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
     let client = RuntimeTransportClient::from_io(client_io)
         .await
         .expect("negotiate in-memory SDK transport");
-    assert_eq!(client.protocol_version(), 2);
+    assert_eq!(client.protocol_version(), 3);
 
     let info = client.features().await.expect("transport features");
     assert_eq!(
@@ -97,6 +99,8 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
         .join("transport-bundle");
     let exact_config = " {\n \"ociVersion\": \"1.3.0\",\n \"root\": {\"path\": \"rootfs\"}\n}\n";
     let bundle = OciBundle::from_json(bundle_directory, exact_config).expect("build bundle");
+    let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+        .expect("build attachment contract");
     let expected_digest = bundle.config_digest().to_string();
     let record = client
         .create(CreateRequest {
@@ -106,7 +110,7 @@ async fn negotiates_and_round_trips_typed_requests_responses_and_errors() {
             id: ContainerId::new("transport-container").expect("container ID"),
             bundle,
             isolation: IsolationRequest::SharedHostKernel,
-            io: ProcessIo::default(),
+            attachments,
         })
         .await
         .expect("transport create");
@@ -157,8 +161,8 @@ async fn client_reports_an_incompatible_server_protocol() {
         write_frame(
             &mut server_io,
             &ServerMessage::Reject {
-                protocol_min: 3,
-                protocol_max: 4,
+                protocol_min: 4,
+                protocol_max: 5,
                 message: "no common protocol".to_string(),
             },
         )
@@ -183,7 +187,7 @@ async fn client_rejects_a_mismatched_response_id() {
             .expect("read client hello")
             .expect("client hello frame");
         assert!(matches!(hello, ClientMessage::Hello { .. }));
-        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 2 })
+        write_frame(&mut server_io, &ServerMessage::Welcome { protocol: 3 })
             .await
             .expect("write server welcome");
 
@@ -198,7 +202,7 @@ async fn client_rejects_a_mismatched_response_id() {
         write_frame(
             &mut server_io,
             &ServerMessage::Response {
-                protocol: 2,
+                protocol: 3,
                 request_id: request_id + 1,
                 result: Box::new(WireResult::Error {
                     error: Error::unsupported("test"),
@@ -237,8 +241,8 @@ async fn server_rejects_the_reserved_zero_request_id() {
     write_frame(
         &mut client_io,
         &ClientMessage::Hello {
-            protocol_min: 2,
-            protocol_max: 2,
+            protocol_min: 3,
+            protocol_max: 3,
         },
     )
     .await
@@ -247,12 +251,12 @@ async fn server_rejects_the_reserved_zero_request_id() {
         .await
         .expect("read welcome")
         .expect("welcome frame");
-    assert_eq!(welcome, ServerMessage::Welcome { protocol: 2 });
+    assert_eq!(welcome, ServerMessage::Welcome { protocol: 3 });
 
     write_frame(
         &mut client_io,
         &ClientMessage::Request {
-            protocol: 2,
+            protocol: 3,
             request_id: 0,
             request: Box::new(super::wire::WireRequest::Features),
         },
@@ -278,8 +282,8 @@ async fn server_validates_untrusted_wire_requests_before_dispatch() {
     write_frame(
         &mut client_io,
         &ClientMessage::Hello {
-            protocol_min: 2,
-            protocol_max: 2,
+            protocol_min: 3,
+            protocol_max: 3,
         },
     )
     .await
@@ -288,12 +292,12 @@ async fn server_validates_untrusted_wire_requests_before_dispatch() {
         .await
         .expect("read welcome")
         .expect("welcome frame");
-    assert_eq!(welcome, ServerMessage::Welcome { protocol: 2 });
+    assert_eq!(welcome, ServerMessage::Welcome { protocol: 3 });
 
     write_frame(
         &mut client_io,
         &ClientMessage::Request {
-            protocol: 2,
+            protocol: 3,
             request_id: 1,
             request: Box::new(super::wire::WireRequest::Events(EventsRequest {
                 container: None,

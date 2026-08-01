@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Public `a3s.oci.attachments.v1` create/restore contracts for rootfs, mounts,
+  networking, process I/O, secret classifications, and optional namespaced
+  runtime extensions. SDK protocol 3 rejects older peers instead of dropping
+  attachment evidence; the host advertises exact schema/extension support,
+  fails unsupported required extensions before mutation, fingerprints and
+  persists the complete manifest, and returns a durable attachment digest in
+  every new `ContainerRecord`. Reopen revalidates the manifest against the
+  immutable bundle snapshot, while legacy records remain explicitly
+  unversioned rather than being reinterpreted.
 - A protected, per-generation WHPX runtime share separate from the guest
   system root. The candidate accepts bundles only below
   `shares/<container>/<generation>`, rejects cross-generation and external

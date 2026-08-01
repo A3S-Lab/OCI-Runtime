@@ -6,13 +6,13 @@ use std::sync::Arc;
 use a3s_oci_core::{DriverKind, RuntimeFeatures};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, CheckpointRequest, CloseStdinRequest, ContainerId, ContainerOperationRequest,
-    ContainerRecord, ContainerStats, ContainerTarget, CreateRequest, DeleteRequest, Error,
-    ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus, KillRequest, ListRequest,
-    OciRuntimeService, OutputChunk, ProcessId, ProcessRecord, ProcessTarget, ProcessesRequest,
-    ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RuntimeInfo, RuntimeOperation,
-    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest, ValidateRequest,
-    WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    async_trait, AttachmentCapabilities, CheckpointRequest, CloseStdinRequest, ContainerId,
+    ContainerOperationRequest, ContainerRecord, ContainerStats, ContainerTarget, CreateRequest,
+    DeleteRequest, Error, ErrorCode, EventBatch, EventsRequest, ExecRequest, ExitStatus,
+    KillRequest, ListRequest, OciRuntimeService, OutputChunk, ProcessId, ProcessRecord,
+    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, RestoreRequest, Result,
+    RuntimeInfo, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    UpdateRequest, ValidateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
 use crate::driver::{
@@ -249,6 +249,8 @@ impl HostRuntimeService {
         request: CreateRequest,
         attachments: DriverCreateAttachments,
     ) -> Result<ContainerRecord> {
+        request.validate()?;
+        AttachmentCapabilities::base_v1().require(&request.attachments)?;
         let lifecycle = self.lifecycle("create")?;
         let registered = lifecycle
             .drivers
@@ -278,7 +280,8 @@ impl HostRuntimeService {
                 target,
                 bundle: durable_bundle,
                 isolation: request.isolation,
-                io: request.io,
+                io: request.attachments.process_io().clone(),
+                attachment_contract: request.attachments,
                 attachments,
             })
             .await;
@@ -411,6 +414,7 @@ impl OciRuntimeService for HostRuntimeService {
             oci,
             drivers: self.runtime_features(),
             operations: operations.into_iter().collect(),
+            attachments: AttachmentCapabilities::base_v1(),
         })
     }
 

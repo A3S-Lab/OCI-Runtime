@@ -213,9 +213,9 @@ mod windows {
     use a3s_oci_core::{CapabilityStatus, DriverReadiness, HostPlatform};
     use a3s_oci_sdk::oci_spec::runtime::ContainerState;
     use a3s_oci_sdk::{
-        ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-        ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo,
-        Result, Signal, StartRequest, StateRequest, WaitRequest,
+        ContainerId, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest,
+        Error, ErrorCode, ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
+        ProcessIo, Result, Signal, StartRequest, StateRequest, WaitRequest,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::time::{sleep, Instant};
@@ -268,13 +268,14 @@ mod windows {
         }
         let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
         let service = HostRuntimeService::open(state_root, runtime_driver).await?;
+        let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())?;
         let created = service
             .create(CreateRequest {
                 context: operation("whpx-recovery-owner-create")?,
                 id: container_id.clone(),
                 bundle,
                 isolation: a3s_oci_sdk::IsolationRequest::DedicatedVm,
-                io: ProcessIo::default(),
+                attachments,
             })
             .await?;
         if *created.state.status() != ContainerState::Created {

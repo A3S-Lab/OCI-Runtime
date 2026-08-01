@@ -264,6 +264,7 @@ impl DurableStateStore {
         driver: DriverKind,
         generation: Generation,
     ) -> Result<StoredContainer> {
+        let attachments_digest = request.attachments.digest()?;
         let container_directory = self.container_directory(&request.id);
         if path_exists(&container_directory).await? {
             ensure_plain_directory(&container_directory, "container state directory").await?;
@@ -300,6 +301,8 @@ impl DurableStateStore {
             if stored.record.driver != driver
                 || stored.record.isolation != request.isolation.class()
                 || stored.record.config_digest != request.bundle.config_digest()
+                || stored.record.attachments_digest.as_deref() != Some(attachments_digest.as_str())
+                || stored.attachments.as_ref() != Some(&request.attachments)
             {
                 return Err(state_error(
                     ErrorCode::Conflict,
@@ -320,11 +323,13 @@ impl DurableStateStore {
             driver,
             isolation: request.isolation.class(),
             config_digest: request.bundle.config_digest().to_string(),
+            attachments_digest: Some(attachments_digest),
         };
         let stored = StoredContainer {
             schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
             id: request.id.clone(),
             record,
+            attachments: Some(request.attachments.clone()),
             active_operation: Some(request.context.operation_id.clone()),
             init_exit_status: None,
         };
@@ -626,6 +631,28 @@ impl DurableStateStore {
                 "load-container-state",
                 format!("container {id} configuration digest does not match its snapshot"),
             ));
+        }
+        match (&stored.attachments, &stored.record.attachments_digest) {
+            (Some(attachments), Some(expected_digest)) => {
+                attachments.validate(&bundle)?;
+                if attachments.digest()? != *expected_digest {
+                    return Err(state_error(
+                        ErrorCode::FailedPrecondition,
+                        "load-container-state",
+                        format!(
+                            "container {id} attachment digest does not match its durable contract"
+                        ),
+                    ));
+                }
+            }
+            (None, None) => {}
+            _ => {
+                return Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    "load-container-state",
+                    format!("container {id} has incomplete durable attachment evidence"),
+                ));
+            }
         }
         Ok(stored)
     }

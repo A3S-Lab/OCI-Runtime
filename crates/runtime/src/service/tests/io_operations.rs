@@ -12,12 +12,12 @@ pub(super) async fn io_fixture() -> (
     let driver = Arc::new(RecordingDriver::with_control_operations());
     let service = open_service(&temporary, Arc::clone(&driver)).await;
     let mut create = create_request(&bundle_directory, "io-create");
-    create.io = ProcessIo {
+    create.attachments = create.attachments.with_process_io(ProcessIo {
         stdin: IoMode::Pipe,
         stdout: IoMode::Capture,
         stderr: IoMode::Capture,
         terminal_size: None,
-    };
+    });
     let created = service.create(create.clone()).await.expect("create");
     let target = ContainerTarget::exact(create.id, created.generation);
     service

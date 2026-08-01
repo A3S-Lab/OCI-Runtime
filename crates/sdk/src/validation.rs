@@ -24,7 +24,11 @@ pub trait ValidateRequest {
 impl ValidateRequest for CreateRequest {
     fn validate(&self) -> Result<()> {
         self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
-        validate_process_io(&self.io, initial_process_uses_terminal(self))
+        self.attachments.validate(&self.bundle)?;
+        validate_process_io(
+            self.attachments.process_io(),
+            initial_process_uses_terminal(self),
+        )
     }
 }
 
@@ -107,9 +111,10 @@ impl ValidateRequest for CheckpointRequest {
 impl ValidateRequest for RestoreRequest {
     fn validate(&self) -> Result<()> {
         self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
+        self.attachments.validate(&self.bundle)?;
         validate_absolute_path(&self.checkpoint_directory, "restore.checkpoint_directory")?;
         validate_process_io(
-            &self.io,
+            self.attachments.process_io(),
             self.bundle
                 .spec()
                 .process()

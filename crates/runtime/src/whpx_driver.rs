@@ -1347,9 +1347,9 @@ mod tests {
     };
     use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
     use a3s_oci_sdk::{
-        async_trait, ContainerId, ContainerRecord, ContainerTarget, DeleteMode, Error, ErrorCode,
-        ExitStatus, Generation, IsolationRequest, OciBundle, OperationContext, OperationId,
-        ProcessIo, Result, Signal,
+        async_trait, ContainerId, ContainerRecord, ContainerTarget, CreateAttachments, DeleteMode,
+        Error, ErrorCode, ExitStatus, Generation, IsolationRequest, OciBundle, OperationContext,
+        OperationId, ProcessIo, Result, Signal,
     };
     use tokio::sync::Mutex;
 
@@ -1615,10 +1615,13 @@ mod tests {
         }
 
         fn create_request(&self, generation: u64, operation: &str) -> DriverCreateRequest {
+            let bundle = self.bundle_for("whpx-test", generation);
             DriverCreateRequest {
                 context: context(operation),
                 target: target(generation),
-                bundle: self.bundle_for("whpx-test", generation),
+                attachment_contract: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+                    .expect("attachment contract"),
+                bundle,
                 isolation: IsolationRequest::DedicatedVm,
                 io: ProcessIo::default(),
                 attachments: DriverCreateAttachments::None,
@@ -1651,6 +1654,12 @@ mod tests {
                 driver: DriverKind::LibkrunWhpx,
                 isolation: IsolationClass::DedicatedVm,
                 config_digest: self.bundle.config_digest().to_string(),
+                attachments_digest: Some(
+                    CreateAttachments::from_bundle(&self.bundle, ProcessIo::default())
+                        .expect("attachment contract")
+                        .digest()
+                        .expect("attachment digest"),
+                ),
             }
         }
 

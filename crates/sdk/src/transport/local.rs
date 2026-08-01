@@ -150,7 +150,7 @@ mod tests {
             .expect("read client hello")
             .expect("client hello frame");
         assert!(matches!(hello, ClientMessage::Hello { .. }));
-        write_frame(&mut io, &ServerMessage::Welcome { protocol: 2 })
+        write_frame(&mut io, &ServerMessage::Welcome { protocol: 3 })
             .await
             .expect("write server welcome");
     }
@@ -190,7 +190,7 @@ mod tests {
         let client = RuntimeTransportClient::connect(&endpoint)
             .await
             .expect("connect SDK transport over named pipe");
-        assert_eq!(client.protocol_version(), 2);
+        assert_eq!(client.protocol_version(), 3);
         drop(client);
         server_task.await.expect("server task must join");
     }

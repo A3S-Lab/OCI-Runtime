@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerOperationRequest, ContainerTarget, CreateRequest, ErrorCode, ExecRequest,
-    IsolationRequest, OciBundle, OutputChunk, ProcessRecord, ProcessTarget, ProcessesRequest,
-    ReadOutputRequest, Result, SignalProcessRequest, StatsRequest, UpdateRequest, ValidateRequest,
-    WaitProcessRequest,
+    ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest, ErrorCode,
+    ExecRequest, IsolationRequest, OciBundle, OutputChunk, ProcessRecord, ProcessTarget,
+    ProcessesRequest, ReadOutputRequest, Result, SignalProcessRequest, StatsRequest, UpdateRequest,
+    ValidateRequest, WaitProcessRequest,
 };
 
 use crate::model::{
@@ -40,12 +40,13 @@ impl AgentCreateRequest {
     pub(crate) fn validate(&self) -> Result<()> {
         validate_exact_target(&self.target)?;
         let bundle = self.bundle.validate()?;
+        let attachments = CreateAttachments::from_bundle(&bundle, self.io.clone())?;
         CreateRequest {
             context: self.context.clone(),
             id: self.target.id.clone(),
             bundle,
             isolation: IsolationRequest::DedicatedVm,
-            io: self.io.clone(),
+            attachments,
         }
         .validate()
     }

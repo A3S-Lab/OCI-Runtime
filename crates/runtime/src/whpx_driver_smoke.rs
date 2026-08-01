@@ -208,8 +208,8 @@ mod windows {
     use a3s_oci_core::{CapabilityStatus, DriverReadiness, HostPlatform};
     use a3s_oci_sdk::oci_spec::runtime::ContainerState;
     use a3s_oci_sdk::{
-        ContainerTarget, DeleteMode, ErrorCode, ExitStatus, IsolationRequest, OciBundle,
-        OperationContext, OperationId, ProcessIo, Signal,
+        ContainerTarget, CreateAttachments, DeleteMode, ErrorCode, ExitStatus, IsolationRequest,
+        OciBundle, OperationContext, OperationId, ProcessIo, Signal,
     };
     use tokio::io::AsyncReadExt;
     use tokio::time::{sleep, Instant};
@@ -421,12 +421,15 @@ mod windows {
         marker: &Path,
         report: &mut WhpxDriverSmokeReport,
     ) -> Result<(), String> {
+        let io = ProcessIo::default();
         let create = DriverCreateRequest {
             context: operation("whpx-driver-smoke-create")?,
             target: target.clone(),
             bundle: bundle.clone(),
             isolation: IsolationRequest::DedicatedVm,
-            io: ProcessIo::default(),
+            io: io.clone(),
+            attachment_contract: CreateAttachments::from_bundle(bundle, io)
+                .map_err(|error| format!("WHPX attachment contract failed: {error}"))?,
             attachments: DriverCreateAttachments::None,
         };
         let created = driver
