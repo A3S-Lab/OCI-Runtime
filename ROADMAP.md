@@ -410,7 +410,7 @@ the utility-VM host/agent transport portion remains open.
   pipe.
 - [x] Implement the Linux guest binary, bounded AF_VSOCK connection retry,
   secret-zeroizing bootstrap, and static musl build.
-- [ ] Replace the diagnostic path with a protected runtime-owned share.
+- [x] Replace the diagnostic path with a protected runtime-owned share.
   - [x] Separate the guest system root from a protected writable share, export
     only `shares/<container>/<generation>` with a fixed virtio-fs tag, mount it
     before agent token access, and reject external or cross-generation bundles
@@ -420,8 +420,11 @@ the utility-VM host/agent transport portion remains open.
   - [x] Run the qualification-only `RuntimeDriver` nominal lifecycle through
     that share on a real WHPX host and retain its versioned lifecycle, replay,
     authenticated recovery-publication, and cleanup evidence.
-  - [ ] Run the owner-death and service-restart matrix through that share on a
+  - [x] Run the owner-death and service-restart matrix through that share on a
     fresh WHPX-enabled Windows host and retain its machine-readable evidence.
+    Clean commit `2d91cd0` emitted `a3s.oci.whpx-recovery-smoke-run.v1` after
+    exact owner termination, both Recover fault boundaries, service reopen,
+    terminal replay, stopped-only delete, and complete transient cleanup.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the named-pipe/vsock bridge.
 - [x] Negotiate the guest protocol and retain boot evidence.
@@ -437,7 +440,7 @@ the utility-VM host/agent transport portion remains open.
   stopped tombstone. Permit state, idempotent kill, empty process inventory,
   and delete while rejecting live-only operations and never synthesizing an
   exit status.
-- [ ] Retain exact init exit evidence across WHPX owner death and host-service
+- [x] Retain exact init exit evidence across WHPX owner death and host-service
   restart, including before/after recovery faults.
   - [x] Define a versioned and bounded exact-generation report, authenticate it
     with the ephemeral agent session token, and emit it only after complete
@@ -448,7 +451,7 @@ the utility-VM host/agent transport portion remains open.
     replay, retain the artifact through before/after recovery fault gates, and
     close the replacement-host/shim handoff race with a protected pending
     marker plus bounded retryable wait.
-  - [ ] Run the complete owner-death and service-restart gate on a fresh
+  - [x] Run the complete owner-death and service-restart gate on a fresh
     WHPX-enabled Windows host and retain its machine-readable evidence.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest

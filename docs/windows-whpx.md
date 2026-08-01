@@ -57,7 +57,13 @@ The runtime:
 16. exposes a versioned, qualification-only direct `RuntimeDriver` gate that
     verifies create/start/kill/wait replay, authenticated shutdown-report
     publication, stopped-only delete, and complete nominal cleanup while
-    preserving `probe-only` readiness.
+    preserving `probe-only` readiness;
+17. exposes a separate multi-process gate that force-terminates the exact
+    host-service owner, injects the before- and after-`Recover` boundaries,
+    reopens durable state, replays the authenticated signal-9 exit result, and
+    proves stopped-only delete plus complete host/share cleanup. Its launch
+    override is crate-private and scoped only to this gate, so normal discovery
+    remains `probe-only`.
 
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
@@ -183,6 +189,24 @@ A successful direct WHPX `RuntimeDriver` smoke additionally proves that:
   directories, normalized recovery artifacts, workload marker, and host
   processes.
 
+A successful WHPX owner-death recovery smoke additionally proves that:
+
+- the parent starts with no A3S OCI process and force-terminates only the exact
+  owner PID after one exact-generation workload is running and its marker is
+  visible;
+- the owner-bound shim survives long enough to stop the VM, collect the guest's
+  authenticated shutdown report, and persist the exact signal-9 init result;
+- a `Recover` before-call fault retains the protected pending/report handoff,
+  and an after-call fault retains the normalized report for the next service;
+- a newly opened `HostRuntimeService` observes stopped state and replays the
+  exact wait result, while the recovered driver tombstone replays kill without
+  claiming that a new service-level signal was delivered to a stopped process;
+- stopped-only delete removes durable state, the driver attachment, VM session,
+  session/report handoff directories, normalized recovery artifacts, workload
+  marker, and every owned host process;
+- the ordinary candidate remains `probe-only`, and only the crate-private
+  qualification constructor reports its exact scoped override.
+
 ## Hardware soak gate
 
 Run the complete gate from an x86-64 Windows host with WHPX enabled:
@@ -198,6 +222,14 @@ Run the nominal formal-driver gate separately:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\windows-whpx-driver-smoke.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+```
+
+Run the owner-death and host-service recovery gate separately:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-recovery-smoke.ps1 `
   -RootfsArchive C:\path\to\alpine-minirootfs.tar
 ```
 
@@ -237,6 +269,23 @@ and `krun.dll` SHA-256
 The retained report and summary SHA-256 values are respectively
 `b9442b1d8da3d091f5a1b4099697fdf50dda932fe3bcb31a95c100fd361aec6e`
 and `64d898fcad1f1ad597e8ad98a19233dec260a3d7831de39178ef24562766047f`.
+
+The August 1, 2026 owner-death qualification ran from clean commit
+`2d91cd04f6ec1ecd9ea3fce4673be6fdc2b6f631` with an empty recorded worktree and
+emitted `a3s.oci.whpx-recovery-smoke-run.v1`. From 13:41:20Z through 13:41:30Z
+it rebuilt the artifacts, force-terminated owner PID 57496 only after running
+and marker readiness, injected both Recover fault boundaries, reopened the host
+service, replayed exact signal 9, replayed the recovered driver tombstone kill,
+completed stopped-only delete, and passed every cleanup field. It used rootfs
+SHA-256 `4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282`,
+agent SHA-256 `b97ba3f0989432a13873f825e37d66cbb4244bbe7c126d537b0518190ff4091d`,
+CLI SHA-256 `23db303dfae37a1b2cb2973cb74d3d52a441abe91f588b41fdf9a26686cc488e`,
+shim SHA-256 `8072612e5a1e5f0dea69b80697bdffa2a19fa54dd0c7f1e2f43a4d821146e189`,
+and `krun.dll` SHA-256
+`f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e`.
+The retained report and summary SHA-256 values are respectively
+`db7daff5d912d9d0786a660c9321274aa3ee1d666368792b3985412a5a682734`
+and `c8179b2f2f4ed38f1820103645a2d96487ea0cdfb98a7884181e2082737d5270`.
 
 The focused August 1, 2026 transport qualification used the Alpine minirootfs
 SHA-256

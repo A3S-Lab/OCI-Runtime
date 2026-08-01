@@ -671,6 +671,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -RootfsArchive C:\path\to\alpine-minirootfs.tar
 ```
 
+Owner-death, recovery faults, and host-service restart have a separate
+multi-process gate:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-recovery-smoke.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+```
+
 The default gate runs 25 serial lifecycles, three two-VM parallel waves,
 three two-container lifecycles inside one VM, cleanup faults after create,
 start, and kill, private and inherited network profiles, read-write and
@@ -698,7 +707,13 @@ The direct-driver gate passed from clean commit `7bb09df` with exact protected
 share containment, lifecycle and mutation replay, authenticated shutdown-report
 publication, exact exit replay, stopped-only delete, and no retained driver
 attachment, VM session, transient share entry, recovery artifact, marker, or
-host process. The default soak above remains the broader release profile.
+host process. The owner-death gate then passed from clean commit `2d91cd0` after
+forcing the exact service owner to exit, injecting both sides of Recover,
+reopening durable host state, replaying the exact signal-9 init result, and
+removing every durable record, driver attachment, VM session, protected-share
+transient, recovery artifact, marker, and owned host process. The public WHPX
+candidate remains `probe-only`; the default soak above remains the broader
+release profile.
 
 The Windows fixture intentionally omits user and time namespaces and the swap
 controller, which the current WHPX utility kernel has not qualified. Those
