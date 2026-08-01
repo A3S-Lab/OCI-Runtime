@@ -214,14 +214,17 @@ Completed:
   fail-closed executor planning for its absolute rootfs, annotations,
   capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
   mount normalization, and AArch64 seccomp policy;
-- public-SDK-only A3S Box lifecycle consumer at Box commit `8402d8c8`, with
+- public-SDK-only A3S Box lifecycle consumer at Box commit `365f7f2a`, with
   isolation preflight before product reservation, distinct product/runtime
   identities and generations, exact endpoint/driver/configuration/attachment
   binding, attachment-schema negotiation before product mutation, stable SDK
   operation IDs, lost create/start response recovery without duplicate create,
-  stopped-only cleanup, graceful-signal escalation, and exact terminal
-  projection in its in-process contract suite; production routing,
-  out-of-process restart, and real-host cutover gates remain open;
+  stopped-only cleanup, graceful-signal escalation, exact terminal projection,
+  and memory-retaining pause/resume with capability preflight, claim-scoped
+  replay identities, immutable binding validation, and lost-response
+  reconciliation without repeating freezer mutations in its in-process
+  contract suite; production routing, out-of-process restart, and real-host
+  cutover gates remain open;
 - Linux executor enforcement for exact capability sets and exec bounding
   ceilings, private controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
@@ -725,8 +728,11 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   isolation, configuration digest, and attachment digest needed for
   reconciliation; stop persisting runtime-owned process, VM, socket, pipe, and
   cgroup identities in new records.
-- [ ] Preserve commands, files, exec, PTY, logs, stats, pause/resume, stop,
-  kill, recovery, and cleanup behavior.
+- [x] Preserve memory-retaining pause/resume through exact SDK targets with
+  operation capability checks, durable replay identities, immutable binding
+  validation, and lost-response reconciliation.
+- [ ] Preserve commands, files, exec, PTY, logs, stats, stop, kill, recovery,
+  and cleanup behavior.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI
   Runtime.
 - [ ] Qualify the Box R17 resource profile against `control-workload-v1`,

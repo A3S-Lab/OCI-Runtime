@@ -208,8 +208,9 @@ candidate while the two gates named above remain open.
 ## Architecture
 
 ```text
-A3S Box (current Sandbox consumer; SDK-only unified adapter landed,
-         production cutover in progress)
+A3S Box (current Sandbox consumer; SDK-only unified adapter landed for
+         exact-generation lifecycle, attachments, and pause/resume;
+         production routing and real-host cutover in progress)
 a3s-oci CLI
 future containerd runtime-v2 shim
                          │
