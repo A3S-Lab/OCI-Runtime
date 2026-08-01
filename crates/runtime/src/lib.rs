@@ -1,5 +1,10 @@
 //! Cross-platform host orchestration and platform capability probing.
 
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+mod agent_driver;
 #[cfg(windows)]
 mod agent_pipe;
 #[cfg(any(
@@ -38,6 +43,8 @@ mod service;
 mod soak_report;
 mod state;
 mod utility_vm_soak_report;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod whpx_driver;
 #[cfg(windows)]
 mod windows_security;
 #[cfg(windows)]
@@ -96,6 +103,8 @@ pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,
     MACOS_HVF_SOAK_SCHEMA_VERSION, MAX_MACOS_HVF_SOAK_ITERATIONS,
 };
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub use whpx_driver::{WhpxRuntimeDriver, WhpxRuntimeDriverConfig};
 #[cfg(windows)]
 pub use windows_service::WindowsHostService;
 

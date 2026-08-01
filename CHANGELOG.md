@@ -13,6 +13,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
   guest clients, and one cached shutdown/cleanup result. WHPX and HVF smoke,
   fault-cleanup, and multi-container paths now exercise that driver-ready
   ownership model.
+- A shared eighteen-operation agent driver adapter used by native Linux and a
+  new one-VM-per-container WHPX `RuntimeDriver` candidate. The candidate binds
+  exact generations to one guest session, serializes same-ID create while
+  launching distinct container VMs concurrently, reuses the VM for retryable
+  create, reaps terminal create failures and successful deletes once, requires
+  bundles below a protected runtime-owned guest root, and intentionally remains
+  non-registerable at `probe-only` readiness while restart reattachment and
+  immutable-system-root qualification are pending.
+- Target-correct KVM ioctl request typing so both glibc (`c_ulong`) and musl
+  (`c_int`) Linux builds compile against their actual libc ABI.
 - A protected Windows host SDK service that binds the first local named-pipe
   instance with a verified current-user/LocalSystem DACL, rejects remote
   clients, serves bounded concurrent connections, and releases the endpoint

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerStats, Error, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
+    async_trait, ContainerStats, Error, ErrorCode, ExitStatus, OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -18,6 +18,7 @@ use crate::model::{
     AgentWriteStdinRequest, HelloOutcome, HostHello, ProtocolRange, RequestEnvelope,
     ResponseEnvelope, ResponseOutcome, SessionToken,
 };
+use crate::server::GuestAgentService;
 use crate::wire::{read_frame, write_frame};
 
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -417,6 +418,93 @@ where
             }
             ResponseOutcome::Failed { error } => Err(error),
         }
+    }
+}
+
+/// Treat an authenticated client as a transport-backed guest service.
+///
+/// Runtime drivers can therefore share one executor adapter between an
+/// in-process Linux executor and a utility-VM protocol connection without
+/// duplicating the eighteen-operation mapping contract.
+#[async_trait]
+impl<T> GuestAgentService for AgentClient<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    fn capabilities(&self) -> crate::AgentCapabilities {
+        self.hello().capabilities().clone()
+    }
+
+    async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
+        AgentClient::create(self, request).await
+    }
+
+    async fn state(&self, request: AgentStateRequest) -> Result<AgentState> {
+        AgentClient::state(self, request).await
+    }
+
+    async fn start(&self, request: AgentStartRequest) -> Result<AgentState> {
+        AgentClient::start(self, request).await
+    }
+
+    async fn kill(&self, request: AgentKillRequest) -> Result<AgentState> {
+        AgentClient::kill(self, request).await
+    }
+
+    async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
+        AgentClient::delete(self, request).await
+    }
+
+    async fn wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
+        AgentClient::wait(self, request).await
+    }
+
+    async fn exec(&self, request: AgentExecRequest) -> Result<AgentProcess> {
+        AgentClient::exec(self, request).await
+    }
+
+    async fn signal_process(&self, request: AgentSignalProcessRequest) -> Result<()> {
+        AgentClient::signal_process(self, request).await
+    }
+
+    async fn wait_process(&self, request: AgentWaitProcessRequest) -> Result<ExitStatus> {
+        AgentClient::wait_process(self, request).await
+    }
+
+    async fn pause(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
+        AgentClient::pause(self, request).await
+    }
+
+    async fn resume(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
+        AgentClient::resume(self, request).await
+    }
+
+    async fn processes(&self, request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
+        AgentClient::processes(self, request).await
+    }
+
+    async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
+        AgentClient::update(self, request).await
+    }
+
+    async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
+        AgentClient::stats(self, request).await
+    }
+
+    async fn read_output(&self, request: AgentReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        AgentClient::read_output(self, request).await
+    }
+
+    async fn write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
+        AgentClient::write_stdin(self, request).await
+    }
+
+    async fn close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
+        AgentClient::close_stdin(self, request).await
+    }
+
+    async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
+        AgentClient::resize(self, request).await
     }
 }
 

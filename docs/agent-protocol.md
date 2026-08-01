@@ -122,6 +122,12 @@ management envelope. The native host driver gives every bounded chunk of a
 larger SDK stdin write a stable derived operation ID. Durable recovery across
 an agent restart remains a separate host/driver release gate.
 
+`AgentClient` also implements the same `GuestAgentService` contract as the
+in-process executor. One runtime adapter therefore performs target, digest,
+state, process, stats, and chunked-I/O mapping for both native Linux and WHPX;
+the transport boundary cannot grow a second interpretation of the eighteen
+operations.
+
 OCI hooks do not add guest protocol operations: they travel inside the exact
 digest-bound `config.json` and execute in the shared Linux executor. Native
 feature discovery separately advertises the six enforced hook phases.

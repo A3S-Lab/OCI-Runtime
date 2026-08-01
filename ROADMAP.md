@@ -108,6 +108,12 @@ Completed:
   reap, providing the ownership boundary required by a long-lived VM driver;
 - single-owner utility-VM sessions with clone-safe guest access and idempotent
   retained cleanup evidence, exercised by WHPX/HVF lifecycle harnesses;
+- one shared eighteen-operation guest-to-driver adapter, plus a
+  qualification-only WHPX `RuntimeDriver` candidate that owns one VM per
+  exact dedicated-VM generation, serializes same-ID launch without blocking
+  distinct container VMs, retains retryable create sessions, reaps terminal
+  failures and deletes once, and refuses bundles outside a protected
+  runtime-owned guest root;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;
@@ -399,6 +405,12 @@ the utility-VM host/agent transport portion remains open.
 - [x] Negotiate the guest protocol and retain boot evidence.
 - [x] Run a fixed configured process through distinct OCI create and start
   calls.
+- [x] Factor native and transport-backed guest execution through one exact
+  eighteen-operation driver adapter.
+- [x] Implement a one-VM-per-container WHPX `RuntimeDriver` candidate with
+  exact-generation routing, retry/terminal-failure ownership, delete and
+  whole-driver cleanup, and protected-root bundle containment tests. Keep it
+  `probe-only` and non-registerable until the remaining exit gates pass.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest
   runtime directory on the nominal path.

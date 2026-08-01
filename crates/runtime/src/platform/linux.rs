@@ -10,7 +10,7 @@ use a3s_oci_core::{
 
 const KVM_DEVICE: &str = "/dev/kvm";
 const KVM_API_VERSION: i32 = 12;
-const KVM_GET_API_VERSION: libc::c_ulong = 0xAE00;
+const KVM_GET_API_VERSION: libc::Ioctl = 0xAE00;
 const APPARMOR_USER_NAMESPACE_POLICY: &str =
     "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 const REQUIRED_NAMESPACE_FILES: [&str; 9] = [

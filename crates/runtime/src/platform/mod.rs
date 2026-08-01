@@ -8,6 +8,8 @@ mod windows;
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::native_driver_capability;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub(crate) use windows::whpx_driver_capability;
 
 use a3s_oci_core::RuntimeFeatures;
 

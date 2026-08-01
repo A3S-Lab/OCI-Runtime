@@ -256,6 +256,10 @@ pub(crate) fn features() -> RuntimeFeatures {
     RuntimeFeatures::current(vec![capability_from_observation(observe_whpx())])
 }
 
+pub(crate) fn whpx_driver_capability() -> DriverCapability {
+    capability_from_observation(observe_whpx())
+}
+
 pub(crate) fn whpx_smoke() -> WhpxSmokeReport {
     let api = match WhpxApi::load() {
         Ok(api) => api,

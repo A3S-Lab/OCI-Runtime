@@ -277,9 +277,17 @@ For that reason, driver readiness remains `probe-only` even after all smokes
 succeed. Driver resolution must reject `probe-only` readiness rather than
 silently treating host capability as runtime support.
 
+The runtime now contains a qualification-only `WhpxRuntimeDriver` candidate.
+It uses the same eighteen-operation adapter as native Linux, owns one VM per
+exact dedicated-VM generation, retains the VM across retryable create calls,
+and reaps terminal create failures, deletes, and driver shutdown exactly once.
+Opening it requires the guest root to sit below a runtime-owned root whose
+Windows DACL is protected. Its reported readiness deliberately stays
+`probe-only`, so the durable host service cannot register it yet.
+
 ## Next Windows gate
 
-The next vertical slice must:
+With the live driver boundary in place, the next vertical slice must:
 
 1. boot a version-pinned A3S system image;
 2. mount one protected runtime-owned root through virtio-fs;
