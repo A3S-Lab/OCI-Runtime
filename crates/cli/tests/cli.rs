@@ -324,6 +324,36 @@ fn whpx_driver_smoke_fails_closed_with_versioned_output() {
 }
 
 #[test]
+fn whpx_recovery_resume_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "whpx-recovery-resume",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--runtime-root",
+            "missing-a3s-oci-runtime-root",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--state-root",
+            "missing-a3s-oci-state-root",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--container-id",
+            "whpx-recovery-smoke-test",
+            "--generation",
+            "1",
+        ])
+        .output()
+        .expect("WHPX recovery resume command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("WHPX recovery resume output must be valid JSON");
+    assert_eq!(report["schema_version"], "a3s.oci.whpx-recovery-smoke.v1");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
 fn oci_vm_multi_container_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
         .args([

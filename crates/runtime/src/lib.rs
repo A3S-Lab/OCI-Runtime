@@ -46,6 +46,7 @@ mod utility_vm_soak_report;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_driver;
 mod whpx_driver_smoke;
+mod whpx_recovery_smoke;
 #[cfg(windows)]
 mod windows_security;
 #[cfg(windows)]
@@ -108,6 +109,10 @@ pub use utility_vm_soak_report::{
 pub use whpx_driver::{WhpxRuntimeDriver, WhpxRuntimeDriverConfig};
 pub use whpx_driver_smoke::{
     whpx_driver_smoke, WhpxDriverSmokeReport, WHPX_DRIVER_SMOKE_SCHEMA_VERSION,
+};
+pub use whpx_recovery_smoke::{
+    whpx_recovery_owner, whpx_recovery_resume, WhpxRecoveryOwnerReady, WhpxRecoverySmokeReport,
+    WHPX_RECOVERY_OWNER_READY_SCHEMA_VERSION, WHPX_RECOVERY_SMOKE_SCHEMA_VERSION,
 };
 #[cfg(windows)]
 pub use windows_service::WindowsHostService;

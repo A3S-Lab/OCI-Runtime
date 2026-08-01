@@ -176,6 +176,42 @@ enum Command {
         #[arg(long, default_value_t = 1)]
         generation: u64,
     },
+    /// Hold one durable WHPX service alive for the owner-death qualification parent.
+    #[command(hide = true)]
+    WhpxRecoveryOwner {
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        runtime_root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        state_root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        #[arg(long, value_name = "FILE")]
+        ready_file: PathBuf,
+    },
+    /// Reopen a killed WHPX owner and emit exact recovery qualification evidence.
+    #[command(hide = true)]
+    WhpxRecoveryResume {
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        runtime_root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        state_root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        #[arg(long)]
+        generation: u64,
+    },
     /// Prove two containers remain independently fenced inside one utility VM.
     OciVmMultiContainerSmoke {
         /// Isolated libkrun shim executable.
@@ -488,6 +524,57 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
                 &shim,
                 &runtime_root,
                 &vm_rootfs,
+                &bundle,
+                target,
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::WhpxRecoveryOwner {
+            shim,
+            runtime_root,
+            vm_rootfs,
+            state_root,
+            bundle,
+            container_id,
+            ready_file,
+        } => {
+            a3s_oci_runtime::whpx_recovery_owner(
+                &shim,
+                &runtime_root,
+                &vm_rootfs,
+                &state_root,
+                &bundle,
+                container_id,
+                &ready_file,
+            )
+            .await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::WhpxRecoveryResume {
+            shim,
+            runtime_root,
+            vm_rootfs,
+            state_root,
+            bundle,
+            container_id,
+            generation,
+        } => {
+            let target = a3s_oci_sdk::ContainerTarget::exact(
+                container_id,
+                a3s_oci_sdk::Generation(generation),
+            );
+            let report = a3s_oci_runtime::whpx_recovery_resume(
+                &shim,
+                &runtime_root,
+                &vm_rootfs,
+                &state_root,
                 &bundle,
                 target,
             )

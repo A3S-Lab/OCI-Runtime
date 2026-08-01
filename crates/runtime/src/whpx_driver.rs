@@ -177,6 +177,25 @@ impl WhpxRuntimeDriver {
         })
     }
 
+    /// Open one launch-ready instance exclusively for the multi-process
+    /// host-service recovery qualification gate.
+    ///
+    /// The public candidate remains `probe-only`. Keeping this constructor
+    /// crate-private prevents normal SDK or product paths from bypassing the
+    /// remaining promotion gates while still exercising the exact durable
+    /// [`crate::HostRuntimeService`] recovery path on real hardware.
+    pub(crate) async fn open_service_qualification(
+        config: WhpxRuntimeDriverConfig,
+    ) -> Result<Self> {
+        let mut driver = Self::open_candidate(config).await?;
+        driver.capability.readiness = DriverReadiness::Experimental;
+        driver.capability.evidence.insert(
+            "qualification_override".to_string(),
+            "host-service-owner-death-only".to_string(),
+        );
+        Ok(driver)
+    }
+
     /// Close every attached guest transport, reap each owned VM once, and
     /// retain stopped tombstones for durable host reconciliation.
     pub async fn shutdown(&self) -> Result<()> {
