@@ -224,6 +224,19 @@ preserves safe state and delete semantics after owner death without claiming
 that the guest protocol supplied an exact init exit result. A live same-process
 recovery query additionally checks the durable configuration digest.
 
+The guest-agent shutdown path now has a separate, versioned recovery artifact
+contract. After every owned process has been stopped and the complete executor
+cleanup succeeds, it records the exact target generation, canonical
+`sha256:` configuration digest, and validated init `ExitStatus`. Records are
+sorted, unique, limited to 1,024 entries, encoded in at most 1 MiB, and
+authenticated with HMAC-SHA256 under the ephemeral session token. The token is
+not included in the artifact. The guest creates the fixed one-time report file
+with exclusive `0600` semantics and synchronizes both file and directory.
+Missing or partial cleanup produces no usable report. This establishes the
+guest side of restart-stable exit evidence; WHPX remains `probe-only` until the
+trusted shim validates and copies the artifact into protected host storage and
+the durable recovery path consumes it.
+
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID

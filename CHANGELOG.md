@@ -6,6 +6,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A versioned, bounded guest shutdown report for restart-stable utility-VM
+  evidence. The Linux executor now retains the exact init terminal result for
+  every exact container generation only after complete cleanup, binds each
+  result to its canonical configuration digest, and authenticates the sorted
+  report with a session-scoped HMAC-SHA256 tag. Missing, partial, oversized,
+  malformed, stale-generation, and tampered reports remain unusable; protected
+  Windows shim handoff and durable host consumption are the next gate.
 - An idempotent startup `RuntimeDriver::recover` handshake that dispatches each
   durable generation only to its recorded driver, commits an optional exact
   state observation before the host accepts requests, and is covered by the

@@ -7,6 +7,7 @@
 mod client;
 mod inherited_descriptor;
 mod model;
+mod recovery;
 mod server;
 mod transport;
 mod validation;
@@ -28,6 +29,12 @@ pub use model::{
     AGENT_PROTOCOL_VERSION_MAX, AGENT_PROTOCOL_VERSION_MIN, AGENT_SESSION_TOKEN_BYTES,
     AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_ENV,
     AGENT_SESSION_TOKEN_FILE_NAME,
+};
+pub use recovery::{
+    AgentRecoveryRecord, AgentRecoveryReport, AuthenticatedAgentRecoveryReport,
+    AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX, AGENT_RECOVERY_REPORT_ENV,
+    AGENT_RECOVERY_REPORT_FILE_NAME, AGENT_RECOVERY_REPORT_MAX_BYTES,
+    AGENT_RECOVERY_REPORT_MAX_RECORDS, AGENT_RECOVERY_REPORT_SCHEMA_VERSION,
 };
 pub use server::{serve_agent_connection, GuestAgentService};
 pub use transport::{AgentVsockEndpoint, AGENT_VSOCK_PORT};

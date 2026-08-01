@@ -43,9 +43,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcess, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentResizeRequest, AgentSignalProcessRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
-    AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
+    AgentReadOutputRequest, AgentRecoveryRecord, AgentResizeRequest, AgentSignalProcessRequest,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
@@ -244,12 +244,28 @@ impl LinuxExecutor {
 
     /// Stop every owned init process and remove all transient executor state.
     pub async fn shutdown(&self) -> Result<()> {
+        self.shutdown_with_recovery().await.map(drop)
+    }
+
+    /// Stop every owned process and retain exact init terminal evidence.
+    ///
+    /// Evidence is returned only when the complete executor cleanup succeeds.
+    /// Callers must not persist a partial vector from a failed cleanup.
+    pub async fn shutdown_with_recovery(&self) -> Result<Vec<AgentRecoveryRecord>> {
         let mut state = self.state.lock().await;
         let mut first_error = None;
         let mut poststop = Vec::new();
+        let mut recovery = Vec::with_capacity(state.containers.len());
         for record in state.containers.values_mut() {
             if let Err(error) = record.force_stop_all().await {
                 first_error.get_or_insert(error);
+            } else {
+                match record.recovery_record() {
+                    Ok(record) => recovery.push(record),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
             }
             poststop.push(record.process.poststop_plan());
         }
@@ -284,7 +300,7 @@ impl LinuxExecutor {
         }
         match first_error {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => Ok(recovery),
         }
     }
 

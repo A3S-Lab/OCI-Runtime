@@ -5,6 +5,8 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(target_os = "linux")]
+use std::io::Write;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
@@ -12,6 +14,12 @@ use a3s_oci_agent_protocol::{
     AgentState, AgentStateRequest, GuestAgentService, SessionToken,
     AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_ENV,
     AGENT_SESSION_TOKEN_FILE_NAME,
+};
+#[cfg(target_os = "linux")]
+use a3s_oci_agent_protocol::{AgentRecoveryRecord, AgentRecoveryReport, AGENT_RECOVERY_REPORT_ENV};
+#[cfg(any(target_os = "linux", test))]
+use a3s_oci_agent_protocol::{
+    AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX, AGENT_RECOVERY_REPORT_FILE_NAME,
 };
 use a3s_oci_sdk::{async_trait, Error, ErrorCode, Result};
 use zeroize::Zeroizing;
@@ -248,6 +256,8 @@ fn invalid_token_path() -> Error {
 /// Connect to the host bridge and serve the fail-closed Linux executor.
 #[cfg(target_os = "linux")]
 pub fn run(token: SessionToken) -> Result<()> {
+    let recovery_path = take_recovery_report_path()?;
+    let recovery_token = token.clone();
     let stream = vsock::connect_host_with_retry()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -272,7 +282,9 @@ pub fn run(token: SessionToken) -> Result<()> {
         let protocol_service: Arc<dyn GuestAgentService> = service.clone();
         let serve_result =
             a3s_oci_agent_protocol::serve_agent_connection(stream, token, protocol_service).await;
-        let cleanup_result = service.shutdown().await;
+        let cleanup_result = service.shutdown_with_recovery().await.and_then(|records| {
+            write_recovery_report(recovery_path.as_deref(), &recovery_token, records)
+        });
         match (serve_result, cleanup_result) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(error), Ok(())) => Err(error),
@@ -285,6 +297,120 @@ pub fn run(token: SessionToken) -> Result<()> {
             .retryable(error.retryable)),
         }
     })
+}
+
+#[cfg(target_os = "linux")]
+fn take_recovery_report_path() -> Result<Option<PathBuf>> {
+    let Some(value) = std::env::var_os(AGENT_RECOVERY_REPORT_ENV) else {
+        return Ok(None);
+    };
+    std::env::remove_var(AGENT_RECOVERY_REPORT_ENV);
+    let path = PathBuf::from(value);
+    validate_recovery_report_path(&path)?;
+    Ok(Some(path))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn validate_recovery_report_path(path: &Path) -> Result<()> {
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir) {
+        return Err(invalid_recovery_report_path());
+    }
+    let Some(Component::Normal(directory)) = components.next() else {
+        return Err(invalid_recovery_report_path());
+    };
+    let Some(Component::Normal(file)) = components.next() else {
+        return Err(invalid_recovery_report_path());
+    };
+    let valid_directory = directory.to_str().is_some_and(|value| {
+        value.starts_with(AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX)
+            && value.len() > AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX.len()
+    });
+    if components.next().is_some() || file != AGENT_RECOVERY_REPORT_FILE_NAME || !valid_directory {
+        return Err(invalid_recovery_report_path());
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn invalid_recovery_report_path() -> Error {
+    Error::new(
+        ErrorCode::FailedPrecondition,
+        "guest recovery report path is not the runtime-owned one-time path",
+    )
+    .for_operation("persist-agent-recovery")
+}
+
+#[cfg(target_os = "linux")]
+fn write_recovery_report(
+    path: Option<&Path>,
+    token: &SessionToken,
+    records: Vec<AgentRecoveryRecord>,
+) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let report = AgentRecoveryReport::new(records)?.authenticate(token)?;
+    let encoded = report.to_json()?;
+    let parent = path.parent().ok_or_else(invalid_recovery_report_path)?;
+    let metadata = std::fs::symlink_metadata(parent).map_err(|error| {
+        recovery_io_error(
+            format!(
+                "failed to inspect guest recovery directory {}: {error}",
+                parent.display()
+            ),
+            ErrorCode::FailedPrecondition,
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(recovery_io_error(
+            format!(
+                "guest recovery directory must be a real directory: {}",
+                parent.display()
+            ),
+            ErrorCode::FailedPrecondition,
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        recovery_io_error(
+            format!(
+                "failed to create guest recovery report {}: {error}",
+                path.display()
+            ),
+            ErrorCode::FailedPrecondition,
+        )
+    })?;
+    let write_result = file
+        .write_all(&encoded)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::File::open(parent)?.sync_all());
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(recovery_io_error(
+            format!(
+                "failed to commit guest recovery report {}: {error}",
+                path.display()
+            ),
+            ErrorCode::Internal,
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn recovery_io_error(message: impl Into<String>, code: ErrorCode) -> Error {
+    Error::new(code, message).for_operation("persist-agent-recovery")
 }
 
 /// Report that the guest binary cannot run on a non-Linux target.
@@ -303,7 +429,7 @@ mod tests {
 
     use a3s_oci_agent_protocol::GuestAgentService;
 
-    use super::{validate_token_path, NegotiationOnlyAgent};
+    use super::{validate_recovery_report_path, validate_token_path, NegotiationOnlyAgent};
 
     #[test]
     fn bootstrap_service_does_not_claim_executor_operations() {
@@ -326,6 +452,26 @@ mod tests {
             "/.a3s-oci-bootstrap-test/nested/session-token",
         ] {
             assert!(validate_token_path(Path::new(path)).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn accepts_only_the_runtime_owned_recovery_file_shape() {
+        assert!(validate_recovery_report_path(Path::new(
+            "/.a3s-oci-recovery-a3s-oci-agent-test/report.json"
+        ))
+        .is_ok());
+        for path in [
+            "relative/report.json",
+            "/report.json",
+            "/.a3s-oci-recovery-/report.json",
+            "/.a3s-oci-recovery-test/other",
+            "/.a3s-oci-recovery-test/nested/report.json",
+        ] {
+            assert!(
+                validate_recovery_report_path(Path::new(path)).is_err(),
+                "{path}"
+            );
         }
     }
 }

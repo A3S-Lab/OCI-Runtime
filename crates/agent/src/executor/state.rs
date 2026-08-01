@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use a3s_oci_agent_protocol::{AgentInheritedDescriptorSchema, AgentProcess, AgentState};
+use a3s_oci_agent_protocol::{
+    AgentInheritedDescriptorSchema, AgentProcess, AgentRecoveryRecord, AgentState,
+};
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
     ContainerStats, ErrorCode, ExitStatus, OperationId, ProcessId, ProcessRecord, ProcessTarget,
@@ -252,6 +254,23 @@ impl ContainerRecord {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+
+    pub(super) fn recovery_record(&mut self) -> Result<AgentRecoveryRecord> {
+        let init_exit_status = self.poll_wait()?.ok_or_else(|| {
+            executor_error(
+                ErrorCode::Internal,
+                format!(
+                    "init process for container {} has no terminal result after forced shutdown",
+                    self.target.id
+                ),
+            )
+        })?;
+        AgentRecoveryRecord::new(
+            self.target.clone(),
+            self.config_digest.clone(),
+            init_exit_status,
+        )
     }
 
     pub(super) fn signal_all(&self, signal: i32) -> Result<SignalOutcome> {

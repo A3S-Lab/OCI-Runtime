@@ -300,6 +300,15 @@ directly, so recovery retains its tombstone without committing an observation;
 replaying the original create then returns a terminal error and the existing
 durable failure path quarantines that generation.
 
+The guest side of the next recovery gate is implemented: complete executor
+shutdown emits a bounded, exact-generation report containing the canonical
+configuration digest and real init exit status, authenticated with the
+ephemeral session token. It is deliberately not trusted by a restarted host
+yet. The owner-PID shim must first validate that authentication tag and copy a
+normalized report out of the guest-writable root into protected host storage;
+until that handoff and durable consumption exist, recovered `wait` continues
+to fail instead of inventing a result.
+
 ## Next Windows gate
 
 With the live driver boundary in place, the next vertical slice must:

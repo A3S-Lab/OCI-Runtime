@@ -422,6 +422,11 @@ the utility-VM host/agent transport portion remains open.
   exit status.
 - [ ] Retain exact init exit evidence across WHPX owner death and host-service
   restart, including before/after recovery faults.
+  - [x] Define a versioned and bounded exact-generation report, authenticate it
+    with the ephemeral agent session token, and emit it only after complete
+    guest executor shutdown.
+  - [ ] Have the owner-PID shim verify and copy the report into protected host
+    storage, then consume it through durable startup recovery and fault gates.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest
   runtime directory on the nominal path.
