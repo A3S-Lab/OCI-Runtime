@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, State};
 use a3s_oci_sdk::{
-    ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, EventsRequest, ExitStatus, IsolationRequest, KillRequest,
-    ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo,
-    ProcessTarget, ProcessesRequest, RuntimeClient, RuntimeEventKind, Signal, StartRequest,
-    StateRequest, StatsRequest, UpdateRequest, WaitRequest,
+    ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest,
+    DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExitStatus, IsolationRequest,
+    KillRequest, ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
+    ProcessIo, ProcessTarget, ProcessesRequest, RuntimeClient, RuntimeEventKind, Signal,
+    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -108,12 +108,16 @@ async fn exercise_client(
         id: id.clone(),
         bundle: bundle.clone(),
         isolation: IsolationRequest::SharedHostKernel,
-        io: ProcessIo {
-            stdin: a3s_oci_sdk::IoMode::Null,
-            stdout: a3s_oci_sdk::IoMode::Null,
-            stderr: a3s_oci_sdk::IoMode::Null,
-            terminal_size: None,
-        },
+        attachments: CreateAttachments::from_bundle(
+            bundle,
+            ProcessIo {
+                stdin: a3s_oci_sdk::IoMode::Null,
+                stdout: a3s_oci_sdk::IoMode::Null,
+                stderr: a3s_oci_sdk::IoMode::Null,
+                terminal_size: None,
+            },
+        )
+        .map_err(|error| format!("failed to derive native create attachments: {error}"))?,
     };
     let mut dedicated = create.clone();
     dedicated.isolation = IsolationRequest::DedicatedVm;
@@ -686,12 +690,16 @@ pub(super) async fn exercise_until_fault(
         id: id.clone(),
         bundle: bundle.clone(),
         isolation: IsolationRequest::SharedHostKernel,
-        io: ProcessIo {
-            stdin: a3s_oci_sdk::IoMode::Null,
-            stdout: a3s_oci_sdk::IoMode::Null,
-            stderr: a3s_oci_sdk::IoMode::Null,
-            terminal_size: None,
-        },
+        attachments: CreateAttachments::from_bundle(
+            bundle,
+            ProcessIo {
+                stdin: a3s_oci_sdk::IoMode::Null,
+                stdout: a3s_oci_sdk::IoMode::Null,
+                stderr: a3s_oci_sdk::IoMode::Null,
+                terminal_size: None,
+            },
+        )
+        .map_err(|error| format!("failed to derive native fault attachments: {error}"))?,
     };
     let created = native_call("fault create", client.create(create)).await?;
     if *created.state.status() != ContainerState::Created {

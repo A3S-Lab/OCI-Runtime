@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "linux")]
@@ -101,6 +102,8 @@ struct RecordingDriver {
     output_responses: Mutex<VecDeque<Vec<OutputChunk>>>,
     recovery: Mutex<DriverRecovery>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
+    process_fixture_log: Option<PathBuf>,
+    recover_process_fixture_state: bool,
 }
 
 impl RecordingDriver {
@@ -136,7 +139,18 @@ impl RecordingDriver {
             output_responses: Mutex::new(VecDeque::new()),
             recovery: Mutex::new(DriverRecovery::none()),
             failures: Mutex::new(HashMap::new()),
+            process_fixture_log: None,
+            recover_process_fixture_state: false,
         }
+    }
+
+    fn process_fixture(log: PathBuf) -> Self {
+        let mut driver = Self::supported();
+        driver.capability.evidence =
+            BTreeMap::from([("test-driver".to_string(), "out-of-process".to_string())]);
+        driver.process_fixture_log = Some(log);
+        driver.recover_process_fixture_state = true;
+        driver
     }
 
     fn probe_only() -> Self {
@@ -238,6 +252,67 @@ impl RecordingDriver {
         }
     }
 
+    fn record_process_fixture_call(&self, operation: &'static str) -> Result<()> {
+        let Some(path) = &self.process_fixture_log else {
+            return Ok(());
+        };
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|error| {
+                Error::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to open out-of-process driver log {}: {error}",
+                        path.display()
+                    ),
+                )
+                .for_operation("record-process-fixture-call")
+            })?;
+        writeln!(log, "{operation}").map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!(
+                    "failed to append out-of-process driver log {}: {error}",
+                    path.display()
+                ),
+            )
+            .for_operation("record-process-fixture-call")
+        })
+    }
+
+    fn recover_process_fixture(&self, record: &ContainerRecord) -> Result<()> {
+        let status = record.state.status();
+        let state = if status == &ContainerState::Stopped {
+            DriverState::stopped()
+        } else {
+            let pid = (*record.state.pid()).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "live process fixture record has no init PID",
+                )
+                .for_operation("recover-process-fixture")
+            })?;
+            if status == &ContainerState::Created {
+                DriverState::created(pid)?
+            } else if status == &ContainerState::Running {
+                DriverState::running(pid)?.with_paused(record.is_paused())?
+            } else {
+                return Err(Error::new(
+                    ErrorCode::FailedPrecondition,
+                    format!("process fixture cannot recover OCI state {status}"),
+                )
+                .for_operation("recover-process-fixture"));
+            }
+        };
+        self.states
+            .lock()
+            .expect("driver states lock")
+            .insert(container_id(record.state.id()), (record.generation, state));
+        Ok(())
+    }
+
     fn exact_generation(target: &ContainerTarget) -> Result<Generation> {
         target.generation.ok_or_else(|| {
             Error::new(
@@ -271,6 +346,11 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
+        if self.recover_process_fixture_state {
+            self.record_process_fixture_call("recover")?;
+            self.recover_process_fixture(record)?;
+            return Ok(DriverRecovery::none());
+        }
         let recovery = self.recovery.lock().expect("driver recovery lock").clone();
         if recovery != DriverRecovery::none() {
             self.calls
@@ -282,6 +362,7 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
+        self.record_process_fixture_call("create")?;
         self.calls
             .lock()
             .expect("driver calls lock")
@@ -323,6 +404,7 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
+        self.record_process_fixture_call("start")?;
         self.calls
             .lock()
             .expect("driver calls lock")
@@ -340,6 +422,7 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        self.record_process_fixture_call("kill")?;
         self.calls
             .lock()
             .expect("driver calls lock")
@@ -361,6 +444,7 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
+        self.record_process_fixture_call("delete")?;
         self.calls
             .lock()
             .expect("driver calls lock")
@@ -2517,4 +2601,282 @@ async fn multi_driver_registration_rejects_ambiguous_or_inconsistent_sets_before
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
     assert!(error.message.contains("different OCI hook set"));
     assert!(!hook_root.exists());
+}
+
+#[cfg(any(unix, windows))]
+const PROCESS_OWNER_CHILD_ENV: &str = "A3S_OCI_TEST_RUNTIME_OWNER_CHILD";
+#[cfg(any(unix, windows))]
+const PROCESS_OWNER_STATE_ENV: &str = "A3S_OCI_TEST_RUNTIME_OWNER_STATE";
+#[cfg(any(unix, windows))]
+const PROCESS_OWNER_ENDPOINT_ENV: &str = "A3S_OCI_TEST_RUNTIME_OWNER_ENDPOINT";
+#[cfg(any(unix, windows))]
+const PROCESS_OWNER_READY_ENV: &str = "A3S_OCI_TEST_RUNTIME_OWNER_READY";
+#[cfg(any(unix, windows))]
+const PROCESS_OWNER_LOG_ENV: &str = "A3S_OCI_TEST_RUNTIME_OWNER_LOG";
+#[cfg(any(unix, windows))]
+const PROCESS_OWNER_TEST_NAME: &str =
+    "service::tests::retained_sdk_client_recovers_after_runtime_owner_process_restart";
+
+#[cfg(any(unix, windows))]
+struct RuntimeOwnerChild {
+    child: Option<std::process::Child>,
+    stderr_path: PathBuf,
+}
+
+#[cfg(any(unix, windows))]
+impl RuntimeOwnerChild {
+    fn spawn(
+        state_root: &Path,
+        endpoint: &std::ffi::OsStr,
+        ready_path: &Path,
+        log_path: &Path,
+        stderr_path: PathBuf,
+    ) -> Self {
+        let stderr = std::fs::File::create(&stderr_path).expect("create owner stderr file");
+        let child = std::process::Command::new(
+            std::env::current_exe().expect("resolve runtime test executable"),
+        )
+        .args(["--exact", PROCESS_OWNER_TEST_NAME, "--nocapture"])
+        .env(PROCESS_OWNER_CHILD_ENV, "1")
+        .env(PROCESS_OWNER_STATE_ENV, state_root)
+        .env(PROCESS_OWNER_ENDPOINT_ENV, endpoint)
+        .env(PROCESS_OWNER_READY_ENV, ready_path)
+        .env(PROCESS_OWNER_LOG_ENV, log_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(stderr)
+        .spawn()
+        .expect("spawn out-of-process runtime owner");
+        Self {
+            child: Some(child),
+            stderr_path,
+        }
+    }
+
+    fn wait_until_ready(&mut self, ready_path: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if ready_path.is_file() {
+                return;
+            }
+            if let Some(status) = self
+                .child
+                .as_mut()
+                .expect("runtime owner child")
+                .try_wait()
+                .expect("inspect runtime owner child")
+            {
+                let stderr = std::fs::read_to_string(&self.stderr_path).unwrap_or_default();
+                panic!("runtime owner exited before readiness ({status}): {stderr}");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "runtime owner did not become ready: {}",
+                std::fs::read_to_string(&self.stderr_path).unwrap_or_default()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn terminate(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let _ = child.kill();
+        child.wait().expect("reap runtime owner child");
+    }
+}
+
+#[cfg(any(unix, windows))]
+impl Drop for RuntimeOwnerChild {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn required_process_owner_path(name: &'static str) -> PathBuf {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("missing runtime owner child environment {name}"))
+}
+
+#[cfg(any(unix, windows))]
+async fn run_process_owner_child() {
+    let state_root = required_process_owner_path(PROCESS_OWNER_STATE_ENV);
+    let ready_path = required_process_owner_path(PROCESS_OWNER_READY_ENV);
+    let log_path = required_process_owner_path(PROCESS_OWNER_LOG_ENV);
+    let driver: Arc<dyn RuntimeDriver> = Arc::new(RecordingDriver::process_fixture(log_path));
+    let service = HostRuntimeService::open(state_root, driver)
+        .await
+        .expect("open durable child host service");
+
+    #[cfg(windows)]
+    {
+        let endpoint_name = std::env::var(PROCESS_OWNER_ENDPOINT_ENV)
+            .expect("Windows runtime owner endpoint environment");
+        let endpoint = a3s_oci_sdk::LocalIpcEndpoint::windows_named_pipe(endpoint_name)
+            .expect("valid child named-pipe endpoint");
+        let owner = crate::WindowsHostService::bind(endpoint, service)
+            .expect("bind child Windows host service");
+        std::fs::write(&ready_path, b"ready").expect("publish child readiness");
+        owner
+            .serve_until(std::future::pending())
+            .await
+            .expect("serve child Windows host service");
+    }
+
+    #[cfg(unix)]
+    {
+        let socket_path = required_process_owner_path(PROCESS_OWNER_ENDPOINT_ENV);
+        if socket_path.exists() {
+            std::fs::remove_file(&socket_path).expect("remove stale child SDK socket");
+        }
+        let listener =
+            tokio::net::UnixListener::bind(&socket_path).expect("bind child Unix SDK socket");
+        let service: Arc<dyn OciRuntimeService> = Arc::new(service);
+        std::fs::write(&ready_path, b"ready").expect("publish child readiness");
+        let (stream, _) = listener.accept().await.expect("accept parent SDK client");
+        a3s_oci_sdk::serve_transport_connection(service, stream)
+            .await
+            .expect("serve child Unix SDK connection");
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn retained_sdk_client_recovers_after_runtime_owner_process_restart() {
+    if std::env::var_os(PROCESS_OWNER_CHILD_ENV).is_some() {
+        run_process_owner_child().await;
+        return;
+    }
+
+    let temporary = tempfile::tempdir().expect("temporary process-restart directory");
+    let state_root = temporary.path().join("state");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let call_log = temporary.path().join("driver-calls.log");
+
+    #[cfg(windows)]
+    let (endpoint_value, endpoint) = {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_PIPE: AtomicU64 = AtomicU64::new(30_000);
+        let name = format!(
+            r"\\.\pipe\a3s-oci-owner-restart-test-{}-{}",
+            std::process::id(),
+            NEXT_PIPE.fetch_add(1, Ordering::Relaxed)
+        );
+        let endpoint = a3s_oci_sdk::LocalIpcEndpoint::windows_named_pipe(name.clone())
+            .expect("valid parent named-pipe endpoint");
+        (std::ffi::OsString::from(name), endpoint)
+    };
+    #[cfg(unix)]
+    let (endpoint_value, endpoint) = {
+        let path = temporary.path().join("runtime.sock");
+        let endpoint = a3s_oci_sdk::LocalIpcEndpoint::unix_socket(path.clone())
+            .expect("valid parent Unix endpoint");
+        (path.into_os_string(), endpoint)
+    };
+
+    let first_ready = temporary.path().join("owner-1.ready");
+    let mut first_owner = RuntimeOwnerChild::spawn(
+        &state_root,
+        &endpoint_value,
+        &first_ready,
+        &call_log,
+        temporary.path().join("owner-1.stderr"),
+    );
+    first_owner.wait_until_ready(&first_ready);
+    let client = a3s_oci_sdk::RuntimeClient::connect(&endpoint)
+        .await
+        .expect("connect retained SDK client to first owner");
+    let create = create_request(&bundle_directory, "process-restart-create");
+    let created = client
+        .create(create.clone())
+        .await
+        .expect("create through first owner");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("process-restart-start")),
+        target: target.clone(),
+    };
+    let running = client
+        .start(start.clone())
+        .await
+        .expect("start through first owner");
+    assert_eq!(running.state.status(), &ContainerState::Running);
+
+    first_owner.terminate();
+    let disconnected = client
+        .state(StateRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect_err("first request after owner death must expose the disconnect");
+    assert_eq!(disconnected.code, ErrorCode::Unavailable);
+    assert!(disconnected.retryable);
+
+    let second_ready = temporary.path().join("owner-2.ready");
+    let mut second_owner = RuntimeOwnerChild::spawn(
+        &state_root,
+        &endpoint_value,
+        &second_ready,
+        &call_log,
+        temporary.path().join("owner-2.stderr"),
+    );
+    second_owner.wait_until_ready(&second_ready);
+    let recovered = client
+        .state(StateRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("retained client must reconnect to replacement owner");
+    assert_eq!(recovered, running);
+    assert_eq!(
+        client
+            .create(create.clone())
+            .await
+            .expect("durable create replay after process restart"),
+        created
+    );
+    assert_eq!(
+        client
+            .start(start)
+            .await
+            .expect("durable start replay after process restart"),
+        running
+    );
+
+    let calls = std::fs::read_to_string(&call_log).expect("read process driver call log");
+    assert_eq!(calls.lines().filter(|call| *call == "create").count(), 1);
+    assert_eq!(calls.lines().filter(|call| *call == "start").count(), 1);
+    assert_eq!(calls.lines().filter(|call| *call == "recover").count(), 1);
+
+    client
+        .kill(KillRequest {
+            context: OperationContext::new(operation_id("process-restart-kill")),
+            target: target.clone(),
+            signal: Signal::new(9).expect("valid signal"),
+            all: true,
+        })
+        .await
+        .expect("kill recovered process fixture");
+    client
+        .delete(DeleteRequest {
+            context: OperationContext::new(operation_id("process-restart-delete")),
+            target,
+            mode: DeleteMode::StoppedOnly,
+        })
+        .await
+        .expect("delete recovered process fixture");
+    let calls = std::fs::read_to_string(&call_log).expect("read final process driver call log");
+    assert_eq!(calls.lines().filter(|call| *call == "create").count(), 1);
+    assert_eq!(calls.lines().filter(|call| *call == "start").count(), 1);
+    assert_eq!(calls.lines().filter(|call| *call == "kill").count(), 1);
+    assert_eq!(calls.lines().filter(|call| *call == "delete").count(), 1);
+    second_owner.terminate();
 }

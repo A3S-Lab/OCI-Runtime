@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerId, ContainerRecord, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error,
-    ErrorCode, ExitStatus, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId,
-    ProcessIo, RuntimeClient, Signal, StartRequest, StateRequest, WaitRequest,
+    ContainerId, ContainerRecord, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode,
+    DeleteRequest, Error, ErrorCode, ExitStatus, IsolationRequest, KillRequest, OciBundle,
+    OperationContext, OperationId, ProcessIo, RuntimeClient, Signal, StartRequest, StateRequest,
+    WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -391,7 +392,9 @@ pub(super) fn create_request(
         id,
         bundle: bundle.clone(),
         isolation: IsolationRequest::SharedHostKernel,
-        io: null_io(),
+        attachments: CreateAttachments::from_bundle(bundle, null_io()).map_err(|error| {
+            format!("failed to derive multi-container create attachments: {error}")
+        })?,
     })
 }
 

@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Out-of-process runtime-owner restart coverage for the durable host service.
+  The cross-platform test launches the runtime test binary as one OS process,
+  creates and starts a generation through real local IPC, terminates that
+  owner, and launches a second process against the same state root and endpoint.
+  One retained `RuntimeClient` exposes the disconnect, reconnects to the new
+  owner, and replays the original create/start identities without a second
+  driver dispatch. The fixture deliberately uses a deterministic test driver;
+  Box wiring and real native/WHPX process recovery remain separate gates.
 - Reconnectable local SDK transport for retained `RuntimeClient` instances.
   The request that first observes a broken Unix socket or Windows named pipe
   still returns a retryable ambiguity and is never replayed inside the
@@ -14,8 +22,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
   or reconcile with the original durable operation identity. Caller-supplied
   `from_io` streams remain permanently closed after a protocol or transport
   failure. Real named-pipe and Unix-socket server-restart tests cover both
-  boundaries; A3S Box runtime-owner process restart and real-driver
-  qualification remain open gates.
+  boundaries; A3S Box wiring and real-driver qualification remain open gates.
 - Public-SDK-only A3S Box consumer evidence at Box commit `09a9e5d3` for exact
   live process inventory, normalized CPU/memory stats, bounded ordered-event
   polling, and replay-safe complete OCI resource updates. Box rechecks read
@@ -118,6 +125,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Native Linux lifecycle, rootless, multi-container, and soak fixtures now
+  derive `a3s.oci.attachments.v1` from each immutable bundle and requested I/O
+  contract. They no longer initialize the removed `CreateRequest::io` field,
+  restoring Linux runtime-test compilation after the attachment protocol
+  migration.
 - Prepare read-only bind mounts from parent-namespace filesystems as detached
   mount objects before entering a container user namespace. Requested kernel
   security attributes are applied with `mount_setattr` and the prepared mount

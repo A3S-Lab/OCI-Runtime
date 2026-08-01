@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerOperationRequest, ContainerTarget, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, IoMode, IsolationRequest,
+    ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest,
+    DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, IoMode, IsolationRequest,
     KillRequest, ListRequest, OciBundle, OperationContext, OperationId, OutputStream, ProcessId,
     ProcessIo, ProcessTarget, ProcessesRequest, ReadOutputRequest, RuntimeClient, Signal,
     StartRequest, StateRequest, StatsRequest, WaitProcessRequest, WaitRequest,
@@ -738,17 +738,22 @@ fn create_request(
     id: ContainerId,
     bundle: OciBundle,
 ) -> Result<CreateRequest, String> {
-    Ok(CreateRequest {
-        context: operation(nonce, iteration, slot, "create")?,
-        id,
-        bundle,
-        isolation: IsolationRequest::SharedHostKernel,
-        io: ProcessIo {
+    let attachments = CreateAttachments::from_bundle(
+        &bundle,
+        ProcessIo {
             stdin: IoMode::Null,
             stdout: IoMode::Null,
             stderr: IoMode::Null,
             terminal_size: None,
         },
+    )
+    .map_err(|error| format!("failed to derive soak create attachments: {error}"))?;
+    Ok(CreateRequest {
+        context: operation(nonce, iteration, slot, "create")?,
+        id,
+        bundle,
+        isolation: IsolationRequest::SharedHostKernel,
+        attachments,
     })
 }
 

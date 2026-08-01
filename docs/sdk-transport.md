@@ -42,6 +42,15 @@ the original mutation or run reconciliation with its original `OperationId`;
 the runtime journal, rather than the transport, decides whether an effect has
 already committed.
 
+The cross-platform runtime contract executes that boundary with two distinct
+owner processes. The first process creates and starts a durable generation over
+a real Unix socket or Windows named pipe and is then terminated. A second
+process opens the same `HostRuntimeService` state root and endpoint; the
+retained client reconnects, reads the exact generation, and replays the original
+create/start requests without another deterministic test-driver dispatch. Real
+native Linux and utility-VM driver reattachment remains platform qualification,
+not transport evidence.
+
 ## A3S Box Client
 
 On Windows, use a local named pipe:

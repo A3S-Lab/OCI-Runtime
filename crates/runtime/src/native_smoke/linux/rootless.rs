@@ -6,11 +6,11 @@ use std::time::Duration;
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    EventsRequest, ExecRequest, ExitStatus, IoMode, IsolationRequest, KillRequest, ListRequest,
-    OciBundle, OperationContext, OperationId, ProcessId, ProcessIo, ProcessTarget, RuntimeClient,
-    RuntimeEventKind, Signal, SignalProcessRequest, StartRequest, StateRequest, WaitProcessRequest,
-    WaitRequest,
+    ContainerId, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest,
+    Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, IoMode, IsolationRequest,
+    KillRequest, ListRequest, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo,
+    ProcessTarget, RuntimeClient, RuntimeEventKind, Signal, SignalProcessRequest, StartRequest,
+    StateRequest, WaitProcessRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -172,12 +172,16 @@ async fn exercise(
         id: id.clone(),
         bundle: bundle.clone(),
         isolation: IsolationRequest::SharedHostKernel,
-        io: ProcessIo {
-            stdin: IoMode::Null,
-            stdout: IoMode::Null,
-            stderr: IoMode::Null,
-            terminal_size: None,
-        },
+        attachments: CreateAttachments::from_bundle(
+            bundle,
+            ProcessIo {
+                stdin: IoMode::Null,
+                stdout: IoMode::Null,
+                stderr: IoMode::Null,
+                terminal_size: None,
+            },
+        )
+        .map_err(|error| format!("failed to derive rootless create attachments: {error}"))?,
     };
     let created = call("rootless create", client.create(create.clone())).await?;
     report.create_returned_created = *created.state.status() == ContainerState::Created;

@@ -236,8 +236,8 @@ Completed:
   response with one runtime effect, and published atomically to both managed
   restart state and compatibility state. An immutable create-intent digest
   keeps the original create operation replayable after later resource changes;
-  production routing, out-of-process restart, and real-host cutover gates
-  remain open;
+  production routing, Box-wired owner restart, real-driver reattachment, and
+  real-host cutover gates remain open;
 - Linux executor enforcement for exact capability sets and exec bounding
   ceilings, private controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
@@ -300,6 +300,11 @@ Completed:
   next caller-initiated request. Real Windows named-pipe and Unix-socket tests
   restart the server behind one retained `RuntimeClient`; caller-supplied
   `from_io` streams remain fail-closed and non-reconnectable;
+- cross-platform runtime-owner process restart coverage that launches two
+  distinct test-binary processes on the same platform-local endpoint and
+  durable `HostRuntimeService` state root. One retained client exposes owner
+  death, reconnects to the replacement, recovers the exact generation, and
+  replays create/start with one deterministic test-driver dispatch each;
 - foreground `run` implemented only as a typed SDK composition of durable
   create, start, wait, and stable force-delete cleanup;
 - deterministic durable container enumeration with isolation filtering,
@@ -341,8 +346,8 @@ Not yet complete:
   certification;
 - OCI configuration enforcement;
 - production-ready native Linux execution;
-- A3S Box runtime-owner process restart qualification, production routing, and
-  real-host cutover;
+- A3S Box wiring to the restarted owner, real-driver process reattachment,
+  production routing, and real-host cutover;
 - upstream conformance and security certification.
 
 The built-in WHPX driver remains `probe-only`, and the default host service
@@ -684,10 +689,11 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Add the native Linux driver without linking or initializing libkrun.
 - [x] Reuse the R3 Linux executor directly.
 - [x] Prove runtime binary startup, feature inspection, Rust SDK loading, and
-  the rootful lifecycle including exact repeated init wait plus public SDK
-  exec/signal/wait, pause/resume, process inventory, resource update, and
-  normalized stats plus PTY allocation, resize, interactive I/O, and VEOF
-  without KVM on x86_64 and aarch64.
+  the rootful lifecycle through the versioned create-attachment contract,
+  including exact repeated init wait plus public SDK exec/signal/wait,
+  pause/resume, process inventory, resource update, and normalized stats plus
+  PTY allocation, resize, interactive I/O, and VEOF without KVM on x86_64 and
+  aarch64.
 - [x] Prove the helper-backed non-root core lifecycle with subordinate
   UID/GID ownership and `setgroups=deny` on x86_64 and aarch64; rootless
   cgroup-v2 delegation remains a separate release gate.
