@@ -196,6 +196,18 @@ generate both an unguessable endpoint nonce and the session token from the OS,
 and reject a connected process whose PID is not the expected libkrun shim.
 PID verification occurs before the host sends the session token.
 
+Driver-owned WHPX sessions additionally separate the fixed guest system root
+from one writable host share. The runtime accepts only the plain directory at
+`shares/<container ID>/<generation>`, applies its protected DACL, and passes
+only that exact directory to `krun_add_virtiofs` with tag
+`a3s-oci-runtime`. The Linux agent must mount it at
+`/run/a3s-oci-runtime` before it can read the one-time token or connect to the
+host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v2` records whether the
+device was configured; the host requires that field for candidate-driver
+sessions while diagnostic and macOS sessions remain valid without the extra
+device. Bundle paths, token files, and recovery-report paths are then validated
+below the fixed guest mount rather than below the system root.
+
 macOS tests create a random private directory below `/private/tmp` with mode
 `0700`, bind a `0600` Unix socket, reject collisions and symlinks, and remove
 both entries on success, rejection, timeout, or drop. After accept, the host
@@ -220,9 +232,11 @@ operations receive cloned clients, while concurrent shutdown callers observe
 the same cached cleanup report and can never reap the VM more than once.
 The WHPX driver converts a successfully reaped live session, or a durable
 generation recovered in a new owner process, into a stopped tombstone. This
-preserves safe state and delete semantics after owner death without claiming
-that the guest protocol supplied an exact init exit result. A live same-process
-recovery query additionally checks the durable configuration digest.
+preserves safe state and delete semantics after owner death. When the shim
+retained an authenticated shutdown report, startup also commits its exact init
+exit result to the durable wait cache; without valid evidence, wait continues
+to fail rather than fabricate a result. A live same-process recovery query
+additionally checks the durable configuration digest.
 
 The guest-agent shutdown path now has a separate, versioned recovery artifact
 contract. After every owned process has been stopped and the complete executor
@@ -234,7 +248,8 @@ not included in the artifact. The guest creates the fixed one-time report file
 with exclusive `0600` semantics and synchronizes both file and directory.
 Missing or partial cleanup produces no usable report. On Windows, the
 owner-PID-aware shim stages the one-time path, preserves it throughout the
-bounded owner-death grace, rejects reparse points and guest-root destinations,
+bounded owner-death grace, rejects reparse points and destinations inside the
+per-generation writable share,
 verifies the HMAC, removes the guest copy, and atomically commits only the
 normalized report into the protected host recovery directory. A protected
 empty `.pending` marker exists from VM launch until either that commit or

@@ -49,7 +49,11 @@ The runtime:
 14. exposes a repeatable hardware soak covering serial, parallel, same-VM
     multi-container, network, storage, init, typed-negative, lifecycle-fault,
     and owner-death profiles with machine-readable resource and inventory
-    evidence.
+    evidence;
+15. gives each candidate-driver VM only its exact protected
+    `shares/<container>/<generation>` directory through a second virtio-fs
+    device, mounts the fixed `a3s-oci-runtime` tag before guest token access,
+    and leaves the system root disjoint from writable bundle and handoff data.
 
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
@@ -270,8 +274,9 @@ The smokes and candidate recovery tests do not prove that:
 - the rootful user/time namespace slice now exercised on native Linux and
   macOS, namespace joins, recursive or ID-mapped mounts, tmpfs, capabilities,
   seccomp, or hooks work through WHPX;
-- exact init exit evidence survives host-owner death, or arbitrary
-  shared-guest-kernel isolation policies work;
+- the new per-generation share and exact init exit evidence pass a fresh-host
+  owner-death/service-restart run, or arbitrary shared-guest-kernel isolation
+  policies work;
 - the driver is production ready.
 
 For that reason, driver readiness remains `probe-only` even after all smokes
@@ -282,9 +287,15 @@ The runtime now contains a qualification-only `WhpxRuntimeDriver` candidate.
 It uses the same eighteen-operation adapter as native Linux, owns one VM per
 exact dedicated-VM generation, retains the VM across retryable create calls,
 and reaps terminal create failures, deletes, and driver shutdown exactly once.
-Opening it requires the guest root to sit below a runtime-owned root whose
-Windows DACL is protected. Its reported readiness deliberately stays
-`probe-only`, so the durable host service cannot register it yet.
+Opening it requires a guest system root below the runtime root, the fixed
+`/run/a3s-oci-runtime` mount-point directory, and a disjoint runtime-created
+`shares` parent, all guarded by the protected Windows DACL. Create accepts a
+bundle only below the exact `<container>/<generation>` share, exports only that
+directory, and rejects cross-generation or external paths before launching a
+VM. The shim stages token and recovery files in the share and emits v2 evidence
+that the virtio-fs device was configured; the host requires that evidence. Its
+reported readiness deliberately stays `probe-only`, so the durable host
+service cannot register it yet.
 
 The generic host now has an idempotent startup recovery handshake. WHPX uses
 the shim's existing owner-PID watcher as its fail-closed contract: when a new
@@ -304,7 +315,7 @@ configuration digest and real init exit status, authenticated with the
 ephemeral session token. The owner-PID shim preserves the one-time guest path
 during its 15-second cleanup grace, validates the authentication tag after the
 VM exits, removes the guest copy, and atomically commits only the normalized
-report into a protected host recovery directory outside the guest root. A
+report into a protected host recovery directory outside the writable share. A
 plain, protected pending marker spans VM launch through successful or failed
 handoff. A restarted host now parses only the normalized report, rechecks the
 exact target and durable configuration digest, commits `stopped`, and caches
@@ -322,13 +333,14 @@ WHPX qualification remains pending.
 With the live driver boundary in place, the next vertical slice must:
 
 1. boot a version-pinned A3S system image;
-2. mount one protected runtime-owned root through virtio-fs;
+2. qualify the implemented protected per-generation runtime share on a fresh
+   WHPX host, including owner-death and service restart;
 3. qualify the shared rootful user/time and existing-namespace slices on WHPX
    and add advanced mount, capability, resource, seccomp, and hook enforcement;
 4. extend the current piped and terminal I/O gate with inherited-descriptor
    handling plus arbitrary natural exit-code coverage;
-5. retain exact init exit evidence across owner-death cleanup and host runtime
-   restart, with faults on both sides of the recovery call;
+5. retain fresh-host evidence for exact init exit replay across owner-death
+   cleanup and host runtime restart;
 6. expand the retained two-container gate into arbitrary shared-guest
    isolation and recovery evidence.
 

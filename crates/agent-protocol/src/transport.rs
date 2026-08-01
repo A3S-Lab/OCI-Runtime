@@ -2,6 +2,12 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 /// Guest control port reserved by every libkrun host bridge.
 pub const AGENT_VSOCK_PORT: u32 = 4_093;
+/// Environment key that opts the guest agent into the fixed runtime share.
+pub const AGENT_RUNTIME_SHARE_ENV: &str = "A3S_OCI_AGENT_RUNTIME_SHARE";
+/// Fixed virtio-fs tag used for the per-generation runtime share.
+pub const AGENT_RUNTIME_SHARE_TAG: &str = "a3s-oci-runtime";
+/// Fixed guest mount point for the per-generation runtime share.
+pub const AGENT_RUNTIME_SHARE_GUEST_ROOT: &str = "/run/a3s-oci-runtime";
 
 /// Exact endpoint basename mapped to the guest-agent vsock port.
 #[derive(Debug, Clone, PartialEq, Eq)]

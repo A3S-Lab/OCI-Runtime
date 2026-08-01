@@ -38,7 +38,10 @@ pub use recovery::{
     AGENT_RECOVERY_REPORT_SCHEMA_VERSION,
 };
 pub use server::{serve_agent_connection, GuestAgentService};
-pub use transport::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
+pub use transport::{
+    AgentVsockEndpoint, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_GUEST_ROOT,
+    AGENT_RUNTIME_SHARE_TAG, AGENT_VSOCK_PORT,
+};
 
 #[cfg(test)]
 mod tests;

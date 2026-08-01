@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
     AgentRecoveryReport, GuestAgentService, GuestPath, AGENT_RECOVERY_REPORT_MAX_BYTES,
-    AGENT_RECOVERY_REPORT_PENDING_SUFFIX,
+    AGENT_RECOVERY_REPORT_PENDING_SUFFIX, AGENT_RUNTIME_SHARE_GUEST_ROOT,
 };
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
@@ -32,6 +32,7 @@ use crate::driver::{
 
 const CONSOLE_DIRECTORY: &str = "console";
 const RECOVERY_DIRECTORY: &str = "recovery";
+const RUNTIME_SHARE_DIRECTORY: &str = "shares";
 const RECOVERY_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const RECOVERY_HANDOFF_TIMEOUT: Duration = Duration::from_secs(16);
 
@@ -41,23 +42,27 @@ pub struct WhpxRuntimeDriverConfig {
     shim: PathBuf,
     runtime_root: PathBuf,
     vm_rootfs: PathBuf,
+    runtime_share_root: PathBuf,
 }
 
 impl WhpxRuntimeDriverConfig {
-    /// Describe the isolated libkrun shim, protected runtime root, and guest root.
+    /// Describe the isolated shim, protected runtime root, and guest system root.
     ///
-    /// The guest root must be a strict descendant of `runtime_root`. Opening the
-    /// candidate verifies plain paths and applies the private Windows DACL to
-    /// both roots before any VM can launch.
+    /// The system root must be a strict descendant of `runtime_root` and contain
+    /// the fixed agent plus runtime-share mount point. Opening the candidate
+    /// verifies those plain paths, creates the sibling share parent, and applies
+    /// the private Windows DACL before any VM can launch.
     #[must_use]
     pub fn new(
         shim: impl Into<PathBuf>,
         runtime_root: impl Into<PathBuf>,
         vm_rootfs: impl Into<PathBuf>,
     ) -> Self {
+        let runtime_root = runtime_root.into();
         Self {
             shim: shim.into(),
-            runtime_root: runtime_root.into(),
+            runtime_share_root: runtime_root.join(RUNTIME_SHARE_DIRECTORY),
+            runtime_root,
             vm_rootfs: vm_rootfs.into(),
         }
     }
@@ -74,10 +79,16 @@ impl WhpxRuntimeDriverConfig {
         &self.runtime_root
     }
 
-    /// Guest root exported to each dedicated utility VM.
+    /// Guest system root exported to each dedicated utility VM.
     #[must_use]
     pub fn vm_rootfs(&self) -> &Path {
         &self.vm_rootfs
+    }
+
+    /// Protected parent of every exact-generation writable guest share.
+    #[must_use]
+    pub fn runtime_share_root(&self) -> &Path {
+        &self.runtime_share_root
     }
 }
 
@@ -87,10 +98,11 @@ impl WhpxRuntimeDriverConfig {
 /// qualification tests may invoke it directly. Its capability deliberately
 /// remains `probe-only`, so
 /// [`crate::HostRuntimeService`] rejects production registration until the
-/// immutable-system-root and restart-reattachment gates are complete.
+/// immutable-system-root and fresh-host recovery gates are complete.
 pub struct WhpxRuntimeDriver {
     capability: DriverCapability,
     vm_rootfs: PathBuf,
+    runtime_share_root: PathBuf,
     recovery_directory: PathBuf,
     factory: Arc<dyn UtilityVmFactory>,
     sessions: Mutex<BTreeMap<ContainerId, WhpxAttachment>>,
@@ -103,6 +115,7 @@ impl fmt::Debug for WhpxRuntimeDriver {
             .debug_struct("WhpxRuntimeDriver")
             .field("capability", &self.capability)
             .field("vm_rootfs", &self.vm_rootfs)
+            .field("runtime_share_root", &self.runtime_share_root)
             .finish_non_exhaustive()
     }
 }
@@ -132,6 +145,10 @@ impl WhpxRuntimeDriver {
             .evidence
             .insert("runtime_root_protected".to_string(), "true".to_string());
         capability.evidence.insert(
+            "runtime_share".to_string(),
+            "protected-per-generation-virtiofs".to_string(),
+        );
+        capability.evidence.insert(
             "owner_death_recovery".to_string(),
             "stopped-with-authenticated-exit".to_string(),
         );
@@ -152,6 +169,7 @@ impl WhpxRuntimeDriver {
         Ok(Self {
             capability,
             vm_rootfs: prepared.vm_rootfs,
+            runtime_share_root: prepared.runtime_share_root,
             recovery_directory: prepared.recovery_directory,
             factory,
             sessions: Mutex::new(BTreeMap::new()),
@@ -614,8 +632,9 @@ impl RuntimeDriver for WhpxRuntimeDriver {
             .for_operation("whpx-create"));
         }
         require_exact_generation(&request.target, "whpx-create")?;
-        let guest_directory =
-            guest_bundle_path(&self.vm_rootfs, request.bundle.directory()).await?;
+        let runtime_share =
+            exact_runtime_share_path(&self.runtime_share_root, &request.target).await?;
+        let guest_directory = guest_bundle_path(&runtime_share, request.bundle.directory()).await?;
         let target = request.target.clone();
 
         let create_gate = self.create_gate_for(&target.id).await;
@@ -623,7 +642,7 @@ impl RuntimeDriver for WhpxRuntimeDriver {
         let session = match self.session_for_existing_create(&target).await? {
             Some(session) => session,
             None => {
-                let launched = self.factory.launch(&target).await?;
+                let launched = self.factory.launch(&target, &runtime_share).await?;
                 let session = Arc::new(WhpxContainer {
                     target: target.clone(),
                     client: launched.client,
@@ -854,7 +873,11 @@ struct LaunchedUtilityVm {
 
 #[async_trait]
 trait UtilityVmFactory: Send + Sync {
-    async fn launch(&self, target: &ContainerTarget) -> Result<LaunchedUtilityVm>;
+    async fn launch(
+        &self,
+        target: &ContainerTarget,
+        runtime_share: &Path,
+    ) -> Result<LaunchedUtilityVm>;
 }
 
 #[async_trait]
@@ -871,7 +894,11 @@ struct LiveUtilityVmFactory {
 
 #[async_trait]
 impl UtilityVmFactory for LiveUtilityVmFactory {
-    async fn launch(&self, target: &ContainerTarget) -> Result<LaunchedUtilityVm> {
+    async fn launch(
+        &self,
+        target: &ContainerTarget,
+        runtime_share: &Path,
+    ) -> Result<LaunchedUtilityVm> {
         let generation = require_exact_generation(target, "launch-whpx-utility-vm")?;
         let console = self
             .console_directory
@@ -883,6 +910,7 @@ impl UtilityVmFactory for LiveUtilityVmFactory {
             UtilityVmSession::connect_with_recovery(
                 &self.shim,
                 &self.vm_rootfs,
+                runtime_share,
                 &console,
                 &recovery_report,
             )
@@ -913,9 +941,11 @@ impl UtilityVmOwner for LiveUtilityVmOwner {
     }
 }
 
+#[derive(Debug)]
 struct PreparedWhpxLayout {
     shim: PathBuf,
     vm_rootfs: PathBuf,
+    runtime_share_root: PathBuf,
     console_directory: PathBuf,
     recovery_directory: PathBuf,
 }
@@ -930,7 +960,7 @@ impl PreparedWhpxLayout {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "WHPX guest root must be a strict descendant of protected runtime root {}: {}",
+                    "WHPX guest system root must be a strict descendant of protected runtime root {}: {}",
                     runtime_root.display(),
                     vm_rootfs.display()
                 ),
@@ -942,10 +972,57 @@ impl PreparedWhpxLayout {
             "fixed WHPX guest agent",
         )
         .await?;
+        if !guest_agent.starts_with(&vm_rootfs) {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "fixed WHPX guest agent escapes system root {}: {}",
+                    vm_rootfs.display(),
+                    guest_agent.display()
+                ),
+            )
+            .for_operation("open-whpx-driver-candidate"));
+        }
+        let runtime_share_mount_point = canonical_plain_directory(
+            &vm_rootfs.join(AGENT_RUNTIME_SHARE_GUEST_ROOT.trim_start_matches('/')),
+            "fixed WHPX runtime-share mount point",
+        )
+        .await?;
+        if !runtime_share_mount_point.starts_with(&vm_rootfs) {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "fixed WHPX runtime-share mount point escapes system root {}: {}",
+                    vm_rootfs.display(),
+                    runtime_share_mount_point.display()
+                ),
+            )
+            .for_operation("open-whpx-driver-candidate"));
+        }
 
         protect_path(runtime_root.clone()).await?;
         protect_path(vm_rootfs.clone()).await?;
         protect_path(guest_agent).await?;
+        protect_path(runtime_share_mount_point).await?;
+        let configured_runtime_share_root = config.runtime_share_root;
+        ensure_private_directory(configured_runtime_share_root.clone(), "runtime-share").await?;
+        let runtime_share_root =
+            canonical_plain_directory(&configured_runtime_share_root, "WHPX runtime-share root")
+                .await?;
+        if runtime_share_root == vm_rootfs
+            || runtime_share_root.starts_with(&vm_rootfs)
+            || vm_rootfs.starts_with(&runtime_share_root)
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "WHPX system root and writable runtime-share root must be disjoint: {} and {}",
+                    vm_rootfs.display(),
+                    runtime_share_root.display()
+                ),
+            )
+            .for_operation("open-whpx-driver-candidate"));
+        }
         let console_directory = runtime_root.join(CONSOLE_DIRECTORY);
         ensure_private_directory(console_directory.clone(), "console").await?;
         let recovery_directory = runtime_root.join(RECOVERY_DIRECTORY);
@@ -953,6 +1030,7 @@ impl PreparedWhpxLayout {
         Ok(Self {
             shim,
             vm_rootfs,
+            runtime_share_root,
             console_directory,
             recovery_directory,
         })
@@ -1056,14 +1134,56 @@ async fn ensure_private_directory(path: PathBuf, label: &'static str) -> Result<
     }
 }
 
-async fn guest_bundle_path(vm_rootfs: &Path, bundle: &Path) -> Result<GuestPath> {
+async fn exact_runtime_share_path(
+    runtime_share_root: &Path,
+    target: &ContainerTarget,
+) -> Result<PathBuf> {
+    let generation = require_exact_generation(target, "resolve-whpx-runtime-share")?;
+    let id_directory = canonical_plain_directory(
+        &runtime_share_root.join(target.id.as_str()),
+        "WHPX container share directory",
+    )
+    .await?;
+    if id_directory.parent() != Some(runtime_share_root) {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX container share escaped protected root {}: {}",
+                runtime_share_root.display(),
+                id_directory.display()
+            ),
+        )
+        .for_operation("resolve-whpx-runtime-share"));
+    }
+    let runtime_share = canonical_plain_directory(
+        &id_directory.join(generation.0.to_string()),
+        "WHPX exact-generation runtime share",
+    )
+    .await?;
+    if runtime_share.parent() != Some(id_directory.as_path()) {
+        return Err(Error::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX generation share escaped container directory {}: {}",
+                id_directory.display(),
+                runtime_share.display()
+            ),
+        )
+        .for_operation("resolve-whpx-runtime-share"));
+    }
+    protect_path(id_directory).await?;
+    protect_path(runtime_share.clone()).await?;
+    Ok(runtime_share)
+}
+
+async fn guest_bundle_path(runtime_share: &Path, bundle: &Path) -> Result<GuestPath> {
     let bundle = canonical_plain_directory(bundle, "WHPX OCI bundle").await?;
-    let relative = bundle.strip_prefix(vm_rootfs).map_err(|error| {
+    let relative = bundle.strip_prefix(runtime_share).map_err(|error| {
         Error::new(
             ErrorCode::FailedPrecondition,
             format!(
-                "WHPX OCI bundle must be contained by guest root {}: {} ({error})",
-                vm_rootfs.display(),
+                "WHPX OCI bundle must be contained by exact runtime share {}: {} ({error})",
+                runtime_share.display(),
                 bundle.display()
             ),
         )
@@ -1103,11 +1223,14 @@ async fn guest_bundle_path(vm_rootfs: &Path, bundle: &Path) -> Result<GuestPath>
     if components.is_empty() {
         return Err(Error::new(
             ErrorCode::InvalidArgument,
-            "WHPX OCI bundle cannot be the guest root itself",
+            "WHPX OCI bundle cannot be the runtime-share root itself",
         )
         .for_operation("whpx-create"));
     }
-    GuestPath::new(format!("/{}", components.join("/")))
+    GuestPath::new(format!(
+        "{AGENT_RUNTIME_SHARE_GUEST_ROOT}/{}",
+        components.join("/")
+    ))
 }
 
 fn require_exact_generation(
@@ -1213,8 +1336,8 @@ mod tests {
 
     use super::{
         recovery_pending_path, AgentDriverClient, DriverCreateRequest, DriverDeleteRequest,
-        DriverKillRequest, DriverWaitRequest, LaunchedUtilityVm, RuntimeDriver, UtilityVmFactory,
-        UtilityVmOwner, WhpxRuntimeDriver,
+        DriverKillRequest, DriverWaitRequest, LaunchedUtilityVm, PreparedWhpxLayout, RuntimeDriver,
+        UtilityVmFactory, UtilityVmOwner, WhpxRuntimeDriver, WhpxRuntimeDriverConfig,
     };
     use crate::DriverCreateAttachments;
 
@@ -1236,6 +1359,7 @@ mod tests {
         create_calls: AtomicUsize,
         delete_calls: AtomicUsize,
         state_calls: AtomicUsize,
+        last_guest_directory: StdMutex<Option<String>>,
         next_create_failure: StdMutex<Option<Error>>,
         state: StdMutex<Option<AgentState>>,
     }
@@ -1257,6 +1381,11 @@ mod tests {
 
         async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
             self.create_calls.fetch_add(1, Ordering::Relaxed);
+            *self
+                .last_guest_directory
+                .lock()
+                .expect("guest directory lock") =
+                Some(request.bundle.guest_directory().as_str().to_string());
             if let Some(error) = self
                 .next_create_failure
                 .lock()
@@ -1358,6 +1487,7 @@ mod tests {
         launches: AtomicUsize,
         active_launches: AtomicUsize,
         max_active_launches: AtomicUsize,
+        launch_shares: StdMutex<Vec<PathBuf>>,
         launch_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
         guest: Arc<FakeGuest>,
         owner: Arc<FakeOwner>,
@@ -1372,8 +1502,16 @@ mod tests {
 
     #[async_trait]
     impl UtilityVmFactory for FakeFactory {
-        async fn launch(&self, _target: &ContainerTarget) -> Result<LaunchedUtilityVm> {
+        async fn launch(
+            &self,
+            _target: &ContainerTarget,
+            runtime_share: &std::path::Path,
+        ) -> Result<LaunchedUtilityVm> {
             self.launches.fetch_add(1, Ordering::Relaxed);
+            self.launch_shares
+                .lock()
+                .expect("launch-share lock")
+                .push(runtime_share.to_path_buf());
             let active = self.active_launches.fetch_add(1, Ordering::Relaxed) + 1;
             self.max_active_launches
                 .fetch_max(active, Ordering::Relaxed);
@@ -1404,6 +1542,7 @@ mod tests {
         guest: Arc<FakeGuest>,
         owner: Arc<FakeOwner>,
         factory: Arc<FakeFactory>,
+        runtime_share_root: PathBuf,
         recovery_directory: PathBuf,
         driver: WhpxRuntimeDriver,
     }
@@ -1412,12 +1551,16 @@ mod tests {
         fn new() -> Self {
             let temporary = tempfile::tempdir().expect("temporary WHPX fixture");
             let vm_rootfs = temporary.path().join("vm-root");
+            let runtime_share_root = temporary.path().join("shares");
             let recovery_directory = temporary.path().join("recovery");
-            let bundle_directory = vm_rootfs.join("workloads/test");
+            let bundle_directory = runtime_share_root.join("whpx-test/1/workloads/test");
+            std::fs::create_dir(&vm_rootfs).expect("VM root directory");
             std::fs::create_dir_all(&bundle_directory).expect("bundle directory");
             std::fs::create_dir(&recovery_directory).expect("recovery directory");
             let vm_rootfs = std::fs::canonicalize(vm_rootfs).expect("canonical WHPX fixture root");
-            let bundle_directory = vm_rootfs.join("workloads/test");
+            let runtime_share_root = std::fs::canonicalize(runtime_share_root)
+                .expect("canonical runtime-share fixture root");
+            let bundle_directory = runtime_share_root.join("whpx-test/1/workloads/test");
             let bundle = OciBundle::from_json(bundle_directory, TEST_CONFIG).expect("OCI bundle");
             let guest = Arc::new(FakeGuest::default());
             let owner = Arc::new(FakeOwner::default());
@@ -1425,6 +1568,7 @@ mod tests {
                 launches: AtomicUsize::new(0),
                 active_launches: AtomicUsize::new(0),
                 max_active_launches: AtomicUsize::new(0),
+                launch_shares: StdMutex::new(Vec::new()),
                 launch_barrier: StdMutex::new(None),
                 guest: guest.clone(),
                 owner: owner.clone(),
@@ -1433,6 +1577,7 @@ mod tests {
             let driver = WhpxRuntimeDriver {
                 capability: candidate_capability(),
                 vm_rootfs: vm_rootfs.clone(),
+                runtime_share_root: runtime_share_root.clone(),
                 recovery_directory: recovery_directory.clone(),
                 factory: factory_dyn,
                 sessions: Mutex::new(BTreeMap::new()),
@@ -1444,6 +1589,7 @@ mod tests {
                 guest,
                 owner,
                 factory,
+                runtime_share_root,
                 recovery_directory,
                 driver,
             }
@@ -1453,11 +1599,21 @@ mod tests {
             DriverCreateRequest {
                 context: context(operation),
                 target: target(generation),
-                bundle: self.bundle.clone(),
+                bundle: self.bundle_for("whpx-test", generation),
                 isolation: IsolationRequest::DedicatedVm,
                 io: ProcessIo::default(),
                 attachments: DriverCreateAttachments::None,
             }
+        }
+
+        fn bundle_for(&self, id: &str, generation: u64) -> OciBundle {
+            let directory = self
+                .runtime_share_root
+                .join(id)
+                .join(generation.to_string())
+                .join("workloads/test");
+            std::fs::create_dir_all(&directory).expect("exact runtime-share bundle directory");
+            OciBundle::from_json(directory, TEST_CONFIG).expect("OCI bundle")
         }
 
         fn record(&self, generation: u64, status: ContainerState) -> ContainerRecord {
@@ -1534,6 +1690,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepared_layout_creates_a_disjoint_protected_share_parent() {
+        let temporary = tempfile::tempdir().expect("temporary WHPX layout");
+        let shim = temporary.path().join("a3s-oci-krun-shim.exe");
+        let runtime_root = temporary.path().join("runtime");
+        let system_root = runtime_root.join("system");
+        std::fs::create_dir_all(system_root.join("usr/bin")).expect("agent directory");
+        std::fs::create_dir_all(system_root.join("run/a3s-oci-runtime"))
+            .expect("runtime-share mount point");
+        std::fs::write(&shim, b"shim").expect("shim fixture");
+        std::fs::write(system_root.join("usr/bin/a3s-oci-agent"), b"agent").expect("agent fixture");
+        let config = WhpxRuntimeDriverConfig::new(&shim, &runtime_root, &system_root);
+        assert_eq!(config.runtime_share_root(), runtime_root.join("shares"));
+
+        let prepared = PreparedWhpxLayout::open(config)
+            .await
+            .expect("protected WHPX layout");
+        assert!(prepared.runtime_share_root.is_dir());
+        assert!(!prepared.runtime_share_root.starts_with(&prepared.vm_rootfs));
+        assert!(!prepared.vm_rootfs.starts_with(&prepared.runtime_share_root));
+    }
+
+    #[tokio::test]
+    async fn prepared_layout_requires_the_fixed_system_root_mount_point() {
+        let temporary = tempfile::tempdir().expect("temporary WHPX layout");
+        let shim = temporary.path().join("a3s-oci-krun-shim.exe");
+        let runtime_root = temporary.path().join("runtime");
+        let system_root = runtime_root.join("system");
+        std::fs::create_dir_all(system_root.join("usr/bin")).expect("agent directory");
+        std::fs::write(&shim, b"shim").expect("shim fixture");
+        std::fs::write(system_root.join("usr/bin/a3s-oci-agent"), b"agent").expect("agent fixture");
+
+        let error = PreparedWhpxLayout::open(WhpxRuntimeDriverConfig::new(
+            &shim,
+            &runtime_root,
+            &system_root,
+        ))
+        .await
+        .expect_err("missing runtime-share mount point must fail");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    }
+
+    #[tokio::test]
     async fn concurrent_create_reuses_one_vm_and_delete_reaps_it_once() {
         let fixture = Fixture::new();
         let request = fixture.create_request(1, "create");
@@ -1551,6 +1749,15 @@ mod tests {
             1
         );
         assert_eq!(fixture.guest.create_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            fixture
+                .guest
+                .last_guest_directory
+                .lock()
+                .expect("guest directory lock")
+                .as_deref(),
+            Some("/run/a3s-oci-runtime/workloads/test")
+        );
         assert_eq!(fixture.driver.active_session_count().await, 1);
 
         fixture
@@ -1579,6 +1786,7 @@ mod tests {
             ContainerId::new("whpx-test-b").expect("second container ID"),
             Generation(1),
         );
+        second.bundle = fixture.bundle_for("whpx-test-b", 1);
 
         let (first, second) =
             tokio::join!(fixture.driver.create(first), fixture.driver.create(second));
@@ -1589,6 +1797,21 @@ mod tests {
             fixture.factory.max_active_launches.load(Ordering::Relaxed),
             2
         );
+        {
+            let launch_shares = fixture
+                .factory
+                .launch_shares
+                .lock()
+                .expect("launch-share lock");
+            assert_eq!(launch_shares.len(), 2);
+            assert_ne!(launch_shares[0], launch_shares[1]);
+            assert!(launch_shares
+                .iter()
+                .any(|path| path.ends_with("whpx-test\\1")));
+            assert!(launch_shares
+                .iter()
+                .any(|path| path.ends_with("whpx-test-b\\1")));
+        }
         assert_eq!(fixture.driver.active_session_count().await, 2);
         fixture.owner.synchronize_two_shutdowns();
         fixture.driver.shutdown().await.expect("parallel shutdown");
@@ -1674,6 +1897,21 @@ mod tests {
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
         assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 1);
         fixture.driver.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn cross_generation_bundle_is_rejected_before_vm_launch() {
+        let fixture = Fixture::new();
+        let mut request = fixture.create_request(2, "cross-generation-bundle");
+        request.bundle = fixture.bundle_for("whpx-test", 1);
+
+        let error = fixture
+            .driver
+            .create(request)
+            .await
+            .expect_err("generation-two VM must not see generation-one share");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

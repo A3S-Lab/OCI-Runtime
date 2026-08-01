@@ -427,7 +427,13 @@ tmpfs, fresh-host qualification of restart-stable exact exit evidence, and the
 immutable A3S system image remain outside that evidence. The implemented
 guest/shim/host recovery chain authenticates and durably caches exact init
 termination when present, with a stopped-only fallback when it is absent, but
-the WHPX driver remains `probe-only` until the real-host gate passes.
+the WHPX driver remains `probe-only` until the real-host gate passes. Candidate
+sessions now attach only the exact generation's protected writable share,
+mount its fixed `a3s-oci-runtime` tag at `/run/a3s-oci-runtime` before token
+access, and keep that share disjoint from the guest system root. Host and guest
+unit gates cover path fencing, one-time handoff, and required shim-v2 evidence;
+the existing hardware report predates this layout and therefore does not yet
+qualify it.
 
 The PID qualification used the 6,371,704-byte static agent with SHA-256
 `45d27bfdfec50ddedabd1f11a143dba4c11b4f472e7d2627a686594a0c514f6d`.

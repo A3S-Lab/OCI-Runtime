@@ -3,9 +3,9 @@ use std::path::Path;
 use std::rc::Rc;
 
 use a3s_libkrun_sys::{
-    krun_add_vsock, krun_add_vsock_port_windows, krun_create_ctx, krun_disable_implicit_vsock,
-    krun_free_ctx, krun_set_console_output, krun_set_exec, krun_set_root, krun_set_vm_config,
-    krun_set_workdir, krun_start_enter,
+    krun_add_virtiofs, krun_add_vsock, krun_add_vsock_port_windows, krun_create_ctx,
+    krun_disable_implicit_vsock, krun_free_ctx, krun_set_console_output, krun_set_exec,
+    krun_set_root, krun_set_vm_config, krun_set_workdir, krun_start_enter,
 };
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use zeroize::Zeroizing;
@@ -66,6 +66,20 @@ impl KrunContext {
             "krun_set_root",
             status,
             "failed to configure the libkrun root filesystem",
+        )
+    }
+
+    pub(crate) fn add_virtiofs(&mut self, tag: &str, host_path: &Path) -> Result<()> {
+        let id = self.active_id("krun_add_virtiofs")?;
+        let tag = value_to_cstring("krun_add_virtiofs", "virtio-fs tag", tag)?;
+        let host_path = path_to_cstring("krun_add_virtiofs", host_path)?;
+        // SAFETY: the context remains exclusively owned and both strings are
+        // NUL-terminated allocations retained for the complete call.
+        let status = unsafe { krun_add_virtiofs(id, tag.as_ptr(), host_path.as_ptr()) };
+        check_status(
+            "krun_add_virtiofs",
+            status,
+            "failed to configure the protected runtime share",
         )
     }
 

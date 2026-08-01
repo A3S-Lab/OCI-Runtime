@@ -9,11 +9,13 @@ use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
+use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_TAG;
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, GuestAgentService, SessionToken,
-    AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_ENV,
-    AGENT_SESSION_TOKEN_FILE_NAME,
+    AgentState, AgentStateRequest, GuestAgentService, SessionToken, AGENT_RUNTIME_SHARE_ENV,
+    AGENT_RUNTIME_SHARE_GUEST_ROOT, AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV,
+    AGENT_SESSION_TOKEN_FILE_ENV, AGENT_SESSION_TOKEN_FILE_NAME,
 };
 #[cfg(target_os = "linux")]
 use a3s_oci_agent_protocol::{AgentRecoveryRecord, AgentRecoveryReport, AGENT_RECOVERY_REPORT_ENV};
@@ -40,6 +42,85 @@ pub fn verify_linux_pidfd_support() -> Result<()> {
 
 /// Guest implementation version sent during protocol negotiation.
 pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Mount the exact per-generation runtime share when the host requested it.
+///
+/// The utility-VM system root contains only the fixed agent and mount point.
+/// Bundles and one-time handoff files arrive through this separate virtio-fs
+/// device. Missing or altered mount configuration fails before token access or
+/// host connection.
+#[cfg(target_os = "linux")]
+pub fn mount_runtime_share_if_requested() -> Result<()> {
+    let Some(value) = std::env::var_os(AGENT_RUNTIME_SHARE_ENV) else {
+        return Ok(());
+    };
+    std::env::remove_var(AGENT_RUNTIME_SHARE_ENV);
+    if value != AGENT_RUNTIME_SHARE_TAG {
+        return Err(runtime_share_error(
+            "guest runtime-share tag does not match the fixed host contract",
+        ));
+    }
+
+    let mount_point = Path::new(AGENT_RUNTIME_SHARE_GUEST_ROOT);
+    let metadata = std::fs::symlink_metadata(mount_point).map_err(|error| {
+        runtime_share_error(format!(
+            "failed to inspect guest runtime-share mount point {}: {error}",
+            mount_point.display()
+        ))
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(runtime_share_error(format!(
+            "guest runtime-share mount point must be a real directory: {}",
+            mount_point.display()
+        )));
+    }
+
+    let source = std::ffi::CString::new(AGENT_RUNTIME_SHARE_TAG)
+        .map_err(|error| runtime_share_error(format!("invalid runtime-share tag: {error}")))?;
+    let target = std::ffi::CString::new(AGENT_RUNTIME_SHARE_GUEST_ROOT)
+        .map_err(|error| runtime_share_error(format!("invalid runtime-share path: {error}")))?;
+    let filesystem = std::ffi::CString::new("virtiofs").map_err(|error| {
+        runtime_share_error(format!("invalid runtime-share filesystem: {error}"))
+    })?;
+    // SAFETY: all strings are fixed, NUL-terminated values; the target was
+    // verified as a real directory and no untrusted guest process runs before
+    // this bootstrap boundary.
+    let status = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            filesystem.as_ptr(),
+            0,
+            std::ptr::null(),
+        )
+    };
+    if status != 0 {
+        return Err(runtime_share_error(format!(
+            "failed to mount the protected runtime share at {}: {}",
+            mount_point.display(),
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
+/// Non-Linux builds can parse the shared crate but cannot mount virtio-fs.
+#[cfg(not(target_os = "linux"))]
+pub fn mount_runtime_share_if_requested() -> Result<()> {
+    match std::env::var_os(AGENT_RUNTIME_SHARE_ENV) {
+        None => Ok(()),
+        Some(_) => {
+            std::env::remove_var(AGENT_RUNTIME_SHARE_ENV);
+            Err(runtime_share_error(
+                "guest runtime shares require a Linux utility VM",
+            ))
+        }
+    }
+}
+
+fn runtime_share_error(message: impl Into<String>) -> Error {
+    Error::new(ErrorCode::FailedPrecondition, message).for_operation("mount-agent-runtime-share")
+}
 
 /// Run the internal prepared-init mode when selected by the guest executor.
 ///
@@ -225,10 +306,7 @@ pub fn take_session_token_from_file() -> Result<SessionToken> {
 }
 
 fn validate_token_path(path: &Path) -> Result<()> {
-    let mut components = path.components();
-    if components.next() != Some(Component::RootDir) {
-        return Err(invalid_token_path());
-    }
+    let mut components = runtime_owned_handoff_components(path).ok_or_else(invalid_token_path)?;
     let Some(Component::Normal(directory)) = components.next() else {
         return Err(invalid_token_path());
     };
@@ -312,10 +390,8 @@ fn take_recovery_report_path() -> Result<Option<PathBuf>> {
 
 #[cfg(any(target_os = "linux", test))]
 fn validate_recovery_report_path(path: &Path) -> Result<()> {
-    let mut components = path.components();
-    if components.next() != Some(Component::RootDir) {
-        return Err(invalid_recovery_report_path());
-    }
+    let mut components =
+        runtime_owned_handoff_components(path).ok_or_else(invalid_recovery_report_path)?;
     let Some(Component::Normal(directory)) = components.next() else {
         return Err(invalid_recovery_report_path());
     };
@@ -330,6 +406,14 @@ fn validate_recovery_report_path(path: &Path) -> Result<()> {
         return Err(invalid_recovery_report_path());
     }
     Ok(())
+}
+
+fn runtime_owned_handoff_components(path: &Path) -> Option<std::path::Components<'_>> {
+    let relative = path
+        .strip_prefix(AGENT_RUNTIME_SHARE_GUEST_ROOT)
+        .or_else(|_| path.strip_prefix(Path::new("/")))
+        .ok()?;
+    Some(relative.components())
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -440,16 +524,20 @@ mod tests {
 
     #[test]
     fn accepts_only_the_runtime_owned_token_file_shape() {
-        assert!(validate_token_path(Path::new(
-            "/.a3s-oci-bootstrap-a3s-oci-agent-test/session-token"
-        ))
-        .is_ok());
+        for path in [
+            "/.a3s-oci-bootstrap-a3s-oci-agent-test/session-token",
+            "/run/a3s-oci-runtime/.a3s-oci-bootstrap-a3s-oci-agent-test/session-token",
+        ] {
+            assert!(validate_token_path(Path::new(path)).is_ok(), "{path}");
+        }
         for path in [
             "relative/session-token",
             "/session-token",
             "/.a3s-oci-bootstrap-/session-token",
             "/.a3s-oci-bootstrap-test/other",
             "/.a3s-oci-bootstrap-test/nested/session-token",
+            "/run/other/.a3s-oci-bootstrap-test/session-token",
+            "/run/a3s-oci-runtime/nested/.a3s-oci-bootstrap-test/session-token",
         ] {
             assert!(validate_token_path(Path::new(path)).is_err(), "{path}");
         }
@@ -457,16 +545,23 @@ mod tests {
 
     #[test]
     fn accepts_only_the_runtime_owned_recovery_file_shape() {
-        assert!(validate_recovery_report_path(Path::new(
-            "/.a3s-oci-recovery-a3s-oci-agent-test/report.json"
-        ))
-        .is_ok());
+        for path in [
+            "/.a3s-oci-recovery-a3s-oci-agent-test/report.json",
+            "/run/a3s-oci-runtime/.a3s-oci-recovery-a3s-oci-agent-test/report.json",
+        ] {
+            assert!(
+                validate_recovery_report_path(Path::new(path)).is_ok(),
+                "{path}"
+            );
+        }
         for path in [
             "relative/report.json",
             "/report.json",
             "/.a3s-oci-recovery-/report.json",
             "/.a3s-oci-recovery-test/other",
             "/.a3s-oci-recovery-test/nested/report.json",
+            "/run/other/.a3s-oci-recovery-test/report.json",
+            "/run/a3s-oci-runtime/nested/.a3s-oci-recovery-test/report.json",
         ] {
             assert!(
                 validate_recovery_report_path(Path::new(path)).is_err(),

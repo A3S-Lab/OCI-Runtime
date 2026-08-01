@@ -112,9 +112,10 @@ Completed:
   qualification-only WHPX `RuntimeDriver` candidate that owns one VM per
   exact dedicated-VM generation, serializes same-ID launch without blocking
   distinct container VMs, retains retryable create sessions, reaps terminal
-  failures and deletes once, and refuses bundles outside a protected
-  runtime-owned guest root; owner-death restart reconciliation retains an
-  exact-generation stopped tombstone without fabricating exit evidence;
+  failures and deletes once, and refuses bundles outside a protected,
+  per-generation runtime share mounted separately from the system root;
+  owner-death restart reconciliation retains an exact-generation stopped
+  tombstone and replays authenticated exit evidence when available;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;
@@ -405,6 +406,14 @@ the utility-VM host/agent transport portion remains open.
 - [x] Implement the Linux guest binary, bounded AF_VSOCK connection retry,
   secret-zeroizing bootstrap, and static musl build.
 - [ ] Replace the diagnostic path with a protected runtime-owned share.
+  - [x] Separate the guest system root from a protected writable share, export
+    only `shares/<container>/<generation>` with a fixed virtio-fs tag, mount it
+    before agent token access, and reject external or cross-generation bundles
+    before VM launch.
+  - [x] Move one-time token and recovery-report handoff into the exact share and
+    require versioned shim evidence that the device was configured.
+  - [ ] Run the fixed lifecycle and owner-death matrix through that share on a
+    fresh WHPX-enabled Windows host and retain its machine-readable evidence.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the named-pipe/vsock bridge.
 - [x] Negotiate the guest protocol and retain boot evidence.

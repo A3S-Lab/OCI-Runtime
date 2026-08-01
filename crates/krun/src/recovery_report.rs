@@ -7,6 +7,7 @@ use a3s_oci_agent_protocol::{
     AgentRecoveryReport, AgentVsockEndpoint, AuthenticatedAgentRecoveryReport, SessionToken,
     AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX, AGENT_RECOVERY_REPORT_FILE_NAME,
     AGENT_RECOVERY_REPORT_MAX_BYTES, AGENT_RECOVERY_REPORT_PENDING_SUFFIX,
+    AGENT_RUNTIME_SHARE_GUEST_ROOT,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
@@ -19,18 +20,20 @@ pub(crate) struct RecoveryReportHandoff {
 
 impl RecoveryReportHandoff {
     pub(crate) fn create(
-        rootfs: &Path,
+        host_root: &Path,
+        guest_root: &str,
         endpoint: &AgentVsockEndpoint,
         destination: &Path,
     ) -> io::Result<Self> {
-        let rootfs = canonical_plain_directory(rootfs, "guest rootfs")?;
+        validate_guest_root(guest_root)?;
+        let host_root = canonical_plain_directory(host_root, "guest handoff root")?;
         let destination = prepare_destination(destination)?;
-        if destination.starts_with(&rootfs) {
+        if destination.starts_with(&host_root) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "trusted recovery destination must be outside guest rootfs {}: {}",
-                    rootfs.display(),
+                    "trusted recovery destination must be outside guest handoff root {}: {}",
+                    host_root.display(),
                     destination.display()
                 ),
             ));
@@ -67,7 +70,7 @@ impl RecoveryReportHandoff {
             "{AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX}{}",
             endpoint.pipe_name()
         );
-        let directory = rootfs.join(&directory_name);
+        let directory = host_root.join(&directory_name);
         if let Err(error) = fs::create_dir(&directory) {
             let _ = fs::remove_file(&pending);
             return Err(contextual(
@@ -86,7 +89,7 @@ impl RecoveryReportHandoff {
 
         Ok(Self {
             paths,
-            guest_path: format!("/{directory_name}/{AGENT_RECOVERY_REPORT_FILE_NAME}"),
+            guest_path: guest_path(guest_root, &directory_name, AGENT_RECOVERY_REPORT_FILE_NAME),
             destination,
             cleaned: false,
         })
@@ -167,6 +170,25 @@ impl RecoveryReportHandoff {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
         atomic_write(&self.destination, &normalized)?;
         Ok(report)
+    }
+}
+
+fn validate_guest_root(guest_root: &str) -> io::Result<()> {
+    if matches!(guest_root, "/") || guest_root == AGENT_RUNTIME_SHARE_GUEST_ROOT {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported guest handoff root: {guest_root}"),
+        ))
+    }
+}
+
+fn guest_path(guest_root: &str, directory: &str, file: &str) -> String {
+    if guest_root == "/" {
+        format!("/{directory}/{file}")
+    } else {
+        format!("{guest_root}/{directory}/{file}")
     }
 }
 
@@ -418,7 +440,7 @@ mod tests {
         let destination = trusted.join("box-7.json");
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-recovery-test").unwrap();
         let handoff =
-            RecoveryReportHandoff::create(&rootfs, &endpoint, &destination).expect("handoff");
+            RecoveryReportHandoff::create(&rootfs, "/", &endpoint, &destination).expect("handoff");
         assert!(pending_path(&destination).is_file());
         let guest_path = rootfs.join(handoff.guest_path().trim_start_matches('/'));
         let encoded = report().authenticate(&token(4)).unwrap().to_json().unwrap();
@@ -445,7 +467,7 @@ mod tests {
         let destination = trusted.join("box-7.json");
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-tamper-test").unwrap();
         let handoff =
-            RecoveryReportHandoff::create(&rootfs, &endpoint, &destination).expect("handoff");
+            RecoveryReportHandoff::create(&rootfs, "/", &endpoint, &destination).expect("handoff");
         let guest_path = rootfs.join(handoff.guest_path().trim_start_matches('/'));
         let encoded = report().authenticate(&token(4)).unwrap().to_json().unwrap();
         let mut value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
@@ -465,7 +487,8 @@ mod tests {
         std::fs::create_dir(&rootfs).unwrap();
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-path-test").unwrap();
         assert!(
-            RecoveryReportHandoff::create(&rootfs, &endpoint, &rootfs.join("box-7.json")).is_err()
+            RecoveryReportHandoff::create(&rootfs, "/", &endpoint, &rootfs.join("box-7.json"),)
+                .is_err()
         );
     }
 
@@ -479,7 +502,7 @@ mod tests {
         let destination = trusted.join("box-7.json");
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-drop-test").unwrap();
         let handoff =
-            RecoveryReportHandoff::create(&rootfs, &endpoint, &destination).expect("handoff");
+            RecoveryReportHandoff::create(&rootfs, "/", &endpoint, &destination).expect("handoff");
         let guest_directory = rootfs
             .join(handoff.guest_path().trim_start_matches('/'))
             .parent()

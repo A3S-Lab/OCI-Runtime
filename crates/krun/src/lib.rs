@@ -28,7 +28,7 @@ pub use a3s_oci_agent_protocol::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
-pub use agent_smoke::agent_vm_smoke;
+pub use agent_smoke::{agent_vm_smoke, AgentVmHandoff};
 pub use report::{
     KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunVmSmokeReport,
     KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,

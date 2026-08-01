@@ -3,8 +3,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use a3s_oci_agent_protocol::{
-    AgentVsockEndpoint, SessionToken, AGENT_SESSION_TOKEN_DIRECTORY_PREFIX,
-    AGENT_SESSION_TOKEN_FILE_NAME,
+    AgentVsockEndpoint, SessionToken, AGENT_RUNTIME_SHARE_GUEST_ROOT,
+    AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_FILE_NAME,
 };
 
 pub(crate) struct BootstrapTokenFile {
@@ -15,20 +15,28 @@ pub(crate) struct BootstrapTokenFile {
 
 impl BootstrapTokenFile {
     pub(crate) fn create(
-        rootfs: &Path,
+        host_root: &Path,
+        guest_root: &str,
         endpoint: &AgentVsockEndpoint,
         token: &SessionToken,
     ) -> io::Result<Self> {
-        let rootfs = rootfs.canonicalize().map_err(|error| {
+        validate_guest_root(guest_root)?;
+        let host_root = host_root.canonicalize().map_err(|error| {
             contextual(
                 error,
-                format!("failed to resolve guest rootfs {}", rootfs.display()),
+                format!(
+                    "failed to resolve guest handoff root {}",
+                    host_root.display()
+                ),
             )
         })?;
-        if !rootfs.is_dir() {
+        if !host_root.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("guest rootfs is not a directory: {}", rootfs.display()),
+                format!(
+                    "guest handoff root is not a directory: {}",
+                    host_root.display()
+                ),
             ));
         }
 
@@ -36,7 +44,7 @@ impl BootstrapTokenFile {
             "{AGENT_SESSION_TOKEN_DIRECTORY_PREFIX}{}",
             endpoint.pipe_name()
         );
-        let directory = rootfs.join(&directory_name);
+        let directory = host_root.join(&directory_name);
         fs::create_dir(&directory).map_err(|error| {
             contextual(
                 error,
@@ -92,7 +100,7 @@ impl BootstrapTokenFile {
 
         Ok(Self {
             paths,
-            guest_path: format!("/{directory_name}/{AGENT_SESSION_TOKEN_FILE_NAME}"),
+            guest_path: guest_path(guest_root, &directory_name, AGENT_SESSION_TOKEN_FILE_NAME),
             cleaned: false,
         })
     }
@@ -109,6 +117,25 @@ impl BootstrapTokenFile {
         let result = self.paths.cleanup();
         self.cleaned = result.is_ok();
         result
+    }
+}
+
+fn validate_guest_root(guest_root: &str) -> io::Result<()> {
+    if matches!(guest_root, "/") || guest_root == AGENT_RUNTIME_SHARE_GUEST_ROOT {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported guest handoff root: {guest_root}"),
+        ))
+    }
+}
+
+fn guest_path(guest_root: &str, directory: &str, file: &str) -> String {
+    if guest_root == "/" {
+        format!("/{directory}/{file}")
+    } else {
+        format!("{guest_root}/{directory}/{file}")
     }
 }
 
@@ -177,8 +204,8 @@ mod tests {
         let endpoint =
             AgentVsockEndpoint::new("a3s-oci-agent-bootstrap-test").expect("valid endpoint");
         let token = SessionToken::from_bytes([0x5a; 32]).expect("nonzero token");
-        let bootstrap =
-            BootstrapTokenFile::create(rootfs.path(), &endpoint, &token).expect("bootstrap file");
+        let bootstrap = BootstrapTokenFile::create(rootfs.path(), "/", &endpoint, &token)
+            .expect("bootstrap file");
         let host_path = rootfs
             .path()
             .join(bootstrap.guest_path().trim_start_matches('/'));
@@ -194,5 +221,25 @@ mod tests {
         bootstrap.cleanup().expect("remove bootstrap file");
         assert!(!host_path.exists());
         assert!(!directory.exists());
+    }
+
+    #[test]
+    fn reports_the_fixed_runtime_share_guest_path() {
+        let runtime_share = tempfile::tempdir().expect("temporary runtime share");
+        let endpoint =
+            AgentVsockEndpoint::new("a3s-oci-agent-runtime-share").expect("valid endpoint");
+        let token = SessionToken::from_bytes([0x3c; 32]).expect("nonzero token");
+        let bootstrap = BootstrapTokenFile::create(
+            runtime_share.path(),
+            a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT,
+            &endpoint,
+            &token,
+        )
+        .expect("bootstrap file");
+
+        assert!(bootstrap
+            .guest_path()
+            .starts_with(a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT));
+        bootstrap.cleanup().expect("remove bootstrap file");
     }
 }

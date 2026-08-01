@@ -6,6 +6,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A protected, per-generation WHPX runtime share separate from the guest
+  system root. The candidate accepts bundles only below
+  `shares/<container>/<generation>`, rejects cross-generation and external
+  paths before VM launch, exports only that exact directory with the fixed
+  `a3s-oci-runtime` virtio-fs tag, and requires the Linux agent to mount it at
+  `/run/a3s-oci-runtime` before reading bootstrap material. One-time session
+  tokens and authenticated recovery reports now use that share instead of the
+  system root. Shim evidence schema v2 records the device configuration, and
+  the host requires that evidence for every driver-owned WHPX session. The
+  system root and writable share must be disjoint and protected by the runtime
+  DACL; immutable-system-image and fresh-host qualification remain separate
+  gates.
 - A versioned, bounded guest shutdown report for restart-stable utility-VM
   evidence. The Linux executor now retains the exact init terminal result for
   every exact container generation only after complete cleanup, binds each
@@ -42,9 +54,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
   exact generations to one guest session, serializes same-ID create while
   launching distinct container VMs concurrently, reuses the VM for retryable
   create, reaps terminal create failures and successful deletes once, requires
-  bundles below a protected runtime-owned guest root, and intentionally remains
-  non-registerable at `probe-only` readiness while real-host restart recovery
-  and immutable-system-root qualification are pending.
+  bundles below an exact protected per-generation share, and intentionally
+  remains non-registerable at `probe-only` readiness while real-host
+  qualification of runtime-share restart behavior and the immutable system
+  root are pending.
 - Target-correct KVM ioctl request typing so both glibc (`c_ulong`) and musl
   (`c_int`) Linux builds compile against their actual libc ABI.
 - A protected Windows host SDK service that binds the first local named-pipe

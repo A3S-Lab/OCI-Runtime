@@ -59,6 +59,10 @@ enum Command {
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         #[arg(long, value_name = "FILE")]
         recovery_report: Option<PathBuf>,
+        /// Exact per-generation host directory exported at the fixed guest mount point.
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        #[arg(long, value_name = "DIR")]
+        runtime_share: Option<PathBuf>,
     },
     /// Internal process-takeover boundary for the macOS VM smoke.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -122,6 +126,8 @@ fn main() -> ExitCode {
             owner_pid,
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             recovery_report,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            runtime_share,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
                 Ok(endpoint) => endpoint,
@@ -143,19 +149,30 @@ fn main() -> ExitCode {
             let socket_path = None;
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             let report = {
-                let bootstrap =
-                    match bootstrap_token::BootstrapTokenFile::create(&rootfs, &endpoint, &token) {
-                        Ok(bootstrap) => bootstrap,
-                        Err(error) => {
-                            eprintln!(
-                                "a3s-oci-krun-shim: failed to stage guest bootstrap token: {error}"
-                            );
-                            return ExitCode::FAILURE;
-                        }
-                    };
+                let handoff_root = runtime_share.as_deref().unwrap_or(&rootfs);
+                let guest_handoff_root = if runtime_share.is_some() {
+                    a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT
+                } else {
+                    "/"
+                };
+                let bootstrap = match bootstrap_token::BootstrapTokenFile::create(
+                    handoff_root,
+                    guest_handoff_root,
+                    &endpoint,
+                    &token,
+                ) {
+                    Ok(bootstrap) => bootstrap,
+                    Err(error) => {
+                        eprintln!(
+                            "a3s-oci-krun-shim: failed to stage guest bootstrap token: {error}"
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                };
                 let recovery = match recovery_report {
                     Some(destination) => match recovery_report::RecoveryReportHandoff::create(
-                        &rootfs,
+                        handoff_root,
+                        guest_handoff_root,
                         &endpoint,
                         &destination,
                     ) {
@@ -186,8 +203,11 @@ fn main() -> ExitCode {
                     &endpoint,
                     socket_path,
                     &token,
-                    Some(bootstrap.guest_path()),
-                    recovery.as_ref().map(|recovery| recovery.guest_path()),
+                    a3s_oci_krun::AgentVmHandoff::new(
+                        runtime_share.as_deref(),
+                        Some(bootstrap.guest_path()),
+                        recovery.as_ref().map(|recovery| recovery.guest_path()),
+                    ),
                 );
                 let recovery_result = recovery.map(|recovery| recovery.persist(&token));
                 if let Err(error) = bootstrap.cleanup() {
@@ -212,8 +232,7 @@ fn main() -> ExitCode {
                 &endpoint,
                 socket_path,
                 &token,
-                None,
-                None,
+                a3s_oci_krun::AgentVmHandoff::default(),
             );
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {

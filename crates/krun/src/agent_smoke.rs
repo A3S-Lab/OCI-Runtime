@@ -1,15 +1,40 @@
 use std::path::Path;
 
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-use a3s_oci_agent_protocol::AGENT_RECOVERY_REPORT_ENV;
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-use a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_FILE_ENV;
 use a3s_oci_agent_protocol::{AgentVsockEndpoint, SessionToken};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use a3s_oci_agent_protocol::{
+    AGENT_RECOVERY_REPORT_ENV, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_TAG,
+    AGENT_SESSION_TOKEN_FILE_ENV,
+};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use a3s_oci_core::CapabilityStatus;
 use a3s_oci_core::HostPlatform;
 
 use crate::{fallback_config, KrunAgentVmSmokeReport, VmConfig};
+
+/// Optional host/guest handoff paths used by a driver-owned utility VM.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AgentVmHandoff<'a> {
+    runtime_share: Option<&'a Path>,
+    guest_token_file: Option<&'a str>,
+    guest_recovery_report: Option<&'a str>,
+}
+
+impl<'a> AgentVmHandoff<'a> {
+    /// Bind an optional runtime share to its one-time guest handoff paths.
+    #[must_use]
+    pub const fn new(
+        runtime_share: Option<&'a Path>,
+        guest_token_file: Option<&'a str>,
+        guest_recovery_report: Option<&'a str>,
+    ) -> Self {
+        Self {
+            runtime_share,
+            guest_token_file,
+            guest_recovery_report,
+        }
+    }
+}
 
 /// Boot the fixed Linux guest-agent path through the shim-local libkrun context.
 #[must_use]
@@ -19,8 +44,7 @@ pub fn agent_vm_smoke(
     endpoint: &AgentVsockEndpoint,
     socket_path: Option<&Path>,
     token: &SessionToken,
-    guest_token_file: Option<&str>,
-    guest_recovery_report: Option<&str>,
+    handoff: AgentVmHandoff<'_>,
 ) -> KrunAgentVmSmokeReport {
     let config = match VmConfig::new(1, 512) {
         Ok(config) => config,
@@ -35,7 +59,7 @@ pub fn agent_vm_smoke(
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
         let _ = socket_path;
-        let Some(guest_token_file) = guest_token_file else {
+        let Some(guest_token_file) = handoff.guest_token_file else {
             let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Windows, config);
             report.reason = Some("the Windows guest-agent bridge requires a token file".into());
             return report;
@@ -43,18 +67,22 @@ pub fn agent_vm_smoke(
         let _ = token;
         agent_vm_smoke_windows(
             rootfs,
+            handoff.runtime_share,
             console,
             endpoint,
             guest_token_file,
-            guest_recovery_report,
+            handoff.guest_recovery_report,
             config,
         )
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        let _ = guest_token_file;
-        let _ = guest_recovery_report;
+        let _ = (
+            handoff.runtime_share,
+            handoff.guest_token_file,
+            handoff.guest_recovery_report,
+        );
         let Some(socket_path) = socket_path else {
             let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
             report.reason = Some("the macOS guest-agent bridge requires a Unix socket path".into());
@@ -81,8 +109,9 @@ pub fn agent_vm_smoke(
             endpoint,
             socket_path,
             token,
-            guest_token_file,
-            guest_recovery_report,
+            handoff.runtime_share,
+            handoff.guest_token_file,
+            handoff.guest_recovery_report,
         );
         KrunAgentVmSmokeReport::unsupported(HostPlatform::current(), config)
     }
@@ -91,6 +120,7 @@ pub fn agent_vm_smoke(
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 fn agent_vm_smoke_windows(
     rootfs: &Path,
+    runtime_share: Option<&Path>,
     console: &Path,
     endpoint: &AgentVsockEndpoint,
     guest_token_file: &str,
@@ -124,6 +154,27 @@ fn agent_vm_smoke_windows(
         return report;
     }
     report.agent_binary_present = true;
+
+    let runtime_share = match runtime_share {
+        Some(path) => match path.canonicalize() {
+            Ok(path) if path.is_dir() => Some(path),
+            Ok(path) => {
+                report.reason = Some(format!(
+                    "runtime share is not a directory: {}",
+                    path.display()
+                ));
+                return report;
+            }
+            Err(error) => {
+                report.reason = Some(format!(
+                    "failed to resolve runtime share {}: {error}",
+                    path.display()
+                ));
+                return report;
+            }
+        },
+        None => None,
+    };
 
     let Some(console_parent) = console.parent() else {
         report.reason = Some(format!(
@@ -160,6 +211,13 @@ fn agent_vm_smoke_windows(
         return report;
     }
     report.rootfs_configured = true;
+    if let Some(runtime_share) = &runtime_share {
+        if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, runtime_share) {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+        report.runtime_share_configured = true;
+    }
     if let Err(error) = context.set_agent_vsock(endpoint) {
         report.reason = Some(error.to_string());
         return report;
@@ -174,6 +232,12 @@ fn agent_vm_smoke_windows(
         AGENT_SESSION_TOKEN_FILE_ENV.to_string(),
         guest_token_file.to_string(),
     )];
+    if runtime_share.is_some() {
+        environment.push((
+            AGENT_RUNTIME_SHARE_ENV.to_string(),
+            AGENT_RUNTIME_SHARE_TAG.to_string(),
+        ));
+    }
     if let Some(path) = guest_recovery_report {
         environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));
     }

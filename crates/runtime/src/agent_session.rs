@@ -29,7 +29,7 @@ use crate::report::AgentVmSmokeReport;
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DIAGNOSTIC_CHARS: usize = 2_048;
-const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v1";
+const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v2";
 const SHIM_TRUE_FIELDS: &[&str] = &[
     "runtime_bundle_loaded",
     "context_created",
@@ -53,6 +53,7 @@ pub(crate) struct AgentVmSession {
     client: AgentClient<PlatformAgentStream>,
     running: RunningShim,
     console: PathBuf,
+    runtime_share_required: bool,
 }
 
 /// Shareable guest client with single-owner, idempotent VM shutdown.
@@ -76,7 +77,7 @@ impl UtilityVmSession {
         rootfs: &Path,
         console: &Path,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let owner = AgentVmSession::connect(shim, rootfs, console, None).await?;
+        let owner = AgentVmSession::connect(shim, rootfs, None, console, None).await?;
         Ok(Self {
             client: owner.client().clone(),
             state: Mutex::new(UtilityVmSessionState {
@@ -90,10 +91,18 @@ impl UtilityVmSession {
     pub(crate) async fn connect_with_recovery(
         shim: &Path,
         rootfs: &Path,
+        runtime_share: &Path,
         console: &Path,
         recovery_report: &Path,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let owner = AgentVmSession::connect(shim, rootfs, console, Some(recovery_report)).await?;
+        let owner = AgentVmSession::connect(
+            shim,
+            rootfs,
+            Some(runtime_share),
+            console,
+            Some(recovery_report),
+        )
+        .await?;
         Ok(Self {
             client: owner.client().clone(),
             state: Mutex::new(UtilityVmSessionState {
@@ -144,6 +153,7 @@ impl AgentVmSession {
     pub(crate) async fn connect(
         shim: &Path,
         rootfs: &Path,
+        runtime_share: Option<&Path>,
         console: &Path,
         recovery_report: Option<&Path>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
@@ -162,6 +172,16 @@ impl AgentVmSession {
             Err(reason) => return Err(failed(report, reason)),
         };
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        let runtime_share = match runtime_share {
+            Some(path) => match canonical_directory(path, "per-generation runtime share").await {
+                Ok(path) => Some(path),
+                Err(reason) => return Err(failed(report, reason)),
+            },
+            None => None,
+        };
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+        let _ = runtime_share;
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         let recovery_report = match recovery_report {
             Some(path) => match prepare_recovery_report_path(path).await {
                 Ok(path) => Some(path),
@@ -178,7 +198,8 @@ impl AgentVmSession {
         };
         report.endpoint_name = Some(endpoint.pipe_name().to_string());
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        let bootstrap_cleanup = BootstrapTokenCleanup::new(&rootfs, &endpoint);
+        let bootstrap_cleanup =
+            BootstrapTokenCleanup::new(runtime_share.as_deref().unwrap_or(&rootfs), &endpoint);
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         let listener = match WindowsAgentPipeListener::bind(endpoint.clone()) {
             Ok(listener) => {
@@ -219,6 +240,9 @@ impl AgentVmSession {
                 .arg(std::process::id().to_string());
             if let Some(path) = recovery_report {
                 command.arg("--recovery-report").arg(path);
+            }
+            if let Some(path) = &runtime_share {
+                command.arg("--runtime-share").arg(path);
             }
         }
         command
@@ -330,6 +354,16 @@ impl AgentVmSession {
             client,
             running,
             console,
+            runtime_share_required: {
+                #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+                {
+                    runtime_share.is_some()
+                }
+                #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+                {
+                    false
+                }
+            },
         };
         if let Some(reason) = session.contract_failure() {
             return Err(session.finish_with_failure(reason).await);
@@ -376,6 +410,7 @@ impl AgentVmSession {
             client,
             running,
             console,
+            runtime_share_required,
         } = self;
         let close_error = client.close().await.err();
         drop(client);
@@ -395,10 +430,11 @@ impl AgentVmSession {
                 &completed,
             );
         }
-        let shim_report = match parse_shim_report(&completed.stdout, report.platform) {
-            Ok(shim_report) => shim_report,
-            Err(reason) => return failed_with_output(report, &reason, &completed),
-        };
+        let shim_report =
+            match parse_shim_report(&completed.stdout, report.platform, runtime_share_required) {
+                Ok(shim_report) => shim_report,
+                Err(reason) => return failed_with_output(report, &reason, &completed),
+            };
         report.shim_report_verified = true;
         report.shim_report = Some(shim_report);
         report.console_created = tokio::fs::metadata(&console)
@@ -629,7 +665,11 @@ async fn prepare_recovery_report_path(path: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn parse_shim_report(output: &BoundedOutput, platform: HostPlatform) -> Result<Value, String> {
+fn parse_shim_report(
+    output: &BoundedOutput,
+    platform: HostPlatform,
+    runtime_share_required: bool,
+) -> Result<Value, String> {
     if output.truncated {
         return Err(format!(
             "libkrun shim report exceeded the {MAX_CAPTURE_BYTES}-byte evidence limit"
@@ -660,6 +700,16 @@ fn parse_shim_report(output: &BoundedOutput, platform: HostPlatform) -> Result<V
         if object.get(*field).and_then(Value::as_bool) != Some(true) {
             return Err(format!("libkrun shim evidence field `{field}` is not true"));
         }
+    }
+    if runtime_share_required
+        && object
+            .get("runtime_share_configured")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err(
+            "libkrun shim did not configure the required per-generation runtime share".into(),
+        );
     }
     if object.get("guest_exit_code").and_then(Value::as_i64) != Some(0) {
         return Err("libkrun shim did not report a zero guest-agent exit code".into());

@@ -110,7 +110,7 @@ fn agent_vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
     let report: a3s_oci_krun::KrunAgentVmSmokeReport =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
     assert_eq!(output.status.code(), Some(2));
-    assert_eq!(report.schema_version, "a3s.oci.krun-agent-vm-smoke.v1");
+    assert_eq!(report.schema_version, "a3s.oci.krun-agent-vm-smoke.v2");
     assert!(!report.is_success());
     assert!(!report.runtime_bundle_loaded);
     assert!(!report.context_created);

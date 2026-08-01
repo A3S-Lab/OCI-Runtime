@@ -8,7 +8,7 @@ pub const KRUN_CONTEXT_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-context-smoke.
 /// Schema emitted by the real utility-VM entry smoke.
 pub const KRUN_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-vm-smoke.v1";
 /// Schema emitted while booting the negotiation-only guest agent.
-pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v1";
+pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v2";
 
 /// Evidence from creating, configuring, and releasing one libkrun context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,6 +174,7 @@ pub struct KrunAgentVmSmokeReport {
     pub context_created: bool,
     pub vm_configured: bool,
     pub rootfs_configured: bool,
+    pub runtime_share_configured: bool,
     pub agent_binary_present: bool,
     pub agent_vsock_configured: bool,
     pub workload_configured: bool,
@@ -198,6 +199,7 @@ impl KrunAgentVmSmokeReport {
             context_created: false,
             vm_configured: false,
             rootfs_configured: false,
+            runtime_share_configured: false,
             agent_binary_present: false,
             agent_vsock_configured: false,
             workload_configured: false,
