@@ -215,8 +215,8 @@ Completed:
   fail-closed executor planning for its absolute rootfs, annotations,
   capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
   mount normalization, and AArch64 seccomp policy;
-- public-SDK-only A3S Box lifecycle, process-session, observability, and
-  resource-control consumer at Box commit `09a9e5d3`, with
+- public-SDK-only A3S Box lifecycle, process-session, filesystem,
+  observability, and resource-control consumer at Box commit `28739c6c`, with
   isolation preflight before product reservation, distinct product/runtime
   identities and generations, exact endpoint/driver/configuration/attachment
   binding, attachment-schema negotiation before product mutation, stable SDK
@@ -236,7 +236,11 @@ Completed:
   complete OCI contract, claimed before mutation, replayed after a lost
   response with one runtime effect, and published atomically to both managed
   restart state and compatibility state. An immutable create-intent digest
-  keeps the original create operation replayable after later resource changes;
+  keeps the original create operation replayable after later resource changes.
+  File upload/download and filesystem stat/mkdir/move/list/remove use the same
+  cross-platform session facade with capability and Box-generation preflight,
+  bounded response conversion, target/shape drift rejection, and one-effect
+  replay of explicitly retryable mutations;
   production routing, Box-wired owner restart, real-driver reattachment, and
   real-host cutover gates remain open;
 - Linux executor enforcement for exact capability sets and exec bounding

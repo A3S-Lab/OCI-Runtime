@@ -105,12 +105,16 @@ and `experimental` or `supported` readiness.
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; production routing and real-host cutover remain open |
 | Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
-The current Box adapter at `A3S-Lab/Box@09a9e5d3` rechecks every read against
-the exact runtime binding. A partial product resource request is compiled into
-one complete OCI `LinuxResources` contract, claimed durably before dispatch,
-and replayed with the same runtime operation after a lost response. Runtime
-acknowledgement updates Box restart intent atomically without changing the
-original create identity.
+The current Box adapter at `A3S-Lab/Box@28739c6c` rechecks every read against
+the exact runtime binding. File upload/download and filesystem
+stat/mkdir/move/list/remove now use the same cross-platform session facade;
+capability and Box-generation checks happen before dispatch, response targets
+and shapes are revalidated, and one explicitly retryable mutation response is
+replayed with the same context and one runtime effect. A partial product
+resource request is compiled into one complete OCI `LinuxResources` contract,
+claimed durably before dispatch, and replayed with the same runtime operation
+after a lost response. Runtime acknowledgement updates Box restart intent
+atomically without changing the original create identity.
 
 The complete release target is every applicable OCI Runtime Specification
 1.3.0 requirement for Linux containers and every advertised driver—not a
