@@ -191,9 +191,11 @@ async fn main() -> a3s_oci_sdk::Result<()> {
 ```
 
 `RuntimeClient` can wrap an in-process service or connect over bounded local
-IPC. Foreground `run` is only a client composition of durable
-create/start/wait/delete calls; it does not create a second lifecycle API or
-state machine.
+IPC. A broken local stream is reported without hidden replay; the next explicit
+request reconnects and renegotiates so the caller can retry or reconcile with
+the original operation identity. Foreground `run` is only a client composition
+of durable create/start/wait/delete calls; it does not create a second
+lifecycle API or state machine.
 
 ## Platform status
 

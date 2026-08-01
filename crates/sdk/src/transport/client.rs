@@ -1,5 +1,5 @@
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -20,9 +20,15 @@ use super::wire::{
 };
 use super::{protocol_error, SDK_PROTOCOL_VERSION_MAX, SDK_PROTOCOL_VERSION_MIN};
 
-trait AsyncTransportIo: AsyncRead + AsyncWrite + Unpin + Send {}
+pub(super) trait AsyncTransportIo: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<T> AsyncTransportIo for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
+/// Reopen one transport connection without replaying an in-flight request.
+#[async_trait]
+pub(super) trait TransportConnector: Send + Sync {
+    async fn connect(&self) -> Result<Box<dyn AsyncTransportIo>>;
+}
 
 /// Cloneable SDK service client over a negotiated framed byte stream.
 #[derive(Clone)]
@@ -32,7 +38,8 @@ pub struct RuntimeTransportClient {
 
 struct TransportClientInner {
     connection: Mutex<Option<Box<dyn AsyncTransportIo>>>,
-    protocol: u16,
+    connector: Option<Arc<dyn TransportConnector>>,
+    protocol: AtomicU16,
     next_request_id: AtomicU64,
 }
 
@@ -40,7 +47,8 @@ impl fmt::Debug for RuntimeTransportClient {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeTransportClient")
-            .field("protocol", &self.inner.protocol)
+            .field("protocol", &self.protocol_version())
+            .field("reconnectable", &self.inner.connector.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -51,63 +59,55 @@ impl RuntimeTransportClient {
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let mut io: Box<dyn AsyncTransportIo> = Box::new(io);
-        write_frame(
-            &mut *io,
-            &ClientMessage::Hello {
-                protocol_min: SDK_PROTOCOL_VERSION_MIN,
-                protocol_max: SDK_PROTOCOL_VERSION_MAX,
-            },
-        )
-        .await?;
-        let response = read_frame::<ServerMessage>(&mut *io)
-            .await?
-            .ok_or_else(|| protocol_error("SDK transport closed during protocol negotiation"))?;
-        let protocol = match response {
-            ServerMessage::Welcome { protocol }
-                if (SDK_PROTOCOL_VERSION_MIN..=SDK_PROTOCOL_VERSION_MAX).contains(&protocol) =>
-            {
-                protocol
-            }
-            ServerMessage::Welcome { protocol } => {
-                return Err(protocol_error(format!(
-                    "server selected unsupported SDK protocol version {protocol}"
-                )));
-            }
-            ServerMessage::Reject {
-                protocol_min,
-                protocol_max,
-                message,
-            } => {
-                return Err(crate::Error::new(
-                    crate::ErrorCode::Unsupported,
-                    format!(
-                        "SDK protocol negotiation failed; server supports \
-                         {protocol_min} through {protocol_max}: {message}"
-                    ),
-                )
-                .for_operation("sdk-handshake"));
-            }
-            ServerMessage::Response { .. } => {
-                return Err(protocol_error(
-                    "server sent an SDK response before protocol negotiation",
-                ));
-            }
-        };
-
-        Ok(Self {
-            inner: Arc::new(TransportClientInner {
-                connection: Mutex::new(Some(io)),
-                protocol,
-                next_request_id: AtomicU64::new(1),
-            }),
-        })
+        let (io, protocol) = negotiate_transport(Box::new(io)).await?;
+        Ok(Self::from_negotiated(io, protocol, None))
     }
 
-    /// Negotiated wire protocol version.
+    pub(super) async fn from_connector(connector: Arc<dyn TransportConnector>) -> Result<Self> {
+        let io = connector.connect().await?;
+        let (io, protocol) = negotiate_transport(io).await?;
+        Ok(Self::from_negotiated(io, protocol, Some(connector)))
+    }
+
+    fn from_negotiated(
+        io: Box<dyn AsyncTransportIo>,
+        protocol: u16,
+        connector: Option<Arc<dyn TransportConnector>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(TransportClientInner {
+                connection: Mutex::new(Some(io)),
+                connector,
+                protocol: AtomicU16::new(protocol),
+                next_request_id: AtomicU64::new(1),
+            }),
+        }
+    }
+
+    async fn reconnect_locked(
+        &self,
+        connection: &mut Option<Box<dyn AsyncTransportIo>>,
+    ) -> Result<()> {
+        if connection.is_some() {
+            return Ok(());
+        }
+        let connector = self.inner.connector.as_ref().ok_or_else(|| {
+            super::transport_error(
+                "sdk-transport",
+                "SDK transport connection is closed after a prior failure",
+            )
+        })?;
+        let io = connector.connect().await?;
+        let (io, protocol) = negotiate_transport(io).await?;
+        self.inner.protocol.store(protocol, Ordering::Release);
+        *connection = Some(io);
+        Ok(())
+    }
+
+    /// Negotiated wire protocol version for the current or most recent connection.
     #[must_use]
     pub fn protocol_version(&self) -> u16 {
-        self.inner.protocol
+        self.inner.protocol.load(Ordering::Acquire)
     }
 
     async fn call(&self, request: WireRequest) -> Result<WireResponse> {
@@ -121,16 +121,15 @@ impl RuntimeTransportClient {
             .map_err(|_| protocol_error("SDK transport request ID space exhausted"))?;
 
         let mut connection_guard = self.inner.connection.lock().await;
-        let connection = connection_guard.as_mut().ok_or_else(|| {
-            super::transport_error(
-                "sdk-transport",
-                "SDK transport connection is closed after a prior failure",
-            )
-        })?;
+        self.reconnect_locked(&mut connection_guard).await?;
+        let protocol = self.inner.protocol.load(Ordering::Acquire);
+        let connection = connection_guard
+            .as_mut()
+            .expect("reconnect_locked publishes a negotiated connection");
         if let Err(error) = write_frame(
             &mut **connection,
             &ClientMessage::Request {
-                protocol: self.inner.protocol,
+                protocol,
                 request_id,
                 request: Box::new(request),
             },
@@ -144,7 +143,8 @@ impl RuntimeTransportClient {
             Ok(Some(response)) => response,
             Ok(None) => {
                 *connection_guard = None;
-                return Err(protocol_error(
+                return Err(super::transport_error(
+                    "sdk-transport",
                     "SDK transport closed while awaiting a response",
                 ));
             }
@@ -155,23 +155,22 @@ impl RuntimeTransportClient {
         };
         match response {
             ServerMessage::Response {
-                protocol,
+                protocol: response_protocol,
                 request_id: response_id,
                 result,
-            } if protocol == self.inner.protocol && response_id == request_id => match *result {
+            } if response_protocol == protocol && response_id == request_id => match *result {
                 super::wire::WireResult::Ok { response } => Ok(*response),
                 super::wire::WireResult::Error { error } => Err(error),
             },
             ServerMessage::Response {
-                protocol,
+                protocol: response_protocol,
                 request_id: response_id,
                 ..
             } => {
                 *connection_guard = None;
                 Err(protocol_error(format!(
-                    "SDK response correlation mismatch: expected protocol {} request {}, \
-                     received protocol {protocol} request {response_id}",
-                    self.inner.protocol, request_id
+                    "SDK response correlation mismatch: expected protocol {protocol} request {request_id}, \
+                     received protocol {response_protocol} request {response_id}",
                 )))
             }
             ServerMessage::Welcome { .. } | ServerMessage::Reject { .. } => {
@@ -182,6 +181,60 @@ impl RuntimeTransportClient {
             }
         }
     }
+}
+
+async fn negotiate_transport(
+    mut io: Box<dyn AsyncTransportIo>,
+) -> Result<(Box<dyn AsyncTransportIo>, u16)> {
+    write_frame(
+        &mut *io,
+        &ClientMessage::Hello {
+            protocol_min: SDK_PROTOCOL_VERSION_MIN,
+            protocol_max: SDK_PROTOCOL_VERSION_MAX,
+        },
+    )
+    .await?;
+    let response = read_frame::<ServerMessage>(&mut *io)
+        .await?
+        .ok_or_else(|| {
+            super::transport_error(
+                "sdk-handshake",
+                "SDK transport closed during protocol negotiation",
+            )
+        })?;
+    let protocol = match response {
+        ServerMessage::Welcome { protocol }
+            if (SDK_PROTOCOL_VERSION_MIN..=SDK_PROTOCOL_VERSION_MAX).contains(&protocol) =>
+        {
+            protocol
+        }
+        ServerMessage::Welcome { protocol } => {
+            return Err(protocol_error(format!(
+                "server selected unsupported SDK protocol version {protocol}"
+            )));
+        }
+        ServerMessage::Reject {
+            protocol_min,
+            protocol_max,
+            message,
+        } => {
+            return Err(crate::Error::new(
+                crate::ErrorCode::Unsupported,
+                format!(
+                    "SDK protocol negotiation failed; server supports \
+                         {protocol_min} through {protocol_max}: {message}"
+                ),
+            )
+            .for_operation("sdk-handshake"));
+        }
+        ServerMessage::Response { .. } => {
+            return Err(protocol_error(
+                "server sent an SDK response before protocol negotiation",
+            ));
+        }
+    };
+
+    Ok((io, protocol))
 }
 
 macro_rules! typed_call {

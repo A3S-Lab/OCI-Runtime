@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Reconnectable local SDK transport for retained `RuntimeClient` instances.
+  The request that first observes a broken Unix socket or Windows named pipe
+  still returns a retryable ambiguity and is never replayed inside the
+  transport. A later explicit request reconnects to the same validated local
+  endpoint and performs a fresh protocol handshake, allowing callers to retry
+  or reconcile with the original durable operation identity. Caller-supplied
+  `from_io` streams remain permanently closed after a protocol or transport
+  failure. Real named-pipe and Unix-socket server-restart tests cover both
+  boundaries; A3S Box runtime-owner process restart and real-driver
+  qualification remain open gates.
 - Public-SDK-only A3S Box consumer evidence at Box commit `09a9e5d3` for exact
   live process inventory, normalized CPU/memory stats, bounded ordered-event
   polling, and replay-safe complete OCI resource updates. Box rechecks read

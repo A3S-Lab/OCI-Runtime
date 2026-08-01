@@ -19,6 +19,11 @@ pub struct RuntimeClient {
 
 impl RuntimeClient {
     /// Connect to an out-of-process runtime over a validated local IPC endpoint.
+    ///
+    /// A request that observes a broken connection returns that ambiguity to
+    /// the caller and is never replayed inside the transport. A later explicit
+    /// call reconnects to the same endpoint and negotiates a fresh stream, so
+    /// operation-aware callers can retry with the same durable identity.
     pub async fn connect(endpoint: &LocalIpcEndpoint) -> Result<Self> {
         Ok(Self::new(RuntimeTransportClient::connect(endpoint).await?))
     }

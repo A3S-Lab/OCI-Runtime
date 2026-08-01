@@ -295,6 +295,11 @@ Completed:
   protocol-v6 bounded process I/O, protocol-v7 terminal resize, and
   protocol-v8 durable process-I/O mutation contexts with exact session replay;
 - existing `features` CLI path routed through the Rust SDK;
+- reconnectable local SDK endpoints that expose the first broken-stream result
+  without hidden replay, discard the poisoned stream, and renegotiate on the
+  next caller-initiated request. Real Windows named-pipe and Unix-socket tests
+  restart the server behind one retained `RuntimeClient`; caller-supplied
+  `from_io` streams remain fail-closed and non-reconnectable;
 - foreground `run` implemented only as a typed SDK composition of durable
   create, start, wait, and stable force-delete cleanup;
 - deterministic durable container enumeration with isolation filtering,
@@ -336,7 +341,7 @@ Not yet complete:
   certification;
 - OCI configuration enforcement;
 - production-ready native Linux execution;
-- A3S Box production routing, out-of-process restart qualification, and
+- A3S Box runtime-owner process restart qualification, production routing, and
   real-host cutover;
 - upstream conformance and security certification.
 

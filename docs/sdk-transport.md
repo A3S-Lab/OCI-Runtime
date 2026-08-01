@@ -23,14 +23,24 @@ resize:
 5. every request and response carries the negotiated version and a nonzero
    request ID;
 6. stable SDK errors cross the boundary without being converted to strings;
-7. framing, version, or correlation failures permanently poison the
-   connection;
+7. framing, version, or correlation failures poison the current byte stream;
+   a local-endpoint client reconnects and renegotiates only when the caller
+   makes a later request, while `from_io` streams remain permanently closed;
 8. every decoded request is validated before service dispatch.
 
 Calls from cloned clients are serialized on one connection. This guarantees
 deterministic response correlation while retaining an async, `Send + Sync`
 API. A later protocol version may add multiplexing without changing the
 service trait.
+
+The transport never hides an unknown result. If a service exits after reading
+a mutation but before returning its response, that call fails with a retryable
+transport error and the physical connection is discarded. Once the service is
+available again, the next caller-initiated request opens the same validated
+local endpoint and performs a new protocol handshake. The caller must replay
+the original mutation or run reconciliation with its original `OperationId`;
+the runtime journal, rather than the transport, decides whether an effect has
+already committed.
 
 ## A3S Box Client
 
@@ -84,12 +94,13 @@ the SDK wire contract. Requests for another container ID are rejected before
 driver dispatch.
 
 Box should treat the runtime owner and `RuntimeClient` as one Sandbox-scoped
-resource: retain one client connection for the Sandbox lifecycle, close it
-when no more requests are needed, then terminate the owner with `SIGTERM` and
-wait for a successful exit. The signal path shuts down every driver-owned
-process and transient executor slot before the exact service socket is
-removed. Durable state stays inside the Sandbox runtime root until Box removes
-that product-owned root.
+resource: retain one logical client for the Sandbox lifecycle, allowing its
+physical stream to reconnect after an observed owner restart; close it when no
+more requests are needed, then terminate the owner with `SIGTERM` and wait for
+a successful exit. The signal path shuts down every driver-owned process and
+transient executor slot before the exact service socket is removed. Durable
+state stays inside the Sandbox runtime root until Box removes that
+product-owned root.
 
 For an in-process host integration, A3S Box can wrap
 `HostRuntimeService::open(state_root, driver)` in `RuntimeClient`. The
