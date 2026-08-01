@@ -154,6 +154,7 @@ mod tests {
     use tokio::io::{AsyncRead, AsyncWrite};
 
     use super::LocalIpcEndpoint;
+    #[cfg(windows)]
     use super::RuntimeTransportClient;
     use crate::{
         AttachmentCapabilities, ErrorCode, RuntimeClient, RuntimeFeatures, RuntimeInfo,
