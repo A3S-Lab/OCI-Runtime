@@ -23,6 +23,12 @@ mod agent_socket;
 mod cleanup_report;
 mod driver;
 mod fault;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+mod filesystem_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
 mod marker;

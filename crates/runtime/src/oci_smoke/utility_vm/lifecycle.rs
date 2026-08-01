@@ -98,6 +98,9 @@ pub(super) async fn exercise<T: AgentStream>(
     report.process_io_verified = true;
     exercise_terminal_io(client, target, nonce).await?;
     report.terminal_io_verified = true;
+    crate::filesystem_smoke::exercise_agent(client, target, nonce).await?;
+    report.file_transfer_verified = true;
+    report.filesystem_operations_verified = true;
     let cleanup_process = exercise_exec_processes(client, target, nonce).await?;
     exercise_control_plane(client, target, &cleanup_process, nonce, marker, report).await?;
     report.wait_timeout_enforced = wait_times_out_while_running(client, target).await?;

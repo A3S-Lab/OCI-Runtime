@@ -92,15 +92,15 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v11` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v12` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
    `kill`, `delete`, `exec`, `wait`, `list`, `pause`, `resume`, `update`, `processes`,
    `stats`, `events`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
-   `signal-process`, and `wait-process`, plus `prestart`, `createRuntime`,
-   `createContainer`, `startContainer`, `poststart`, and `poststop` in the OCI
-   feature document's normative order;
+   `signal-process`, `wait-process`, `file`, and `filesystem`, plus `prestart`,
+   `createRuntime`, `createContainer`, `startContainer`, `poststart`, and
+   `poststop` in the OCI feature document's normative order;
 2. a dedicated-VM create fails as `Unsupported` before claiming the container
    ID or operation ID;
 3. the process-local native create validates the A3S Box exec listener, PTY
@@ -142,31 +142,36 @@ following:
     and resized 120x40 dimensions, accepts interactive input through merged
     output, advances one byte cursor through EOF, and accepts repeated close
     while delivering `VEOF` to a live terminal reader;
-15. pause and its replay expose a durable frozen state, the progress-producing
-   exec remains unchanged for a bounded interval, resume and its replay expose
-   a durable thawed state, and that same exec advances again;
-16. the second live exec is terminated and reaped automatically when init
-   exits, while process ID `init` returns the same result as lifecycle wait;
-17. a 50-millisecond wait returns `DeadlineExceeded` while the configured
-   process is still running;
-18. `SIGKILL` reaches the configured process through its retained pidfd, and
-   both internal supervisors preserve the exact signal result while retrying
-   kill replays its exact result;
-19. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
-   the same terminal result;
-20. state reaches `stopped`;
-21. stopped-only delete and its exact retry succeed, and both inherited socket
+15. a binary payload containing NUL and non-UTF-8 bytes survives exact-target
+    upload and download; upload replay is byte-for-byte stable, reusing its
+    operation ID for a changed destination fails as `Conflict` without creating
+    that file, and mkdir/stat/list/move/recursive-remove each preserve exact
+    metadata, mutation replay, and post-cleanup `NotFound` evidence;
+16. pause and its replay expose a durable frozen state, the progress-producing
+    exec remains unchanged for a bounded interval, resume and its replay expose
+    a durable thawed state, and that same exec advances again;
+17. the second live exec is terminated and reaped automatically when init
+    exits, while process ID `init` returns the same result as lifecycle wait;
+18. a 50-millisecond wait returns `DeadlineExceeded` while the configured
+    process is still running;
+19. `SIGKILL` reaches the configured process through its retained pidfd, and
+    both internal supervisors preserve the exact signal result while retrying
+    kill replays its exact result;
+20. wait returns signal 9 with `oom_killed: false`, and a repeated wait returns
+    the same terminal result;
+21. state reaches `stopped`;
+22. stopped-only delete and its exact retry succeed, and both inherited socket
     paths reject new connections afterward;
-22. the host-owned event journal contains one ordered creating, created,
+23. the host-owned event journal contains one ordered creating, created,
     started, paused, resumed, resources-updated, stopped, and deleted event,
     balanced exec create/start/exit events, the init exit, exact generation
     identity, a monotonic cursor, and an empty replay-safe tail poll;
-23. a six-line trace proves exact hook order, `creating`, `created`, `running`,
+24. a six-line trace proves exact hook order, `creating`, `created`, `running`,
     and `stopped` state, the exact container ID, OCI version, bundle path,
     annotations, and positive init PID for every live phase, with no PID in
     `poststop`;
-24. state returns `NotFound` and durable list is empty after delete;
-25. the marker, executor root, and complete smoke session are removed.
+25. state returns `NotFound` and durable list is empty after delete;
+26. the marker, executor root, and complete smoke session are removed.
 
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
@@ -216,8 +221,8 @@ configured with one container ID and duplicates the inherited Box FD 3/4/5
 roles before it opens any workload.
 
 The `native-linux-service-smoke` command reuses the complete
-`a3s.oci.native-linux-smoke.v11` lifecycle assertions over a real `0600` Unix
-socket. In addition to the 25 lifecycle requirements above, success requires:
+`a3s.oci.native-linux-smoke.v12` lifecycle assertions over a real `0600` Unix
+socket. In addition to the 26 lifecycle requirements above, success requires:
 
 1. the service root, state root, and executor parent are real, owner-owned
    `0700` directories, while the endpoint is an owner-owned `0600` socket;
@@ -227,8 +232,9 @@ socket. In addition to the 25 lifecycle requirements above, success requires:
    roles for the configured container ID;
 4. create for any other container ID fails as `PermissionDenied` before
    driver dispatch or descriptor reuse;
-5. create/start/exec, piped and terminal I/O, update/stats, pause/resume,
-   processes, kill/wait, events, and delete all cross the transport boundary;
+5. create/start/exec, piped and terminal I/O, file transfer and filesystem
+   mutations, update/stats, pause/resume, processes, kill/wait, events, and
+   delete all cross the transport boundary;
 6. service shutdown closes the retained Box descriptors, removes its exact
    socket inode, reaps every driver-owned process, and leaves the executor
    parent empty before the isolated session is removed.

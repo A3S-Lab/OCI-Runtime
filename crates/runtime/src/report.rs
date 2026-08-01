@@ -12,9 +12,9 @@ pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
 pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
-pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v8";
+pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v11";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v12";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-rootless-smoke.v1";
@@ -395,6 +395,10 @@ pub struct NativeLinuxSmokeReport {
     pub process_io_verified: bool,
     /// Whether PTY allocation, resize, interactive I/O, and EOF passed end-to-end.
     pub terminal_io_verified: bool,
+    /// Whether binary upload/download and mutation replay passed end-to-end.
+    pub file_transfer_verified: bool,
+    /// Whether directory, stat, list, move, and recursive cleanup passed end-to-end.
+    pub filesystem_operations_verified: bool,
     /// Whether live OCI Linux resources were applied and exactly replayed.
     pub resources_updated: bool,
     /// Whether normalized cgroup counters were exact and generation-fenced.
@@ -468,6 +472,8 @@ impl NativeLinuxSmokeReport {
             processes_verified: false,
             process_io_verified: false,
             terminal_io_verified: false,
+            file_transfer_verified: false,
+            filesystem_operations_verified: false,
             resources_updated: false,
             stats_verified: false,
             pause_froze_workload: false,
@@ -533,6 +539,8 @@ impl NativeLinuxSmokeReport {
                     RuntimeOperation::Resize,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
+                    RuntimeOperation::File,
+                    RuntimeOperation::Filesystem,
                 ]
             && self.dedicated_vm_rejected_before_create
             && self.create_returned_created
@@ -557,6 +565,8 @@ impl NativeLinuxSmokeReport {
             && self.processes_verified
             && self.process_io_verified
             && self.terminal_io_verified
+            && self.file_transfer_verified
+            && self.filesystem_operations_verified
             && self.resources_updated
             && self.stats_verified
             && self.pause_froze_workload
@@ -731,6 +741,8 @@ impl NativeLinuxRootlessSmokeReport {
                     RuntimeOperation::Resize,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
+                    RuntimeOperation::File,
+                    RuntimeOperation::Filesystem,
                 ]
             && self.create_returned_created
             && self.create_replayed
@@ -783,6 +795,10 @@ pub struct OciVmSmokeReport {
     pub process_io_verified: bool,
     /// Whether guest PTY allocation, resize, interactive I/O, and EOF passed.
     pub terminal_io_verified: bool,
+    /// Whether binary upload/download and mutation replay passed in the guest.
+    pub file_transfer_verified: bool,
+    /// Whether directory, stat, list, move, and recursive cleanup passed in the guest.
+    pub filesystem_operations_verified: bool,
     /// Whether live OCI Linux resources were applied and exactly replayed.
     pub resources_updated: bool,
     /// Whether normalized cgroup counters were exact and generation-fenced.
@@ -839,6 +855,8 @@ impl OciVmSmokeReport {
             processes_verified: false,
             process_io_verified: false,
             terminal_io_verified: false,
+            file_transfer_verified: false,
+            filesystem_operations_verified: false,
             resources_updated: false,
             stats_verified: false,
             pause_froze_workload: false,
@@ -891,6 +909,8 @@ impl OciVmSmokeReport {
             && self.processes_verified
             && self.process_io_verified
             && self.terminal_io_verified
+            && self.file_transfer_verified
+            && self.filesystem_operations_verified
             && self.resources_updated
             && self.stats_verified
             && self.pause_froze_workload

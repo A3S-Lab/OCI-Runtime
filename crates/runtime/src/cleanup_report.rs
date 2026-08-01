@@ -187,6 +187,8 @@ impl NativeLinuxFaultCleanupReport {
                     RuntimeOperation::Resize,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
+                    RuntimeOperation::File,
+                    RuntimeOperation::Filesystem,
                 ]
             && self.lifecycle.is_success()
             && self.executor_shutdown_succeeded
@@ -360,6 +362,8 @@ mod tests {
             RuntimeOperation::Resize,
             RuntimeOperation::SignalProcess,
             RuntimeOperation::WaitProcess,
+            RuntimeOperation::File,
+            RuntimeOperation::Filesystem,
         ];
         report.lifecycle = complete(LifecycleFaultPoint::AfterStart);
         report.executor_shutdown_succeeded = true;

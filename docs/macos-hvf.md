@@ -435,7 +435,7 @@ starts; otherwise APFS ownership such as ID 501 remains unmapped and the
 create barrier correctly fails instead of weakening filesystem checks.
 
 The signed Apple Silicon qualification contract is
-`a3s.oci.oci-vm-smoke.v8`: bundle loading, created state, exact create replay,
+`a3s.oci.oci-vm-smoke.v9`: bundle loading, created state, exact create replay,
 pre-start marker absence, start, running observation, a bounded wait that must
 time out while running, exact kill replay, exact normal exit status from the
 SIGTERM trap, repeated wait, exact-target exec replay, duplicate process-ID
@@ -446,7 +446,10 @@ progress-producing exec that remains unchanged while frozen and advances
    after resume, captured stdout/stderr with exact cursor pagination and EOF,
    piped stdin with idempotent close and rejected late writes, controlling PTY
    allocation, exact initial and resized dimensions, interactive input, merged
-   terminal output and `VEOF` close, init-exit cleanup of another live exec,
+   terminal output and `VEOF` close, exact binary file upload/download with
+   replay and changed-request conflict evidence, descriptor-confined
+   mkdir/stat/list/move/recursive-remove with exact replay and cleanup,
+   init-exit cleanup of another live exec,
    stopped observation, marker verification, stopped-only delete, exact delete
    replay, post-delete NotFound, marker removal, guest-runtime cleanup, and the
    complete nested authenticated bridge report.

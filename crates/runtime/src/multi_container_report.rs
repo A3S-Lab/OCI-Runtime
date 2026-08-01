@@ -581,6 +581,8 @@ impl NativeLinuxMultiContainerSmokeReport {
                     RuntimeOperation::Resize,
                     RuntimeOperation::SignalProcess,
                     RuntimeOperation::WaitProcess,
+                    RuntimeOperation::File,
+                    RuntimeOperation::Filesystem,
                 ]
             && self.lifecycle.is_success()
             && self.lifecycle.wait_status_a

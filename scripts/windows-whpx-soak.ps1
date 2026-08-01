@@ -1058,10 +1058,10 @@ function Assert-PositiveReport {
     if ($null -eq $Result.Report) {
         throw "$Label emitted no report"
     }
-    if ($Result.Report.schema_version -ne 'a3s.oci.oci-vm-smoke.v8' -or
+    if ($Result.Report.schema_version -ne 'a3s.oci.oci-vm-smoke.v9' -or
         $Result.Report.platform -ne 'windows' -or
         $Result.Report.status -ne 'available') {
-        throw "$Label did not return an available Windows v8 report"
+        throw "$Label did not return an available Windows v9 report"
     }
     $trueFields = @(
         'bundle_loaded',
@@ -1073,6 +1073,8 @@ function Assert-PositiveReport {
         'processes_verified',
         'process_io_verified',
         'terminal_io_verified',
+        'file_transfer_verified',
+        'filesystem_operations_verified',
         'resources_updated',
         'stats_verified',
         'pause_froze_workload',
@@ -1100,14 +1102,14 @@ function Assert-PositiveReport {
     if ($Result.Report.bridge.status -ne 'available' -or
         $Result.Report.bridge.protocol_negotiated -ne $true -or
         $Result.Report.bridge.shim_report_verified -ne $true -or
-        $Result.Report.bridge.selected_protocol -ne 8) {
+        $Result.Report.bridge.selected_protocol -ne 9) {
         throw "$Label did not retain a successful authenticated bridge"
     }
     $operations = @($Result.Report.bridge.advertised_operations) -join ','
     $expectedOperations = (
         'create,state,start,kill,delete,wait,exec,signal-process,' +
         'wait-process,pause,resume,processes,update,stats,read-output,' +
-        'write-stdin,close-stdin,resize'
+        'write-stdin,close-stdin,resize,file,filesystem'
     )
     if ($operations -ne $expectedOperations) {
         throw "$Label advertised unexpected guest operations: $operations"

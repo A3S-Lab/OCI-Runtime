@@ -133,8 +133,8 @@ Completed:
   host-visible marker verification, bounded worker reap, and marker cleanup;
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
-  one-time token authentication, protocol-v8 negotiation, exact
-  eighteen-operation advertisement, process-group termination, exact endpoint
+  one-time token authentication, protocol-v9 negotiation, exact
+  twenty-operation advertisement, process-group termination, exact endpoint
   removal, observed PID reap, and in-process descriptor-inventory restoration;
 - real macOS fixed-bundle create/state/start/kill/wait/delete evidence using
   the shared Windows lifecycle harness, including exact mutation retries,
@@ -536,7 +536,7 @@ then may WHPX become `experimental`.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
-  authenticate protocol-v8 negotiation with a one-time token.
+  authenticate protocol-v9 negotiation with a one-time token.
 - [x] Run the same fixed create/state/start/kill/wait/delete OCI lifecycle used
   by WHPX, including bounded running wait, exact repeated exit status,
   pause/resume, live process inventory, resource update, and normalized stats.

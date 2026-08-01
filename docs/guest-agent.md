@@ -418,7 +418,8 @@ bootstrap slice, not the immutable A3S system image, complete OCI enforcement,
 restart recovery, or exhaustive durable-write fault injection.
 
 The current Windows hardware soak supersedes that historical run for the
-protocol-v8 core profile. It proves process and PTY I/O, resources and stats,
+protocol-v9 core profile. It proves process and PTY I/O, descriptor-confined
+file transfer and filesystem mutations, resources and stats,
 pause/resume, serial and parallel VM churn, two same-VM containers,
 private/inherited networking, RW/RO bind volumes, init success/failure, ten
 typed negatives, lifecycle cleanup faults, and owner-death cleanup. It retains

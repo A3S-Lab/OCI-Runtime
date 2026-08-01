@@ -226,6 +226,9 @@ async fn exercise_client(
     report.process_io_verified = true;
     process::exercise_terminal_io(client, &target, nonce).await?;
     report.terminal_io_verified = true;
+    crate::filesystem_smoke::exercise_runtime(client, &target, nonce).await?;
+    report.file_transfer_verified = true;
+    report.filesystem_operations_verified = true;
     let cleanup_process =
         process::exercise_before_init_exit(client, &target, nonce, PROGRESS_PATH).await?;
     exercise_control_plane(client, &target, &cleanup_process, nonce, marker, report).await?;
