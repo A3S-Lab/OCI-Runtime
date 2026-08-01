@@ -258,6 +258,9 @@ Completed:
   bundle snapshots, monotonic generations, generation fencing, global
   idempotent create/start/kill/delete journals, active-operation claims,
   terminal failure replay, crash reconciliation, and quarantine;
+- deterministic multi-driver registration with one owner per isolation class,
+  identical advertised operation/Hook surfaces, create-time selection, and
+  exact recorded-driver routing across host-service reopen;
 - async `RuntimeDriver` integration plus a tested host implementation of
   `create`, `state`, `start`, `kill`, `delete`, and driver-advertised `wait`,
   `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
@@ -342,6 +345,10 @@ enforce it. No property is silently ignored.
   create/delete state.
 - [x] Implement driver-independent `create`, `state`, `start`, `kill`, and
   `delete` host orchestration.
+- [x] Register multiple launch-ready drivers behind one host service, reject
+  ambiguous isolation ownership and inconsistent advertised surfaces before
+  state creation, and route every post-create operation by the durable driver
+  identity rather than registration order.
 - [x] Preserve the exact create/start barrier in the durable host/driver
   contract.
 - [x] Verify the barrier against the real Linux guest bootstrap executor.

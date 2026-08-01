@@ -141,6 +141,13 @@ impl RecordingDriver {
         driver
     }
 
+    fn shared_guest_supported() -> Self {
+        let mut driver = Self::supported();
+        driver.capability.driver = DriverKind::LibkrunHvf;
+        driver.capability.isolation_classes = vec![IsolationClass::SharedGuestKernel];
+        driver
+    }
+
     #[cfg(target_os = "linux")]
     fn native_supported() -> Self {
         let mut driver = Self::supported();
@@ -2082,4 +2089,214 @@ async fn launch_and_isolation_checks_fail_before_state_or_driver_mutation() {
         .expect_err("unsupported isolation must fail");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(driver.calls().is_empty());
+}
+
+#[tokio::test]
+async fn multi_driver_service_routes_create_and_reopen_by_durable_driver() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("multi-driver-state");
+    let dedicated = Arc::new(RecordingDriver::supported());
+    let shared = Arc::new(RecordingDriver::shared_guest_supported());
+    let drivers: Vec<Arc<dyn RuntimeDriver>> = vec![dedicated.clone(), shared.clone()];
+    let service = HostRuntimeService::open_with_drivers(&state_root, drivers)
+        .await
+        .expect("open multi-driver service");
+
+    let mut dedicated_request = create_request(&bundle_directory, "multi-create-dedicated");
+    dedicated_request.id = container_id("multi-dedicated");
+    let dedicated_record = service
+        .create(dedicated_request.clone())
+        .await
+        .expect("create dedicated container");
+    assert_eq!(dedicated_record.driver, DriverKind::LibkrunWhpx);
+
+    let mut shared_request = create_request(&bundle_directory, "multi-create-shared");
+    shared_request.id = container_id("multi-shared");
+    shared_request.isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: identifier("multi-domain", TrustDomainId::new),
+    };
+    let shared_record = service
+        .create(shared_request.clone())
+        .await
+        .expect("create shared-guest container");
+    assert_eq!(shared_record.driver, DriverKind::LibkrunHvf);
+    assert_eq!(
+        dedicated
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Create(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        shared
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Create(_)))
+            .count(),
+        1
+    );
+
+    drop(service);
+    let reversed: Vec<Arc<dyn RuntimeDriver>> = vec![shared.clone(), dedicated.clone()];
+    let reopened = HostRuntimeService::open_with_drivers(&state_root, reversed)
+        .await
+        .expect("reopen multi-driver service");
+    reopened
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("multi-start-dedicated")),
+            target: ContainerTarget::exact(
+                dedicated_request.id.clone(),
+                dedicated_record.generation,
+            ),
+        })
+        .await
+        .expect("start dedicated container after reopen");
+    reopened
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("multi-start-shared")),
+            target: ContainerTarget::exact(shared_request.id, shared_record.generation),
+        })
+        .await
+        .expect("start shared container after reopen");
+    assert_eq!(
+        dedicated
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Start(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        shared
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Start(_)))
+            .count(),
+        1
+    );
+
+    let dedicated_target =
+        ContainerTarget::exact(dedicated_request.id.clone(), dedicated_record.generation);
+    reopened
+        .kill(KillRequest {
+            context: OperationContext::new(operation_id("multi-kill-dedicated")),
+            target: dedicated_target.clone(),
+            signal: Signal::new(15).expect("signal"),
+            all: true,
+        })
+        .await
+        .expect("stop dedicated container");
+    reopened
+        .delete(DeleteRequest {
+            context: OperationContext::new(operation_id("multi-delete-dedicated")),
+            target: dedicated_target,
+            mode: DeleteMode::StoppedOnly,
+        })
+        .await
+        .expect("delete dedicated container");
+
+    let mut reused = create_request(&bundle_directory, "multi-recreate-shared");
+    reused.id = dedicated_request.id;
+    reused.isolation = IsolationRequest::SharedGuestKernel {
+        trust_domain: identifier("multi-domain", TrustDomainId::new),
+    };
+    let reused_record = reopened
+        .create(reused.clone())
+        .await
+        .expect("recreate ID with shared-guest isolation");
+    assert!(reused_record.generation > dedicated_record.generation);
+    assert_eq!(reused_record.driver, DriverKind::LibkrunHvf);
+    reopened
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("multi-start-reused")),
+            target: ContainerTarget::exact(reused.id, reused_record.generation),
+        })
+        .await
+        .expect("start reused ID through recorded shared driver");
+    assert_eq!(
+        dedicated
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Start(_)))
+            .count(),
+        1,
+        "reused ID must not return to its previous driver"
+    );
+    assert_eq!(
+        shared
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Start(_)))
+            .count(),
+        2,
+        "reused ID must follow the new generation's driver"
+    );
+
+    let info = reopened.features().await.expect("multi-driver features");
+    assert_eq!(
+        info.drivers
+            .driver(DriverKind::LibkrunWhpx)
+            .expect("dedicated driver")
+            .readiness,
+        DriverReadiness::Supported
+    );
+    assert_eq!(
+        info.drivers
+            .driver(DriverKind::LibkrunHvf)
+            .expect("shared driver")
+            .readiness,
+        DriverReadiness::Supported
+    );
+}
+
+#[tokio::test]
+async fn multi_driver_registration_rejects_ambiguous_or_inconsistent_sets_before_state() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+
+    let empty_root = temporary.path().join("empty");
+    let error = HostRuntimeService::open_with_drivers(&empty_root, Vec::new())
+        .await
+        .expect_err("empty driver set must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("at least one"));
+    assert!(!empty_root.exists());
+
+    let first = Arc::new(RecordingDriver::supported());
+    let mut overlapping = RecordingDriver::supported();
+    overlapping.capability.driver = DriverKind::LibkrunHvf;
+    let overlap_root = temporary.path().join("overlap");
+    let overlap_drivers: Vec<Arc<dyn RuntimeDriver>> = vec![first, Arc::new(overlapping)];
+    let error = HostRuntimeService::open_with_drivers(&overlap_root, overlap_drivers)
+        .await
+        .expect_err("overlapping isolation must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("claimed by both"));
+    assert!(!overlap_root.exists());
+
+    let first = Arc::new(RecordingDriver::supported());
+    let mut inconsistent = RecordingDriver::shared_guest_supported();
+    inconsistent.operations.pop();
+    let inconsistent_root = temporary.path().join("inconsistent");
+    let inconsistent_drivers: Vec<Arc<dyn RuntimeDriver>> = vec![first, Arc::new(inconsistent)];
+    let error = HostRuntimeService::open_with_drivers(&inconsistent_root, inconsistent_drivers)
+        .await
+        .expect_err("inconsistent operation sets must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("different operation set"));
+    assert!(!inconsistent_root.exists());
+
+    let first = Arc::new(RecordingDriver::supported());
+    let mut inconsistent_hooks = RecordingDriver::shared_guest_supported();
+    inconsistent_hooks.hooks.push(OciHookPhase::Prestart);
+    let hook_root = temporary.path().join("inconsistent-hooks");
+    let hook_drivers: Vec<Arc<dyn RuntimeDriver>> = vec![first, Arc::new(inconsistent_hooks)];
+    let error = HostRuntimeService::open_with_drivers(&hook_root, hook_drivers)
+        .await
+        .expect_err("inconsistent Hook sets must fail");
+    assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(error.message.contains("different OCI hook set"));
+    assert!(!hook_root.exists());
 }

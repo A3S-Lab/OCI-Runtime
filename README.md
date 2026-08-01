@@ -844,9 +844,14 @@ and restore are still release gates.
 - typed IDs, operation IDs, deadlines, generations, and isolation requests.
 
 The durable host implements the five core lifecycle operations plus sorted,
-isolation-filtered container enumeration and ordered runtime events around an
-injected `RuntimeDriver`. Both queries are host-owned and never dispatch the
-driver. It conditionally exposes init wait, exact-target
+isolation-filtered container enumeration and ordered runtime events around a
+validated driver registry. Each isolation class has exactly one driver owner;
+create selects that owner, persists its identity, and every later operation
+routes through the recorded driver even when the service reopens with a
+different registration order. Drivers in one service must expose the same
+operation and Hook surfaces so discovery cannot overstate support for a
+selected workload. Both host queries remain driver-independent. The service
+conditionally exposes init wait, exact-target
 exec, per-process signal/wait, pause/resume, live resource update, process
 inventory, statistics, captured output, stdin write/close, and terminal resize
 only when that exact driver implements them. The native Linux driver maps all
@@ -909,7 +914,7 @@ flowchart TB
         validation["OCI schema and semantic validation"]
         lifecycle["Durable lifecycle<br/>generations · replay · fencing · reconciliation"]
         state[("Runtime-owned state<br/>exact config · operation journal")]
-        selection{"RuntimeDriver<br/>explicit isolation selection"}
+        selection{"DriverRegistry<br/>deterministic isolation selection"}
 
         service --> validation --> lifecycle --> selection
         lifecycle <--> state
