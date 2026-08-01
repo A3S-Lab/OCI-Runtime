@@ -214,6 +214,13 @@ Completed:
   fail-closed executor planning for its absolute rootfs, annotations,
   capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
   mount normalization, and AArch64 seccomp policy;
+- public-SDK-only A3S Box lifecycle consumer at Box commit `70311368`, with
+  isolation preflight before product reservation, distinct product/runtime
+  identities and generations, exact endpoint/driver/config binding, stable
+  SDK operation IDs, lost create/start response recovery without duplicate
+  create, stopped-only cleanup, graceful-signal escalation, and exact terminal
+  projection in its in-process contract suite; production routing,
+  out-of-process restart, and real-host cutover gates remain open;
 - Linux executor enforcement for exact capability sets and exec bounding
   ceilings, private controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
@@ -308,7 +315,8 @@ Not yet complete:
   certification;
 - OCI configuration enforcement;
 - production-ready native Linux execution;
-- A3S Box migration;
+- A3S Box production routing, versioned attachment contracts,
+  out-of-process restart qualification, and real-host cutover;
 - upstream conformance and security certification.
 
 The built-in WHPX driver remains `probe-only`, and the default host service
