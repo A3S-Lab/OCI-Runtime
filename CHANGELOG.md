@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Public-SDK-only A3S Box consumer evidence at Box commit `09a9e5d3` for exact
+  live process inventory, normalized CPU/memory stats, bounded ordered-event
+  polling, and replay-safe complete OCI resource updates. Box rechecks read
+  targets around every SDK response, persists an `updating_resources` claim
+  before dispatch, reuses the same runtime operation after backend recreation
+  or a lost response, and publishes acknowledged limits atomically to restart
+  and compatibility state. Its immutable create-intent digest preserves create
+  replay after mutable resource changes; changed keyed content, unavailable
+  capabilities, target drift, malformed stats, and event cursor drift fail
+  closed. Real-driver and out-of-process restart qualification remain explicit
+  release gates.
 - Public-SDK-only A3S Box consumer evidence at Box commit `8ea5f366` for
   exact-generation captured and streaming exec, replay-safe keyed process and
   stdin identities, cursor-checked stdout/stderr, signal/wait, PTY/resize,

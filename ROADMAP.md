@@ -214,8 +214,8 @@ Completed:
   fail-closed executor planning for its absolute rootfs, annotations,
   capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
   mount normalization, and AArch64 seccomp policy;
-- public-SDK-only A3S Box lifecycle and process-session consumer at Box commit
-  `8ea5f366`, with
+- public-SDK-only A3S Box lifecycle, process-session, observability, and
+  resource-control consumer at Box commit `09a9e5d3`, with
   isolation preflight before product reservation, distinct product/runtime
   identities and generations, exact endpoint/driver/configuration/attachment
   binding, attachment-schema negotiation before product mutation, stable SDK
@@ -229,8 +229,15 @@ Completed:
   rootfs, invalid IDs, empty commands, and changed keyed content before a
   second process can start; proves replay-safe stdin, cursor-checked output,
   signal/wait, PTY/resize, exact normal and signaled status, raw-log separation,
-  timeout cleanup, and caller-cancellation cleanup; production routing,
-  out-of-process restart, and real-host cutover gates remain open;
+  timeout cleanup, and caller-cancellation cleanup. Exact live process targets,
+  normalized stats, and strict ordered-event cursors are rechecked against the
+  same runtime binding. Partial Box resource intent is compiled into one
+  complete OCI contract, claimed before mutation, replayed after a lost
+  response with one runtime effect, and published atomically to both managed
+  restart state and compatibility state. An immutable create-intent digest
+  keeps the original create operation replayable after later resource changes;
+  production routing, out-of-process restart, and real-host cutover gates
+  remain open;
 - Linux executor enforcement for exact capability sets and exec bounding
   ceilings, private controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
@@ -740,8 +747,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
 - [x] Preserve captured and streaming exec, initial and streaming stdin,
   cursor-checked output, signal/wait, PTY/resize, exact terminal status, and
   cancellation-safe timeout cleanup through exact-generation SDK operations.
-- [ ] Preserve files, process inventory, Box log policy, resource updates,
-  stats, ordered events, and complete stop, kill, recovery, and cleanup parity.
+- [x] Preserve exact-generation process inventory, resource updates, normalized
+  stats, and ordered events through the public SDK, including capability
+  preflight, binding drift rejection, durable Box claims, and lost-response
+  replay.
+- [ ] Preserve files, Box log policy, and complete stop, kill, recovery, and
+  cleanup parity.
 - [ ] Prove Box process-session recovery across an out-of-process runtime
   restart on real native Linux and utility-VM drivers.
 - [ ] Complete the Box cross-platform behavior and soak suites against A3S OCI

@@ -102,8 +102,15 @@ and `experimental` or `supported` readiness.
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, and ordered events |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, pause/resume, update/stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
-| A3S Box consumer | Public-SDK-only lifecycle, versioned attachments, pause/resume, captured and streaming exec, replay-safe stdin, cursor-checked output, signal/wait, PTY/resize, exact terminal status, and cancellation-safe timeout cleanup; production routing and real-host cutover remain open |
+| A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process sessions and I/O; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; production routing and real-host cutover remain open |
 | Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
+
+The current Box adapter at `A3S-Lab/Box@09a9e5d3` rechecks every read against
+the exact runtime binding. A partial product resource request is compiled into
+one complete OCI `LinuxResources` contract, claimed durably before dispatch,
+and replayed with the same runtime operation after a lost response. Runtime
+acknowledgement updates Box restart intent atomically without changing the
+original create identity.
 
 The complete release target is every applicable OCI Runtime Specification
 1.3.0 requirement for Linux containers and every advertised driver—not a
@@ -211,7 +218,7 @@ candidate while the two gates named above remain open.
 ```text
 A3S Box (current Sandbox consumer; SDK-only unified adapter landed for
          exact-generation lifecycle, attachments, pause/resume, and process
-         sessions; inventory/resources/stats/events, file sessions,
+         sessions plus inventory/resources/stats/events; file sessions,
          production routing, and real-host cutover remain in progress)
 a3s-oci CLI
 future containerd runtime-v2 shim
