@@ -155,6 +155,27 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
     },
+    /// Run one exact lifecycle through the qualification-only WHPX driver.
+    WhpxDriverSmoke {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Protected runtime root containing system, shares, console, and recovery.
+        #[arg(long, value_name = "DIR")]
+        runtime_root: PathBuf,
+        /// Extracted Linux system root containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// OCI bundle below shares/<container>/<generation>.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Exact path-safe container identity used by the candidate driver.
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        /// Exact container generation represented by the share.
+        #[arg(long, default_value_t = 1)]
+        generation: u64,
+    },
     /// Prove two containers remain independently fenced inside one utility VM.
     OciVmMultiContainerSmoke {
         /// Isolated libkrun shim executable.
@@ -443,6 +464,34 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             console,
         } => {
             let report = a3s_oci_runtime::oci_vm_smoke(&shim, &vm_rootfs, &bundle, &console).await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::WhpxDriverSmoke {
+            shim,
+            runtime_root,
+            vm_rootfs,
+            bundle,
+            container_id,
+            generation,
+        } => {
+            let target = a3s_oci_sdk::ContainerTarget::exact(
+                container_id,
+                a3s_oci_sdk::Generation(generation),
+            );
+            let report = a3s_oci_runtime::whpx_driver_smoke(
+                &shim,
+                &runtime_root,
+                &vm_rootfs,
+                &bundle,
+                target,
+            )
+            .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {
