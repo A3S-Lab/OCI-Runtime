@@ -104,6 +104,25 @@ impl AgentRecoveryReport {
         &self.records
     }
 
+    /// Encode a validated report after a trusted shim has authenticated it.
+    pub fn to_json(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        encode_bounded(self, "recovery report")
+    }
+
+    /// Decode a normalized report from protected host-only storage.
+    pub fn from_json(encoded: &[u8]) -> Result<Self> {
+        validate_encoded_size(encoded)?;
+        let report: Self = serde_json::from_slice(encoded).map_err(|error| {
+            recovery_error(
+                ErrorCode::InvalidArgument,
+                format!("failed to decode recovery report: {error}"),
+            )
+        })?;
+        report.validate()?;
+        Ok(report)
+    }
+
     /// Authenticate this canonical report with the one-time session token.
     pub fn authenticate(self, token: &SessionToken) -> Result<AuthenticatedAgentRecoveryReport> {
         self.validate()?;
@@ -161,37 +180,12 @@ pub struct AuthenticatedAgentRecoveryReport {
 impl AuthenticatedAgentRecoveryReport {
     /// Encode a bounded authenticated report for one-time file handoff.
     pub fn to_json(&self) -> Result<Vec<u8>> {
-        let encoded = serde_json::to_vec(self).map_err(|error| {
-            recovery_error(
-                ErrorCode::Internal,
-                format!("failed to encode authenticated recovery report: {error}"),
-            )
-        })?;
-        if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
-            return Err(recovery_error(
-                ErrorCode::ResourceExhausted,
-                format!(
-                    "encoded recovery report is {} bytes; maximum is {}",
-                    encoded.len(),
-                    AGENT_RECOVERY_REPORT_MAX_BYTES
-                ),
-            ));
-        }
-        Ok(encoded)
+        encode_bounded(self, "authenticated recovery report")
     }
 
     /// Decode, validate, and authenticate a one-time guest report.
     pub fn verify_json(encoded: &[u8], token: &SessionToken) -> Result<AgentRecoveryReport> {
-        if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
-            return Err(recovery_error(
-                ErrorCode::ResourceExhausted,
-                format!(
-                    "encoded recovery report is {} bytes; maximum is {}",
-                    encoded.len(),
-                    AGENT_RECOVERY_REPORT_MAX_BYTES
-                ),
-            ));
-        }
+        validate_encoded_size(encoded)?;
         let authenticated: Self = serde_json::from_slice(encoded).map_err(|error| {
             recovery_error(
                 ErrorCode::InvalidArgument,
@@ -215,6 +209,31 @@ impl AuthenticatedAgentRecoveryReport {
         }
         Ok(self.report)
     }
+}
+
+fn encode_bounded(value: &impl Serialize, label: &str) -> Result<Vec<u8>> {
+    let encoded = serde_json::to_vec(value).map_err(|error| {
+        recovery_error(
+            ErrorCode::Internal,
+            format!("failed to encode {label}: {error}"),
+        )
+    })?;
+    validate_encoded_size(&encoded)?;
+    Ok(encoded)
+}
+
+fn validate_encoded_size(encoded: &[u8]) -> Result<()> {
+    if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
+        return Err(recovery_error(
+            ErrorCode::ResourceExhausted,
+            format!(
+                "encoded recovery report is {} bytes; maximum is {}",
+                encoded.len(),
+                AGENT_RECOVERY_REPORT_MAX_BYTES
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn canonical_payload(report: &AgentRecoveryReport) -> Result<Vec<u8>> {
@@ -355,6 +374,11 @@ mod tests {
         let verified = AuthenticatedAgentRecoveryReport::verify_json(&encoded, &token(7))
             .expect("verify report");
         assert_eq!(verified, report);
+        assert_eq!(
+            AgentRecoveryReport::from_json(&verified.to_json().expect("normalize report"))
+                .expect("decode normalized report"),
+            report
+        );
         assert_eq!(verified.records()[0].target.id.as_str(), "one");
         assert_eq!(verified.records()[1].target.id.as_str(), "two");
     }

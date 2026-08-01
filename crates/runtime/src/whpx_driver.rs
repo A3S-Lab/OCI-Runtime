@@ -25,6 +25,7 @@ use crate::driver::{
 };
 
 const CONSOLE_DIRECTORY: &str = "console";
+const RECOVERY_DIRECTORY: &str = "recovery";
 
 /// Protected host paths used by the one-VM-per-container WHPX driver candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +136,7 @@ impl WhpxRuntimeDriver {
             shim: prepared.shim,
             vm_rootfs: prepared.vm_rootfs.clone(),
             console_directory: prepared.console_directory,
+            recovery_directory: prepared.recovery_directory,
         });
         Ok(Self {
             capability,
@@ -611,6 +613,7 @@ struct LiveUtilityVmFactory {
     shim: PathBuf,
     vm_rootfs: PathBuf,
     console_directory: PathBuf,
+    recovery_directory: PathBuf,
 }
 
 #[async_trait]
@@ -620,10 +623,18 @@ impl UtilityVmFactory for LiveUtilityVmFactory {
         let console = self
             .console_directory
             .join(format!("{}-{}.log", target.id, generation.0));
+        let recovery_report = self
+            .recovery_directory
+            .join(format!("{}-{}.json", target.id, generation.0));
         let session = Arc::new(
-            UtilityVmSession::connect(&self.shim, &self.vm_rootfs, &console)
-                .await
-                .map_err(vm_launch_error)?,
+            UtilityVmSession::connect_with_recovery(
+                &self.shim,
+                &self.vm_rootfs,
+                &console,
+                &recovery_report,
+            )
+            .await
+            .map_err(vm_launch_error)?,
         );
         let service: Arc<dyn GuestAgentService> = Arc::new(session.client());
         Ok(LaunchedUtilityVm {
@@ -653,6 +664,7 @@ struct PreparedWhpxLayout {
     shim: PathBuf,
     vm_rootfs: PathBuf,
     console_directory: PathBuf,
+    recovery_directory: PathBuf,
 }
 
 impl PreparedWhpxLayout {
@@ -682,11 +694,14 @@ impl PreparedWhpxLayout {
         protect_path(vm_rootfs.clone()).await?;
         protect_path(guest_agent).await?;
         let console_directory = runtime_root.join(CONSOLE_DIRECTORY);
-        ensure_private_directory(console_directory.clone()).await?;
+        ensure_private_directory(console_directory.clone(), "console").await?;
+        let recovery_directory = runtime_root.join(RECOVERY_DIRECTORY);
+        ensure_private_directory(recovery_directory.clone(), "recovery").await?;
         Ok(Self {
             shim,
             vm_rootfs,
             console_directory,
+            recovery_directory,
         })
     }
 }
@@ -750,7 +765,7 @@ async fn protect_path(path: PathBuf) -> Result<()> {
         })?
 }
 
-async fn ensure_private_directory(path: PathBuf) -> Result<()> {
+async fn ensure_private_directory(path: PathBuf, label: &'static str) -> Result<()> {
     match tokio::fs::symlink_metadata(&path).await {
         Ok(metadata)
             if metadata.is_dir()
@@ -762,7 +777,7 @@ async fn ensure_private_directory(path: PathBuf) -> Result<()> {
         Ok(_) => Err(path_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "WHPX console path is not a plain directory: {}",
+                "WHPX {label} path is not a plain directory: {}",
                 path.display()
             ),
         )),
@@ -774,14 +789,14 @@ async fn ensure_private_directory(path: PathBuf) -> Result<()> {
             .map_err(|error| {
                 path_error(
                     ErrorCode::Internal,
-                    format!("WHPX console-directory task failed: {error}"),
+                    format!("WHPX {label}-directory task failed: {error}"),
                 )
             })?
         }
         Err(error) => Err(path_error(
             ErrorCode::Internal,
             format!(
-                "failed to inspect WHPX console directory {}: {error}",
+                "failed to inspect WHPX {label} directory {}: {error}",
                 path.display()
             ),
         )),
@@ -1027,6 +1042,14 @@ mod tests {
         shutdown_calls: AtomicUsize,
         active_shutdowns: AtomicUsize,
         max_active_shutdowns: AtomicUsize,
+        shutdown_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
+    }
+
+    impl FakeOwner {
+        fn synchronize_two_shutdowns(&self) {
+            *self.shutdown_barrier.lock().expect("shutdown barrier lock") =
+                Some(Arc::new(tokio::sync::Barrier::new(2)));
+        }
     }
 
     #[async_trait]
@@ -1036,7 +1059,17 @@ mod tests {
             let active = self.active_shutdowns.fetch_add(1, Ordering::Relaxed) + 1;
             self.max_active_shutdowns
                 .fetch_max(active, Ordering::Relaxed);
-            tokio::task::yield_now().await;
+            let barrier = self
+                .shutdown_barrier
+                .lock()
+                .expect("shutdown barrier lock")
+                .clone();
+            match barrier {
+                Some(barrier) => {
+                    barrier.wait().await;
+                }
+                None => tokio::task::yield_now().await,
+            }
             self.active_shutdowns.fetch_sub(1, Ordering::Relaxed);
             Ok(())
         }
@@ -1046,8 +1079,16 @@ mod tests {
         launches: AtomicUsize,
         active_launches: AtomicUsize,
         max_active_launches: AtomicUsize,
+        launch_barrier: StdMutex<Option<Arc<tokio::sync::Barrier>>>,
         guest: Arc<FakeGuest>,
         owner: Arc<FakeOwner>,
+    }
+
+    impl FakeFactory {
+        fn synchronize_two_launches(&self) {
+            *self.launch_barrier.lock().expect("launch barrier lock") =
+                Some(Arc::new(tokio::sync::Barrier::new(2)));
+        }
     }
 
     #[async_trait]
@@ -1057,7 +1098,17 @@ mod tests {
             let active = self.active_launches.fetch_add(1, Ordering::Relaxed) + 1;
             self.max_active_launches
                 .fetch_max(active, Ordering::Relaxed);
-            tokio::task::yield_now().await;
+            let barrier = self
+                .launch_barrier
+                .lock()
+                .expect("launch barrier lock")
+                .clone();
+            match barrier {
+                Some(barrier) => {
+                    barrier.wait().await;
+                }
+                None => tokio::task::yield_now().await,
+            }
             self.active_launches.fetch_sub(1, Ordering::Relaxed);
             let service: Arc<dyn GuestAgentService> = self.guest.clone();
             let owner: Arc<dyn UtilityVmOwner> = self.owner.clone();
@@ -1092,6 +1143,7 @@ mod tests {
                 launches: AtomicUsize::new(0),
                 active_launches: AtomicUsize::new(0),
                 max_active_launches: AtomicUsize::new(0),
+                launch_barrier: StdMutex::new(None),
                 guest: guest.clone(),
                 owner: owner.clone(),
             });
@@ -1213,6 +1265,7 @@ mod tests {
     #[tokio::test]
     async fn different_container_ids_launch_in_parallel() {
         let fixture = Fixture::new();
+        fixture.factory.synchronize_two_launches();
         let first = fixture.create_request(1, "parallel-create-a");
         let mut second = fixture.create_request(1, "parallel-create-b");
         second.target = ContainerTarget::exact(
@@ -1230,6 +1283,7 @@ mod tests {
             2
         );
         assert_eq!(fixture.driver.active_session_count().await, 2);
+        fixture.owner.synchronize_two_shutdowns();
         fixture.driver.shutdown().await.expect("parallel shutdown");
         assert_eq!(
             fixture.owner.max_active_shutdowns.load(Ordering::Relaxed),

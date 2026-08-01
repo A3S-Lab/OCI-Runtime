@@ -1,6 +1,8 @@
 use std::path::Path;
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use a3s_oci_agent_protocol::AGENT_RECOVERY_REPORT_ENV;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_FILE_ENV;
 use a3s_oci_agent_protocol::{AgentVsockEndpoint, SessionToken};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -18,6 +20,7 @@ pub fn agent_vm_smoke(
     socket_path: Option<&Path>,
     token: &SessionToken,
     guest_token_file: Option<&str>,
+    guest_recovery_report: Option<&str>,
 ) -> KrunAgentVmSmokeReport {
     let config = match VmConfig::new(1, 512) {
         Ok(config) => config,
@@ -38,12 +41,20 @@ pub fn agent_vm_smoke(
             return report;
         };
         let _ = token;
-        agent_vm_smoke_windows(rootfs, console, endpoint, guest_token_file, config)
+        agent_vm_smoke_windows(
+            rootfs,
+            console,
+            endpoint,
+            guest_token_file,
+            guest_recovery_report,
+            config,
+        )
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         let _ = guest_token_file;
+        let _ = guest_recovery_report;
         let Some(socket_path) = socket_path else {
             let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
             report.reason = Some("the macOS guest-agent bridge requires a Unix socket path".into());
@@ -71,6 +82,7 @@ pub fn agent_vm_smoke(
             socket_path,
             token,
             guest_token_file,
+            guest_recovery_report,
         );
         KrunAgentVmSmokeReport::unsupported(HostPlatform::current(), config)
     }
@@ -82,6 +94,7 @@ fn agent_vm_smoke_windows(
     console: &Path,
     endpoint: &AgentVsockEndpoint,
     guest_token_file: &str,
+    guest_recovery_report: Option<&str>,
     config: VmConfig,
 ) -> KrunAgentVmSmokeReport {
     use std::fs;
@@ -157,10 +170,13 @@ fn agent_vm_smoke_windows(
         return report;
     }
 
-    let environment = vec![(
+    let mut environment = vec![(
         AGENT_SESSION_TOKEN_FILE_ENV.to_string(),
         guest_token_file.to_string(),
     )];
+    if let Some(path) = guest_recovery_report {
+        environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));
+    }
     if let Err(error) = context.set_exec("/usr/bin/a3s-oci-agent", &[], &environment) {
         report.reason = Some(error.to_string());
         return report;

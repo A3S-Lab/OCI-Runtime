@@ -303,11 +303,13 @@ durable failure path quarantines that generation.
 The guest side of the next recovery gate is implemented: complete executor
 shutdown emits a bounded, exact-generation report containing the canonical
 configuration digest and real init exit status, authenticated with the
-ephemeral session token. It is deliberately not trusted by a restarted host
-yet. The owner-PID shim must first validate that authentication tag and copy a
-normalized report out of the guest-writable root into protected host storage;
-until that handoff and durable consumption exist, recovered `wait` continues
-to fail instead of inventing a result.
+ephemeral session token. The owner-PID shim preserves the one-time guest path
+during its 15-second cleanup grace, validates the authentication tag after the
+VM exits, removes the guest copy, and atomically commits only the normalized
+report into a protected host recovery directory outside the guest root. A
+restarted host deliberately does not consume that file yet; until durable
+consumption exists, recovered `wait` continues to fail instead of inventing a
+result.
 
 ## Next Windows gate
 

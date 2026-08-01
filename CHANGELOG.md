@@ -11,8 +11,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   every exact container generation only after complete cleanup, binds each
   result to its canonical configuration digest, and authenticates the sorted
   report with a session-scoped HMAC-SHA256 tag. Missing, partial, oversized,
-  malformed, stale-generation, and tampered reports remain unusable; protected
-  Windows shim handoff and durable host consumption are the next gate.
+  malformed, stale-generation, and tampered reports remain unusable. The
+  owner-PID-aware Windows shim verifies that tag during its bounded owner-death
+  grace, removes the guest copy, and atomically writes only the normalized
+  result into a protected host-only directory. Durable host consumption
+  remains the next gate.
 - An idempotent startup `RuntimeDriver::recover` handshake that dispatches each
   durable generation only to its recorded driver, commits an optional exact
   state observation before the host accepts requests, and is covered by the

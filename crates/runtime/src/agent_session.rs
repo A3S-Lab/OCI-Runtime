@@ -76,7 +76,24 @@ impl UtilityVmSession {
         rootfs: &Path,
         console: &Path,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let owner = AgentVmSession::connect(shim, rootfs, console).await?;
+        let owner = AgentVmSession::connect(shim, rootfs, console, None).await?;
+        Ok(Self {
+            client: owner.client().clone(),
+            state: Mutex::new(UtilityVmSessionState {
+                owner: Some(owner),
+                completed: None,
+            }),
+        })
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    pub(crate) async fn connect_with_recovery(
+        shim: &Path,
+        rootfs: &Path,
+        console: &Path,
+        recovery_report: &Path,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let owner = AgentVmSession::connect(shim, rootfs, console, Some(recovery_report)).await?;
         Ok(Self {
             client: owner.client().clone(),
             state: Mutex::new(UtilityVmSessionState {
@@ -128,6 +145,7 @@ impl AgentVmSession {
         shim: &Path,
         rootfs: &Path,
         console: &Path,
+        recovery_report: Option<&Path>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
         let platform = HostPlatform::current();
         let mut report = AgentVmSmokeReport::initial(platform);
@@ -143,6 +161,16 @@ impl AgentVmSession {
             Ok(path) => path,
             Err(reason) => return Err(failed(report, reason)),
         };
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        let recovery_report = match recovery_report {
+            Some(path) => match prepare_recovery_report_path(path).await {
+                Ok(path) => Some(path),
+                Err(reason) => return Err(failed(report, reason)),
+            },
+            None => None,
+        };
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+        let _ = recovery_report;
 
         let endpoint = match AgentVsockEndpoint::generate() {
             Ok(endpoint) => endpoint,
@@ -185,9 +213,14 @@ impl AgentVmSession {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         command.arg("--socket-path").arg(listener.socket_path());
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        command
-            .arg("--owner-pid")
-            .arg(std::process::id().to_string());
+        {
+            command
+                .arg("--owner-pid")
+                .arg(std::process::id().to_string());
+            if let Some(path) = recovery_report {
+                command.arg("--recovery-report").arg(path);
+            }
+        }
         command
             .env(AGENT_SESSION_TOKEN_ENV, encoded_token.as_str())
             .stdin(Stdio::null())
@@ -541,6 +574,59 @@ async fn prepare_console_path(path: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(console)
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+async fn prepare_recovery_report_path(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "trusted recovery report path must be absolute: {}",
+            path.display()
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        format!(
+            "trusted recovery report path must name a file: {}",
+            path.display()
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "trusted recovery report path has no parent: {}",
+            path.display()
+        )
+    })?;
+    let metadata = tokio::fs::symlink_metadata(parent).await.map_err(|error| {
+        format!(
+            "failed to inspect trusted recovery directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "trusted recovery directory must be a plain directory: {}",
+            parent.display()
+        ));
+    }
+    let parent = tokio::fs::canonicalize(parent).await.map_err(|error| {
+        format!(
+            "failed to resolve trusted recovery directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let path = parent.join(file_name);
+    if tokio::fs::try_exists(&path).await.map_err(|error| {
+        format!(
+            "failed to inspect trusted recovery destination {}: {error}",
+            path.display()
+        )
+    })? {
+        return Err(format!(
+            "refusing to overwrite trusted recovery destination: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 fn parse_shim_report(output: &BoundedOutput, platform: HostPlatform) -> Result<Value, String> {

@@ -12,6 +12,8 @@ use zeroize::Zeroizing;
 mod bootstrap_token;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod owner_process;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod recovery_report;
 
 #[derive(Debug, Parser)]
 #[command(name = "a3s-oci-krun-shim", version, about)]
@@ -53,6 +55,10 @@ enum Command {
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         #[arg(long, value_name = "PID")]
         owner_pid: NonZeroU32,
+        /// Protected host-only destination for verified shutdown evidence.
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        #[arg(long, value_name = "FILE")]
+        recovery_report: Option<PathBuf>,
     },
     /// Internal process-takeover boundary for the macOS VM smoke.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -114,6 +120,8 @@ fn main() -> ExitCode {
             socket_path,
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             owner_pid,
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            recovery_report,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
                 Ok(endpoint) => endpoint,
@@ -145,8 +153,27 @@ fn main() -> ExitCode {
                             return ExitCode::FAILURE;
                         }
                     };
-                let owner_monitor = match owner_process::start(owner_pid, bootstrap.cleanup_paths())
-                {
+                let recovery = match recovery_report {
+                    Some(destination) => match recovery_report::RecoveryReportHandoff::create(
+                        &rootfs,
+                        &endpoint,
+                        &destination,
+                    ) {
+                        Ok(recovery) => Some(recovery),
+                        Err(error) => {
+                            eprintln!(
+                                "a3s-oci-krun-shim: failed to stage guest recovery report: {error}"
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                    },
+                    None => None,
+                };
+                let owner_monitor = match owner_process::start(
+                    owner_pid,
+                    bootstrap.cleanup_paths(),
+                    recovery.as_ref().map(|recovery| recovery.cleanup_paths()),
+                ) {
                     Ok(owner_monitor) => owner_monitor,
                     Err(error) => {
                         eprintln!("a3s-oci-krun-shim: failed to monitor runtime owner: {error}");
@@ -160,14 +187,22 @@ fn main() -> ExitCode {
                     socket_path,
                     &token,
                     Some(bootstrap.guest_path()),
+                    recovery.as_ref().map(|recovery| recovery.guest_path()),
                 );
-                owner_monitor.mark_vm_finished();
+                let recovery_result = recovery.map(|recovery| recovery.persist(&token));
                 if let Err(error) = bootstrap.cleanup() {
                     report.status = a3s_oci_core::CapabilityStatus::Unavailable;
                     report.reason = Some(format!(
                         "failed to clean one-time guest bootstrap token: {error}"
                     ));
                 }
+                if let Some(Err(error)) = recovery_result {
+                    report.status = a3s_oci_core::CapabilityStatus::Unavailable;
+                    report.reason = Some(format!(
+                        "failed to retain authenticated guest recovery report: {error}"
+                    ));
+                }
+                owner_monitor.mark_vm_finished();
                 report
             };
             #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
@@ -177,6 +212,7 @@ fn main() -> ExitCode {
                 &endpoint,
                 socket_path,
                 &token,
+                None,
                 None,
             );
             let succeeded = report.is_success();

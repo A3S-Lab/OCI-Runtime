@@ -232,10 +232,12 @@ sorted, unique, limited to 1,024 entries, encoded in at most 1 MiB, and
 authenticated with HMAC-SHA256 under the ephemeral session token. The token is
 not included in the artifact. The guest creates the fixed one-time report file
 with exclusive `0600` semantics and synchronizes both file and directory.
-Missing or partial cleanup produces no usable report. This establishes the
-guest side of restart-stable exit evidence; WHPX remains `probe-only` until the
-trusted shim validates and copies the artifact into protected host storage and
-the durable recovery path consumes it.
+Missing or partial cleanup produces no usable report. On Windows, the
+owner-PID-aware shim stages the one-time path, preserves it throughout the
+bounded owner-death grace, rejects reparse points and guest-root destinations,
+verifies the HMAC, removes the guest copy, and atomically commits only the
+normalized report into the protected host recovery directory. WHPX remains
+`probe-only` until the durable recovery path consumes that evidence.
 
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified

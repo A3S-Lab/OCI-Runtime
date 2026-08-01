@@ -11,6 +11,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::bootstrap_token::CleanupPaths;
+use crate::recovery_report::RecoveryCleanupPaths;
 
 const OWNER_EXIT_CODE: u32 = 3;
 const OWNER_EXIT_GRACE: Duration = Duration::from_secs(15);
@@ -30,13 +31,24 @@ impl OwnerMonitor {
 /// The process handle identifies one kernel process object, so later PID reuse
 /// cannot keep the shim alive. The monitor is installed before libkrun creates
 /// a VM context and fails closed if the owner cannot be opened.
-pub(crate) fn start(owner_pid: NonZeroU32, cleanup: CleanupPaths) -> io::Result<OwnerMonitor> {
+pub(crate) fn start(
+    owner_pid: NonZeroU32,
+    bootstrap_cleanup: CleanupPaths,
+    recovery_cleanup: Option<RecoveryCleanupPaths>,
+) -> io::Result<OwnerMonitor> {
     let owner = open(owner_pid)?;
     let vm_completion = VmCompletion::new();
     let watchdog_completion = vm_completion.clone();
     thread::Builder::new()
         .name("a3s-oci-owner-watchdog".into())
-        .spawn(move || terminate_when_signaled(owner, cleanup, watchdog_completion))?;
+        .spawn(move || {
+            terminate_when_signaled(
+                owner,
+                bootstrap_cleanup,
+                recovery_cleanup,
+                watchdog_completion,
+            );
+        })?;
     Ok(OwnerMonitor { vm_completion })
 }
 
@@ -58,16 +70,24 @@ fn open(owner_pid: NonZeroU32) -> io::Result<OwnedHandle> {
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
-fn terminate_when_signaled(owner: OwnedHandle, cleanup: CleanupPaths, vm_completion: VmCompletion) {
+fn terminate_when_signaled(
+    owner: OwnedHandle,
+    bootstrap_cleanup: CleanupPaths,
+    recovery_cleanup: Option<RecoveryCleanupPaths>,
+    vm_completion: VmCompletion,
+) {
     // SAFETY: `owner` is a live process handle opened with synchronization
     // rights. Any return means the owner exited or the wait failed, and both
     // conditions must fail closed.
     unsafe {
         WaitForSingleObject(owner.as_raw_handle(), INFINITE);
     }
-    let _ = cleanup.cleanup();
+    let _ = bootstrap_cleanup.cleanup();
     if vm_completion.wait(OWNER_EXIT_GRACE) {
         return;
+    }
+    if let Some(cleanup) = recovery_cleanup {
+        let _ = cleanup.cleanup();
     }
     // SAFETY: the owner has exited or its wait failed. Terminating the current
     // shim tears down a stuck in-process libkrun VM after a bounded grace.

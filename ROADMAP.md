@@ -425,8 +425,10 @@ the utility-VM host/agent transport portion remains open.
   - [x] Define a versioned and bounded exact-generation report, authenticate it
     with the ephemeral agent session token, and emit it only after complete
     guest executor shutdown.
-  - [ ] Have the owner-PID shim verify and copy the report into protected host
-    storage, then consume it through durable startup recovery and fault gates.
+  - [x] Have the owner-PID shim verify and copy the normalized report into
+    protected host storage before its owner-death grace expires.
+  - [ ] Consume the report through durable startup recovery and before/after
+    fault gates.
 - [x] Verify running state, exact create/kill/delete replay, signal-driven
   stopped state, post-delete NotFound, marker cleanup, and no new guest
   runtime directory on the nominal path.
