@@ -99,7 +99,9 @@ impl RootfsScope {
 }
 
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
-    init::run_container_init_if_requested().or_else(exec_process::run_container_exec_if_requested)
+    init::run_container_init_if_requested()
+        .or_else(exec_process::run_container_exec_if_requested)
+        .or_else(filesystem::run_container_filesystem_if_requested)
 }
 
 /// Fail-closed Linux OCI executor shared by native and utility-VM drivers.

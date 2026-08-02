@@ -100,7 +100,7 @@ and `experimental` or `supported` readiness.
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, ordered events, and a same-UID multi-container Native Linux owner |
-| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, descriptor-confined file/filesystem sessions, pause/resume, update/stats, and scoped cleanup for the qualified profile |
+| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound namespace helpers for descriptor-confined file/filesystem sessions, pause/resume, update/stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; production routing and real-host cutover remain open |
 | Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
@@ -115,6 +115,13 @@ resource request is compiled into one complete OCI `LinuxResources` contract,
 claimed durably before dispatch, and replayed with the same runtime operation
 after a lost response. Runtime acknowledgement updates Box restart intent
 atomically without changing the original create identity.
+
+Linux file and filesystem calls execute in a fresh internal helper that inherits
+only the exact retained root, user-namespace, and mount-namespace descriptors.
+The helper authenticates its parent, rejects duplicate or reordered descriptors,
+enters the user namespace before the mount namespace, and then performs the
+bounded `openat2` operations. Container IDs therefore remain correct on the
+rootfs, bind mounts, ID-mapped mounts, and container-created tmpfs filesystems.
 
 The complete release target is every applicable OCI Runtime Specification
 1.3.0 requirement for Linux containers and every advertised driver—not a
