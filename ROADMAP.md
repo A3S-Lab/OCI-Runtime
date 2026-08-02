@@ -210,9 +210,9 @@ Completed:
   driver before publishing `runtime.sock`, accepts ordinary SDK attachments
   without Box process-local descriptors, preserves exact recorded-driver and
   generation routing across reopen, and performs bounded driver shutdown. The
-  explicitly opted-in x86_64 Box production route now prepares bundles and
-  launches through this owner; aarch64 Box composition, default routing,
-  transparent live-session reattachment, and cross-platform cutover remain;
+  explicitly opted-in x86_64 and aarch64 Box production routes now prepare
+  bundles and launch through this owner; default routing, transparent
+  live-session reattachment, and cross-platform cutover remain;
 - shared Linux executor support for all six OCI hook phases in normative order,
   with runtime/container namespace placement, exact OCI state on stdin,
   bounded configuration, timeout and process-group cleanup, typed
@@ -224,7 +224,7 @@ Completed:
   capabilities, cgroup v2 resources, exact device allowlist, legacy `cgroup`
   mount normalization, and AArch64 seccomp policy;
 - public-SDK-only A3S Box lifecycle, process-session, filesystem,
-  observability, and resource-control consumer at Box commit `2cbe588b`, with
+  observability, and resource-control consumer at Box commit `a16772c3`, with
   isolation preflight before product reservation, distinct product/runtime
   identities and generations, exact endpoint/driver/configuration/attachment
   binding, attachment-schema negotiation before product mutation, stable SDK
@@ -257,9 +257,9 @@ Completed:
   contract now retains the Box process stream and input handle through an
   observed owner disconnect, then continues inventory, stdin, output, signal,
   wait, and cleanup after reconnecting to a replacement durable host service.
-  The x86_64 production owner route and fresh-Box-process stopped-only restart
-  gate now pass; real-driver live-session reattachment plus aarch64, WHPX,
-  default-routing, and broader cutover gates remain open;
+  The x86_64 and aarch64 production owner routes and fresh-Box-process
+  stopped-only restart gates now pass; real-driver live-session reattachment
+  plus WHPX, default-routing, and broader cutover gates remain open;
 - Linux executor enforcement for exact capability sets and exec bounding
   ceilings, private controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
@@ -372,8 +372,7 @@ Not yet complete:
 - OCI configuration enforcement;
 - production-ready native Linux execution;
 - real-driver live process and filesystem session reattachment;
-- aarch64 A3S Box production composition, default routing, and cross-platform
-  real-host cutover;
+- A3S Box default routing and cross-platform real-host cutover;
 - upstream conformance and security certification.
 
 The built-in WHPX driver remains `probe-only`, and the default host service
@@ -740,7 +739,7 @@ and recovery suites in the Windows guest and on native Linux.
   and private-tmpfs storage; inline/script/direct/nonzero init; and selected
   create/start/timeout/poststop Hook failure behavior on x86_64 and aarch64.
 - [x] Prove the Box-owned production bundle and explicitly opted-in long-lived
-  Native Linux owner composition on x86_64 through the Rust, Python,
+  Native Linux owner composition on x86_64 and aarch64 through the Rust, Python,
   TypeScript, and Go SDK lifecycle, exec, filesystem, route-aware stats,
   pause/resume, snapshot restore, restart, and cleanup surfaces.
 - [x] Safely reconcile abrupt Native Linux owner death on x86_64 and aarch64.
@@ -828,14 +827,15 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
 The Native Linux side now exposes a packaged, long-lived multi-container host
 service suitable for the unified Box adapter. Box persists an explicit
 `box_vm` or `oci_sdk` route before preflight, prepares its product resources and
-minimal OCI bundle, and passes the opt-in x86_64 production-owner composition
-through all four SDKs. A separate x86_64 gate now proves owner/Box process
-restart with safe stopped-only reconciliation and explicit next-generation
-restart. The broader gate remains unchecked until live session reattachment
-passes on the real driver, the same production composition passes WHPX and
-aarch64, and the default/MicroVM cutover is complete. OCI Runtime independently
-proves that abrupt Native Linux owner death safely terminates and reconciles
-the exact generation without inventing terminal evidence.
+minimal OCI bundle, and passes the opt-in x86_64 and aarch64 production-owner
+composition through all four SDKs. Separate gates on both architectures now
+prove owner/Box process restart with safe stopped-only reconciliation and
+explicit next-generation restart. The broader gate remains unchecked until
+live session reattachment passes on the real driver, the same production
+composition passes WHPX, and the default/MicroVM cutover is complete. OCI
+Runtime independently proves that abrupt Native Linux owner death safely
+terminates and reconciles the exact generation without inventing terminal
+evidence.
 
 ## Platform Promotion
 
