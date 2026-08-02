@@ -58,6 +58,27 @@ value; `attach_network_extension` and `attach_secret_extension` classify that
 declared mechanism. Duplicate, missing, reordered, unknown, drifted, or
 oversized declarations fail request validation.
 
+## Runtime-owned bundle handoff
+
+Local products that prepare a portable bundle for a utility-VM driver may
+transfer ownership without predicting the runtime generation. They place the
+complete bundle at
+`<runtime-root>/bundle-handoffs/<container>/<create-operation>/bundle`, set
+the OCI annotation `dev.a3s.bundle-handoff=move-to-runtime-v1`, and add the
+required version-1 extension with `with_runtime_bundle_handoff`.
+
+The selected driver must advertise that extension. After durable create state
+allocates the real generation, the driver validates the exact protected
+operation path, immutable configuration digest, relative `root.path`, and
+relative bind sources, then atomically moves the directory below
+`shares/<container>/<generation>/bundle`. Replay accepts only that exact
+destination with matching ownership evidence. Delete and terminal create
+failure remove only an exact digest- and generation-bound handoff.
+
+The public container record deliberately retains the caller's original bundle
+identity. The relocated path is an internal driver attachment and is never a
+substitute durable product record.
+
 ## Negotiation And Failure Rules
 
 SDK transport protocol 3 is the first protocol that carries this contract.

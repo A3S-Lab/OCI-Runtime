@@ -481,6 +481,9 @@ the utility-VM host/agent transport portion remains open.
     before VM launch.
   - [x] Move one-time token and recovery-report handoff into the exact share and
     require versioned shim evidence that the device was configured.
+  - [x] Add an explicit digest-bound product bundle-handoff extension that
+    stages by create-operation identity, moves only after the runtime allocates
+    the real generation, and preserves exact replay and owned cleanup.
   - [x] Run the qualification-only `RuntimeDriver` nominal lifecycle through
     that share on a real WHPX host and retain its versioned lifecycle, replay,
     authenticated recovery-publication, and cleanup evidence.

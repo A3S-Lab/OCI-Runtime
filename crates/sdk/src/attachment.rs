@@ -8,6 +8,12 @@ use crate::{Error, ErrorCode, OciBundle, ProcessIo, Result};
 
 /// First public create-time attachment contract understood by A3S OCI Runtime.
 pub const ATTACHMENT_SCHEMA_V1: &str = "a3s.oci.attachments.v1";
+/// Required extension declaring an operation-scoped transfer of bundle ownership.
+pub const RUNTIME_BUNDLE_HANDOFF_EXTENSION: &str = "dev.a3s.bundle-handoff";
+/// First bundle-handoff contract version.
+pub const RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION: u16 = 1;
+/// Exact annotation value for an atomic move into runtime-owned storage.
+pub const RUNTIME_BUNDLE_HANDOFF_MOVE_V1: &str = "move-to-runtime-v1";
 
 const MAX_MOUNT_ATTACHMENTS: usize = 4_096;
 const MAX_NETWORK_ATTACHMENTS: usize = 256;
@@ -222,6 +228,43 @@ impl CreateAttachments {
             .insert(extension.name().to_string(), extension);
         self.validate(bundle)?;
         Ok(self)
+    }
+
+    /// Transfer a portable bundle from the protected operation handoff path.
+    ///
+    /// The immutable OCI configuration must carry the exact namespaced
+    /// annotation value. Declaring this required extension makes ownership
+    /// transfer explicit, digest-bound, and fail-closed on runtimes or drivers
+    /// that do not implement it.
+    pub fn with_runtime_bundle_handoff(mut self, bundle: &OciBundle) -> Result<Self> {
+        let configured = bundle
+            .spec()
+            .annotations()
+            .as_ref()
+            .and_then(|annotations| annotations.get(RUNTIME_BUNDLE_HANDOFF_EXTENSION));
+        if configured.map(String::as_str) != Some(RUNTIME_BUNDLE_HANDOFF_MOVE_V1) {
+            return Err(invalid_attachment(format!(
+                "runtime bundle handoff requires annotation {RUNTIME_BUNDLE_HANDOFF_EXTENSION}={RUNTIME_BUNDLE_HANDOFF_MOVE_V1}"
+            )));
+        }
+        self = self.add_extension_from_annotation(
+            bundle,
+            RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+            RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+            true,
+        )?;
+        Ok(self)
+    }
+
+    /// Whether this exact manifest requests runtime bundle ownership transfer.
+    #[must_use]
+    pub fn uses_runtime_bundle_handoff(&self) -> bool {
+        self.extensions
+            .get(RUNTIME_BUNDLE_HANDOFF_EXTENSION)
+            .is_some_and(|extension| {
+                extension.version() == RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION
+                    && extension.required()
+            })
     }
 
     /// Classify one declared runtime extension as a network attachment mechanism.
@@ -481,6 +524,24 @@ impl AttachmentCapabilities {
         Ok(self)
     }
 
+    /// Merge another service or driver capability set into this inventory.
+    #[must_use]
+    pub fn merged(mut self, other: &Self) -> Self {
+        for schema in &other.schemas {
+            if !self.schemas.contains(schema) {
+                self.schemas.push(schema.clone());
+            }
+        }
+        self.schemas.sort();
+        for (name, versions) in &other.extensions {
+            let retained = self.extensions.entry(name.clone()).or_default();
+            retained.extend(versions.iter().copied());
+            retained.sort_unstable();
+            retained.dedup();
+        }
+        self
+    }
+
     /// Whether this service supports an attachment schema.
     #[must_use]
     pub fn supports_schema(&self, schema: &str) -> bool {
@@ -616,6 +677,8 @@ mod tests {
 
     use super::{
         AttachmentCapabilities, AttachmentSource, CreateAttachments, ATTACHMENT_SCHEMA_V1,
+        RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+        RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
     };
     use crate::{ErrorCode, OciBundle, ProcessIo};
 
@@ -646,6 +709,18 @@ mod tests {
             .expect("encode configuration"),
         )
         .expect("attachment fixture bundle")
+    }
+
+    fn handoff_bundle() -> OciBundle {
+        let mut configuration: serde_json::Value =
+            serde_json::from_str(bundle().config_json()).expect("fixture configuration");
+        configuration["annotations"][RUNTIME_BUNDLE_HANDOFF_EXTENSION] =
+            json!(RUNTIME_BUNDLE_HANDOFF_MOVE_V1);
+        OciBundle::from_json(
+            std::env::temp_dir().join("a3s-bundle-handoff"),
+            serde_json::to_string(&configuration).expect("handoff configuration"),
+        )
+        .expect("handoff bundle")
     }
 
     #[test]
@@ -738,6 +813,36 @@ mod tests {
         AttachmentCapabilities::base_v1()
             .require(&advisory)
             .expect("unsupported advisory extension remains explicit and non-enforcing");
+    }
+
+    #[test]
+    fn runtime_bundle_handoff_is_explicit_digest_bound_and_capability_checked() {
+        let handoff = handoff_bundle();
+        let attachments = CreateAttachments::from_bundle(&handoff, ProcessIo::default())
+            .expect("base attachments")
+            .with_runtime_bundle_handoff(&handoff)
+            .expect("bundle handoff extension");
+        assert!(attachments.uses_runtime_bundle_handoff());
+
+        let unsupported = AttachmentCapabilities::base_v1()
+            .require(&attachments)
+            .expect_err("base runtime must reject required handoff");
+        assert_eq!(unsupported.code, ErrorCode::Unsupported);
+        AttachmentCapabilities::base_v1()
+            .with_extension(
+                RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+                vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
+            )
+            .expect("handoff capability")
+            .require(&attachments)
+            .expect("handoff-capable runtime");
+
+        let ordinary = bundle();
+        let error = CreateAttachments::from_bundle(&ordinary, ProcessIo::default())
+            .expect("ordinary attachments")
+            .with_runtime_bundle_handoff(&ordinary)
+            .expect_err("missing exact annotation must fail");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
     }
 
     #[test]

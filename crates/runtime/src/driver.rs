@@ -2,10 +2,11 @@ use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverCapability;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerStats, ContainerTarget, CreateAttachments, DeleteMode,
-    Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
-    IsolationRequest, OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord,
-    ProcessTarget, Result, RuntimeOperation, Signal, TerminalSize,
+    async_trait, AttachmentCapabilities, ContainerRecord, ContainerStats, ContainerTarget,
+    CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
+    FilesystemRequest, FilesystemResponse, IsolationRequest, OciBundle, OperationContext,
+    OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal,
+    TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -433,6 +434,11 @@ pub trait RuntimeDriver: Send + Sync {
         &[]
     }
 
+    /// Versioned create-attachment extensions implemented by this driver.
+    fn attachment_capabilities(&self) -> AttachmentCapabilities {
+        AttachmentCapabilities::base_v1()
+    }
+
     /// Reconcile process-local resources with one durable record while the
     /// host service opens.
     ///
@@ -446,6 +452,16 @@ pub trait RuntimeDriver: Send + Sync {
     /// may repeat it after the driver-side reconciliation already happened.
     async fn recover(&self, _record: &ContainerRecord) -> Result<DriverRecovery> {
         Ok(DriverRecovery::none())
+    }
+
+    /// Resolve a create bundle into driver-owned storage after the durable
+    /// generation has been allocated but before any workload resource starts.
+    ///
+    /// The default keeps the caller's immutable bundle. Drivers implementing
+    /// an explicit ownership-handoff extension may atomically relocate it and
+    /// return an equivalent bundle with only its host directory changed.
+    async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
+        Ok(request.bundle.clone())
     }
 
     /// Prepare all OCI create-time resources and return the blocked init PID.

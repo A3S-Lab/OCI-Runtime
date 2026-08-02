@@ -11,11 +11,15 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
-    async_trait, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode,
-    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, OutputChunk,
-    ProcessRecord, Result, RuntimeOperation,
+    async_trait, runtime_bundle_handoff_directory, runtime_bundle_handoff_root,
+    AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error,
+    ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
+    OciBundle, OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
-use tokio::io::AsyncReadExt;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
@@ -34,6 +38,10 @@ use crate::driver::{
 const CONSOLE_DIRECTORY: &str = "console";
 const RECOVERY_DIRECTORY: &str = "recovery";
 const RUNTIME_SHARE_DIRECTORY: &str = "shares";
+const BUNDLE_HANDOFF_MARKER: &str = ".a3s-oci-bundle-handoff.json";
+const BUNDLE_HANDOFF_MARKER_PENDING: &str = ".a3s-oci-bundle-handoff.pending";
+const BUNDLE_HANDOFF_MARKER_SCHEMA: &str = "a3s.oci.bundle-handoff.v1";
+const MAX_BUNDLE_HANDOFF_MARKER_BYTES: usize = 4 * 1024;
 const RECOVERY_HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const RECOVERY_HANDOFF_TIMEOUT: Duration = Duration::from_secs(16);
 
@@ -102,6 +110,7 @@ impl WhpxRuntimeDriverConfig {
 /// immutable-system-root and fresh-host recovery gates are complete.
 pub struct WhpxRuntimeDriver {
     capability: DriverCapability,
+    runtime_root: PathBuf,
     vm_rootfs: PathBuf,
     runtime_share_root: PathBuf,
     recovery_directory: PathBuf,
@@ -115,6 +124,7 @@ impl fmt::Debug for WhpxRuntimeDriver {
         formatter
             .debug_struct("WhpxRuntimeDriver")
             .field("capability", &self.capability)
+            .field("runtime_root", &self.runtime_root)
             .field("vm_rootfs", &self.vm_rootfs)
             .field("runtime_share_root", &self.runtime_share_root)
             .finish_non_exhaustive()
@@ -169,6 +179,7 @@ impl WhpxRuntimeDriver {
         });
         Ok(Self {
             capability,
+            runtime_root: prepared.runtime_root,
             vm_rootfs: prepared.vm_rootfs,
             runtime_share_root: prepared.runtime_share_root,
             recovery_directory: prepared.recovery_directory,
@@ -558,6 +569,12 @@ impl WhpxRuntimeDriver {
                 );
             }
         }
+        if let Err(cleanup) = self.cleanup_runtime_bundle_handoff(&session.target).await {
+            error.message = format!(
+                "{}; failed to remove the runtime-owned bundle handoff: {}",
+                error.message, cleanup
+            );
+        }
         error
     }
 
@@ -570,6 +587,151 @@ impl WhpxRuntimeDriver {
         let gate = Arc::new(Mutex::new(()));
         gates.insert(id.clone(), Arc::downgrade(&gate));
         gate
+    }
+
+    async fn prepare_runtime_bundle_handoff(
+        &self,
+        request: &DriverCreateRequest,
+    ) -> Result<OciBundle> {
+        let create_gate = self.create_gate_for(&request.target.id).await;
+        let _create_guard = create_gate.lock().await;
+        let runtime_share =
+            ensure_exact_runtime_share_path(&self.runtime_share_root, &request.target).await?;
+        let destination = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
+        let source = runtime_bundle_handoff_directory(
+            &self.runtime_root,
+            &request.target.id,
+            &request.context.operation_id,
+        )?;
+
+        if path_metadata(&destination).await?.is_some() {
+            if path_metadata(&source).await?.is_some() {
+                return Err(bundle_handoff_error(
+                    ErrorCode::Conflict,
+                    format!(
+                        "both the operation handoff and exact-generation bundle exist: {} and {}",
+                        source.display(),
+                        destination.display()
+                    ),
+                ));
+            }
+            let bundle = load_exact_handoff_bundle(&destination, &request.bundle).await?;
+            ensure_bundle_handoff_marker(&runtime_share, &request.target, bundle.config_digest())
+                .await?;
+            cleanup_empty_handoff_parents(&source, &self.runtime_root)
+                .await
+                .map_err(|error| error.retryable(true))?;
+            return Ok(bundle);
+        }
+
+        let source = canonical_plain_directory(&source, "WHPX operation bundle handoff").await?;
+        validate_handoff_ancestry(
+            &self.runtime_root,
+            &source,
+            &request.target.id,
+            &request.context.operation_id,
+        )
+        .await?;
+        let source_bundle = load_exact_handoff_bundle(&source, &request.bundle).await?;
+        ensure_bundle_handoff_marker(
+            &runtime_share,
+            &request.target,
+            source_bundle.config_digest(),
+        )
+        .await?;
+
+        tokio::fs::rename(&source, &destination)
+            .await
+            .map_err(|error| {
+                bundle_handoff_error(
+                    ErrorCode::Unavailable,
+                    format!(
+                        "failed to atomically move WHPX bundle handoff {} into {}: {error}",
+                        source.display(),
+                        destination.display()
+                    ),
+                )
+                .retryable(true)
+            })?;
+        let bundle = load_exact_handoff_bundle(&destination, &source_bundle).await?;
+        cleanup_empty_handoff_parents(&source, &self.runtime_root)
+            .await
+            .map_err(|error| error.retryable(true))?;
+        Ok(bundle)
+    }
+
+    async fn cleanup_runtime_bundle_handoff(&self, target: &ContainerTarget) -> Result<()> {
+        let Some(runtime_share) = existing_exact_runtime_share_path(
+            &self.runtime_share_root,
+            target,
+            "cleanup-whpx-bundle-handoff",
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let marker = runtime_share.join(BUNDLE_HANDOFF_MARKER);
+        let Some(metadata) = path_metadata(&marker).await? else {
+            return Ok(());
+        };
+        ensure_plain_file_metadata(&metadata, &marker, "WHPX bundle-handoff marker")?;
+        let retained = read_bundle_handoff_marker(&marker).await?;
+        if retained.target != *target {
+            return Err(bundle_handoff_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "bundle-handoff marker targets {:?}, not {:?}",
+                    retained.target, target
+                ),
+            ));
+        }
+
+        let configured_bundle = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
+        if path_metadata(&configured_bundle).await?.is_some() {
+            let bundle =
+                canonical_plain_directory(&configured_bundle, "runtime-owned WHPX bundle").await?;
+            if bundle.parent() != Some(runtime_share.as_path()) {
+                return Err(bundle_handoff_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "runtime-owned WHPX bundle escaped exact share {}: {}",
+                        runtime_share.display(),
+                        bundle.display()
+                    ),
+                ));
+            }
+            let loaded = OciBundle::load(&bundle).await?;
+            if loaded.config_digest() != retained.config_digest {
+                return Err(bundle_handoff_error(
+                    ErrorCode::FailedPrecondition,
+                    "runtime-owned WHPX bundle no longer matches its handoff marker",
+                ));
+            }
+            tokio::fs::remove_dir_all(&bundle).await.map_err(|error| {
+                bundle_handoff_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to remove runtime-owned WHPX bundle {}: {error}",
+                        bundle.display()
+                    ),
+                )
+            })?;
+        }
+        tokio::fs::remove_file(&marker).await.map_err(|error| {
+            bundle_handoff_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to remove WHPX bundle-handoff marker {}: {error}",
+                    marker.display()
+                ),
+            )
+        })?;
+        remove_plain_file_if_present(&runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING)).await?;
+        remove_directory_if_empty(&runtime_share).await?;
+        if let Some(container_directory) = runtime_share.parent() {
+            remove_directory_if_empty(container_directory).await?;
+        }
+        Ok(())
     }
 }
 
@@ -585,6 +747,23 @@ impl RuntimeDriver for WhpxRuntimeDriver {
 
     fn hooks(&self) -> &[OciHookPhase] {
         &AGENT_DRIVER_HOOKS
+    }
+
+    fn attachment_capabilities(&self) -> AttachmentCapabilities {
+        AttachmentCapabilities::base_v1()
+            .with_extension(
+                RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+                vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
+            )
+            .expect("the fixed WHPX bundle-handoff extension is valid")
+    }
+
+    async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
+        if request.attachment_contract.uses_runtime_bundle_handoff() {
+            self.prepare_runtime_bundle_handoff(request).await
+        } else {
+            Ok(request.bundle.clone())
+        }
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
@@ -662,7 +841,19 @@ impl RuntimeDriver for WhpxRuntimeDriver {
         let session = match self.session_for_existing_create(&target).await? {
             Some(session) => session,
             None => {
-                let launched = self.factory.launch(&target, &runtime_share).await?;
+                let launched = match self.factory.launch(&target, &runtime_share).await {
+                    Ok(launched) => launched,
+                    Err(error) if error.retryable => return Err(error),
+                    Err(mut error) => {
+                        if let Err(cleanup) = self.cleanup_runtime_bundle_handoff(&target).await {
+                            error.message = format!(
+                                "{}; failed to remove the runtime-owned bundle handoff: {}",
+                                error.message, cleanup
+                            );
+                        }
+                        return Err(error);
+                    }
+                };
                 let session = Arc::new(WhpxContainer {
                     target: target.clone(),
                     client: launched.client,
@@ -712,11 +903,13 @@ impl RuntimeDriver for WhpxRuntimeDriver {
                 session.owner.shutdown().await?;
                 self.replace_with_stopped(&session).await;
                 self.remove_recovery_report(&session.target).await?;
+                self.cleanup_runtime_bundle_handoff(&session.target).await?;
                 self.remove_stopped(&session.target).await;
                 Ok(())
             }
             WhpxAttachment::RecoveredStopped { target, .. } => {
                 self.remove_recovery_report(&target).await?;
+                self.cleanup_runtime_bundle_handoff(&target).await?;
                 self.remove_stopped(&target).await;
                 Ok(())
             }
@@ -980,6 +1173,7 @@ impl UtilityVmOwner for LiveUtilityVmOwner {
 #[derive(Debug)]
 struct PreparedWhpxLayout {
     shim: PathBuf,
+    runtime_root: PathBuf,
     vm_rootfs: PathBuf,
     runtime_share_root: PathBuf,
     console_directory: PathBuf,
@@ -1063,8 +1257,11 @@ impl PreparedWhpxLayout {
         ensure_private_directory(console_directory.clone(), "console").await?;
         let recovery_directory = runtime_root.join(RECOVERY_DIRECTORY);
         ensure_private_directory(recovery_directory.clone(), "recovery").await?;
+        let handoff_directory = runtime_bundle_handoff_root(&runtime_root)?;
+        ensure_private_directory(handoff_directory, "bundle-handoff").await?;
         Ok(Self {
             shim,
+            runtime_root,
             vm_rootfs,
             runtime_share_root,
             console_directory,
@@ -1174,12 +1371,57 @@ async fn exact_runtime_share_path(
     runtime_share_root: &Path,
     target: &ContainerTarget,
 ) -> Result<PathBuf> {
-    let generation = require_exact_generation(target, "resolve-whpx-runtime-share")?;
-    let id_directory = canonical_plain_directory(
-        &runtime_share_root.join(target.id.as_str()),
-        "WHPX container share directory",
+    existing_exact_runtime_share_path(
+        runtime_share_root,
+        target,
+        "resolve-whpx-runtime-share",
+    )
+    .await?
+    .ok_or_else(|| {
+        Error::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX exact-generation runtime share does not exist for container {} generation {:?}",
+                target.id, target.generation
+            ),
+        )
+        .for_operation("resolve-whpx-runtime-share")
+    })
+}
+
+async fn ensure_exact_runtime_share_path(
+    runtime_share_root: &Path,
+    target: &ContainerTarget,
+) -> Result<PathBuf> {
+    let generation = require_exact_generation(target, "prepare-whpx-runtime-share")?;
+    ensure_private_directory(
+        runtime_share_root.join(target.id.as_str()),
+        "container-share",
     )
     .await?;
+    ensure_private_directory(
+        runtime_share_root
+            .join(target.id.as_str())
+            .join(generation.0.to_string()),
+        "generation-share",
+    )
+    .await?;
+    exact_runtime_share_path(runtime_share_root, target).await
+}
+
+async fn existing_exact_runtime_share_path(
+    runtime_share_root: &Path,
+    target: &ContainerTarget,
+    operation: &'static str,
+) -> Result<Option<PathBuf>> {
+    let generation = require_exact_generation(target, operation)?;
+    let configured_id_directory = runtime_share_root.join(target.id.as_str());
+    if path_metadata(&configured_id_directory).await?.is_none() {
+        return Ok(None);
+    }
+    let id_directory =
+        canonical_plain_directory(&configured_id_directory, "WHPX container share directory")
+            .await?;
     if id_directory.parent() != Some(runtime_share_root) {
         return Err(Error::new(
             ErrorCode::FailedPrecondition,
@@ -1191,8 +1433,12 @@ async fn exact_runtime_share_path(
         )
         .for_operation("resolve-whpx-runtime-share"));
     }
+    let configured_runtime_share = id_directory.join(generation.0.to_string());
+    if path_metadata(&configured_runtime_share).await?.is_none() {
+        return Ok(None);
+    }
     let runtime_share = canonical_plain_directory(
-        &id_directory.join(generation.0.to_string()),
+        &configured_runtime_share,
         "WHPX exact-generation runtime share",
     )
     .await?;
@@ -1209,7 +1455,461 @@ async fn exact_runtime_share_path(
     }
     protect_path(id_directory).await?;
     protect_path(runtime_share.clone()).await?;
-    Ok(runtime_share)
+    Ok(Some(runtime_share))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BundleHandoffMarker {
+    schema_version: String,
+    target: ContainerTarget,
+    config_digest: String,
+}
+
+async fn validate_handoff_ancestry(
+    runtime_root: &Path,
+    source: &Path,
+    container_id: &ContainerId,
+    operation_id: &a3s_oci_sdk::OperationId,
+) -> Result<()> {
+    let expected = runtime_bundle_handoff_directory(runtime_root, container_id, operation_id)?;
+    let expected = canonical_plain_directory(&expected, "WHPX operation bundle handoff").await?;
+    if source != expected {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX bundle handoff must use the exact operation path {}: {}",
+                expected.display(),
+                source.display()
+            ),
+        ));
+    }
+
+    let operation_directory = source.parent().ok_or_else(|| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            "WHPX bundle handoff has no operation directory",
+        )
+    })?;
+    let container_directory = operation_directory.parent().ok_or_else(|| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            "WHPX bundle handoff has no container directory",
+        )
+    })?;
+    let handoff_root = container_directory.parent().ok_or_else(|| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            "WHPX bundle handoff has no protected root",
+        )
+    })?;
+    let expected_root = canonical_plain_directory(
+        &runtime_bundle_handoff_root(runtime_root)?,
+        "WHPX bundle-handoff root",
+    )
+    .await?;
+    if handoff_root != expected_root {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX bundle handoff escaped protected root {}: {}",
+                expected_root.display(),
+                source.display()
+            ),
+        ));
+    }
+    for path in [container_directory, operation_directory, source] {
+        let path = canonical_plain_directory(path, "WHPX bundle-handoff ancestor").await?;
+        protect_path(path).await?;
+    }
+    Ok(())
+}
+
+async fn load_exact_handoff_bundle(path: &Path, expected: &OciBundle) -> Result<OciBundle> {
+    let directory = canonical_plain_directory(path, "WHPX portable OCI bundle").await?;
+    let config =
+        canonical_plain_file(&directory.join("config.json"), "WHPX OCI configuration").await?;
+    if config.parent() != Some(directory.as_path()) {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX OCI configuration escaped bundle {}: {}",
+                directory.display(),
+                config.display()
+            ),
+        ));
+    }
+    let bundle = OciBundle::load(&directory).await?;
+    if bundle.config_bytes() != expected.config_bytes()
+        || bundle.config_digest() != expected.config_digest()
+    {
+        return Err(bundle_handoff_error(
+            ErrorCode::Conflict,
+            format!(
+                "WHPX bundle handoff configuration differs from durable digest {}",
+                expected.config_digest()
+            ),
+        ));
+    }
+    validate_portable_handoff_bundle(&bundle).await?;
+    Ok(bundle)
+}
+
+async fn validate_portable_handoff_bundle(bundle: &OciBundle) -> Result<()> {
+    let root = bundle.spec().root().as_ref().ok_or_else(|| {
+        bundle_handoff_error(
+            ErrorCode::InvalidArgument,
+            "WHPX bundle handoff requires an OCI root filesystem",
+        )
+    })?;
+    let root_path = root.path();
+    if root_path.is_absolute()
+        || root_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(bundle_handoff_error(
+            ErrorCode::InvalidArgument,
+            format!(
+                "WHPX bundle handoff requires a normalized relative root.path: {}",
+                root_path.display()
+            ),
+        ));
+    }
+    let rootfs = canonical_plain_directory(
+        &bundle.directory().join(root_path),
+        "WHPX portable bundle rootfs",
+    )
+    .await?;
+    if rootfs == bundle.directory() || !rootfs.starts_with(bundle.directory()) {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX portable rootfs escapes bundle {}: {}",
+                bundle.directory().display(),
+                rootfs.display()
+            ),
+        ));
+    }
+
+    for (index, mount) in bundle
+        .spec()
+        .mounts()
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
+        let is_bind = mount
+            .options()
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|option| matches!(option.as_str(), "bind" | "rbind"));
+        if !is_bind {
+            continue;
+        }
+        let source = mount.source().as_ref().ok_or_else(|| {
+            bundle_handoff_error(
+                ErrorCode::InvalidArgument,
+                format!("WHPX portable bind mount {index} has no source"),
+            )
+        })?;
+        if source.is_absolute()
+            || source
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(bundle_handoff_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "WHPX portable bind mount {index} requires a normalized relative source: {}",
+                    source.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_bundle_handoff_marker(
+    runtime_share: &Path,
+    target: &ContainerTarget,
+    config_digest: &str,
+) -> Result<()> {
+    let marker = runtime_share.join(BUNDLE_HANDOFF_MARKER);
+    let expected = BundleHandoffMarker {
+        schema_version: BUNDLE_HANDOFF_MARKER_SCHEMA.to_string(),
+        target: target.clone(),
+        config_digest: config_digest.to_string(),
+    };
+    if path_metadata(&marker).await?.is_some() {
+        let retained = read_bundle_handoff_marker(&marker).await?;
+        if retained != expected {
+            return Err(bundle_handoff_error(
+                ErrorCode::Conflict,
+                "existing WHPX bundle-handoff marker differs from this create",
+            ));
+        }
+        remove_plain_file_if_present(&runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING)).await?;
+        return Ok(());
+    }
+
+    let pending = runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING);
+    remove_plain_file_if_present(&pending).await?;
+    let encoded = serde_json::to_vec(&expected).map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!("failed to encode WHPX bundle-handoff marker: {error}"),
+        )
+    })?;
+    if encoded.len() > MAX_BUNDLE_HANDOFF_MARKER_BYTES {
+        return Err(bundle_handoff_error(
+            ErrorCode::Internal,
+            "WHPX bundle-handoff marker exceeds its fixed bound",
+        ));
+    }
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending)
+        .await
+        .map_err(|error| {
+            bundle_handoff_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to create WHPX bundle-handoff marker {}: {error}",
+                    pending.display()
+                ),
+            )
+        })?;
+    file.write_all(&encoded).await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to write WHPX bundle-handoff marker {}: {error}",
+                pending.display()
+            ),
+        )
+    })?;
+    file.flush().await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to flush WHPX bundle-handoff marker {}: {error}",
+                pending.display()
+            ),
+        )
+    })?;
+    file.sync_all().await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!(
+                "failed to sync WHPX bundle-handoff marker {}: {error}",
+                pending.display()
+            ),
+        )
+    })?;
+    drop(file);
+    protect_path(pending.clone()).await?;
+    tokio::fs::rename(&pending, &marker)
+        .await
+        .map_err(|error| {
+            bundle_handoff_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to commit WHPX bundle-handoff marker {}: {error}",
+                    marker.display()
+                ),
+            )
+        })?;
+    protect_path(marker).await
+}
+
+async fn read_bundle_handoff_marker(path: &Path) -> Result<BundleHandoffMarker> {
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect WHPX bundle-handoff marker {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    ensure_plain_file_metadata(&metadata, path, "WHPX bundle-handoff marker")?;
+    if metadata.len() > MAX_BUNDLE_HANDOFF_MARKER_BYTES as u64 {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "WHPX bundle-handoff marker exceeds {} bytes: {}",
+                MAX_BUNDLE_HANDOFF_MARKER_BYTES,
+                path.display()
+            ),
+        ));
+    }
+    let mut encoded = Vec::with_capacity(metadata.len() as usize);
+    tokio::fs::File::open(path)
+        .await
+        .map_err(|error| {
+            bundle_handoff_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to open WHPX bundle-handoff marker {}: {error}",
+                    path.display()
+                ),
+            )
+        })?
+        .take((MAX_BUNDLE_HANDOFF_MARKER_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)
+        .await
+        .map_err(|error| {
+            bundle_handoff_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to read WHPX bundle-handoff marker {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    let marker: BundleHandoffMarker = serde_json::from_slice(&encoded).map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "invalid WHPX bundle-handoff marker {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if marker.schema_version != BUNDLE_HANDOFF_MARKER_SCHEMA
+        || marker.target.generation.is_none()
+        || marker.config_digest.len() != 71
+        || !marker.config_digest.starts_with("sha256:")
+    {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!("invalid WHPX bundle-handoff evidence: {}", path.display()),
+        ));
+    }
+    Ok(marker)
+}
+
+fn ensure_plain_file_metadata(
+    metadata: &std::fs::Metadata,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!("{label} is not a plain file: {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+async fn path_metadata(path: &Path) -> Result<Option<std::fs::Metadata>> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(bundle_handoff_error(
+            ErrorCode::Internal,
+            format!("failed to inspect {}: {error}", path.display()),
+        )),
+    }
+}
+
+async fn remove_plain_file_if_present(path: &Path) -> Result<()> {
+    let Some(metadata) = path_metadata(path).await? else {
+        return Ok(());
+    };
+    ensure_plain_file_metadata(&metadata, path, "WHPX bundle-handoff temporary file")?;
+    tokio::fs::remove_file(path).await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!("failed to remove {}: {error}", path.display()),
+        )
+    })
+}
+
+async fn cleanup_empty_handoff_parents(source: &Path, runtime_root: &Path) -> Result<()> {
+    let expected_root = canonical_plain_directory(
+        &runtime_bundle_handoff_root(runtime_root)?,
+        "WHPX bundle-handoff root",
+    )
+    .await?;
+    let operation_directory = source.parent().ok_or_else(|| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            "WHPX bundle handoff has no operation parent",
+        )
+    })?;
+    let container_directory = operation_directory.parent().ok_or_else(|| {
+        bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            "WHPX bundle handoff has no container parent",
+        )
+    })?;
+    if container_directory.parent() != Some(expected_root.as_path()) {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            "refusing to clean bundle-handoff parents outside the protected root",
+        ));
+    }
+    remove_directory_if_empty(operation_directory).await?;
+    remove_directory_if_empty(container_directory).await
+}
+
+async fn remove_directory_if_empty(path: &Path) -> Result<()> {
+    let Some(metadata) = path_metadata(path).await? else {
+        return Ok(());
+    };
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(bundle_handoff_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "refusing to remove a non-plain directory: {}",
+                path.display()
+            ),
+        ));
+    }
+    let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
+        bundle_handoff_error(
+            ErrorCode::Internal,
+            format!("failed to inspect directory {}: {error}", path.display()),
+        )
+    })?;
+    if entries
+        .next_entry()
+        .await
+        .map_err(|error| {
+            bundle_handoff_error(
+                ErrorCode::Internal,
+                format!("failed to enumerate directory {}: {error}", path.display()),
+            )
+        })?
+        .is_none()
+    {
+        tokio::fs::remove_dir(path).await.map_err(|error| {
+            bundle_handoff_error(
+                ErrorCode::Internal,
+                format!(
+                    "failed to remove empty directory {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn bundle_handoff_error(code: ErrorCode, message: impl Into<String>) -> Error {
+    Error::new(code, message).for_operation("prepare-whpx-bundle-handoff")
 }
 
 async fn guest_bundle_path(runtime_share: &Path, bundle: &Path) -> Result<GuestPath> {
@@ -1364,9 +2064,10 @@ mod tests {
     };
     use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
     use a3s_oci_sdk::{
-        async_trait, ContainerId, ContainerRecord, ContainerTarget, CreateAttachments, DeleteMode,
-        Error, ErrorCode, ExitStatus, Generation, IsolationRequest, OciBundle, OperationContext,
-        OperationId, ProcessIo, Result, Signal,
+        async_trait, runtime_bundle_handoff_directory, ContainerId, ContainerRecord,
+        ContainerTarget, CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, Generation,
+        IsolationRequest, OciBundle, OperationContext, OperationId, ProcessIo, Result, Signal,
+        RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
     };
     use tokio::sync::Mutex;
 
@@ -1578,6 +2279,7 @@ mod tests {
         guest: Arc<FakeGuest>,
         owner: Arc<FakeOwner>,
         factory: Arc<FakeFactory>,
+        runtime_root: PathBuf,
         runtime_share_root: PathBuf,
         recovery_directory: PathBuf,
         driver: WhpxRuntimeDriver,
@@ -1594,6 +2296,8 @@ mod tests {
             std::fs::create_dir_all(&bundle_directory).expect("bundle directory");
             std::fs::create_dir(&recovery_directory).expect("recovery directory");
             let vm_rootfs = std::fs::canonicalize(vm_rootfs).expect("canonical WHPX fixture root");
+            let runtime_root = std::fs::canonicalize(temporary.path())
+                .expect("canonical WHPX runtime fixture root");
             let runtime_share_root = std::fs::canonicalize(runtime_share_root)
                 .expect("canonical runtime-share fixture root");
             let bundle_directory = runtime_share_root.join("whpx-test/1/workloads/test");
@@ -1612,6 +2316,7 @@ mod tests {
             let factory_dyn: Arc<dyn UtilityVmFactory> = factory.clone();
             let driver = WhpxRuntimeDriver {
                 capability: candidate_capability(),
+                runtime_root: runtime_root.clone(),
                 vm_rootfs: vm_rootfs.clone(),
                 runtime_share_root: runtime_share_root.clone(),
                 recovery_directory: recovery_directory.clone(),
@@ -1625,6 +2330,7 @@ mod tests {
                 guest,
                 owner,
                 factory,
+                runtime_root,
                 runtime_share_root,
                 recovery_directory,
                 driver,
@@ -1653,6 +2359,48 @@ mod tests {
                 .join("workloads/test");
             std::fs::create_dir_all(&directory).expect("exact runtime-share bundle directory");
             OciBundle::from_json(directory, TEST_CONFIG).expect("OCI bundle")
+        }
+
+        fn handoff_request(
+            &self,
+            id: &str,
+            generation: u64,
+            operation: &str,
+        ) -> DriverCreateRequest {
+            let target = ContainerTarget::exact(
+                ContainerId::new(id).expect("handoff container ID"),
+                Generation(generation),
+            );
+            let context = context(operation);
+            let directory = runtime_bundle_handoff_directory(
+                &self.runtime_root,
+                &target.id,
+                &context.operation_id,
+            )
+            .expect("handoff directory");
+            std::fs::create_dir_all(directory.join("rootfs")).expect("portable handoff rootfs");
+            let mut config: serde_json::Value =
+                serde_json::from_str(TEST_CONFIG).expect("test OCI config");
+            config["annotations"] = serde_json::json!({
+                RUNTIME_BUNDLE_HANDOFF_EXTENSION: RUNTIME_BUNDLE_HANDOFF_MOVE_V1
+            });
+            let config = serde_json::to_string_pretty(&config).expect("handoff config");
+            std::fs::write(directory.join("config.json"), config.as_bytes())
+                .expect("handoff config file");
+            let bundle = OciBundle::from_json(directory, config).expect("handoff bundle");
+            let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+                .expect("base handoff attachments")
+                .with_runtime_bundle_handoff(&bundle)
+                .expect("bundle handoff attachment");
+            DriverCreateRequest {
+                context,
+                target,
+                bundle,
+                isolation: IsolationRequest::DedicatedVm,
+                io: ProcessIo::default(),
+                attachment_contract: attachments,
+                attachments: DriverCreateAttachments::None,
+            }
         }
 
         fn record(&self, generation: u64, status: ContainerState) -> ContainerRecord {
@@ -1907,6 +2655,97 @@ mod tests {
 
         assert_eq!(fixture.owner.shutdown_calls.load(Ordering::Relaxed), 1);
         assert_eq!(fixture.driver.active_session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn runtime_bundle_handoff_uses_allocated_generation_and_cleans_on_delete() {
+        let fixture = Fixture::new();
+        let mut request = fixture.handoff_request("product-box", 37, "product-create");
+        let source = request.bundle.directory().to_path_buf();
+
+        let staged = fixture
+            .driver
+            .prepare_create_bundle(&request)
+            .await
+            .expect("prepare runtime-owned bundle");
+        let expected = fixture.runtime_share_root.join("product-box/37/bundle");
+        assert_eq!(staged.directory(), expected);
+        assert!(!source.exists());
+        assert!(expected.join("rootfs").is_dir());
+        assert!(expected
+            .parent()
+            .expect("generation share")
+            .join(super::BUNDLE_HANDOFF_MARKER)
+            .is_file());
+
+        let replayed = fixture
+            .driver
+            .prepare_create_bundle(&request)
+            .await
+            .expect("replay runtime-owned bundle preparation");
+        assert_eq!(replayed, staged);
+
+        request.bundle = staged;
+        fixture
+            .driver
+            .create(request.clone())
+            .await
+            .expect("create from runtime-owned bundle");
+        fixture
+            .driver
+            .delete(DriverDeleteRequest {
+                context: context("product-delete"),
+                target: request.target,
+                mode: DeleteMode::Force,
+            })
+            .await
+            .expect("delete runtime-owned bundle generation");
+        assert!(!expected.exists());
+    }
+
+    #[tokio::test]
+    async fn runtime_bundle_handoff_cleans_committed_intent_before_move() {
+        let fixture = Fixture::new();
+        let request = fixture.handoff_request("product-box", 38, "product-create-pending");
+        let source = request.bundle.directory().to_path_buf();
+        let runtime_share =
+            super::ensure_exact_runtime_share_path(&fixture.runtime_share_root, &request.target)
+                .await
+                .expect("exact runtime share");
+        super::ensure_bundle_handoff_marker(
+            &runtime_share,
+            &request.target,
+            request.bundle.config_digest(),
+        )
+        .await
+        .expect("committed handoff intent");
+
+        fixture
+            .driver
+            .cleanup_runtime_bundle_handoff(&request.target)
+            .await
+            .expect("clean handoff before move");
+
+        assert!(source.exists());
+        assert!(!runtime_share.exists());
+    }
+
+    #[tokio::test]
+    async fn runtime_bundle_handoff_rejects_non_operation_source_before_launch() {
+        let fixture = Fixture::new();
+        let mut request = fixture.handoff_request("product-box", 9, "product-create-wrong");
+        let outside = fixture.runtime_root.join("outside-bundle");
+        std::fs::rename(request.bundle.directory(), &outside).expect("move bundle outside handoff");
+        request.bundle = OciBundle::from_json(outside, request.bundle.config_json().to_string())
+            .expect("outside handoff bundle");
+
+        let error = fixture
+            .driver
+            .prepare_create_bundle(&request)
+            .await
+            .expect_err("non-operation handoff source must fail");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -2226,5 +3065,9 @@ mod tests {
         let capability = fixture.driver.capability();
         assert_eq!(capability.readiness, DriverReadiness::ProbeOnly);
         assert!(!capability.can_launch());
+        assert!(fixture.driver.attachment_capabilities().supports_extension(
+            RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+            a3s_oci_sdk::RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+        ));
     }
 }

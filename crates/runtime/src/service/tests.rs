@@ -119,6 +119,7 @@ struct RecordingDriver {
     process_fixture_log: Option<PathBuf>,
     process_fixture_state: Option<PathBuf>,
     recover_process_fixture_state: bool,
+    staged_bundle_directory: Option<PathBuf>,
 }
 
 impl RecordingDriver {
@@ -157,6 +158,7 @@ impl RecordingDriver {
             process_fixture_log: None,
             process_fixture_state: None,
             recover_process_fixture_state: false,
+            staged_bundle_directory: None,
         }
     }
 
@@ -229,6 +231,12 @@ impl RecordingDriver {
     fn with_hooks(hooks: Vec<OciHookPhase>) -> Self {
         let mut driver = Self::supported();
         driver.hooks = hooks;
+        driver
+    }
+
+    fn with_staged_bundle(directory: PathBuf) -> Self {
+        let mut driver = Self::supported();
+        driver.staged_bundle_directory = Some(directory);
         driver
     }
 
@@ -505,6 +513,15 @@ impl RuntimeDriver for RecordingDriver {
                 .push(DriverCall::Recover(record.clone()));
         }
         Ok(recovery)
+    }
+
+    async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
+        self.staged_bundle_directory.as_ref().map_or_else(
+            || Ok(request.bundle.clone()),
+            |directory| {
+                OciBundle::from_json(directory.clone(), request.bundle.config_json().to_string())
+            },
+        )
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
@@ -1897,6 +1914,50 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
         .await
         .expect_err("deleted state must not remain visible");
     assert_eq!(error.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn create_uses_driver_staged_bundle_without_rewriting_public_bundle_identity() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let source = temporary.path().join("caller-bundle");
+    let staged = temporary.path().join("runtime-generation/bundle");
+    std::fs::create_dir(&source).expect("source bundle directory");
+    let driver = Arc::new(RecordingDriver::with_staged_bundle(staged.clone()));
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+    let create = create_request(&source, "staged-create");
+
+    let created = service.create(create.clone()).await.expect("staged create");
+    assert_eq!(created.state.bundle(), &source);
+    let calls = driver.calls();
+    let DriverCall::Create(driver_create) = calls
+        .iter()
+        .find(|call| matches!(call, DriverCall::Create(_)))
+        .expect("driver create call")
+    else {
+        unreachable!("filtered driver call must be create");
+    };
+    assert_eq!(driver_create.bundle.directory(), staged);
+    assert_eq!(
+        driver_create.bundle.config_digest(),
+        create.bundle.config_digest()
+    );
+    assert_eq!(driver_create.attachment_contract, create.attachments);
+
+    assert_eq!(
+        service
+            .create(create)
+            .await
+            .expect("replayed staged create"),
+        created
+    );
+    assert_eq!(
+        driver
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Create(_)))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
