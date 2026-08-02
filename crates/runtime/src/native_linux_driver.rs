@@ -1,14 +1,16 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use a3s_oci_agent::{InheritedDescriptorPlan, LinuxExecutor};
+use a3s_oci_agent::{InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone};
 use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestAgentService, GuestPath};
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest,
-    FileResponse, FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
-    RuntimeOperation,
+    async_trait, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode,
+    ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, OutputChunk,
+    ProcessRecord, Result, RuntimeOperation,
 };
+use tokio::sync::Mutex;
 
 use crate::agent_driver::{AgentDriverClient, AGENT_DRIVER_HOOKS, AGENT_DRIVER_OPERATIONS};
 use crate::driver::{
@@ -30,6 +32,7 @@ pub struct NativeLinuxDriver {
     capability: DriverCapability,
     executor: Arc<LinuxExecutor>,
     client: AgentDriverClient,
+    recovered: Mutex<BTreeMap<ContainerId, LinuxExecutorTombstone>>,
 }
 
 impl NativeLinuxDriver {
@@ -74,6 +77,7 @@ impl NativeLinuxDriver {
             capability,
             executor,
             client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
+            recovered: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -86,6 +90,38 @@ impl NativeLinuxDriver {
     #[must_use]
     pub fn executor_root(&self) -> &Path {
         self.executor.runtime_root()
+    }
+
+    async fn recovered_for(
+        &self,
+        target: &ContainerTarget,
+        operation: &'static str,
+    ) -> Result<Option<LinuxExecutorTombstone>> {
+        let recovered = self.recovered.lock().await;
+        let Some(tombstone) = recovered.get(&target.id) else {
+            return Ok(None);
+        };
+        if tombstone.target() != target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                format!(
+                    "container {} has native recovery evidence for generation {:?}, not requested generation {:?}",
+                    target.id,
+                    tombstone.target().generation,
+                    target.generation
+                ),
+            )
+            .for_operation(operation));
+        }
+        Ok(Some(tombstone.clone()))
+    }
+
+    async fn require_live(&self, target: &ContainerTarget, operation: &'static str) -> Result<()> {
+        if self.recovered_for(target, operation).await?.is_some() {
+            Err(recovered_stopped_error(target, operation))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -103,6 +139,79 @@ impl RuntimeDriver for NativeLinuxDriver {
         &AGENT_DRIVER_HOOKS
     }
 
+    async fn recover(&self, record: &ContainerRecord) -> Result<crate::DriverRecovery> {
+        let target =
+            ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
+        let can_commit_stopped =
+            *record.state.status() != a3s_oci_sdk::oci_spec::runtime::ContainerState::Creating;
+        match self
+            .client
+            .state_with_digest(target.clone(), Some(&record.config_digest))
+            .await
+        {
+            Ok(observed) => {
+                if !can_commit_stopped {
+                    return Ok(crate::DriverRecovery::none());
+                }
+                if observed.status() == a3s_oci_sdk::oci_spec::runtime::ContainerState::Stopped {
+                    let status = self
+                        .client
+                        .wait(DriverWaitRequest {
+                            target,
+                            timeout_ms: Some(0),
+                        })
+                        .await?;
+                    return crate::DriverRecovery::stopped_with_exit(status);
+                }
+                return Ok(crate::DriverRecovery::observed(observed));
+            }
+            Err(error) if error.code == ErrorCode::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let durable_pid = *record.state.pid();
+        let tombstone = self
+            .executor
+            .recover_stale_generation(&target, &record.config_digest, durable_pid)
+            .await?;
+        if !can_commit_stopped {
+            if let Some(tombstone) = tombstone {
+                self.executor.delete_stale_generation(&tombstone).await?;
+            }
+            return Ok(crate::DriverRecovery::none());
+        }
+        let tombstone = tombstone.ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "no authenticated native recovery record exists for container {} generation {:?}",
+                    target.id, target.generation
+                ),
+            )
+            .for_operation("native-linux-recover")
+        })?;
+
+        let mut recovered = self.recovered.lock().await;
+        match recovered.get(&target.id) {
+            Some(existing) if existing.target() == &target => {}
+            Some(existing) => {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    format!(
+                        "container {} already has native recovery evidence for generation {:?}",
+                        target.id,
+                        existing.target().generation
+                    ),
+                )
+                .for_operation("native-linux-recover"));
+            }
+            None => {
+                recovered.insert(target.id.clone(), tombstone);
+            }
+        }
+        Ok(crate::DriverRecovery::observed(DriverState::stopped()))
+    }
+
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
         if request.isolation.class() != IsolationClass::SharedHostKernel {
             return Err(Error::new(
@@ -110,6 +219,12 @@ impl RuntimeDriver for NativeLinuxDriver {
                 "native Linux execution requires shared-host-kernel isolation",
             )
             .for_operation("native-linux-create"));
+        }
+        if let Some(tombstone) = self.recovered.lock().await.get(&request.target.id) {
+            return Err(recovered_stopped_error(
+                tombstone.target(),
+                "native-linux-create",
+            ));
         }
         let inherited_descriptors = match &request.attachments {
             DriverCreateAttachments::None => InheritedDescriptorPlan::empty(),
@@ -135,80 +250,174 @@ impl RuntimeDriver for NativeLinuxDriver {
     }
 
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
+        if self
+            .recovered_for(&target, "native-linux-state")
+            .await?
+            .is_some()
+        {
+            return Ok(DriverState::stopped());
+        }
         self.client.state(target).await
     }
 
     async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
+        self.require_live(&request.target, "native-linux-start")
+            .await?;
         self.client.start(request).await
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        if self
+            .recovered_for(&request.target, "native-linux-kill")
+            .await?
+            .is_some()
+        {
+            return Ok(DriverState::stopped());
+        }
         self.client.kill(request).await
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
+        if let Some(tombstone) = self
+            .recovered_for(&request.target, "native-linux-delete")
+            .await?
+        {
+            self.executor.delete_stale_generation(&tombstone).await?;
+            let mut recovered = self.recovered.lock().await;
+            if recovered
+                .get(&request.target.id)
+                .is_some_and(|current| current.target() == &request.target)
+            {
+                recovered.remove(&request.target.id);
+            }
+            return Ok(());
+        }
         self.client.delete(request).await
     }
 
     async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        if self
+            .recovered_for(&request.target, "native-linux-wait")
+            .await?
+            .is_some()
+        {
+            return Err(recovered_exit_evidence_error(
+                &request.target,
+                "native-linux-wait",
+            ));
+        }
         self.client.wait(request).await
     }
 
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
+        self.require_live(&request.target.container, "native-linux-exec")
+            .await?;
         self.client.exec(request).await
     }
 
     async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        self.require_live(&request.target.container, "native-linux-signal-process")
+            .await?;
         self.client.signal_process(request).await
     }
 
     async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        self.require_live(&request.target.container, "native-linux-wait-process")
+            .await?;
         self.client.wait_process(request).await
     }
 
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.require_live(&request.target, "native-linux-pause")
+            .await?;
         self.client.pause(request).await
     }
 
     async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.require_live(&request.target, "native-linux-resume")
+            .await?;
         self.client.resume(request).await
     }
 
     async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        if self
+            .recovered_for(&target, "native-linux-processes")
+            .await?
+            .is_some()
+        {
+            return Ok(Vec::new());
+        }
         self.client.processes(target).await
     }
 
     async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        self.require_live(&request.target, "native-linux-update")
+            .await?;
         self.client.update(request).await
     }
 
     async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        self.require_live(&target, "native-linux-stats").await?;
         self.client.stats(target).await
     }
 
     async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.require_live(&request.target.container, "native-linux-read-output")
+            .await?;
         self.client.read_output(request).await
     }
 
     async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        self.require_live(&request.target.container, "native-linux-write-stdin")
+            .await?;
         self.client.write_stdin(request).await
     }
 
     async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
+        self.require_live(&request.target.container, "native-linux-close-stdin")
+            .await?;
         self.client.close_stdin(request).await
     }
 
     async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
+        self.require_live(&request.target.container, "native-linux-resize")
+            .await?;
         self.client.resize(request).await
     }
 
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.require_live(&request.target, "native-linux-file")
+            .await?;
         self.client.file(request).await
     }
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.require_live(&request.target, "native-linux-filesystem")
+            .await?;
         self.client.filesystem(request).await
     }
+}
+
+fn recovered_stopped_error(target: &ContainerTarget, operation: &'static str) -> Error {
+    Error::new(
+        ErrorCode::FailedPrecondition,
+        format!(
+            "container {} generation {:?} was safely terminated after its native Linux owner exited; delete this stopped generation before another live operation",
+            target.id, target.generation
+        ),
+    )
+    .for_operation(operation)
+}
+
+fn recovered_exit_evidence_error(target: &ContainerTarget, operation: &'static str) -> Error {
+    Error::new(
+        ErrorCode::FailedPrecondition,
+        format!(
+            "container {} generation {:?} was safely terminated by native Linux owner-death cleanup, but no authenticated parent remained to retain its exact init exit status",
+            target.id, target.generation
+        ),
+    )
+    .for_operation(operation)
 }
 
 async fn guest_path(bundle: &Path) -> Result<GuestPath> {

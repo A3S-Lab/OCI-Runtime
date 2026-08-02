@@ -20,6 +20,8 @@ mod wave;
 
 use wave::{best_effort_delete, create_start_and_pause, recover_resume_and_delete, WaveContext};
 
+const EXECUTOR_OWNER_RECORD_NAME: &str = "owner.json";
+
 pub(super) async fn run(
     init_executable: &Path,
     bundle_paths: &[PathBuf],
@@ -363,10 +365,10 @@ async fn clean_wave_artifacts(
             ));
         }
     }
-    if !directory_is_empty(executor_root).await? {
+    if !executor_has_only_owner_record(executor_root).await? {
         report.executor_empty_after_each_iteration = false;
         return Err(format!(
-            "native executor root remained populated after soak iteration {iteration}"
+            "native executor root retained generation transients after soak iteration {iteration}"
         ));
     }
     Ok(())
@@ -458,18 +460,37 @@ async fn cleanup_session(
     report
 }
 
-async fn directory_is_empty(path: &Path) -> Result<bool, String> {
+async fn executor_has_only_owner_record(path: &Path) -> Result<bool, String> {
     let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
         format!(
-            "failed to inspect soak directory {}: {error}",
+            "failed to inspect native soak executor root {}: {error}",
             path.display()
         )
     })?;
-    entries
-        .next_entry()
-        .await
-        .map(|entry| entry.is_none())
-        .map_err(|error| format!("failed to read soak directory {}: {error}", path.display()))
+    let mut owner_record_found = false;
+    while let Some(entry) = entries.next_entry().await.map_err(|error| {
+        format!(
+            "failed to enumerate native soak executor root {}: {error}",
+            path.display()
+        )
+    })? {
+        if owner_record_found || entry.file_name() != EXECUTOR_OWNER_RECORD_NAME {
+            return Ok(false);
+        }
+        let metadata = tokio::fs::symlink_metadata(entry.path())
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to inspect native soak executor owner record {}: {error}",
+                    entry.path().display()
+                )
+            })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Ok(false);
+        }
+        owner_record_found = true;
+    }
+    Ok(owner_record_found)
 }
 
 async fn open_descriptor_count() -> Result<u64, String> {

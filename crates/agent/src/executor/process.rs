@@ -29,6 +29,7 @@ use super::inherited_descriptor::InheritedDescriptorPlan;
 use super::io::ProcessIoHandle;
 use super::namespace::{self, RetainedExecutionContext, UserMappingRuntime};
 use super::pid;
+use super::pid_supervisor;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
 use super::process_group::ProcessGroupLease;
@@ -93,6 +94,8 @@ impl PreparedProcess {
             ));
         }
         let (listener, control_name) = bind_control_listener()?;
+        // SAFETY: getpid has no preconditions and cannot fail.
+        let expected_owner_pid = unsafe { libc::getpid() };
         let mut command = Command::new(init_executable);
         command
             .arg("container-init")
@@ -101,6 +104,7 @@ impl PreparedProcess {
             .arg(&control_name)
             .arg(hook_state.id())
             .arg(rootfs_scope.internal_argument())
+            .arg(expected_owner_pid.to_string())
             .env_clear()
             .kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
@@ -112,6 +116,11 @@ impl PreparedProcess {
         // already-validated caller descriptors with bounded dup2.
         unsafe {
             command.pre_exec(move || {
+                pid_supervisor::verify_and_arm_parent_death_signal(
+                    expected_owner_pid,
+                    "container launcher",
+                )
+                .map_err(|error| io::Error::other(error.to_string()))?;
                 if let Some(descriptor) = init_cgroup_procs {
                     cgroup::join_current_process(descriptor)?;
                 }
@@ -421,6 +430,27 @@ impl PreparedProcess {
 
     pub(super) const fn pid(&self) -> i32 {
         self.pid
+    }
+
+    pub(super) fn launcher_pid(&self) -> Result<i32> {
+        let raw = self.child.id().ok_or_else(|| {
+            process_error(
+                ErrorCode::FailedPrecondition,
+                "container launcher exited before recovery evidence was persisted",
+            )
+        })?;
+        i32::try_from(raw).map_err(|error| {
+            process_error(
+                ErrorCode::ResourceExhausted,
+                format!("container launcher PID {raw} does not fit the recovery model: {error}"),
+            )
+        })
+    }
+
+    pub(super) fn recovery_cgroup_paths(&self) -> Option<(&Path, &[std::path::PathBuf])> {
+        self.cgroup
+            .as_ref()
+            .map(super::cgroup::CgroupHandle::recovery_paths)
     }
 
     pub(super) async fn release(&mut self) -> Result<()> {

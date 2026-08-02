@@ -740,6 +740,13 @@ and recovery suites in the Windows guest and on native Linux.
   Native Linux owner composition on x86_64 through the Rust, Python,
   TypeScript, and Go SDK lifecycle, exec, filesystem, route-aware stats,
   pause/resume, snapshot restore, restart, and cleanup surfaces.
+- [x] Safely reconcile abrupt Native Linux owner death on x86_64 and aarch64.
+  Bind the launcher and all helper chains to their authenticated parents,
+  persist PID-start-time/config-digest/cgroup recovery evidence per exact
+  generation, kill the owner with `SIGKILL`, reopen the real driver in a
+  distinct process, commit only a stopped tombstone, refuse invented wait
+  evidence, and prove stopped-only delete plus complete transient cleanup.
+  Live process-session reattachment remains an R6 gate.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver
@@ -815,8 +822,11 @@ service suitable for the unified Box adapter. Box persists an explicit
 `box_vm` or `oci_sdk` route before preflight, prepares its product resources and
 minimal OCI bundle, and passes the opt-in x86_64 production-owner composition
 through all four SDKs. The broader gate remains unchecked until owner and Box
-process restart pass on the real driver, the same composition passes WHPX and
-aarch64, and the default/MicroVM cutover is complete.
+process restart composition and live session reattachment pass on the real
+driver, the same composition passes WHPX and aarch64, and the default/MicroVM
+cutover is complete. OCI Runtime independently proves that abrupt Native Linux
+owner death safely terminates and reconciles the exact generation without
+inventing terminal evidence.
 
 ## Platform Promotion
 

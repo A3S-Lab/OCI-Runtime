@@ -466,8 +466,52 @@ needs a shorter diagnostic or a longer qualification; the script derives all
 lifecycle, stale-generation, durable-reopen, and SDK-operation assertions from
 that value. CI also sets `A3S_OCI_NATIVE_SOAK_REPORT` and uploads the resulting
 JSON report for each architecture. This gate covers native lifecycle churn and
-leak detection. Hook failure/security-negative soak and runtime-process
+leak detection. Per-wave executor emptiness excludes only the protected
+`owner.json` identity record that must remain until driver shutdown; every
+generation slot must disappear after each wave and the complete executor root
+must disappear at shutdown. Hook failure/security-negative soak and runtime-process
 reattachment remain separate promotion work.
+
+## Abrupt owner-death recovery gate
+
+The Native Linux executor does not leave an uncontrolled workload behind when
+its host-service process is killed. Before the top-level container launcher can
+fork a namespace child, it installs `PR_SET_PDEATHSIG(SIGKILL)` and rechecks its
+exact parent. Namespace init, payload, exec, and filesystem helpers apply the
+same parent-bound rule at their own fork boundaries. An uncatchable owner exit
+therefore terminates the authenticated process tree instead of orphaning a live
+generation that a replacement driver cannot safely identify.
+
+Every executor root contains a versioned owner record, and every successfully
+created generation contains a versioned recovery record. Those mode-0600 files
+bind the immutable configuration digest to the exact owner, launcher, and init
+PID start times plus only the cgroup directories created for that generation.
+Recovery rejects missing, duplicate, oversized, symlinked, permissive,
+digest-drifted, generation-drifted, PID-drifted, or live-owner evidence. Numeric
+PID equality alone is never accepted.
+
+`.github/scripts/native-linux-smoke.sh` starts the hidden
+`native-linux-recovery-owner` command with a real long-running bundle, waits for
+`a3s.oci.native-linux-recovery-owner-ready.v1`, and sends `SIGKILL` to that exact
+owner. A distinct `native-linux-recovery-resume` process then opens the same
+durable state. Its `a3s.oci.native-linux-recovery-smoke.v1` report requires:
+
+1. the replacement host service opens only after the exact old workload has
+   disappeared;
+2. durable state is reconciled to stopped with no PID and empty process
+   inventory;
+3. repeated kill is idempotent;
+4. wait fails explicitly because no authenticated reaper survived to retain an
+   exact exit result, rather than inventing signal 9;
+5. stopped-only delete removes the durable record, exact executor slot, and
+   runtime-created cgroups;
+6. replacement-driver shutdown leaves the executor parent empty.
+
+Both x86_64 and aarch64 Linux CI retain this report beside the soak report via
+`A3S_OCI_NATIVE_RECOVERY_REPORT`. This gate proves safe termination and exact
+cleanup. It deliberately does not claim live process-I/O session reattachment;
+that requires a persistent authenticated supervisor and remains a promotion
+gate.
 
 ## Fault-injected shutdown cleanup
 
@@ -513,7 +557,7 @@ following pass:
 - remaining mount and credential controls, broader cgroup v2 policies and
   device-access BPF, multi-architecture/notification seccomp, and LSM
   enforcement;
-- real-driver reattachment after runtime-process restart, plus generic SDK
+- live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
 - broader Hook rollback/recovery/security-negative and adversarial soak beyond
   the retained create/start/timeout/poststop matrix, durable recovery for the

@@ -109,6 +109,10 @@ impl CgroupManager {
     pub(super) fn remove(self) -> Result<()> {
         cleanup_cgroup_tree(&self.root)
     }
+
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
 }
 
 #[derive(Debug)]
@@ -293,6 +297,10 @@ impl CgroupHandle {
                 layout.workload_procs.as_raw_fd(),
             )
         })
+    }
+
+    pub(super) fn recovery_paths(&self) -> (&Path, &[PathBuf]) {
+        (&self.leaf, &self.created)
     }
 
     pub(super) async fn set_frozen(&self, frozen: bool) -> Result<()> {

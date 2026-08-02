@@ -877,13 +877,16 @@ jobs:
         name: Native Linux SDK lifecycle without KVM
         env:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
+          A3S_OCI_NATIVE_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-recovery.json
         run: bash .github/scripts/native-linux-smoke.sh
       - if: runner.os == 'Linux' && always()
         name: Upload native Linux soak evidence
         uses: actions/upload-artifact@v4
         with:
           name: native-linux-soak-${{ runner.arch }}
-          path: ${{ runner.temp }}/a3s-oci-native-soak.json
+          path: |
+            ${{ runner.temp }}/a3s-oci-native-soak.json
+            ${{ runner.temp }}/a3s-oci-native-recovery.json
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
@@ -900,13 +903,16 @@ jobs:
       - name: Native Linux SDK lifecycle without KVM
         env:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
+          A3S_OCI_NATIVE_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-recovery.json
         run: bash .github/scripts/native-linux-smoke.sh
       - if: always()
         name: Upload native Linux soak evidence
         uses: actions/upload-artifact@v4
         with:
           name: native-linux-soak-${{ runner.arch }}
-          path: ${{ runner.temp }}/a3s-oci-native-soak.json
+          path: |
+            ${{ runner.temp }}/a3s-oci-native-soak.json
+            ${{ runner.temp }}/a3s-oci-native-recovery.json
           if-no-files-found: warn
           retention-days: 14
 

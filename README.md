@@ -100,10 +100,10 @@ and `experimental` or `supported` readiness.
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, ordered events, and a same-UID multi-container Native Linux owner |
-| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound namespace helpers for descriptor-confined file/filesystem sessions, pause/resume, update/stats, and scoped cleanup for the qualified profile |
+| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, update/stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
-| Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
+| Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container, soak, and owner-death safe-termination gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
 The current Box adapter at `A3S-Lab/Box@0c3f84e4` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
@@ -239,11 +239,22 @@ duplicate test-driver dispatch, and continues inventory, stdin, signal, wait,
 output, and cleanup. This proves the generic process and transport boundary,
 not native Linux or utility-VM reattachment on real hardware.
 
+The real Native Linux gate now crosses that process boundary with the actual
+driver. The launcher is parent-death-bound before it forks namespace children;
+after an owner `SIGKILL`, a replacement process revalidates the immutable
+configuration plus owner/launcher/init start-time identities, waits for the
+exact workload to disappear, and exposes a stopped cleanup tombstone. It never
+claims that a live stream was reattached or fabricates an exit code when no
+authenticated parent survived to reap it. Idempotent kill, empty inventory,
+explicit missing-exit evidence, stopped-only delete, and executor/cgroup
+cleanup are machine-checked on x86_64 and aarch64. Live process-session
+reattachment remains open for the Box B2 cutover.
+
 ## Platform status
 
 | Host path | Retained real evidence | Current readiness and open gate |
 | --- | --- | --- |
-| Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; 25 waves × 4 containers; x86_64 Box production-owner composition through all four SDKs | Default inventory `probe-only`; explicitly opened development driver `experimental`. Box aarch64/default-cutover plus production security and OCI conformance gates remain |
+| Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64 Box production-owner composition through all four SDKs | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, Box owner-restart composition, aarch64/default cutover, production security, and OCI conformance remain |
 | Linux KVM utility VM | Device access, ioctl result, and KVM API version probes | `probe-only`; workload driver not implemented |
 | macOS arm64/HVF | Real HVF object lifecycle, pinned libkrun context and guest entry, protocol-v9 agent, fixed and multi-container lifecycle, descriptor-confined filesystem sessions, mount/namespace profiles, no-delete cleanup, and 25 fresh-VM waves | `probe-only`; immutable system image, exhaustive recovery, and release hardware qualification remain |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup | `probe-only`; pinned immutable system root and in-process native-handle reclamation remain before `experimental` |
@@ -350,6 +361,8 @@ qualification must all pass before a driver becomes `supported`.
 - real-host qualification of descriptor-confined filesystem sessions on each
   remaining utility-VM driver;
 - production-ready Native Linux and utility-VM drivers;
+- live Native Linux process-I/O reattachment across owner death and exact
+  terminal evidence when a persistent authenticated reaper can retain it;
 - pinned immutable utility-VM system roots;
 - remaining utility-VM transport fault injection and hook recovery/security
   certification;

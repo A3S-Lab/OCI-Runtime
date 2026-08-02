@@ -11,6 +11,8 @@ rootless_uid=20000
 rootless_gid=20000
 rootless_user_created=false
 rootless_group_created=false
+recovery_owner_pid=""
+recovery_runtime_owner_pid=""
 soak_bundles=()
 soak_iterations="${A3S_OCI_NATIVE_SOAK_ITERATIONS:-25}"
 soak_concurrent_containers=4
@@ -26,6 +28,15 @@ restore_host() {
   local status
   trap - EXIT
   set +e
+
+  if [[ -n "$recovery_runtime_owner_pid" ]] && \
+    sudo kill -0 "$recovery_runtime_owner_pid" 2>/dev/null; then
+    sudo kill -KILL "$recovery_runtime_owner_pid"
+  fi
+  if [[ -n "$recovery_owner_pid" ]] && kill -0 "$recovery_owner_pid" 2>/dev/null; then
+    sudo kill -KILL "$recovery_owner_pid"
+    wait "$recovery_owner_pid" 2>/dev/null
+  fi
 
   if [[ "$kvm_test_directory_created" == true && -d /dev/kvm ]]; then
     sudo rmdir /dev/kvm
@@ -117,6 +128,7 @@ qualification_root="$(mktemp -d /var/tmp/a3s-oci-native.XXXXXXXX)"
 bundle="$qualification_root/bundle"
 bundle_b="$qualification_root/bundle-b"
 control_bundle="$qualification_root/control-bundle"
+recovery_bundle="$qualification_root/recovery-bundle"
 rootless_bundle="$qualification_root/rootless-bundle"
 rootless_bin="$qualification_root/rootless-bin"
 work_parent="$qualification_root/work"
@@ -126,13 +138,17 @@ mkdir -p \
   "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
   "$control_bundle/rootfs/bin" "$control_bundle/rootfs/proc" \
   "$control_bundle/rootfs/sys/fs/cgroup" \
+  "$recovery_bundle/rootfs/bin" "$recovery_bundle/rootfs/proc" \
   "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/proc" \
   "$rootless_bin" "$work_parent" "$rootless_work_parent"
-for candidate in "$bundle" "$bundle_b" "$control_bundle"; do
+for candidate in "$bundle" "$bundle_b" "$control_bundle" "$recovery_bundle"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
 done
+jq '.linux.cgroupsPath = "a3s-oci-owner-recovery" | del(.hooks)' \
+  "$recovery_bundle/config.json" >"$recovery_bundle/config.json.tmp"
+mv "$recovery_bundle/config.json.tmp" "$recovery_bundle/config.json"
 for slot in 0 1 2 3; do
   candidate="$qualification_root/soak-bundle-$slot"
   mkdir -p "$candidate/rootfs/bin" "$candidate/rootfs/proc"
@@ -233,6 +249,7 @@ for candidate in "$bundle" "$bundle_b" "$control_bundle"; do
 done
 sudo chown -R 100000:200000 "$bundle/rootfs" "$bundle_b/rootfs"
 sudo chown -R 100000:200000 "$control_bundle/rootfs"
+sudo chown -R 100000:200000 "$recovery_bundle/rootfs"
 for candidate in "${soak_bundles[@]}"; do
   sudo chown -R 100000:200000 "$candidate/rootfs"
   test "$(stat --format '%u:%g' "$candidate/rootfs")" = '100000:200000'
@@ -247,6 +264,7 @@ sudo chmod 0755 "$qualification_root"
 test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$control_bundle/rootfs")" = '100000:200000'
+test "$(stat --format '%u:%g' "$recovery_bundle/rootfs")" = '100000:200000'
 
 if getent passwd "$rootless_uid" >/dev/null; then
   printf 'Required rootless smoke UID %s is already allocated\n' "$rootless_uid" >&2
@@ -823,6 +841,123 @@ run_rootless_smoke() {
   test -z "$(sudo find "$rootless_work_parent" -mindepth 1 -print -quit)"
 }
 
+run_owner_death_recovery() {
+  local recovery_root="$qualification_root/native-owner-recovery"
+  local ready_file="$qualification_root/native-owner-recovery-ready.json"
+  local owner_log="$qualification_root/native-owner-recovery-owner.log"
+  local output
+  local status
+  local generation
+  local ready_json
+  local ready_owner_pid
+  local init_pid
+  local deadline
+
+  sudo rm -f "$recovery_bundle/rootfs/.a3s-oci-native-smoke"
+  sudo "$PWD/target/debug/a3s-oci" native-linux-recovery-owner \
+    --agent "$PWD/target/debug/a3s-oci-agent" \
+    --root "$recovery_root" \
+    --bundle "$recovery_bundle" \
+    --container-id native-owner-recovery \
+    --ready-file "$ready_file" >"$owner_log" 2>&1 &
+  recovery_owner_pid=$!
+
+  deadline=$((SECONDS + 30))
+  while [[ ! -f "$ready_file" ]]; do
+    if ! kill -0 "$recovery_owner_pid" 2>/dev/null; then
+      wait "$recovery_owner_pid" || true
+      cat "$owner_log" >&2
+      printf '%s\n' 'Native recovery owner exited before readiness' >&2
+      return 1
+    fi
+    if ((SECONDS >= deadline)); then
+      cat "$owner_log" >&2
+      printf '%s\n' 'Timed out waiting for native recovery owner readiness' >&2
+      return 1
+    fi
+    sleep 0.025
+  done
+
+  test "$(sudo stat --format '%u:%g:%a' "$ready_file")" = '0:0:600'
+  ready_json="$(sudo cat -- "$ready_file")"
+  jq --exit-status \
+    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v1"
+     and .status == "available" and .platform == "linux"
+     and .target.id == "native-owner-recovery"
+     and .target.generation == 1
+     and (.owner_pid > 0) and (.init_pid > 0)
+     and .running_observed' \
+    <<<"$ready_json" >/dev/null
+  ready_owner_pid="$(jq --raw-output '.owner_pid' <<<"$ready_json")"
+  recovery_runtime_owner_pid="$ready_owner_pid"
+  init_pid="$(jq --raw-output '.init_pid' <<<"$ready_json")"
+  generation="$(jq --raw-output '.target.generation' <<<"$ready_json")"
+  sudo test -e "/proc/$init_pid/stat"
+  # sudo may either exec the command directly or retain a monitor process.
+  # The authenticated readiness record identifies the actual runtime owner;
+  # the shell PID remains useful only for reaping the background sudo job.
+  sudo kill -KILL "$ready_owner_pid"
+  set +e
+  wait "$recovery_owner_pid"
+  status=$?
+  set -e
+  recovery_owner_pid=""
+  recovery_runtime_owner_pid=""
+  if ((status == 0)); then
+    cat "$owner_log" >&2
+    printf '%s\n' 'Native recovery owner unexpectedly exited cleanly after SIGKILL' >&2
+    return 1
+  fi
+  sudo grep --fixed-strings --line-regexp \
+    'a3s-oci-native-box-mapping-v1' \
+    "$recovery_bundle/rootfs/.a3s-oci-native-smoke" >/dev/null
+
+  if output="$(sudo "$PWD/target/debug/a3s-oci" \
+      native-linux-recovery-resume \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --root "$recovery_root" \
+      --bundle "$recovery_bundle" \
+      --container-id native-owner-recovery \
+      --generation "$generation")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if [[ -n "${A3S_OCI_NATIVE_RECOVERY_REPORT:-}" ]]; then
+    mkdir -p "$(dirname "$A3S_OCI_NATIVE_RECOVERY_REPORT")"
+    printf '%s\n' "$output" >"$A3S_OCI_NATIVE_RECOVERY_REPORT"
+  fi
+  if ((status != 0)); then
+    cat "$owner_log" >&2
+    report_native_failure "$recovery_bundle/rootfs"
+    return "$status"
+  fi
+  jq --exit-status \
+    --argjson killed_owner "$ready_owner_pid" \
+    '.schema_version == "a3s.oci.native-linux-recovery-smoke.v1"
+     and .status == "available" and .platform == "linux"
+     and .target.id == "native-owner-recovery"
+     and .target.generation == 1
+     and .replacement_owner_pid != $killed_owner
+     and .bundle_loaded
+     and .host_service_reopened
+     and .stopped_observed
+     and .process_inventory_empty
+     and .kill_idempotent
+     and .exact_wait_evidence_refused
+     and .stopped_delete_succeeded
+     and .durable_record_removed
+     and .current_driver_shutdown
+     and .executor_transients_clean
+     and (.reason == null)' \
+    <<<"$output" >/dev/null
+  sudo test ! -e "/proc/$init_pid/stat"
+  sudo rm -f "$recovery_bundle/rootfs/.a3s-oci-native-smoke"
+  sudo test ! -e "$recovery_bundle/rootfs/.a3s-oci-native-smoke"
+  test -z "$(sudo find "$recovery_root/executor" -mindepth 1 -print -quit)"
+}
+
 run_service_signal_cleanup() {
   # Match the root-owned A3S Box profile qualified by the transported lifecycle.
   sudo python3 - \
@@ -955,6 +1090,7 @@ run_smoke false
 run_smoke false "$control_bundle" "$control_hook_trace"
 run_service_smoke false
 run_service_signal_cleanup
+run_owner_death_recovery
 run_multi_container_smoke false
 run_soak false
 run_fault_cleanup
