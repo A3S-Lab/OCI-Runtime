@@ -42,21 +42,37 @@ impl ProcessIdentity {
     }
 
     fn capture(pid: i32, role: &str) -> Result<Self> {
-        let start_time_ticks = process_start_time(pid)?.ok_or_else(|| {
-            recovery_error(
-                ErrorCode::Unavailable,
-                format!("{role} PID {pid} exited before its recovery identity was captured"),
-            )
-            .retryable(true)
-        })?;
+        let observation = process_observation(pid)?
+            .filter(|observation| !observation.is_terminated())
+            .ok_or_else(|| {
+                recovery_error(
+                    ErrorCode::Unavailable,
+                    format!("{role} PID {pid} exited before its recovery identity was captured"),
+                )
+                .retryable(true)
+            })?;
         Ok(Self {
             pid,
-            start_time_ticks,
+            start_time_ticks: observation.start_time_ticks,
         })
     }
 
     fn is_live(self) -> Result<bool> {
-        Ok(process_start_time(self.pid)? == Some(self.start_time_ticks))
+        Ok(process_observation(self.pid)?.is_some_and(|observation| {
+            observation.start_time_ticks == self.start_time_ticks && !observation.is_terminated()
+        }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProcessObservation {
+    start_time_ticks: u64,
+    state: u8,
+}
+
+impl ProcessObservation {
+    const fn is_terminated(self) -> bool {
+        matches!(self.state, b'Z' | b'X' | b'x')
     }
 }
 
@@ -708,7 +724,7 @@ fn parse_runtime_root_name(name: &str) -> Option<ProcessIdentity> {
     (identity.pid > 0 && runtime_root_name(identity) == name).then_some(identity)
 }
 
-fn process_start_time(pid: i32) -> Result<Option<u64>> {
+fn process_observation(pid: i32) -> Result<Option<ProcessObservation>> {
     if pid <= 0 {
         return Err(recovery_error(
             ErrorCode::InvalidArgument,
@@ -759,11 +775,23 @@ fn process_start_time(pid: i32) -> Result<Option<u64>> {
             ),
         ));
     }
-    contents[closing + 2..]
+    let fields = contents[closing + 2..]
         .split_ascii_whitespace()
-        .nth(19)
+        .collect::<Vec<_>>();
+    let state = fields
+        .first()
+        .filter(|field| field.len() == 1)
+        .and_then(|field| field.as_bytes().first())
+        .copied()
+        .ok_or_else(|| {
+            recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!("process identity has no valid state: {}", path.display()),
+            )
+        })?;
+    let start_time_ticks = fields
+        .get(19)
         .and_then(|field| field.parse::<u64>().ok())
-        .map(Some)
         .ok_or_else(|| {
             recovery_error(
                 ErrorCode::FailedPrecondition,
@@ -772,7 +800,11 @@ fn process_start_time(pid: i32) -> Result<Option<u64>> {
                     path.display()
                 ),
             )
-        })
+        })?;
+    Ok(Some(ProcessObservation {
+        start_time_ticks,
+        state,
+    }))
 }
 
 fn write_atomic_record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -978,6 +1010,24 @@ mod tests {
             !stale.is_live().expect("inspect reused numeric PID"),
             "a reused numeric PID must not match the authenticated start time"
         );
+    }
+
+    #[test]
+    fn zombie_and_dead_process_states_are_terminal() {
+        for state in *b"ZXx" {
+            assert!(ProcessObservation {
+                start_time_ticks: 1,
+                state,
+            }
+            .is_terminated());
+        }
+        for state in *b"RSDTtI" {
+            assert!(!ProcessObservation {
+                start_time_ticks: 1,
+                state,
+            }
+            .is_terminated());
+        }
     }
 
     #[test]
