@@ -6,14 +6,24 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Production A3S Box consumer evidence at Box commit `0c3f84e4` against this
+  runtime's `a6f6242` SDK revision. Box now validates its managed home,
+  prepares snapshot, named-volume, network, rootfs, and OCI bundle resources,
+  then starts or reuses the identity-fenced `native-linux-host-service` for an
+  explicitly opted-in Linux Sandbox record. The blocking x86_64 gate passes
+  Rust, Python, TypeScript, and Go lifecycle, exec, filesystem, route-aware
+  stats, pause/resume, snapshot restore, restart, and cleanup through that
+  production owner. Default routing, aarch64 Box composition, real-driver
+  owner/Box process restart, and utility-VM composition remain release gates.
 - A long-lived `native-linux-host-service` command and public
   `NativeLinuxHostService` boundary for the production Box migration. One
   owner opens durable state and the experimental Native Linux driver before
   publishing its private `0600` Unix socket, authenticates concurrent same-UID
   clients, accepts independently generation-fenced containers without
   process-local Box descriptors, and reaps the driver on graceful shutdown.
-  The existing single-container FD 3/4/5 service remains available while Box
-  bundle preparation and real-host cutover are completed.
+  The existing single-container FD 3/4/5 service remains available for
+  compatibility and focused qualification while the default and cross-platform
+  Box cutover is completed.
 - Out-of-process runtime-owner restart coverage for the durable host service.
   The cross-platform test launches the runtime test binary as one OS process,
   creates and starts a generation plus a live exec through real local IPC,
@@ -135,6 +145,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Execute native Linux file transfer and descriptor-confined filesystem calls
+  in a bounded parent-bound helper that enters the container's retained user
+  and mount namespaces. Rootfs, bind, ID-mapped, and tmpfs paths now preserve
+  the container identity while retaining the same `openat2` confinement and
+  helper authentication; the real native fixture covers binary transfer plus
+  mkdir/stat/list/move/remove on its container-created `/tmp` tmpfs.
 - Native Linux lifecycle, rootless, multi-container, and soak fixtures now
   derive `a3s.oci.attachments.v1` from each immutable bundle and requested I/O
   contract. They no longer initialize the removed `CreateRequest::io` field,

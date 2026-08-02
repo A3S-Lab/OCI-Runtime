@@ -736,6 +736,10 @@ and recovery suites in the Windows guest and on native Linux.
   host-inherited, and donor-shared network namespaces; shared/read-only bind
   and private-tmpfs storage; inline/script/direct/nonzero init; and selected
   create/start/timeout/poststop Hook failure behavior on x86_64 and aarch64.
+- [x] Prove the Box-owned production bundle and explicitly opted-in long-lived
+  Native Linux owner composition on x86_64 through the Rust, Python,
+  TypeScript, and Go SDK lifecycle, exec, filesystem, route-aware stats,
+  pause/resume, snapshot restore, restart, and cleanup surfaces.
 - [ ] Prove packaged installation and A3S Box product startup without KVM.
 - [ ] Run the full Sandbox SDK suite with `/dev/kvm` absent and inaccessible.
 - [x] Fail explicit dedicated-VM requests before runtime state or driver
@@ -743,8 +747,8 @@ and recovery suites in the Windows guest and on native Linux.
 - [ ] Reject unavailable dedicated-VM selection in A3S Box before image
   mutation.
 
-Exit gate: A3S Box Sandbox and its Rust, Python, and TypeScript SDK tests pass
-on supported x86_64 and aarch64 Linux hosts without KVM.
+Exit gate: A3S Box Sandbox and its Rust, Python, TypeScript, and Go SDK tests
+pass on supported x86_64 and aarch64 Linux hosts without KVM.
 
 ### R5 — Full OCI 1.3 Conformance
 
@@ -766,6 +770,9 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
 
 - [x] Add the pinned `a3s-oci-sdk` dependency to A3S Box.
 - [x] Implement the Box adapter using SDK types only.
+- [x] Route explicitly opted-in new Linux Sandbox records through Box-owned
+  resource and bundle preparation into the long-lived Native Linux host owner,
+  with a persisted route and no fallback after selection.
 - [ ] Add an early cross-platform vertical slice for create, state, start,
   wait, kill, delete, exact exit status, and runtime-service restart before
   completing every optional OCI field.
@@ -804,10 +811,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   only after their replacement gates pass through the packaged OCI Runtime.
 
 The Native Linux side now exposes a packaged, long-lived multi-container host
-service suitable for the unified Box adapter, and Box persists an explicit
-`box_vm` or `oci_sdk` route before preflight. The gate remains unchecked until
-Box supplies production bundle preparation, launches through this owner, and
-qualifies restart/cleanup on real Native Linux and utility-VM drivers.
+service suitable for the unified Box adapter. Box persists an explicit
+`box_vm` or `oci_sdk` route before preflight, prepares its product resources and
+minimal OCI bundle, and passes the opt-in x86_64 production-owner composition
+through all four SDKs. The broader gate remains unchecked until owner and Box
+process restart pass on the real driver, the same composition passes WHPX and
+aarch64, and the default/MicroVM cutover is complete.
 
 ## Platform Promotion
 
