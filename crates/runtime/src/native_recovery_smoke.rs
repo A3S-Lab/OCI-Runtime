@@ -16,7 +16,7 @@ use a3s_oci_sdk::{
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
-use crate::{HostRuntimeService, NativeLinuxDriver, RuntimeDriver};
+use crate::{DriverKillRequest, HostRuntimeService, NativeLinuxDriver, RuntimeDriver};
 
 /// Versioned readiness handoff written by the live Native Linux owner.
 pub const NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION: &str =
@@ -250,26 +250,34 @@ pub async fn native_linux_recovery_resume(
             format!("recovered process inventory failed: {error}"),
         ),
     }
-    match service
-        .kill(KillRequest {
-            context: match operation("native-recovery-resume-kill") {
-                Ok(context) => context,
-                Err(error) => return failed(report, error.to_string()),
-            },
-            target: target.clone(),
-            signal: match Signal::new(LINUX_SIGKILL) {
-                Ok(signal) => signal,
-                Err(error) => return failed(report, error.to_string()),
-            },
-            all: true,
-        })
-        .await
-    {
-        Ok(record) => {
-            report.kill_idempotent =
-                *record.state.status() == ContainerState::Stopped && record.state.pid().is_none();
-        }
-        Err(error) => append_reason(&mut report, format!("recovered kill failed: {error}")),
+    let kill = DriverKillRequest {
+        context: match operation("native-recovery-resume-kill") {
+            Ok(context) => context,
+            Err(error) => return failed(report, error.to_string()),
+        },
+        target: target.clone(),
+        signal: match Signal::new(LINUX_SIGKILL) {
+            Ok(signal) => signal,
+            Err(error) => return failed(report, error.to_string()),
+        },
+        all: true,
+    };
+    match driver.kill(kill.clone()).await {
+        Ok(first) => match driver.kill(kill).await {
+            Ok(replayed) => {
+                report.kill_idempotent = first == replayed
+                    && first.status() == ContainerState::Stopped
+                    && first.pid().is_none();
+            }
+            Err(error) => append_reason(
+                &mut report,
+                format!("repeated recovered driver tombstone kill failed: {error}"),
+            ),
+        },
+        Err(error) => append_reason(
+            &mut report,
+            format!("recovered driver tombstone kill failed: {error}"),
+        ),
     }
     match service
         .wait(WaitRequest {
