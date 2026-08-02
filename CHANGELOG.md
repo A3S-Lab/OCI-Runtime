@@ -23,15 +23,19 @@ All notable changes to A3S OCI Runtime are documented in this file.
   with `SIGKILL`, reopens durable state in a distinct process, verifies those
   semantics, and is retained by x86_64 and aarch64 Linux CI. Live process-I/O
   session reattachment remains a separate promotion gate.
-- Production A3S Box consumer evidence at Box commit `0c3f84e4` against this
-  runtime's `a6f6242` SDK revision. Box now validates its managed home,
+- Production A3S Box consumer evidence at Box commit `2cbe588b` against this
+  runtime's `a6cdae7` SDK revision. Box now validates its managed home,
   prepares snapshot, named-volume, network, rootfs, and OCI bundle resources,
   then starts or reuses the identity-fenced `native-linux-host-service` for an
   explicitly opted-in Linux Sandbox record. The blocking x86_64 gate passes
   Rust, Python, TypeScript, and Go lifecycle, exec, filesystem, route-aware
   stats, pause/resume, snapshot restore, restart, and cleanup through that
-  production owner. Default routing, aarch64 Box composition, real-driver
-  owner/Box process restart, and utility-VM composition remain release gates.
+  production owner. The gate also kills the exact owner, proves launcher/init
+  termination, uses fresh Box processes to rebind and reconcile stopped state
+  without invented exit evidence, deletes the old generation, and restarts the
+  next Box and OCI generations. Default routing, aarch64 Box composition,
+  transparent live-session reattachment, and utility-VM composition remain
+  release gates.
 - A long-lived `native-linux-host-service` command and public
   `NativeLinuxHostService` boundary for the production Box migration. One
   owner opens durable state and the experimental Native Linux driver before
@@ -49,8 +53,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   reconnects to the new owner, replays create/start/exec without duplicate
   driver dispatch, recovers live process inventory, and continues stdin,
   signal, wait, output, and cleanup on the exact process target. The fixture
-  deliberately uses a deterministic driver; production Box owner wiring and
-  real native/WHPX process reattachment remain separate gates.
+  deliberately uses a deterministic driver; real native/WHPX live-process
+  reattachment remains a separate gate.
 - Reconnectable local SDK transport for retained `RuntimeClient` instances.
   The request that first observes a broken Unix socket or Windows named pipe
   still returns a retryable ambiguity and is never replayed inside the
@@ -59,7 +63,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   or reconcile with the original durable operation identity. Caller-supplied
   `from_io` streams remain permanently closed after a protocol or transport
   failure. Real named-pipe and Unix-socket server-restart tests cover both
-  boundaries; A3S Box wiring and real-driver qualification remain open gates.
+  boundaries. A3S Box now uses the transport for production x86_64 owner
+  rebinding; live-session reattachment on real drivers remains open.
 - Public-SDK-only A3S Box consumer evidence at Box commit `09a9e5d3` for exact
   live process inventory, normalized CPU/memory stats, bounded ordered-event
   polling, and replay-safe complete OCI resource updates. Box rechecks read
@@ -69,16 +74,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
   and compatibility state. Its immutable create-intent digest preserves create
   replay after mutable resource changes; changed keyed content, unavailable
   capabilities, target drift, malformed stats, and event cursor drift fail
-  closed. Real-driver and out-of-process restart qualification remain explicit
-  release gates.
+  closed. Real-driver live-session reattachment remains an explicit release
+  gate.
 - Public-SDK-only A3S Box consumer evidence at Box commit `8ea5f366` for
   exact-generation captured and streaming exec, replay-safe keyed process and
   stdin identities, cursor-checked stdout/stderr, signal/wait, PTY/resize,
   exact terminal status, raw-log separation, and detached timeout cleanup.
   Missing capabilities, stale generations, alternate rootfs, invalid IDs,
   empty commands, and same-key changed content fail before a second runtime
-  process can start. Out-of-process restart and real-driver cutover remain
-  explicit release gates.
+  process can start. Real-driver live-session reattachment and cross-platform
+  cutover remain explicit release gates.
 - Public `a3s.oci.attachments.v1` create/restore contracts for rootfs, mounts,
   networking, process I/O, secret classifications, and optional namespaced
   runtime extensions. SDK protocol 3 rejects older peers instead of dropping
