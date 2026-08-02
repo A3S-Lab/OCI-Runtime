@@ -411,6 +411,43 @@ pub(super) fn arm_parent_death_signal(role: &str) -> Result<()> {
     }
 }
 
+pub(super) fn verify_and_arm_parent_death_signal(
+    expected_parent: libc::pid_t,
+    role: &str,
+) -> Result<()> {
+    if expected_parent <= 0 {
+        return Err(supervisor_error(
+            ErrorCode::InvalidArgument,
+            format!("{role} expected a positive parent PID; received {expected_parent}"),
+        ));
+    }
+    // SAFETY: `getppid` has no preconditions. Checking before and after
+    // `prctl` closes both sides of the inspection-to-arm race: a child never
+    // authenticates a reaper as its owner, and a death between the first
+    // check and `prctl` is detected even though PDEATHSIG is not retroactive.
+    let observed_parent = unsafe { libc::getppid() };
+    if observed_parent != expected_parent {
+        return Err(supervisor_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "{role} parent changed from authenticated PID {expected_parent} to {observed_parent} before supervision was armed"
+            ),
+        ));
+    }
+    arm_parent_death_signal(role)?;
+    // SAFETY: `getppid` has no preconditions.
+    let observed_parent = unsafe { libc::getppid() };
+    if observed_parent != expected_parent {
+        return Err(supervisor_error(
+            ErrorCode::Unavailable,
+            format!(
+                "{role} parent changed from authenticated PID {expected_parent} to {observed_parent} while supervision was armed"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn wait_for_child_without_reaping(pid: libc::pid_t) -> Result<ChildOutcome> {
     loop {
         // SAFETY: an all-zero siginfo_t is the required input sentinel and

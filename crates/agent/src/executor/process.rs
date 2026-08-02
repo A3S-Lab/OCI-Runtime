@@ -104,6 +104,7 @@ impl PreparedProcess {
             .arg(&control_name)
             .arg(hook_state.id())
             .arg(rootfs_scope.internal_argument())
+            .arg(expected_owner_pid.to_string())
             .env_clear()
             .kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
@@ -115,17 +116,11 @@ impl PreparedProcess {
         // already-validated caller descriptors with bounded dup2.
         unsafe {
             command.pre_exec(move || {
-                pid_supervisor::arm_parent_death_signal("container launcher")
-                    .map_err(|error| io::Error::other(error.to_string()))?;
-                // Rechecking closes the fork-to-prctl race. If the runtime
-                // owner already died, the launcher must fail before it can
-                // create a workload that no authenticated owner can recover.
-                if libc::getppid() != expected_owner_pid {
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "native runtime owner exited before launcher supervision was armed",
-                    ));
-                }
+                pid_supervisor::verify_and_arm_parent_death_signal(
+                    expected_owner_pid,
+                    "container launcher",
+                )
+                .map_err(|error| io::Error::other(error.to_string()))?;
                 if let Some(descriptor) = init_cgroup_procs {
                     cgroup::join_current_process(descriptor)?;
                 }

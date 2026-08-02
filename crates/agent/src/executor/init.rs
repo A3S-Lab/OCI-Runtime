@@ -35,6 +35,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let control_name = arguments.next();
     let container_id = arguments.next();
     let rootfs_scope = arguments.next();
+    let expected_owner_pid = arguments.next();
     let extra = arguments.next();
     let (
         Some(config_snapshot),
@@ -42,6 +43,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         Some(control_name),
         Some(container_id),
         Some(rootfs_scope),
+        Some(expected_owner_pid),
         None,
     ) = (
         config_snapshot,
@@ -49,12 +51,13 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         control_name,
         container_id,
         rootfs_scope,
+        expected_owner_pid,
         extra,
     )
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID and no extra arguments",
         )));
     };
     let container_id = match container_id.into_string() {
@@ -72,12 +75,26 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
             "container-init received an invalid rootfs scope",
         )));
     };
+    let expected_owner_pid = match expected_owner_pid
+        .to_str()
+        .and_then(|value| value.parse::<libc::pid_t>().ok())
+        .filter(|pid| *pid > 0)
+    {
+        Some(pid) => pid,
+        None => {
+            return Some(Err(init_error(
+                ErrorCode::InvalidArgument,
+                "container-init received an invalid authenticated owner PID",
+            )));
+        }
+    };
     Some(run_container_init(
         config_snapshot,
         bundle_directory,
         control_name,
         container_id,
         rootfs_scope,
+        expected_owner_pid,
     ))
 }
 
@@ -87,7 +104,9 @@ fn run_container_init(
     control_name: std::ffi::OsString,
     container_id: String,
     rootfs_scope: RootfsScope,
+    expected_owner_pid: libc::pid_t,
 ) -> Result<()> {
+    pid_supervisor::verify_and_arm_parent_death_signal(expected_owner_pid, "container launcher")?;
     let runtime_directory = config_snapshot
         .parent()
         .map(Path::to_path_buf)
@@ -146,6 +165,16 @@ fn run_container_init(
         plan.annotations.clone(),
     )?;
     if let Err(error) = namespace::enter_new_namespaces(&plan.namespaces, &mut control) {
+        return reject_before_ready(&mut control, error);
+    }
+    // Entering a mapped user namespace changes the launcher's effective
+    // kernel credentials. Linux clears PR_SET_PDEATHSIG on that transition,
+    // so authenticate the original runtime owner and re-arm the fatal signal
+    // before this process can fork either namespace init or workload code.
+    if let Err(error) = pid_supervisor::verify_and_arm_parent_death_signal(
+        expected_owner_pid,
+        "container launcher after namespace credential transition",
+    ) {
         return reject_before_ready(&mut control, error);
     }
     if plan.cgroup.uses_control_workload_layout() {
