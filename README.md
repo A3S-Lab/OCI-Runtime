@@ -99,7 +99,7 @@ and `experimental` or `supported` readiness.
 | --- | --- |
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
-| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, and ordered events |
+| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, ordered events, and a same-UID multi-container Native Linux owner |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, descriptor-confined file/filesystem sessions, pause/resume, update/stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; production routing and real-host cutover remain open |
@@ -200,6 +200,21 @@ request reconnects and renegotiates so the caller can retry or reconcile with
 the original operation identity. Foreground `run` is only a client composition
 of durable create/start/wait/delete calls; it does not create a second
 lifecycle API or state machine.
+
+On Linux, the explicit experimental host owner publishes one durable SDK
+endpoint without opening KVM:
+
+```bash
+a3s-oci native-linux-host-service \
+  --root /run/a3s/oci-native \
+  --agent /usr/libexec/a3s-oci-agent
+```
+
+The owner opens the Native Linux driver and durable state before publishing
+`runtime.sock`, serves independently fenced container generations to
+authenticated same-UID clients, and reaps driver-owned processes on graceful
+shutdown. The existing `native-linux-service` command remains the
+Sandbox-scoped FD 3/4/5 owner for the current Box path.
 
 The runtime contract suite also restarts the owner across two distinct OS
 processes on the same Unix socket or Windows named pipe. The replacement opens

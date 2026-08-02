@@ -92,6 +92,23 @@ The platform-specific constructors are compiled only on their corresponding
 targets. Callers can also create `RuntimeTransportClient::from_io` over an
 already authenticated async byte stream.
 
+### Native Linux multi-container host owner
+
+`a3s-oci native-linux-host-service --root <absolute-root> --agent
+<absolute-agent>` publishes a long-lived Linux SDK endpoint for ordinary
+transported create requests. It opens the experimental Native Linux driver and
+reconciles the durable state root before binding `runtime.sock`; the endpoint
+is mode `0600`, inode-scoped on cleanup, and accepts concurrent same-UID
+clients. Because this owner carries no process-local descriptors, it can serve
+multiple independently fenced container IDs and is the owner boundary intended
+for the unified Box backend.
+
+Graceful `SIGINT` or `SIGTERM` stops the service, aborts client tasks, shuts
+down driver-owned processes, and removes only the socket inode created by that
+owner. Abrupt owner replacement reopens the same durable service state; the
+client still exposes the first broken request and reconnects only on a later
+explicit reconciliation.
+
 ### Native Linux A3S Box owner
 
 `a3s-oci native-linux-service` is the Linux process owner used by the Box

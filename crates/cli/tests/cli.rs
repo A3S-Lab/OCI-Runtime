@@ -161,6 +161,23 @@ fn native_linux_service_requires_explicit_box_descriptor_contract() {
     assert!(!std::path::Path::new(&root).exists());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_host_service_requires_both_owner_paths() {
+    let root = format!(
+        "/tmp/a3s-oci-cli-host-service-contract-{}",
+        std::process::id()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args(["native-linux-host-service", "--root", &root])
+        .output()
+        .expect("native Linux host service command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--agent"));
+    assert!(!std::path::Path::new(&root).exists());
+}
+
 #[test]
 fn native_linux_service_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))

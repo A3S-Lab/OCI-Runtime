@@ -49,6 +49,16 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
     },
+    /// Serve multiple native Linux containers through one durable SDK owner.
+    #[cfg(target_os = "linux")]
+    NativeLinuxHostService {
+        /// Private absolute root containing runtime.sock, state, and executor data.
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        /// Absolute matching a3s-oci-agent executable used for prepared init.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+    },
     /// Own one A3S Box container through the native Linux SDK service.
     #[cfg(target_os = "linux")]
     NativeLinuxService {
@@ -384,6 +394,11 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             } else {
                 ExitCode::from(2)
             })
+        }
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxHostService { root, agent } => {
+            native_service::run_host(root, agent).await?;
+            Ok(ExitCode::SUCCESS)
         }
         #[cfg(target_os = "linux")]
         Command::NativeLinuxService {

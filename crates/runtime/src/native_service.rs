@@ -24,6 +24,47 @@ pub struct NativeLinuxServiceConfig {
     container_id: ContainerId,
 }
 
+/// Filesystem contract for one long-lived, multi-container native Linux owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeLinuxHostServiceConfig {
+    root: PathBuf,
+    init_executable: PathBuf,
+}
+
+impl NativeLinuxHostServiceConfig {
+    /// Bind one host service to a private absolute root.
+    pub fn new(root: impl Into<PathBuf>, init_executable: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        validate_absolute_normalized_path(&root, "native host service root")?;
+        let init_executable = init_executable.into();
+        validate_absolute_normalized_path(&init_executable, "native init executable")?;
+        Ok(Self {
+            root,
+            init_executable,
+        })
+    }
+
+    /// Private root containing the endpoint, durable state, and executor root.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Unix socket consumed by [`a3s_oci_sdk::RuntimeClient::connect`].
+    #[must_use]
+    pub fn socket_path(&self) -> PathBuf {
+        self.root.join(SERVICE_SOCKET_NAME)
+    }
+
+    fn state_root(&self) -> PathBuf {
+        self.root.join(STATE_DIRECTORY_NAME)
+    }
+
+    fn executor_parent(&self) -> PathBuf {
+        self.root.join(EXECUTOR_DIRECTORY_NAME)
+    }
+}
+
 impl NativeLinuxServiceConfig {
     /// Bind one service to a private absolute root and one container identity.
     pub fn new(
@@ -143,6 +184,97 @@ impl NativeLinuxService {
 
     /// Serve authenticated same-UID clients until the supplied shutdown future
     /// resolves, then stop all driver-owned processes and transient state.
+    pub async fn serve_until<F>(self, shutdown: F) -> Result<()>
+    where
+        F: Future<Output = ()> + Send,
+    {
+        let serve_result = self.serve_connections(shutdown).await;
+        let cleanup_result = self.driver.shutdown().await;
+        combine_service_and_cleanup(serve_result, cleanup_result)
+    }
+
+    async fn serve_connections<F>(&self, shutdown: F) -> Result<()>
+    where
+        F: Future<Output = ()> + Send,
+    {
+        let socket_path = self.config.socket_path();
+        serve_authenticated_connections(
+            &self.listener,
+            &socket_path,
+            self.service.clone(),
+            self.effective_uid,
+            shutdown,
+        )
+        .await
+    }
+}
+
+/// Bound native Linux SDK service owning multiple independently fenced containers.
+///
+/// Unlike [`NativeLinuxService`], this owner carries no process-local A3S Box
+/// descriptors and therefore accepts normal SDK create requests for any valid
+/// container ID. Exact driver selection and generation routing remain durable
+/// in [`HostRuntimeService`].
+pub struct NativeLinuxHostService {
+    config: NativeLinuxHostServiceConfig,
+    // Keep the path guard alive while the listener pins the original inode.
+    socket: OwnedSocketPath,
+    listener: UnixListener,
+    service: Arc<HostRuntimeService>,
+    driver: Arc<NativeLinuxDriver>,
+    effective_uid: u32,
+}
+
+impl NativeLinuxHostService {
+    /// Open the native driver and durable host state before publishing the socket.
+    pub async fn bind(config: NativeLinuxHostServiceConfig) -> Result<Self> {
+        prepare_private_directory(&config.root, "native host service root").await?;
+        prepare_private_directory(&config.state_root(), "native host service state root").await?;
+        prepare_private_directory(
+            &config.executor_parent(),
+            "native host service executor parent",
+        )
+        .await?;
+
+        let driver = Arc::new(
+            NativeLinuxDriver::open_experimental(config.executor_parent(), &config.init_executable)
+                .await?,
+        );
+        let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
+        let service = match HostRuntimeService::open(config.state_root(), runtime_driver).await {
+            Ok(service) => Arc::new(service),
+            Err(error) => {
+                let _ = driver.shutdown().await;
+                return Err(error);
+            }
+        };
+        let (listener, socket) = match bind_private_socket(&config.socket_path()).await {
+            Ok(bound) => bound,
+            Err(error) => {
+                let _ = driver.shutdown().await;
+                return Err(error);
+            }
+        };
+
+        // SAFETY: geteuid has no preconditions or failure result.
+        let effective_uid = unsafe { libc::geteuid() };
+        Ok(Self {
+            config,
+            socket,
+            listener,
+            service,
+            driver,
+            effective_uid,
+        })
+    }
+
+    /// Bound SDK endpoint, available after [`Self::bind`] returns.
+    #[must_use]
+    pub fn socket_path(&self) -> &Path {
+        self.socket.path()
+    }
+
+    /// Serve authenticated same-UID clients until shutdown, then reap the driver.
     pub async fn serve_until<F>(self, shutdown: F) -> Result<()>
     where
         F: Future<Output = ()> + Send,
@@ -520,6 +652,27 @@ mod tests {
         assert!(NativeLinuxServiceConfig::new("relative", "/bin/true", id.clone()).is_err());
         assert!(NativeLinuxServiceConfig::new("/tmp/a/../b", "/bin/true", id.clone()).is_err());
         assert!(NativeLinuxServiceConfig::new("/tmp/service", "relative", id).is_err());
+
+        assert!(NativeLinuxHostServiceConfig::new("relative", "/bin/true").is_err());
+        assert!(NativeLinuxHostServiceConfig::new("/tmp/a/../b", "/bin/true").is_err());
+        assert!(NativeLinuxHostServiceConfig::new("/tmp/service", "relative").is_err());
+    }
+
+    #[test]
+    fn host_config_derives_one_private_durable_layout() {
+        let config = NativeLinuxHostServiceConfig::new("/tmp/a3s-oci-host", "/bin/true")
+            .expect("valid native host config");
+
+        assert_eq!(config.root(), Path::new("/tmp/a3s-oci-host"));
+        assert_eq!(
+            config.socket_path(),
+            Path::new("/tmp/a3s-oci-host/runtime.sock")
+        );
+        assert_eq!(config.state_root(), Path::new("/tmp/a3s-oci-host/state"));
+        assert_eq!(
+            config.executor_parent(),
+            Path::new("/tmp/a3s-oci-host/executor")
+        );
     }
 
     #[tokio::test]

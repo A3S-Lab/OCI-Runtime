@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A long-lived `native-linux-host-service` command and public
+  `NativeLinuxHostService` boundary for the production Box migration. One
+  owner opens durable state and the experimental Native Linux driver before
+  publishing its private `0600` Unix socket, authenticates concurrent same-UID
+  clients, accepts independently generation-fenced containers without
+  process-local Box descriptors, and reaps the driver on graceful shutdown.
+  The existing single-container FD 3/4/5 service remains available while Box
+  bundle preparation and real-host cutover are completed.
 - Out-of-process runtime-owner restart coverage for the durable host service.
   The cross-platform test launches the runtime test binary as one OS process,
   creates and starts a generation plus a live exec through real local IPC,

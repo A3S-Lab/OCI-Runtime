@@ -205,6 +205,13 @@ Completed:
   3/4/5 binding for one exact container ID, full transported lifecycle evidence,
   `SIGINT`/`SIGTERM` driver shutdown, inode-scoped socket removal, and empty
   executor-root evidence on x86_64 and aarch64 without KVM;
+- a long-lived multi-container Native Linux host owner behind the same private
+  same-UID Unix SDK contract. It opens the durable service and experimental
+  driver before publishing `runtime.sock`, accepts ordinary SDK attachments
+  without Box process-local descriptors, preserves exact recorded-driver and
+  generation routing across reopen, and performs bounded driver shutdown. Box
+  bundle preparation and process launch through this owner remain migration
+  gates rather than claimed product cutover;
 - shared Linux executor support for all six OCI hook phases in normative order,
   with runtime/container namespace placement, exact OCI state on stdin,
   bounded configuration, timeout and process-group cleanup, typed
@@ -790,6 +797,12 @@ normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
   fallback paths.
 - [ ] Remove Box's direct libkrun, VMM, guest-init, and containerd-shim paths
   only after their replacement gates pass through the packaged OCI Runtime.
+
+The Native Linux side now exposes a packaged, long-lived multi-container host
+service suitable for the unified Box adapter, and Box persists an explicit
+`box_vm` or `oci_sdk` route before preflight. The gate remains unchecked until
+Box supplies production bundle preparation, launches through this owner, and
+qualifies restart/cleanup on real Native Linux and utility-VM drivers.
 
 ## Platform Promotion
 

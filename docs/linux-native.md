@@ -19,6 +19,32 @@ directly without linking or initializing libkrun. The executor selects direct
 rootful mapping or helper-backed rootless mapping from its effective host
 identity.
 
+## Multi-container host owner
+
+The explicit development command below opens one long-lived Native Linux SDK
+owner without probing or opening `/dev/kvm`:
+
+```bash
+a3s-oci native-linux-host-service \
+  --root /run/a3s/oci-native \
+  --agent /usr/libexec/a3s-oci-agent
+```
+
+`--root` and `--agent` must be absolute normalized paths. The root, durable
+state directory, and executor directory are real same-UID `0700` directories.
+The service opens `NativeLinuxDriver::open_experimental` and replays the
+durable state before it publishes `runtime.sock`; the socket is same-UID
+authenticated, mode `0600`, and removed only when its original inode is still
+present. Multiple clients and containers share the owner, while the durable
+host service keeps every later operation pinned to the driver and generation
+selected at create time.
+
+This command accepts ordinary SDK create attachments and deliberately carries
+no A3S Box FD 3/4/5 resources. The separate `native-linux-service` command
+remains the single-container owner for the current Box Sandbox path. Moving Box
+bundle preparation and lifecycle launch to the multi-container owner is still
+an explicit migration and real-host qualification gate.
+
 ## Native prerequisite probe
 
 The native probe performs read-only inspection of:

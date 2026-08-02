@@ -87,7 +87,10 @@ pub use native_control::{
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
 #[cfg(target_os = "linux")]
-pub use native_service::{NativeLinuxService, NativeLinuxServiceConfig};
+pub use native_service::{
+    NativeLinuxHostService, NativeLinuxHostServiceConfig, NativeLinuxService,
+    NativeLinuxServiceConfig,
+};
 pub use native_smoke::{
     native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_rootless_smoke,
     native_linux_service_smoke, native_linux_smoke, native_linux_soak,
