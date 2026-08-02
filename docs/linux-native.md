@@ -466,7 +466,10 @@ needs a shorter diagnostic or a longer qualification; the script derives all
 lifecycle, stale-generation, durable-reopen, and SDK-operation assertions from
 that value. CI also sets `A3S_OCI_NATIVE_SOAK_REPORT` and uploads the resulting
 JSON report for each architecture. This gate covers native lifecycle churn and
-leak detection. Hook failure/security-negative soak and runtime-process
+leak detection. Per-wave executor emptiness excludes only the protected
+`owner.json` identity record that must remain until driver shutdown; every
+generation slot must disappear after each wave and the complete executor root
+must disappear at shutdown. Hook failure/security-negative soak and runtime-process
 reattachment remain separate promotion work.
 
 ## Abrupt owner-death recovery gate
