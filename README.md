@@ -102,10 +102,10 @@ and `experimental` or `supported` readiness.
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, ordered events, and a same-UID multi-container Native Linux owner |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound namespace helpers for descriptor-confined file/filesystem sessions, pause/resume, update/stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
-| A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; production routing and real-host cutover remain open |
+| A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
 | Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
-The current Box adapter at `A3S-Lab/Box@28739c6c` rechecks every read against
+The current Box adapter at `A3S-Lab/Box@0c3f84e4` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
 stat/mkdir/move/list/remove now use the same cross-platform session facade;
 capability and Box-generation checks happen before dispatch, response targets
@@ -115,6 +115,13 @@ resource request is compiled into one complete OCI `LinuxResources` contract,
 claimed durably before dispatch, and replayed with the same runtime operation
 after a lost response. Runtime acknowledgement updates Box restart intent
 atomically without changing the original create identity.
+
+That exact Box revision also validates its managed home, durably prepares the
+snapshot lower, named volumes, and networking, compiles the product-owned OCI
+bundle, and starts or reuses this runtime's identity-fenced long-lived Native
+Linux owner. Its blocking x86_64 Linux gate drives Rust, Python, TypeScript,
+and Go Sandbox lifecycle, exec, filesystem, route-aware stats, pause/resume,
+snapshot restore, restart, and cleanup through the explicit production route.
 
 Linux file and filesystem calls execute in a fresh internal helper that inherits
 only the exact retained root, user-namespace, and mount-namespace descriptors.
@@ -220,8 +227,9 @@ a3s-oci native-linux-host-service \
 The owner opens the Native Linux driver and durable state before publishing
 `runtime.sock`, serves independently fenced container generations to
 authenticated same-UID clients, and reaps driver-owned processes on graceful
-shutdown. The existing `native-linux-service` command remains the
-Sandbox-scoped FD 3/4/5 owner for the current Box path.
+shutdown. Box's explicit `A3S_BOX_OCI_MIGRATION=sandbox` production route uses
+this owner. The existing `native-linux-service` command remains the
+Sandbox-scoped FD 3/4/5 owner for compatibility and focused qualification.
 
 The runtime contract suite also restarts the owner across two distinct OS
 processes on the same Unix socket or Windows named pipe. The replacement opens
@@ -235,7 +243,7 @@ not native Linux or utility-VM reattachment on real hardware.
 
 | Host path | Retained real evidence | Current readiness and open gate |
 | --- | --- | --- |
-| Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; 25 waves × 4 containers | Default inventory `probe-only`; explicitly opened development driver `experimental`. Production security and OCI conformance gates remain |
+| Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; 25 waves × 4 containers; x86_64 Box production-owner composition through all four SDKs | Default inventory `probe-only`; explicitly opened development driver `experimental`. Box aarch64/default-cutover plus production security and OCI conformance gates remain |
 | Linux KVM utility VM | Device access, ioctl result, and KVM API version probes | `probe-only`; workload driver not implemented |
 | macOS arm64/HVF | Real HVF object lifecycle, pinned libkrun context and guest entry, protocol-v9 agent, fixed and multi-container lifecycle, descriptor-confined filesystem sessions, mount/namespace profiles, no-delete cleanup, and 25 fresh-VM waves | `probe-only`; immutable system image, exhaustive recovery, and release hardware qualification remain |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup | `probe-only`; pinned immutable system root and in-process native-handle reclamation remain before `experimental` |
@@ -252,10 +260,9 @@ candidate while the two gates named above remain open.
 ## Architecture
 
 ```text
-A3S Box (current Sandbox consumer; SDK-only unified adapter landed for
-         exact-generation lifecycle, attachments, pause/resume, and process
-         and filesystem sessions plus inventory/resources/stats/events;
-         production routing and real-host cutover remain in progress)
+A3S Box (current Sandbox consumer; explicit Native Linux production route
+         owns bundle/resource preparation and uses the long-lived SDK owner;
+         default, MicroVM, restart, and cross-platform cutover remain open)
 a3s-oci CLI
 future containerd runtime-v2 shim
                          │
@@ -340,13 +347,14 @@ qualification must all pass before a driver becomes `supported`.
 ### Still intentionally open
 
 - complete review and enforcement of pending OCI normative entries;
-- real-host qualification of descriptor-confined filesystem sessions on
-  native Linux and each utility-VM driver;
+- real-host qualification of descriptor-confined filesystem sessions on each
+  remaining utility-VM driver;
 - production-ready Native Linux and utility-VM drivers;
 - pinned immutable utility-VM system roots;
 - remaining utility-VM transport fault injection and hook recovery/security
   certification;
-- the unified A3S Box cutover and OCI Runtime-owned containerd shim;
+- the default and cross-platform A3S Box cutover and OCI Runtime-owned
+  containerd shim;
 - checkpoint/restore and later attachment extensions;
 - signed-package, upgrade, rollback, security, and long-duration release gates.
 
