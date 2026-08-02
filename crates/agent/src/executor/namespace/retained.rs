@@ -165,32 +165,6 @@ impl RetainedExecutionContext {
         self.rootfs.as_raw_fd()
     }
 
-    pub(crate) fn host_uid(&self, container_id: u32) -> Result<u32> {
-        map_container_id(
-            "filesystem UID",
-            container_id,
-            &self.uid_mappings,
-            self.new_user_namespace,
-        )
-    }
-
-    pub(crate) fn host_gid(&self, container_id: u32) -> Result<u32> {
-        map_container_id(
-            "filesystem GID",
-            container_id,
-            &self.gid_mappings,
-            self.new_user_namespace,
-        )
-    }
-
-    pub(crate) fn container_uid(&self, host_id: u32) -> u32 {
-        map_host_id(host_id, &self.uid_mappings, self.new_user_namespace).unwrap_or(host_id)
-    }
-
-    pub(crate) fn container_gid(&self, host_id: u32) -> u32 {
-        map_host_id(host_id, &self.gid_mappings, self.new_user_namespace).unwrap_or(host_id)
-    }
-
     pub(crate) fn namespace_arguments(&self) -> Vec<RetainedNamespaceArgument> {
         self.namespaces
             .iter()
@@ -328,38 +302,6 @@ fn ensure_mapped(field: &str, id: u32, mappings: &[IdMapping]) -> Result<()> {
             format!("{field} value {id} is not covered by the container ID mappings"),
         ))
     }
-}
-
-fn map_container_id(field: &str, id: u32, mappings: &[IdMapping], mapped: bool) -> Result<u32> {
-    if !mapped {
-        return Ok(id);
-    }
-    mappings
-        .iter()
-        .find_map(|mapping| {
-            let offset = id.checked_sub(mapping.container_id)?;
-            (offset < mapping.size)
-                .then(|| mapping.host_id.checked_add(offset))
-                .flatten()
-        })
-        .ok_or_else(|| {
-            retained_error(
-                ErrorCode::InvalidArgument,
-                format!("{field} value {id} is not covered by the container ID mappings"),
-            )
-        })
-}
-
-fn map_host_id(id: u32, mappings: &[IdMapping], mapped: bool) -> Option<u32> {
-    if !mapped {
-        return Some(id);
-    }
-    mappings.iter().find_map(|mapping| {
-        let offset = id.checked_sub(mapping.host_id)?;
-        (offset < mapping.size)
-            .then(|| mapping.container_id.checked_add(offset))
-            .flatten()
-    })
 }
 
 #[cfg(test)]

@@ -15,9 +15,14 @@ use a3s_oci_sdk::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use nix::dir::Dir;
 
-use super::namespace::RetainedExecutionContext;
 use super::state::{ContainerKey, ContainerRecord, MutationKind, RecordedOutcome, RecordedRequest};
 use super::{executor_error, validate_deadline, LinuxExecutor};
+
+mod helper;
+
+pub(crate) fn run_container_filesystem_if_requested() -> Option<Result<()>> {
+    helper::run_if_requested()
+}
 
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_IN_ROOT: u64 = 0x10;
@@ -49,9 +54,20 @@ impl LinuxExecutor {
                 return result;
             }
             state.reserve_operation(&operation_id)?;
-            let result = validate_deadline(context)
-                .and_then(|()| container_record(&mut state, &request.target))
-                .and_then(|record| file_new(record, &request));
+            let result = match validate_deadline(context) {
+                Ok(()) => match container_record(&mut state, &request.target) {
+                    Ok(record) => {
+                        helper::file(
+                            &self.init_executable,
+                            record.process.execution_context(),
+                            &request,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
             state.record(
                 operation_id,
                 operation,
@@ -60,7 +76,12 @@ impl LinuxExecutor {
             result
         } else {
             let record = container_record(&mut state, &request.target)?;
-            file_new(record, &request)
+            helper::file(
+                &self.init_executable,
+                record.process.execution_context(),
+                &request,
+            )
+            .await
         }
     }
 
@@ -83,9 +104,20 @@ impl LinuxExecutor {
                 return result;
             }
             state.reserve_operation(&operation_id)?;
-            let result = validate_deadline(context)
-                .and_then(|()| container_record(&mut state, &request.target))
-                .and_then(|record| filesystem_new(record, &request));
+            let result = match validate_deadline(context) {
+                Ok(()) => match container_record(&mut state, &request.target) {
+                    Ok(record) => {
+                        helper::filesystem(
+                            &self.init_executable,
+                            record.process.execution_context(),
+                            &request,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
             state.record(
                 operation_id,
                 operation,
@@ -94,7 +126,12 @@ impl LinuxExecutor {
             result
         } else {
             let record = container_record(&mut state, &request.target)?;
-            filesystem_new(record, &request)
+            helper::filesystem(
+                &self.init_executable,
+                record.process.execution_context(),
+                &request,
+            )
+            .await
         }
     }
 }
@@ -129,21 +166,16 @@ fn container_record<'a>(
     Ok(record)
 }
 
-fn file_new(record: &mut ContainerRecord, request: &FileRequest) -> Result<FileResponse> {
-    let view = RootView::new(record.process.execution_context())?;
+fn file_in_view(view: &RootView, request: &FileRequest) -> Result<FileResponse> {
     let owner = view.resolve_owner(request.user.as_deref())?;
     let path = resolve_path(&request.path, &owner.home)?;
     match request.op {
-        FileOp::Upload => upload(&view, &path, &owner, request),
-        FileOp::Download => download(&view, &path, request),
+        FileOp::Upload => upload(view, &path, &owner, request),
+        FileOp::Download => download(view, &path, request),
     }
 }
 
-fn filesystem_new(
-    record: &mut ContainerRecord,
-    request: &FilesystemRequest,
-) -> Result<FilesystemResponse> {
-    let view = RootView::new(record.process.execution_context())?;
+fn filesystem_in_view(view: &RootView, request: &FilesystemRequest) -> Result<FilesystemResponse> {
     let owner = view.resolve_owner(request.user.as_deref())?;
     let path = resolve_path(&request.path, &owner.home)?;
     let (entry, entries) = match request.op {
@@ -210,7 +242,7 @@ fn filesystem_new(
 }
 
 fn upload(
-    view: &RootView<'_>,
+    view: &RootView,
     path: &ResolvedPath,
     owner: &ResolvedOwner,
     request: &FileRequest,
@@ -275,11 +307,7 @@ fn upload(
     })
 }
 
-fn download(
-    view: &RootView<'_>,
-    path: &ResolvedPath,
-    request: &FileRequest,
-) -> Result<FileResponse> {
+fn download(view: &RootView, path: &ResolvedPath, request: &FileRequest) -> Result<FileResponse> {
     let file = view.open(&path.relative, libc::O_RDONLY | libc::O_CLOEXEC, 0)?;
     let metadata = file
         .metadata()
@@ -316,16 +344,16 @@ fn download(
     })
 }
 
-struct RootView<'a> {
-    execution: &'a RetainedExecutionContext,
+struct RootView {
+    root: RawFd,
     accounts: Accounts,
 }
 
-impl<'a> RootView<'a> {
-    fn new(execution: &'a RetainedExecutionContext) -> Result<Self> {
+impl RootView {
+    fn new(root: RawFd) -> Result<Self> {
         Ok(Self {
-            execution,
-            accounts: Accounts::load(execution.root_descriptor())?,
+            root,
+            accounts: Accounts::load(root)?,
         })
     }
 
@@ -333,7 +361,7 @@ impl<'a> RootView<'a> {
         let Some(selector) = selector else {
             return Ok(ResolvedOwner {
                 home: PathBuf::from("/root"),
-                ids: Some((self.execution.host_uid(0)?, self.execution.host_gid(0)?)),
+                ids: Some((0, 0)),
             });
         };
         let (user, group_override) = selector
@@ -392,15 +420,12 @@ impl<'a> RootView<'a> {
         })?;
         Ok(ResolvedOwner {
             home,
-            ids: Some((
-                self.execution.host_uid(account.id)?,
-                self.execution.host_gid(gid)?,
-            )),
+            ids: Some((account.id, gid)),
         })
     }
 
     fn open(&self, path: &Path, flags: i32, mode: u32) -> Result<File> {
-        openat2_file(self.execution.root_descriptor(), path, flags, mode)
+        openat2_file(self.root, path, flags, mode)
             .map_err(|error| io_error("open container path", &absolute_display(path), error))
     }
 
@@ -424,7 +449,7 @@ impl<'a> RootView<'a> {
             };
             prefix.push(component);
             match openat2_file(
-                self.execution.root_descriptor(),
+                self.root,
                 &prefix,
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
                 0,
@@ -441,7 +466,7 @@ impl<'a> RootView<'a> {
             }
             let (parent, name) = parent_and_name(&prefix)?;
             let parent = openat2_file(
-                self.execution.root_descriptor(),
+                self.root,
                 parent,
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
                 0,
@@ -466,7 +491,7 @@ impl<'a> RootView<'a> {
                 }
             }
             let directory = openat2_file(
-                self.execution.root_descriptor(),
+                self.root,
                 &prefix,
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
                 0,
@@ -562,8 +587,8 @@ impl<'a> RootView<'a> {
         } else {
             FilesystemEntryKind::Unspecified
         };
-        let container_uid = self.execution.container_uid(metadata.uid());
-        let container_gid = self.execution.container_gid(metadata.gid());
+        let container_uid = metadata.uid();
+        let container_gid = metadata.gid();
         Ok(FilesystemEntry {
             name: path
                 .relative

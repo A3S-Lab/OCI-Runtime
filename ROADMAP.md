@@ -247,7 +247,12 @@ Completed:
   File upload/download and filesystem stat/mkdir/move/list/remove use the same
   cross-platform session facade with capability and Box-generation preflight,
   bounded response conversion, target/shape drift rejection, and one-effect
-  replay of explicitly retryable mutations. The deterministic cross-process
+  replay of explicitly retryable mutations. Native Linux executes those calls
+  in a bounded parent-death helper that inherits only the retained root plus
+  exact user/mount namespace descriptors, validates descriptor order and
+  uniqueness, and enters the namespaces before applying container IDs. The
+  native fixture now mounts `/tmp` as tmpfs so the real filesystem smoke covers
+  namespace-owned mounts rather than only the image rootfs. The deterministic cross-process
   contract now retains the Box process stream and input handle through an
   observed owner disconnect, then continues inventory, stdin, output, signal,
   wait, and cleanup after reconnecting to a replacement durable host service;
