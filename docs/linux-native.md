@@ -40,12 +40,12 @@ host service keeps every later operation pinned to the driver and generation
 selected at create time.
 
 This command accepts ordinary SDK create attachments and deliberately carries
-no A3S Box FD 3/4/5 resources. It is also the explicitly opted-in x86_64 Box
-Sandbox production route: Box prepares the product bundle and resources, then
-reuses this identity-fenced owner across fresh Box processes. The separate
-`native-linux-service` command remains a single-container compatibility and
-focused-qualification path. Default routing, aarch64 Box composition,
-transparent live-session reattachment, and cross-platform cutover remain open.
+no A3S Box FD 3/4/5 resources. It is also the explicitly opted-in x86_64 and
+aarch64 Box Sandbox production route: Box prepares the product bundle and
+resources, then reuses this identity-fenced owner across fresh Box processes.
+The separate `native-linux-service` command remains a single-container
+compatibility and focused-qualification path. Default routing, transparent
+live-session reattachment, and cross-platform cutover remain open.
 
 ## Native prerequisite probe
 

@@ -23,19 +23,24 @@ All notable changes to A3S OCI Runtime are documented in this file.
   with `SIGKILL`, reopens durable state in a distinct process, verifies those
   semantics, and is retained by x86_64 and aarch64 Linux CI. Live process-I/O
   session reattachment remains a separate promotion gate.
-- Production A3S Box consumer evidence at Box commit `2cbe588b` against this
+- Production A3S Box consumer evidence at Box commit `a16772c3` against this
   runtime's `a6cdae7` SDK revision. Box now validates its managed home,
   prepares snapshot, named-volume, network, rootfs, and OCI bundle resources,
   then starts or reuses the identity-fenced `native-linux-host-service` for an
-  explicitly opted-in Linux Sandbox record. The blocking x86_64 gate passes
-  Rust, Python, TypeScript, and Go lifecycle, exec, filesystem, route-aware
-  stats, pause/resume, snapshot restore, restart, and cleanup through that
-  production owner. The gate also kills the exact owner, proves launcher/init
-  termination, uses fresh Box processes to rebind and reconcile stopped state
-  without invented exit evidence, deletes the old generation, and restarts the
-  next Box and OCI generations. Default routing, aarch64 Box composition,
-  transparent live-session reattachment, and utility-VM composition remain
-  release gates.
+  explicitly opted-in Linux Sandbox record. The blocking native x86_64 and
+  aarch64 lanes pass Rust, Python, TypeScript, and Go lifecycle, exec,
+  filesystem, route-aware stats, pause/resume, snapshot restore, restart, and
+  cleanup through that production owner. Both lanes kill the exact owner,
+  prove launcher/init termination, use fresh Box processes to rebind and
+  reconcile stopped state without invented exit evidence, delete the old
+  generation, and restart the next Box and OCI generations. The cancellation
+  replay probe uses an explicit post-cancellation release marker instead of a
+  host-speed-dependent delay. The retained Box
+  [pull-request CI run](https://github.com/A3S-Lab/Box/actions/runs/30754808084)
+  and
+  [main-branch CI run](https://github.com/A3S-Lab/Box/actions/runs/30755797650)
+  both completed successfully. Default routing, transparent live-session
+  reattachment, and utility-VM composition remain release gates.
 - A long-lived `native-linux-host-service` command and public
   `NativeLinuxHostService` boundary for the production Box migration. One
   owner opens durable state and the experimental Native Linux driver before
