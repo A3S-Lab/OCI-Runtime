@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use a3s_oci_core::{DriverCapability, DriverKind, IsolationClass};
-use a3s_oci_sdk::{ContainerRecord, Error, ErrorCode, Result, RuntimeOperation};
+use a3s_oci_sdk::{
+    AttachmentCapabilities, ContainerRecord, Error, ErrorCode, Result, RuntimeOperation,
+    ATTACHMENT_SCHEMA_V1,
+};
 
 use crate::{OciHookPhase, RuntimeDriver};
 
@@ -15,6 +18,7 @@ pub(super) struct RegisteredDriver {
     driver: Arc<dyn RuntimeDriver>,
     capability: DriverCapability,
     operations: BTreeSet<RuntimeOperation>,
+    attachments: AttachmentCapabilities,
 }
 
 impl RegisteredDriver {
@@ -28,6 +32,10 @@ impl RegisteredDriver {
 
     pub(super) const fn kind(&self) -> DriverKind {
         self.capability.driver
+    }
+
+    pub(super) const fn attachment_capabilities(&self) -> &AttachmentCapabilities {
+        &self.attachments
     }
 
     pub(super) fn ensure_operation(
@@ -47,6 +55,7 @@ pub(super) struct DriverRegistry {
     entries: Vec<RegisteredDriver>,
     operations: BTreeSet<RuntimeOperation>,
     hooks: Vec<OciHookPhase>,
+    attachments: AttachmentCapabilities,
 }
 
 impl DriverRegistry {
@@ -60,6 +69,7 @@ impl DriverRegistry {
         let mut entries = Vec::with_capacity(registrations.len());
         let mut common_operations = None;
         let mut common_hooks = None;
+        let mut attachment_capabilities = AttachmentCapabilities::base_v1();
 
         for registration in registrations {
             let capability = registration.capability;
@@ -111,10 +121,20 @@ impl DriverRegistry {
                 common_hooks = Some(hooks.clone());
             }
 
+            let attachments = registration.driver.attachment_capabilities();
+            if !attachments.supports_schema(ATTACHMENT_SCHEMA_V1) {
+                return Err(open_error(format!(
+                    "runtime driver {:?} does not support required attachment schema {ATTACHMENT_SCHEMA_V1}",
+                    capability.driver
+                )));
+            }
+            attachment_capabilities = attachment_capabilities.merged(&attachments);
+
             entries.push(RegisteredDriver {
                 driver: registration.driver,
                 capability,
                 operations,
+                attachments,
             });
         }
 
@@ -127,6 +147,7 @@ impl DriverRegistry {
             entries,
             operations,
             hooks,
+            attachments: attachment_capabilities,
         })
     }
 
@@ -214,6 +235,10 @@ impl DriverRegistry {
 
     pub(super) fn hooks(&self) -> &[OciHookPhase] {
         &self.hooks
+    }
+
+    pub(super) const fn attachment_capabilities(&self) -> &AttachmentCapabilities {
+        &self.attachments
     }
 }
 

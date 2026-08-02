@@ -65,6 +65,15 @@ The runtime:
     override is crate-private and scoped only to this gate, so normal discovery
     remains `probe-only`.
 
+Product bundle preparation no longer needs to guess the runtime generation.
+An explicitly annotated, digest-bound `dev.a3s.bundle-handoff` attachment lets
+the product stage one portable bundle below the protected create-operation
+path. Once durable state allocates the exact generation, the WHPX driver moves
+that directory atomically into its exact runtime share. Retries require the
+same source or matching destination evidence, while cleanup removes only a
+marker-proven runtime-owned bundle. Requests without the extension retain the
+strict fixed-bundle containment behavior used by qualification gates.
+
 The capability query follows the
 [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
 The smoke operation uses

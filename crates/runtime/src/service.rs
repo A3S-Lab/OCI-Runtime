@@ -253,11 +253,13 @@ impl HostRuntimeService {
         attachments: DriverCreateAttachments,
     ) -> Result<ContainerRecord> {
         request.validate()?;
-        AttachmentCapabilities::base_v1().require(&request.attachments)?;
         let lifecycle = self.lifecycle("create")?;
         let registered = lifecycle
             .drivers
             .select(request.isolation.class(), "create")?;
+        registered
+            .attachment_capabilities()
+            .require(&request.attachments)?;
         lifecycle.ensure_attachments(registered, &attachments)?;
         let attachment_schema = attachments.schema();
         let prepared = lifecycle
@@ -275,19 +277,47 @@ impl HostRuntimeService {
         };
         let target = ContainerTarget::exact(request.id.clone(), record.generation);
         let durable_bundle = lifecycle.store.bundle(&target).await?;
+        let mut driver_request = DriverCreateRequest {
+            context: request.context.clone(),
+            target,
+            bundle: durable_bundle,
+            isolation: request.isolation,
+            io: request.attachments.process_io().clone(),
+            attachment_contract: request.attachments,
+            attachments,
+        };
         lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::BeforeCall)?;
-        let result = registered
+        let staged_bundle = match registered
             .driver()
-            .create(DriverCreateRequest {
-                context: request.context.clone(),
-                target,
-                bundle: durable_bundle,
-                isolation: request.isolation,
-                io: request.attachments.process_io().clone(),
-                attachment_contract: request.attachments,
-                attachments,
-            })
-            .await;
+            .prepare_create_bundle(&driver_request)
+            .await
+        {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                return lifecycle
+                    .fail_driver_operation(&request.context.operation_id, error)
+                    .await;
+            }
+        };
+        if staged_bundle.config_bytes() != driver_request.bundle.config_bytes()
+            || staged_bundle.config_digest() != driver_request.bundle.config_digest()
+        {
+            let error = Error::new(
+                ErrorCode::FailedPrecondition,
+                "driver create-bundle preparation changed immutable configuration bytes",
+            )
+            .for_operation("create");
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
+        if let Err(error) = driver_request.attachment_contract.validate(&staged_bundle) {
+            return lifecycle
+                .fail_driver_operation(&request.context.operation_id, error)
+                .await;
+        }
+        driver_request.bundle = staged_bundle;
+        let result = registered.driver().create(driver_request).await;
         lifecycle.driver_boundary(DriverOperation::Create, DriverBoundaryStage::AfterCall)?;
         let observed = match result {
             Ok(observed) => observed,
@@ -417,7 +447,12 @@ impl OciRuntimeService for HostRuntimeService {
             oci,
             drivers: self.runtime_features(),
             operations: operations.into_iter().collect(),
-            attachments: AttachmentCapabilities::base_v1(),
+            attachments: self
+                .lifecycle
+                .as_deref()
+                .map_or_else(AttachmentCapabilities::base_v1, |lifecycle| {
+                    lifecycle.drivers.attachment_capabilities().clone()
+                }),
         })
     }
 

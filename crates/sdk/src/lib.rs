@@ -8,6 +8,7 @@ mod bundle;
 mod client;
 mod conformance;
 mod error;
+mod handoff;
 mod id;
 mod model;
 mod schema;
@@ -22,7 +23,8 @@ pub use a3s_oci_core::{
 pub use async_trait::async_trait;
 pub use attachment::{
     AttachmentCapabilities, AttachmentSource, ConfigurationAttachment, CreateAttachments,
-    RuntimeExtensionAttachment, ATTACHMENT_SCHEMA_V1,
+    RuntimeExtensionAttachment, ATTACHMENT_SCHEMA_V1, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+    RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION, RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
 };
 pub use bundle::{
     OciBundle, CONFIG_FILE_NAME, MAX_CONFIG_BYTES, OCI_RUNTIME_SPEC_VERSION_MAX,
@@ -35,6 +37,10 @@ pub use conformance::{
     OciNormativeInventory, OciNormativeKeyword, OciNormativeRequirement, OciSpecificationScope,
 };
 pub use error::{Error, ErrorCode, Result};
+pub use handoff::{
+    runtime_bundle_handoff_directory, runtime_bundle_handoff_root,
+    RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_ROOT_DIRECTORY,
+};
 pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
 pub use model::*;
 pub use oci_spec;
