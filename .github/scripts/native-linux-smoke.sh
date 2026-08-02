@@ -848,6 +848,7 @@ run_owner_death_recovery() {
   local output
   local status
   local generation
+  local ready_json
   local ready_owner_pid
   local init_pid
   local deadline
@@ -877,6 +878,8 @@ run_owner_death_recovery() {
     sleep 0.025
   done
 
+  test "$(sudo stat --format '%u:%g:%a' "$ready_file")" = '0:0:600'
+  ready_json="$(sudo cat -- "$ready_file")"
   jq --exit-status \
     '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v1"
      and .status == "available" and .platform == "linux"
@@ -884,11 +887,11 @@ run_owner_death_recovery() {
      and .target.generation == 1
      and (.owner_pid > 0) and (.init_pid > 0)
      and .running_observed' \
-    "$ready_file" >/dev/null
-  ready_owner_pid="$(jq --raw-output '.owner_pid' "$ready_file")"
+    <<<"$ready_json" >/dev/null
+  ready_owner_pid="$(jq --raw-output '.owner_pid' <<<"$ready_json")"
   recovery_runtime_owner_pid="$ready_owner_pid"
-  init_pid="$(jq --raw-output '.init_pid' "$ready_file")"
-  generation="$(jq --raw-output '.target.generation' "$ready_file")"
+  init_pid="$(jq --raw-output '.init_pid' <<<"$ready_json")"
+  generation="$(jq --raw-output '.target.generation' <<<"$ready_json")"
   sudo test -e "/proc/$init_pid/stat"
   # sudo may either exec the command directly or retain a monitor process.
   # The authenticated readiness record identifies the actual runtime owner;
