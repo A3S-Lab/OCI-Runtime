@@ -371,8 +371,9 @@ Not yet complete:
   certification;
 - OCI configuration enforcement;
 - production-ready native Linux execution;
-- production A3S Box owner wiring, real-driver process reattachment, production
-  routing, and real-host cutover;
+- real-driver live process and filesystem session reattachment;
+- aarch64 A3S Box production composition, default routing, and cross-platform
+  real-host cutover;
 - upstream conformance and security certification.
 
 The built-in WHPX driver remains `probe-only`, and the default host service
