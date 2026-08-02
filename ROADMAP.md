@@ -240,9 +240,12 @@ Completed:
   File upload/download and filesystem stat/mkdir/move/list/remove use the same
   cross-platform session facade with capability and Box-generation preflight,
   bounded response conversion, target/shape drift rejection, and one-effect
-  replay of explicitly retryable mutations;
-  production routing, Box-wired owner restart, real-driver reattachment, and
-  real-host cutover gates remain open;
+  replay of explicitly retryable mutations. The deterministic cross-process
+  contract now retains the Box process stream and input handle through an
+  observed owner disconnect, then continues inventory, stdin, output, signal,
+  wait, and cleanup after reconnecting to a replacement durable host service;
+  production owner wiring, real-driver reattachment, routing, and real-host
+  cutover gates remain open;
 - Linux executor enforcement for exact capability sets and exec bounding
   ceilings, private controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
@@ -309,8 +312,10 @@ Completed:
 - cross-platform runtime-owner process restart coverage that launches two
   distinct test-binary processes on the same platform-local endpoint and
   durable `HostRuntimeService` state root. One retained client exposes owner
-  death, reconnects to the replacement, recovers the exact generation, and
-  replays create/start with one deterministic test-driver dispatch each;
+  death, reconnects to the replacement, recovers the exact generation and live
+  exec target, replays create/start/exec with one deterministic test-driver
+  dispatch each, and continues inventory, stdin, signal, wait, output, and
+  cleanup through the replacement owner;
 - foreground `run` implemented only as a typed SDK composition of durable
   create, start, wait, and stable force-delete cleanup;
 - deterministic durable container enumeration with isolation filtering,
@@ -352,8 +357,8 @@ Not yet complete:
   certification;
 - OCI configuration enforcement;
 - production-ready native Linux execution;
-- A3S Box wiring to the restarted owner, real-driver process reattachment,
-  production routing, and real-host cutover;
+- production A3S Box owner wiring, real-driver process reattachment, production
+  routing, and real-host cutover;
 - upstream conformance and security certification.
 
 The built-in WHPX driver remains `probe-only`, and the default host service

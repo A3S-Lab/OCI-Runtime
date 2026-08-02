@@ -90,6 +90,14 @@ enum DriverCall {
 type DriverProcessKey = (ContainerId, Generation, ProcessId);
 type DriverProcessState = (DriverProcess, Option<ExitStatus>);
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct DurableProcessFixture {
+    target: ProcessTarget,
+    pid: i32,
+    terminal: bool,
+    exit_status: Option<ExitStatus>,
+}
+
 #[derive(Debug)]
 struct RecordingDriver {
     capability: DriverCapability,
@@ -109,6 +117,7 @@ struct RecordingDriver {
     recovery: Mutex<DriverRecovery>,
     failures: Mutex<HashMap<&'static str, Vec<Error>>>,
     process_fixture_log: Option<PathBuf>,
+    process_fixture_state: Option<PathBuf>,
     recover_process_fixture_state: bool,
 }
 
@@ -146,15 +155,18 @@ impl RecordingDriver {
             recovery: Mutex::new(DriverRecovery::none()),
             failures: Mutex::new(HashMap::new()),
             process_fixture_log: None,
+            process_fixture_state: None,
             recover_process_fixture_state: false,
         }
     }
 
     fn process_fixture(log: PathBuf) -> Self {
-        let mut driver = Self::supported();
+        let state = log.with_extension("processes.json");
+        let mut driver = Self::with_control_operations();
         driver.capability.evidence =
             BTreeMap::from([("test-driver".to_string(), "out-of-process".to_string())]);
         driver.process_fixture_log = Some(log);
+        driver.process_fixture_state = Some(state);
         driver.recover_process_fixture_state = true;
         driver
     }
@@ -290,6 +302,115 @@ impl RecordingDriver {
         })
     }
 
+    fn load_process_fixture_state(&self) -> Result<Vec<DurableProcessFixture>> {
+        let Some(path) = &self.process_fixture_state else {
+            return Ok(Vec::new());
+        };
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(Error::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to read out-of-process driver state {}: {error}",
+                        path.display()
+                    ),
+                )
+                .for_operation("load-process-fixture-state"))
+            }
+        };
+        serde_json::from_slice(&bytes).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!(
+                    "failed to decode out-of-process driver state {}: {error}",
+                    path.display()
+                ),
+            )
+            .for_operation("load-process-fixture-state")
+        })
+    }
+
+    fn store_process_fixture_state(&self) -> Result<()> {
+        let Some(path) = &self.process_fixture_state else {
+            return Ok(());
+        };
+        let processes = self.processes.lock().expect("driver processes lock");
+        let mut durable: Vec<_> = processes
+            .iter()
+            .map(
+                |((container_id, generation, process_id), (process, exit_status))| {
+                    DurableProcessFixture {
+                        target: ProcessTarget {
+                            container: ContainerTarget::exact(container_id.clone(), *generation),
+                            process_id: process_id.clone(),
+                        },
+                        pid: process.pid(),
+                        terminal: process.terminal(),
+                        exit_status: exit_status.clone(),
+                    }
+                },
+            )
+            .collect();
+        drop(processes);
+        durable.sort_by(|left, right| {
+            left.target
+                .container
+                .id
+                .as_str()
+                .cmp(right.target.container.id.as_str())
+                .then_with(|| {
+                    left.target
+                        .process_id
+                        .as_str()
+                        .cmp(right.target.process_id.as_str())
+                })
+        });
+        let bytes = serde_json::to_vec(&durable).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!("failed to encode out-of-process driver state: {error}"),
+            )
+            .for_operation("store-process-fixture-state")
+        })?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(path)
+            .map_err(|error| {
+                Error::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to open out-of-process driver state {}: {error}",
+                        path.display()
+                    ),
+                )
+                .for_operation("store-process-fixture-state")
+            })?;
+        file.write_all(&bytes).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!(
+                    "failed to write out-of-process driver state {}: {error}",
+                    path.display()
+                ),
+            )
+            .for_operation("store-process-fixture-state")
+        })?;
+        file.sync_all().map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!(
+                    "failed to sync out-of-process driver state {}: {error}",
+                    path.display()
+                ),
+            )
+            .for_operation("store-process-fixture-state")
+        })
+    }
+
     fn recover_process_fixture(&self, record: &ContainerRecord) -> Result<()> {
         let status = record.state.status();
         let state = if status == &ContainerState::Stopped {
@@ -318,6 +439,23 @@ impl RecordingDriver {
             .lock()
             .expect("driver states lock")
             .insert(container_id(record.state.id()), (record.generation, state));
+        let restored = self.load_process_fixture_state()?;
+        let mut processes = self.processes.lock().expect("driver processes lock");
+        for process in restored {
+            if process.target.container.id.as_str() != record.state.id()
+                || process.target.container.generation != Some(record.generation)
+            {
+                continue;
+            }
+            let key = Self::process_key(&process.target)?;
+            processes.insert(
+                key,
+                (
+                    DriverProcess::new(process.pid, process.terminal)?,
+                    process.exit_status,
+                ),
+            );
+        }
         Ok(())
     }
 
@@ -472,6 +610,7 @@ impl RuntimeDriver for RecordingDriver {
             .lock()
             .expect("driver processes lock")
             .retain(|(id, _, _), _| id != &request.target.id);
+        self.store_process_fixture_state()?;
         Ok(())
     }
 
@@ -517,6 +656,7 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
+        self.record_process_fixture_call("exec")?;
         self.calls
             .lock()
             .expect("driver calls lock")
@@ -588,6 +728,8 @@ impl RuntimeDriver for RecordingDriver {
             .lock()
             .expect("driver exec replay lock")
             .insert(request.context.operation_id.clone(), (request, process));
+        drop(processes);
+        self.store_process_fixture_state()?;
         Ok(process)
     }
 
@@ -664,6 +806,9 @@ impl RuntimeDriver for RecordingDriver {
             .lock()
             .expect("driver signal replay lock")
             .insert(request.context.operation_id.clone(), request);
+        drop(processes);
+        self.record_process_fixture_call("signal-process")?;
+        self.store_process_fixture_state()?;
         Ok(())
     }
 
@@ -884,12 +1029,60 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.record_process_fixture_call("read-output")?;
         self.calls
             .lock()
             .expect("driver calls lock")
             .push(DriverCall::ReadOutput(request.clone()));
         if let Some(error) = self.take_failure("read-output") {
             return Err(error);
+        }
+        if self.process_fixture_state.is_some() {
+            let key = Self::process_key(&request.target)?;
+            let processes = self.processes.lock().expect("driver processes lock");
+            let (process, exit_status) = processes.get(&key).ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "driver process does not exist")
+                    .for_operation("driver-read-output")
+            })?;
+            let data = b"runtime owner process\n".to_vec();
+            let data_sequence = u64::try_from(data.len()).expect("fixture output length");
+            let mut chunks = vec![OutputChunk {
+                sequence: data_sequence,
+                stream: OutputStream::Stdout,
+                data,
+                eof: false,
+            }];
+            if exit_status.is_some() {
+                chunks.push(OutputChunk {
+                    sequence: data_sequence + 1,
+                    stream: OutputStream::Stdout,
+                    data: Vec::new(),
+                    eof: true,
+                });
+                if !process.terminal() {
+                    chunks.push(OutputChunk {
+                        sequence: data_sequence + 2,
+                        stream: OutputStream::Stderr,
+                        data: Vec::new(),
+                        eof: true,
+                    });
+                }
+            }
+            drop(processes);
+            let mut bytes = 0_u64;
+            return Ok(chunks
+                .into_iter()
+                .filter(|chunk| chunk.sequence > request.after_sequence)
+                .take_while(|chunk| {
+                    let next = bytes.saturating_add(chunk.data.len() as u64);
+                    if next > u64::from(request.max_bytes) {
+                        false
+                    } else {
+                        bytes = next;
+                        true
+                    }
+                })
+                .collect());
         }
         if let Some(chunks) = self
             .output_responses
@@ -914,6 +1107,7 @@ impl RuntimeDriver for RecordingDriver {
     }
 
     async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        self.record_process_fixture_call("write-stdin")?;
         self.calls
             .lock()
             .expect("driver calls lock")
@@ -2880,6 +3074,18 @@ async fn retained_sdk_client_recovers_after_runtime_owner_process_restart() {
         .await
         .expect("start through first owner");
     assert_eq!(running.state.status(), &ContainerState::Running);
+    let mut exec = exec_request(target.clone(), "process-restart-exec", "surviving-worker");
+    exec.io = ProcessIo {
+        stdin: IoMode::Pipe,
+        stdout: IoMode::Capture,
+        stderr: IoMode::Capture,
+        terminal_size: None,
+    };
+    let process = client
+        .exec(exec.clone())
+        .await
+        .expect("start process session through first owner");
+    assert_eq!(process.target.process_id.as_str(), "surviving-worker");
 
     first_owner.terminate();
     let disconnected = client
@@ -2921,11 +3127,85 @@ async fn retained_sdk_client_recovers_after_runtime_owner_process_restart() {
             .expect("durable start replay after process restart"),
         running
     );
+    assert_eq!(
+        client
+            .exec(exec)
+            .await
+            .expect("durable exec replay after process restart"),
+        process
+    );
+    let inventory = client
+        .processes(ProcessesRequest {
+            target: target.clone(),
+        })
+        .await
+        .expect("recover live process inventory after owner restart");
+    assert!(inventory.iter().any(|candidate| candidate == &process));
+    client
+        .write_stdin(WriteStdinRequest {
+            context: OperationContext::new(operation_id("process-restart-stdin")),
+            process: process.target.clone(),
+            data: b"after restart\n".to_vec(),
+        })
+        .await
+        .expect("continue process stdin after owner restart");
+    let process_signal = Signal::new(15).expect("valid process signal");
+    client
+        .signal_process(SignalProcessRequest {
+            context: OperationContext::new(operation_id("process-restart-process-signal")),
+            process: process.target.clone(),
+            signal: process_signal,
+        })
+        .await
+        .expect("signal recovered process session");
+    assert_eq!(
+        client
+            .wait_process(WaitProcessRequest {
+                process: process.target.clone(),
+                timeout_ms: Some(1_000),
+            })
+            .await
+            .expect("wait for recovered process session"),
+        ExitStatus::signaled(process_signal.get(), false).expect("process exit status")
+    );
+    let output = client
+        .read_output(ReadOutputRequest {
+            process: process.target,
+            after_sequence: 0,
+            max_bytes: 4_096,
+            wait_timeout_ms: Some(0),
+        })
+        .await
+        .expect("read recovered process output");
+    assert_eq!(
+        output
+            .iter()
+            .flat_map(|chunk| chunk.data.iter().copied())
+            .collect::<Vec<_>>(),
+        b"runtime owner process\n"
+    );
+    assert!(output.iter().any(|chunk| chunk.eof));
 
     let calls = std::fs::read_to_string(&call_log).expect("read process driver call log");
     assert_eq!(calls.lines().filter(|call| *call == "create").count(), 1);
     assert_eq!(calls.lines().filter(|call| *call == "start").count(), 1);
+    assert_eq!(calls.lines().filter(|call| *call == "exec").count(), 1);
     assert_eq!(calls.lines().filter(|call| *call == "recover").count(), 1);
+    assert_eq!(
+        calls.lines().filter(|call| *call == "write-stdin").count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|call| *call == "signal-process")
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls.lines().filter(|call| *call == "read-output").count(),
+        1
+    );
 
     client
         .kill(KillRequest {
@@ -2949,5 +3229,11 @@ async fn retained_sdk_client_recovers_after_runtime_owner_process_restart() {
     assert_eq!(calls.lines().filter(|call| *call == "start").count(), 1);
     assert_eq!(calls.lines().filter(|call| *call == "kill").count(), 1);
     assert_eq!(calls.lines().filter(|call| *call == "delete").count(), 1);
+    let process_state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(call_log.with_extension("processes.json"))
+            .expect("read cleaned process fixture state"),
+    )
+    .expect("decode cleaned process fixture state");
+    assert_eq!(process_state, serde_json::json!([]));
     second_owner.terminate();
 }

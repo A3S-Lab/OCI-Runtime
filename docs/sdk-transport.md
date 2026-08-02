@@ -51,9 +51,11 @@ owner processes. The first process creates and starts a durable generation over
 a real Unix socket or Windows named pipe and is then terminated. A second
 process opens the same `HostRuntimeService` state root and endpoint; the
 retained client reconnects, reads the exact generation, and replays the original
-create/start requests without another deterministic test-driver dispatch. Real
-native Linux and utility-VM driver reattachment remains platform qualification,
-not transport evidence.
+create/start/exec requests without another deterministic test-driver dispatch.
+It then recovers live process inventory and continues stdin, signal, wait,
+captured output, and cleanup on the same exact process target. Real native Linux
+and utility-VM driver reattachment remains platform qualification, not
+transport evidence.
 
 ## A3S Box Client
 

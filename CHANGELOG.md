@@ -8,12 +8,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 - Out-of-process runtime-owner restart coverage for the durable host service.
   The cross-platform test launches the runtime test binary as one OS process,
-  creates and starts a generation through real local IPC, terminates that
-  owner, and launches a second process against the same state root and endpoint.
-  One retained `RuntimeClient` exposes the disconnect, reconnects to the new
-  owner, and replays the original create/start identities without a second
-  driver dispatch. The fixture deliberately uses a deterministic test driver;
-  Box wiring and real native/WHPX process recovery remain separate gates.
+  creates and starts a generation plus a live exec through real local IPC,
+  terminates that owner, and launches a second process against the same state
+  root and endpoint. One retained `RuntimeClient` exposes the disconnect,
+  reconnects to the new owner, replays create/start/exec without duplicate
+  driver dispatch, recovers live process inventory, and continues stdin,
+  signal, wait, output, and cleanup on the exact process target. The fixture
+  deliberately uses a deterministic driver; production Box owner wiring and
+  real native/WHPX process reattachment remain separate gates.
 - Reconnectable local SDK transport for retained `RuntimeClient` instances.
   The request that first observes a broken Unix socket or Windows named pipe
   still returns a retryable ambiguity and is never replayed inside the

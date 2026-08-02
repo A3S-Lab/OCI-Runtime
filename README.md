@@ -204,9 +204,10 @@ lifecycle API or state machine.
 The runtime contract suite also restarts the owner across two distinct OS
 processes on the same Unix socket or Windows named pipe. The replacement opens
 the same durable `HostRuntimeService` state, while one retained client recovers
-the exact generation and replays create/start without duplicate test-driver
-dispatch. This proves the generic process and transport boundary, not native
-Linux or utility-VM reattachment on real hardware.
+the exact generation and a live exec target, replays create/start/exec without
+duplicate test-driver dispatch, and continues inventory, stdin, signal, wait,
+output, and cleanup. This proves the generic process and transport boundary,
+not native Linux or utility-VM reattachment on real hardware.
 
 ## Platform status
 
