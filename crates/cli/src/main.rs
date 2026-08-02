@@ -59,6 +59,36 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         agent: PathBuf,
     },
+    /// Hold one real Native Linux workload for owner-death qualification.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeLinuxRecoveryOwner {
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        #[arg(long, value_name = "FILE")]
+        ready_file: PathBuf,
+    },
+    /// Reopen a killed Native Linux owner and emit safe-recovery evidence.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeLinuxRecoveryResume {
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        #[arg(long, value_name = "ID")]
+        container_id: a3s_oci_sdk::ContainerId,
+        #[arg(long)]
+        generation: u64,
+    },
     /// Own one A3S Box container through the native Linux SDK service.
     #[cfg(target_os = "linux")]
     NativeLinuxService {
@@ -399,6 +429,44 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
         Command::NativeLinuxHostService { root, agent } => {
             native_service::run_host(root, agent).await?;
             Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxRecoveryOwner {
+            agent,
+            root,
+            bundle,
+            container_id,
+            ready_file,
+        } => {
+            a3s_oci_runtime::native_linux_recovery_owner(
+                &agent,
+                &root,
+                &bundle,
+                container_id,
+                &ready_file,
+            )
+            .await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxRecoveryResume {
+            agent,
+            root,
+            bundle,
+            container_id,
+            generation,
+        } => {
+            let generation = a3s_oci_sdk::Generation(generation);
+            let target = a3s_oci_sdk::ContainerTarget::exact(container_id, generation);
+            let report =
+                a3s_oci_runtime::native_linux_recovery_resume(&agent, &root, &bundle, target).await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
         }
         #[cfg(target_os = "linux")]
         Command::NativeLinuxService {

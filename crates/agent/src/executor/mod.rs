@@ -26,6 +26,7 @@ mod process_group;
 #[cfg(test)]
 mod process_group_tests;
 mod process_io;
+mod recovery;
 mod rlimit;
 mod rootfs;
 #[cfg(test)]
@@ -70,6 +71,7 @@ use state::{
 
 pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
+pub use recovery::LinuxExecutorTombstone;
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const MAX_OPERATION_RECORDS: usize = 4_096;
@@ -109,7 +111,9 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
 pub struct LinuxExecutor {
     capabilities: AgentCapabilities,
     init_executable: PathBuf,
+    runtime_parent: PathBuf,
     runtime_root: PathBuf,
+    owner_identity: recovery::ProcessIdentity,
     rootfs_scope: RootfsScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
     state: Mutex<ExecutorState>,
@@ -217,7 +221,9 @@ impl LinuxExecutor {
             ));
         }
         let user_mapping_runtime = namespace::UserMappingRuntime::detect()?;
-        let runtime_root = parent.join(format!("a3s-oci-agent-{}", std::process::id()));
+        let runtime_parent = parent.to_path_buf();
+        let owner_identity = recovery::ProcessIdentity::current()?;
+        let runtime_root = runtime_parent.join(recovery::runtime_root_name(owner_identity));
         let mut builder = tokio::fs::DirBuilder::new();
         builder.mode(0o700);
         builder.create(&runtime_root).await.map_err(|error| {
@@ -230,10 +236,17 @@ impl LinuxExecutor {
             )
         })?;
 
+        if let Err(error) = recovery::write_owner_record(&runtime_root, owner_identity).await {
+            let _ = tokio::fs::remove_dir_all(&runtime_root).await;
+            return Err(error);
+        }
+
         Ok(Self {
             capabilities: AgentCapabilities::linux_executor(AGENT_VERSION, std::env::consts::ARCH)?,
             init_executable,
+            runtime_parent,
             runtime_root,
+            owner_identity,
             rootfs_scope,
             user_mapping_runtime,
             state: Mutex::new(ExecutorState::default()),
@@ -387,7 +400,7 @@ impl LinuxExecutor {
             let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
             return Err(error);
         }
-        let process = match PreparedProcess::spawn(
+        let mut process = match PreparedProcess::spawn(
             &plan,
             &config_snapshot,
             &self.init_executable,
@@ -408,6 +421,21 @@ impl LinuxExecutor {
                 return Err(error);
             }
         };
+        if let Err(error) = recovery::write_container_record(
+            &runtime_directory,
+            &config_snapshot,
+            &request.target,
+            request.bundle.config_digest(),
+            self.owner_identity,
+            &process,
+            state.cgroup_manager.as_ref(),
+        )
+        .await
+        {
+            let _ = process.force_stop().await;
+            let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
+            return Err(error);
+        }
         let response = AgentState::new(
             request.target.clone(),
             ContainerState::Created,
@@ -430,6 +458,32 @@ impl LinuxExecutor {
             },
         );
         Ok(response)
+    }
+
+    /// Reconcile one durable generation left by a terminated executor owner.
+    ///
+    /// The returned tombstone proves that the exact recorded launcher and init
+    /// identities have disappeared. It retains only the paths required for a
+    /// later stopped-only delete; no live process handle is reconstructed.
+    pub async fn recover_stale_generation(
+        &self,
+        target: &a3s_oci_sdk::ContainerTarget,
+        config_digest: &str,
+        durable_pid: Option<i32>,
+    ) -> Result<Option<LinuxExecutorTombstone>> {
+        recovery::recover_stale_generation(
+            &self.runtime_parent,
+            &self.runtime_root,
+            target,
+            config_digest,
+            durable_pid,
+        )
+        .await
+    }
+
+    /// Remove the exact transient paths retained by a recovered tombstone.
+    pub async fn delete_stale_generation(&self, tombstone: &LinuxExecutorTombstone) -> Result<()> {
+        recovery::delete_stale_generation(tombstone).await
     }
 
     /// Create through the native in-process path with validated inherited

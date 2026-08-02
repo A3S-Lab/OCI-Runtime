@@ -39,6 +39,8 @@ mod native_control;
 #[cfg(target_os = "linux")]
 mod native_linux_driver;
 #[cfg(target_os = "linux")]
+mod native_recovery_smoke;
+#[cfg(target_os = "linux")]
 mod native_service;
 mod native_smoke;
 mod oci_smoke;
@@ -86,6 +88,12 @@ pub use native_control::{
 };
 #[cfg(target_os = "linux")]
 pub use native_linux_driver::NativeLinuxDriver;
+#[cfg(target_os = "linux")]
+pub use native_recovery_smoke::{
+    native_linux_recovery_owner, native_linux_recovery_resume, NativeLinuxRecoveryOwnerReady,
+    NativeLinuxRecoverySmokeReport, NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION,
+    NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION,
+};
 #[cfg(target_os = "linux")]
 pub use native_service::{
     NativeLinuxHostService, NativeLinuxHostServiceConfig, NativeLinuxService,

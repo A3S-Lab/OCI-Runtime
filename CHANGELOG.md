@@ -6,6 +6,23 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Native Linux owner-death recovery with fail-closed, PID-reuse-safe cleanup.
+  Every executor instance and exact container generation now persists a
+  private, versioned recovery record bound to the owner, launcher, and init
+  PID start times, the immutable OCI configuration digest, and only the
+  runtime-created cgroup paths. The top-level launcher is armed with
+  `PR_SET_PDEATHSIG(SIGKILL)` before it can create namespace children, so an
+  uncatchable host-owner exit terminates the authenticated launcher,
+  namespace init, payload, exec helpers, and filesystem helpers rather than
+  leaving an uncontrolled host process. A replacement driver commits a
+  stopped tombstone only after the old owner identity and exact workload have
+  disappeared and all recovery evidence revalidates; it exposes idempotent
+  kill, empty process inventory, explicit refusal to invent an exit status,
+  and stopped-only delete with bounded executor/cgroup cleanup. The new
+  `a3s.oci.native-linux-recovery-smoke.v1` real-process gate kills the owner
+  with `SIGKILL`, reopens durable state in a distinct process, verifies those
+  semantics, and is retained by x86_64 and aarch64 Linux CI. Live process-I/O
+  session reattachment remains a separate promotion gate.
 - Production A3S Box consumer evidence at Box commit `0c3f84e4` against this
   runtime's `a6f6242` SDK revision. Box now validates its managed home,
   prepares snapshot, named-volume, network, rootfs, and OCI bundle resources,

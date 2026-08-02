@@ -29,6 +29,7 @@ use super::inherited_descriptor::InheritedDescriptorPlan;
 use super::io::ProcessIoHandle;
 use super::namespace::{self, RetainedExecutionContext, UserMappingRuntime};
 use super::pid;
+use super::pid_supervisor;
 use super::pidfd::{PidFd, SignalOutcome};
 use super::plan::InitPlan;
 use super::process_group::ProcessGroupLease;
@@ -93,6 +94,8 @@ impl PreparedProcess {
             ));
         }
         let (listener, control_name) = bind_control_listener()?;
+        // SAFETY: getpid has no preconditions and cannot fail.
+        let expected_owner_pid = unsafe { libc::getpid() };
         let mut command = Command::new(init_executable);
         command
             .arg("container-init")
@@ -112,6 +115,17 @@ impl PreparedProcess {
         // already-validated caller descriptors with bounded dup2.
         unsafe {
             command.pre_exec(move || {
+                pid_supervisor::arm_parent_death_signal("container launcher")
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+                // Rechecking closes the fork-to-prctl race. If the runtime
+                // owner already died, the launcher must fail before it can
+                // create a workload that no authenticated owner can recover.
+                if libc::getppid() != expected_owner_pid {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "native runtime owner exited before launcher supervision was armed",
+                    ));
+                }
                 if let Some(descriptor) = init_cgroup_procs {
                     cgroup::join_current_process(descriptor)?;
                 }
@@ -421,6 +435,27 @@ impl PreparedProcess {
 
     pub(super) const fn pid(&self) -> i32 {
         self.pid
+    }
+
+    pub(super) fn launcher_pid(&self) -> Result<i32> {
+        let raw = self.child.id().ok_or_else(|| {
+            process_error(
+                ErrorCode::FailedPrecondition,
+                "container launcher exited before recovery evidence was persisted",
+            )
+        })?;
+        i32::try_from(raw).map_err(|error| {
+            process_error(
+                ErrorCode::ResourceExhausted,
+                format!("container launcher PID {raw} does not fit the recovery model: {error}"),
+            )
+        })
+    }
+
+    pub(super) fn recovery_cgroup_paths(&self) -> Option<(&Path, &[std::path::PathBuf])> {
+        self.cgroup
+            .as_ref()
+            .map(super::cgroup::CgroupHandle::recovery_paths)
     }
 
     pub(super) async fn release(&mut self) -> Result<()> {
