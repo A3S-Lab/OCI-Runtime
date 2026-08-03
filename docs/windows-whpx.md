@@ -216,6 +216,38 @@ A successful WHPX owner-death recovery smoke additionally proves that:
 - the ordinary candidate remains `probe-only`, and only the crate-private
   qualification constructor reports its exact scoped override.
 
+## A3S Box qualification owner
+
+`a3s-oci box-whpx-qualification-service` exposes the same durable SDK service
+over a protected local Windows named pipe for the explicit A3S Box product
+lifecycle gate. It does not register or promote the public WHPX candidate. The
+service opens a separate crate-private override whose capability evidence is
+exactly `qualification_override=box-product-lifecycle-only`; the owner-death
+gate retains its different `host-service-owner-death-only` scope.
+
+```powershell
+a3s-oci box-whpx-qualification-service `
+  --shim C:\a3s\bin\a3s-oci-krun-shim.exe `
+  --runtime-root C:\a3s\oci-runtime `
+  --vm-rootfs C:\a3s\oci-runtime\system `
+  --state-root C:\a3s\oci-runtime\state `
+  --pipe '\\.\pipe\a3s-oci-box-qualification' `
+  --ready-file C:\a3s\oci-runtime\box-service-ready.json
+```
+
+The optional readiness file is created atomically only after the driver,
+durable state, protected pipe ACL, and first pipe instance are ready. It uses
+schema `a3s.oci.box-whpx-service-ready.v1`, records the owner PID and exact
+endpoint/roots, and is removed on graceful shutdown. A stale file after owner
+death is never connection evidence; clients must still complete the SDK
+handshake and feature preflight.
+
+This owner accepts the operation-scoped portable-bundle handoff contract used
+by Box. The source must be exactly
+`bundle-handoffs/<container>/<create-operation>/bundle` below the runtime root,
+with a normalized relative `root.path` and no absolute bind source. The driver
+atomically moves a valid source into its allocated generation before launch.
+
 ## Hardware soak gate
 
 Run the complete gate from an x86-64 Windows host with WHPX enabled:

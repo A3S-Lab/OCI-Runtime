@@ -20,6 +20,7 @@ mod agent_smoke;
 mod agent_smoke_process;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod agent_socket;
+mod box_whpx_service;
 mod cleanup_report;
 mod driver;
 mod fault;
@@ -65,6 +66,9 @@ pub use agent_pipe::WindowsAgentPipeListener;
 pub use agent_smoke::agent_vm_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use agent_socket::MacosAgentSocketListener;
+pub use box_whpx_service::{
+    serve_box_whpx_qualification, BoxWhpxServiceConfig, BOX_WHPX_SERVICE_READY_SCHEMA_VERSION,
+};
 pub use cleanup_report::{
     FaultInjectionEvidence, LifecycleFaultPoint, NativeLinuxFaultCleanupReport,
     OciVmFaultCleanupReport,
