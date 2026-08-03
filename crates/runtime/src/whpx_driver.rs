@@ -199,12 +199,30 @@ impl WhpxRuntimeDriver {
     pub(crate) async fn open_service_qualification(
         config: WhpxRuntimeDriverConfig,
     ) -> Result<Self> {
+        Self::open_qualification(config, "host-service-owner-death-only").await
+    }
+
+    /// Open one launch-ready instance exclusively for the A3S Box product
+    /// lifecycle qualification gate.
+    ///
+    /// This remains crate-private and leaves [`Self::open_candidate`] in its
+    /// public probe-only state. The separately scoped evidence prevents a Box
+    /// qualification service from being mistaken for production promotion or
+    /// for the owner-death recovery gate.
+    pub(crate) async fn open_box_qualification(config: WhpxRuntimeDriverConfig) -> Result<Self> {
+        Self::open_qualification(config, "box-product-lifecycle-only").await
+    }
+
+    async fn open_qualification(
+        config: WhpxRuntimeDriverConfig,
+        scope: &'static str,
+    ) -> Result<Self> {
         let mut driver = Self::open_candidate(config).await?;
         driver.capability.readiness = DriverReadiness::Experimental;
-        driver.capability.evidence.insert(
-            "qualification_override".to_string(),
-            "host-service-owner-death-only".to_string(),
-        );
+        driver
+            .capability
+            .evidence
+            .insert("qualification_override".to_string(), scope.to_string());
         Ok(driver)
     }
 

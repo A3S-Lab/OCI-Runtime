@@ -216,6 +216,27 @@ enum Command {
         #[arg(long, default_value_t = 1)]
         generation: u64,
     },
+    /// Serve the explicit A3S Box lifecycle qualification over a protected Windows pipe.
+    BoxWhpxQualificationService {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Protected runtime root containing system, shares, console, and handoffs.
+        #[arg(long, value_name = "DIR")]
+        runtime_root: PathBuf,
+        /// Extracted immutable Linux system root containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// Durable runtime service state root.
+        #[arg(long, value_name = "DIR")]
+        state_root: PathBuf,
+        /// Local named-pipe path below \\.\pipe\.
+        #[arg(long, value_name = "PIPE")]
+        pipe: String,
+        /// Optional new file published after the protected endpoint is bound.
+        #[arg(long, value_name = "FILE")]
+        ready_file: Option<PathBuf>,
+    },
     /// Hold one durable WHPX service alive for the owner-death qualification parent.
     #[command(hide = true)]
     WhpxRecoveryOwner {
@@ -618,6 +639,30 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             } else {
                 ExitCode::from(2)
             })
+        }
+        Command::BoxWhpxQualificationService {
+            shim,
+            runtime_root,
+            vm_rootfs,
+            state_root,
+            pipe,
+            ready_file,
+        } => {
+            let mut config = a3s_oci_runtime::BoxWhpxServiceConfig::new(
+                shim,
+                runtime_root,
+                vm_rootfs,
+                state_root,
+                pipe,
+            );
+            if let Some(ready_file) = ready_file {
+                config = config.with_ready_file(ready_file);
+            }
+            a3s_oci_runtime::serve_box_whpx_qualification(config, async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::WhpxRecoveryOwner {
             shim,

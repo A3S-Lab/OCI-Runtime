@@ -341,6 +341,36 @@ fn whpx_driver_smoke_fails_closed_with_versioned_output() {
 }
 
 #[test]
+fn box_whpx_qualification_service_fails_before_publishing_readiness() {
+    let temporary =
+        std::env::temp_dir().join(format!("a3s-oci-box-whpx-cli-test-{}", std::process::id()));
+    let ready = temporary.join("ready.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .arg("box-whpx-qualification-service")
+        .arg("--shim")
+        .arg(temporary.join("missing-shim"))
+        .arg("--runtime-root")
+        .arg(temporary.join("missing-runtime"))
+        .arg("--vm-rootfs")
+        .arg(temporary.join("missing-system"))
+        .arg("--state-root")
+        .arg(temporary.join("missing-state"))
+        .arg("--pipe")
+        .arg(format!(
+            r"\\.\pipe\a3s-oci-box-cli-test-{}",
+            std::process::id()
+        ))
+        .arg("--ready-file")
+        .arg(&ready)
+        .output()
+        .expect("Box WHPX qualification service command must start");
+
+    assert!(!output.status.success());
+    assert!(!ready.exists());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("runtime request failed"));
+}
+
+#[test]
 fn whpx_recovery_resume_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
         .args([
