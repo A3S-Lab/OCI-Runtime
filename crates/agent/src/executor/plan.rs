@@ -167,6 +167,12 @@ impl InitPlan {
             process_plan.gid,
             &process_plan.additional_gids,
         )?;
+        super::portable_rootfs_metadata::validate_plan(
+            &annotations,
+            root.path().is_absolute(),
+            namespaces.new_mount(),
+            namespaces.new_user(),
+        )?;
         let cgroup = CgroupPlan::from_linux(spec.linux().as_ref(), &annotations)?;
         if cgroup.uses_control_workload_layout() {
             if !namespaces.new_cgroup() {

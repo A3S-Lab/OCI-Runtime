@@ -450,6 +450,7 @@ fn prepare_create_environment_before_pivot(
     prepared_devices: &PreparedDeviceSources,
     detached_sources: &mut DetachedMountSources,
 ) -> Result<()> {
+    super::portable_rootfs_metadata::replay_if_requested(&plan.annotations, rootfs)?;
     if let Some(hostname) = &plan.hostname {
         if !plan.namespaces.has_uts() {
             return Err(init_error(

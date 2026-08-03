@@ -248,6 +248,18 @@ by Box. The source must be exactly
 with a normalized relative `root.path` and no absolute bind source. The driver
 atomically moves a valid source into its allocated generation before launch.
 
+Box converts its host-side image manifest to the SDK-owned portable contract
+and adds
+`dev.a3s.oci.rootfs-metadata=a3s.oci.rootfs-metadata.v1`. Before any OCI mount
+is installed, the guest validates and consumes the fixed
+`.a3s-oci-rootfs-metadata.v1.json` manifest from the relative rootfs, then
+restores Linux ownership and mode data that cannot be represented directly by
+the Windows backing filesystem. Replay rejects an absolute root, a user or
+missing mount namespace, a wrong annotation, manifests above 16 MiB or 250,000
+entries, duplicate/reserved/escaping paths, symlink parents, type or
+symlink-target drift, and any failed `lchown`, `chmod`, deletion, or directory
+sync. All entries are validated before the first metadata mutation.
+
 ## Hardware soak gate
 
 Run the complete gate from an x86-64 Windows host with WHPX enabled:

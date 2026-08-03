@@ -21,6 +21,7 @@ mod pidfd;
 mod plan;
 #[cfg(test)]
 mod plan_tests;
+mod portable_rootfs_metadata;
 mod process;
 mod process_group;
 #[cfg(test)]

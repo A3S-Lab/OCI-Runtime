@@ -47,6 +47,15 @@ The accepted bootstrap profile requires:
 - numeric UID, GID, optional supplementary groups, and optional umask;
 - bounded arguments and environment with unique environment names.
 
+The opt-in portable rootfs-metadata extension is narrower than the general OCI
+profile. Its exact `dev.a3s.oci.rootfs-metadata` annotation requires a relative
+root, a new mount namespace, no user namespace, and the fixed
+`.a3s-oci-rootfs-metadata.v1.json` manifest. The prepared init validates the
+whole bounded manifest without following symlink parents, restores
+guest-visible UID/GID and mode values, consumes the manifest durably, and only
+then begins OCI rootfs and mount setup. Bundles without the extension are
+unchanged.
+
 When `linux.namespaces` is present, it accepts unique UTS, mount, IPC, network,
 cgroup, PID, user, and time namespace entries in any order. Omitting `path`
 creates a namespace; an absolute `path` joins an existing namespace; omitting

@@ -11,6 +11,7 @@ mod error;
 mod handoff;
 mod id;
 mod model;
+mod rootfs_metadata;
 mod schema;
 mod semantic;
 mod service;
@@ -47,6 +48,12 @@ pub use oci_spec;
 pub use oci_spec::runtime::{
     ContainerState as OciContainerState, Features as OciFeatures, LinuxResources, Process, Spec,
     State as OciState,
+};
+pub use rootfs_metadata::{
+    PortableRootfsEntryKind, PortableRootfsMetadataEntry, PortableRootfsMetadataManifest,
+    PORTABLE_ROOTFS_METADATA_ANNOTATION, PORTABLE_ROOTFS_METADATA_FILE,
+    PORTABLE_ROOTFS_METADATA_MAX_BYTES, PORTABLE_ROOTFS_METADATA_MAX_ENTRIES,
+    PORTABLE_ROOTFS_METADATA_SCHEMA_V1,
 };
 pub use schema::{
     OciSchemaCoverageItem, OciSchemaCoverageManifest, OciSchemaDisposition, OciSchemaDocument,
