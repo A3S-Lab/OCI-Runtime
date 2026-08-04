@@ -890,7 +890,63 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
+        name: Verify Windows libkrun context
         run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+      - if: runner.os == 'Windows'
+        name: Stage Windows WHPX qualification binaries
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'a3s-oci-windows-whpx-qualification'
+          if (Test-Path -LiteralPath $stage) {
+            throw "Refusing to reuse qualification artifact directory: $stage"
+          }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+
+          $sources = @(
+            'target\debug\a3s-oci.exe',
+            'target\debug\a3s-oci-krun-shim.exe',
+            'target\debug\krun.dll',
+            'target\debug\libkrunfw.dll'
+          )
+          foreach ($source in $sources) {
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Missing Windows qualification binary: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination $stage
+          }
+
+          $files = @(
+            Get-ChildItem -LiteralPath $stage -File |
+              Sort-Object Name |
+              ForEach-Object {
+                [ordered]@{
+                  name = $_.Name
+                  size = $_.Length
+                  sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+              }
+          )
+          $manifest = [ordered]@{
+            schema_version = 'a3s.oci.windows-whpx-qualification-artifact.v1'
+            commit = $env:GITHUB_SHA
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            files = $files
+          }
+          $json = ConvertTo-Json -InputObject $manifest -Depth 5
+          [IO.File]::WriteAllText(
+            (Join-Path $stage 'artifact-manifest.json'),
+            $json,
+            (New-Object System.Text.UTF8Encoding($false))
+          )
+      - if: runner.os == 'Windows'
+        name: Upload Windows WHPX qualification binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-whpx-qualification
+          path: ${{ runner.temp }}/a3s-oci-windows-whpx-qualification
+          if-no-files-found: error
+          retention-days: 14
 
   native-linux-arm64:
     name: native-linux-lifecycle (aarch64)
@@ -954,3 +1010,44 @@ jobs:
               exit 1
             fi
           done
+      - name: Stage static guest qualification artifacts
+        shell: bash
+        run: |
+          stage="$RUNNER_TEMP/a3s-oci-guest-agents"
+          test ! -e "$stage"
+          mkdir -p "$stage"
+          install -m 0755 \
+            target/x86_64-unknown-linux-musl/release/a3s-oci-agent \
+            "$stage/a3s-oci-agent-x86_64"
+          install -m 0755 \
+            target/aarch64-unknown-linux-musl/release/a3s-oci-agent \
+            "$stage/a3s-oci-agent-aarch64"
+
+          x86_sha="$(sha256sum "$stage/a3s-oci-agent-x86_64" | cut -d ' ' -f 1)"
+          arm_sha="$(sha256sum "$stage/a3s-oci-agent-aarch64" | cut -d ' ' -f 1)"
+          jq --null-input \
+            --arg schema_version 'a3s.oci.guest-agent-qualification-artifact.v1' \
+            --arg commit "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg x86_sha "$x86_sha" \
+            --arg arm_sha "$arm_sha" \
+            --argjson x86_size "$(stat --format '%s' "$stage/a3s-oci-agent-x86_64")" \
+            --argjson arm_size "$(stat --format '%s' "$stage/a3s-oci-agent-aarch64")" \
+            '{
+              schema_version: $schema_version,
+              commit: $commit,
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              files: [
+                {name: "a3s-oci-agent-x86_64", size: $x86_size, sha256: $x86_sha},
+                {name: "a3s-oci-agent-aarch64", size: $arm_size, sha256: $arm_sha}
+              ]
+            }' > "$stage/artifact-manifest.json"
+      - name: Upload static guest qualification artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-agents-musl
+          path: ${{ runner.temp }}/a3s-oci-guest-agents
+          if-no-files-found: error
+          retention-days: 14

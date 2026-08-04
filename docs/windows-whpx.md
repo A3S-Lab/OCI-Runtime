@@ -264,6 +264,27 @@ sync. All entries are validated before the first metadata mutation.
 
 Run the complete gate from an x86-64 Windows host with WHPX enabled:
 
+Every successful CI run retains two qualification inputs for 14 days:
+`windows-whpx-qualification` contains the exact Windows CLI, shim, and pinned
+native runtime DLLs, while `guest-agents-musl` contains the static x86_64 and
+aarch64 guest agents. Each artifact includes a versioned JSON manifest that
+binds every file size and SHA-256 digest to the exact source commit and Actions
+run. Download both artifacts from the same successful run; never combine
+artifacts whose manifests name different commits.
+
+```powershell
+gh run download <run-id> --repo A3S-Lab/OCI-Runtime `
+  --name windows-whpx-qualification --dir C:\a3s\oci-artifacts\windows
+gh run download <run-id> --repo A3S-Lab/OCI-Runtime `
+  --name guest-agents-musl --dir C:\a3s\oci-artifacts\agents
+```
+
+For a build-free qualification, copy the four verified Windows files into
+`target\debug`, copy `a3s-oci-agent-x86_64` to
+`target\x86_64-unknown-linux-musl\release\a3s-oci-agent`, and pass
+`-SkipBuild` to the focused scripts below. The scripts still bind their report
+to the checked-out commit, so that checkout must match both artifact manifests.
+
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\windows-whpx-soak.ps1 `
