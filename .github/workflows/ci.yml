@@ -895,6 +895,8 @@ jobs:
       - if: runner.os == 'Windows'
         name: Stage Windows WHPX qualification binaries
         shell: pwsh
+        env:
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $stage = Join-Path $env:RUNNER_TEMP 'a3s-oci-windows-whpx-qualification'
           if (Test-Path -LiteralPath $stage) {
@@ -928,7 +930,8 @@ jobs:
           )
           $manifest = [ordered]@{
             schema_version = 'a3s.oci.windows-whpx-qualification-artifact.v1'
-            commit = $env:GITHUB_SHA
+            source_commit = $env:A3S_QUALIFICATION_SOURCE_COMMIT
+            workflow_commit = $env:GITHUB_SHA
             run_id = $env:GITHUB_RUN_ID
             run_attempt = $env:GITHUB_RUN_ATTEMPT
             files = $files
@@ -1012,6 +1015,8 @@ jobs:
           done
       - name: Stage static guest qualification artifacts
         shell: bash
+        env:
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           stage="$RUNNER_TEMP/a3s-oci-guest-agents"
           test ! -e "$stage"
@@ -1027,7 +1032,8 @@ jobs:
           arm_sha="$(sha256sum "$stage/a3s-oci-agent-aarch64" | cut -d ' ' -f 1)"
           jq --null-input \
             --arg schema_version 'a3s.oci.guest-agent-qualification-artifact.v1' \
-            --arg commit "$GITHUB_SHA" \
+            --arg source_commit "$A3S_QUALIFICATION_SOURCE_COMMIT" \
+            --arg workflow_commit "$GITHUB_SHA" \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg x86_sha "$x86_sha" \
@@ -1036,7 +1042,8 @@ jobs:
             --argjson arm_size "$(stat --format '%s' "$stage/a3s-oci-agent-aarch64")" \
             '{
               schema_version: $schema_version,
-              commit: $commit,
+              source_commit: $source_commit,
+              workflow_commit: $workflow_commit,
               run_id: $run_id,
               run_attempt: $run_attempt,
               files: [

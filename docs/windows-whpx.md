@@ -268,9 +268,10 @@ Every successful CI run retains two qualification inputs for 14 days:
 `windows-whpx-qualification` contains the exact Windows CLI, shim, and pinned
 native runtime DLLs, while `guest-agents-musl` contains the static x86_64 and
 aarch64 guest agents. Each artifact includes a versioned JSON manifest that
-binds every file size and SHA-256 digest to the exact source commit and Actions
-run. Download both artifacts from the same successful run; never combine
-artifacts whose manifests name different commits.
+binds every file size and SHA-256 digest to the exact source commit, the
+workflow commit that was built, and the Actions run. Download both artifacts
+from the same successful run; never combine artifacts whose manifests name
+different source or workflow commits.
 
 ```powershell
 gh run download <run-id> --repo A3S-Lab/OCI-Runtime `
@@ -283,7 +284,10 @@ For a build-free qualification, copy the four verified Windows files into
 `target\debug`, copy `a3s-oci-agent-x86_64` to
 `target\x86_64-unknown-linux-musl\release\a3s-oci-agent`, and pass
 `-SkipBuild` to the focused scripts below. The scripts still bind their report
-to the checked-out commit, so that checkout must match both artifact manifests.
+to the checked-out commit, so that checkout must match `source_commit` in both
+artifact manifests. A pull-request artifact can also name GitHub's temporary
+merge commit as `workflow_commit`; a `main` push artifact has identical source
+and workflow commits.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
