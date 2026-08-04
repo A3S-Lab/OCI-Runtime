@@ -134,6 +134,10 @@ pub(super) fn runtime_root_name(owner: ProcessIdentity) -> String {
     )
 }
 
+pub(super) fn transient_runtime_root_name(pid: u32) -> String {
+    format!("{RUNTIME_ROOT_PREFIX}{pid}")
+}
+
 pub(super) async fn write_owner_record(runtime_root: &Path, owner: ProcessIdentity) -> Result<()> {
     let record = ExecutorOwnerRecord {
         schema_version: OWNER_SCHEMA_VERSION.to_string(),

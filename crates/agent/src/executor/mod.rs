@@ -28,6 +28,8 @@ mod process_group;
 mod process_group_tests;
 mod process_io;
 mod recovery;
+#[cfg(test)]
+mod recovery_mode_tests;
 mod rlimit;
 mod rootfs;
 #[cfg(test)]
@@ -84,6 +86,12 @@ pub(super) enum RootfsScope {
     NativeAbsolute,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryMode {
+    Transient,
+    DurableNative,
+}
+
 impl RootfsScope {
     const fn internal_argument(self) -> &'static str {
         match self {
@@ -114,7 +122,7 @@ pub struct LinuxExecutor {
     init_executable: PathBuf,
     runtime_parent: PathBuf,
     runtime_root: PathBuf,
-    owner_identity: recovery::ProcessIdentity,
+    owner_identity: Option<recovery::ProcessIdentity>,
     rootfs_scope: RootfsScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
     state: Mutex<ExecutorState>,
@@ -128,19 +136,32 @@ impl LinuxExecutor {
                 format!("failed to resolve guest-agent executable: {error}"),
             )
         })?;
-        Self::open_with_rootfs_scope(DEFAULT_RUNTIME_PARENT, executable, RootfsScope::BundleOnly)
-            .await
+        Self::open_with_rootfs_scope(
+            DEFAULT_RUNTIME_PARENT,
+            executable,
+            RootfsScope::BundleOnly,
+            RecoveryMode::Transient,
+        )
+        .await
     }
 
-    /// Open an isolated executor beneath an existing runtime-owned directory.
+    /// Open a durable bundle-scoped executor beneath a runtime-owned directory.
     ///
     /// The init executable must enter [`crate::run_internal_container_init`]
-    /// before starting its normal application path.
+    /// before starting its normal application path. Native owner records are
+    /// retained for host-process recovery; the utility-VM guest uses its
+    /// private transient constructor and authenticated outer recovery handoff.
     pub async fn open(
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
     ) -> Result<Self> {
-        Self::open_with_rootfs_scope(runtime_parent, init_executable, RootfsScope::BundleOnly).await
+        Self::open_with_rootfs_scope(
+            runtime_parent,
+            init_executable,
+            RootfsScope::BundleOnly,
+            RecoveryMode::DurableNative,
+        )
+        .await
     }
 
     /// Open the native Linux executor with OCI absolute root paths enabled.
@@ -152,14 +173,20 @@ impl LinuxExecutor {
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
     ) -> Result<Self> {
-        Self::open_with_rootfs_scope(runtime_parent, init_executable, RootfsScope::NativeAbsolute)
-            .await
+        Self::open_with_rootfs_scope(
+            runtime_parent,
+            init_executable,
+            RootfsScope::NativeAbsolute,
+            RecoveryMode::DurableNative,
+        )
+        .await
     }
 
     async fn open_with_rootfs_scope(
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
         rootfs_scope: RootfsScope,
+        recovery_mode: RecoveryMode,
     ) -> Result<Self> {
         pidfd::verify_support()?;
         let parent = runtime_parent.as_ref();
@@ -223,8 +250,8 @@ impl LinuxExecutor {
         }
         let user_mapping_runtime = namespace::UserMappingRuntime::detect()?;
         let runtime_parent = parent.to_path_buf();
-        let owner_identity = recovery::ProcessIdentity::current()?;
-        let runtime_root = runtime_parent.join(recovery::runtime_root_name(owner_identity));
+        let (runtime_root, owner_identity) =
+            executor_runtime_layout(&runtime_parent, recovery_mode)?;
         let mut builder = tokio::fs::DirBuilder::new();
         builder.mode(0o700);
         builder.create(&runtime_root).await.map_err(|error| {
@@ -237,9 +264,11 @@ impl LinuxExecutor {
             )
         })?;
 
-        if let Err(error) = recovery::write_owner_record(&runtime_root, owner_identity).await {
-            let _ = tokio::fs::remove_dir_all(&runtime_root).await;
-            return Err(error);
+        if let Some(owner) = owner_identity {
+            if let Err(error) = recovery::write_owner_record(&runtime_root, owner).await {
+                let _ = tokio::fs::remove_dir_all(&runtime_root).await;
+                return Err(error);
+            }
         }
 
         Ok(Self {
@@ -422,20 +451,22 @@ impl LinuxExecutor {
                 return Err(error);
             }
         };
-        if let Err(error) = recovery::write_container_record(
-            &runtime_directory,
-            &config_snapshot,
-            &request.target,
-            request.bundle.config_digest(),
-            self.owner_identity,
-            &process,
-            state.cgroup_manager.as_ref(),
-        )
-        .await
-        {
-            let _ = process.force_stop().await;
-            let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
-            return Err(error);
+        if let Some(owner) = self.owner_identity {
+            if let Err(error) = recovery::write_container_record(
+                &runtime_directory,
+                &config_snapshot,
+                &request.target,
+                request.bundle.config_digest(),
+                owner,
+                &process,
+                state.cgroup_manager.as_ref(),
+            )
+            .await
+            {
+                let _ = process.force_stop().await;
+                let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                return Err(error);
+            }
         }
         let response = AgentState::new(
             request.target.clone(),
@@ -472,6 +503,12 @@ impl LinuxExecutor {
         config_digest: &str,
         durable_pid: Option<i32>,
     ) -> Result<Option<LinuxExecutorTombstone>> {
+        if self.owner_identity.is_none() {
+            return Err(executor_error(
+                ErrorCode::Unsupported,
+                "stale-generation recovery is available only for durable native Linux executors",
+            ));
+        }
         recovery::recover_stale_generation(
             &self.runtime_parent,
             &self.runtime_root,
@@ -923,6 +960,21 @@ impl GuestAgentService for LinuxExecutor {
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
         self.filesystem_recorded(request).await
     }
+}
+
+fn executor_runtime_layout(
+    runtime_parent: &Path,
+    recovery_mode: RecoveryMode,
+) -> Result<(PathBuf, Option<recovery::ProcessIdentity>)> {
+    let owner_identity = match recovery_mode {
+        RecoveryMode::Transient => None,
+        RecoveryMode::DurableNative => Some(recovery::ProcessIdentity::current()?),
+    };
+    let name = match owner_identity {
+        Some(owner) => recovery::runtime_root_name(owner),
+        None => recovery::transient_runtime_root_name(std::process::id()),
+    };
+    Ok((runtime_parent.join(name), owner_identity))
 }
 
 async fn create_private_directory(path: &Path) -> Result<()> {
