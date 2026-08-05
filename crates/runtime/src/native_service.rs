@@ -322,11 +322,11 @@ where
             completed = connections.join_next(), if !connections.is_empty() => {
                 match completed {
                     Some(Ok(Ok(()))) => {}
-                    Some(Ok(Err(error))) => {
-                        connections.abort_all();
-                        while connections.join_next().await.is_some() {}
-                        return Err(error);
-                    }
+                    // Protocol, transport, and client-disconnect failures are
+                    // scoped to the accepted connection. A short-lived or
+                    // malformed client must not tear down the shared host
+                    // service and every container it owns.
+                    Some(Ok(Err(_))) => {}
                     Some(Err(error)) => {
                         connections.abort_all();
                         while connections.join_next().await.is_some() {}
@@ -762,6 +762,62 @@ mod tests {
         );
         assert_eq!(
             second_result
+                .expect_err("test service rejects features")
+                .code,
+            ErrorCode::Unsupported
+        );
+
+        shutdown_tx.send(()).expect("request service shutdown");
+        server
+            .await
+            .expect("service task")
+            .expect("clean service shutdown");
+        drop(socket);
+    }
+
+    #[tokio::test]
+    async fn aborted_client_does_not_terminate_shared_host_service() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket_path = temporary.path().join(SERVICE_SOCKET_NAME);
+        let (listener, socket) = bind_private_socket(&socket_path)
+            .await
+            .expect("private socket");
+        let endpoint =
+            a3s_oci_sdk::LocalIpcEndpoint::unix_socket(&socket_path).expect("local SDK endpoint");
+        let service: Arc<dyn OciRuntimeService> = Arc::new(UnsupportedService);
+        // SAFETY: geteuid has no preconditions or failure result.
+        let effective_uid = unsafe { libc::geteuid() };
+        let server_socket_path = socket_path.clone();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            serve_authenticated_connections(
+                &listener,
+                &server_socket_path,
+                service,
+                effective_uid,
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+            )
+            .await
+        });
+
+        let aborted = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("connect client that aborts before negotiation");
+        drop(aborted);
+
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            a3s_oci_sdk::RuntimeClient::connect(&endpoint),
+        )
+        .await
+        .expect("replacement SDK client negotiation timed out")
+        .expect("replacement SDK client");
+        assert_eq!(
+            client
+                .features()
+                .await
                 .expect_err("test service rejects features")
                 .code,
             ErrorCode::Unsupported
