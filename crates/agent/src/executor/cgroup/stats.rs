@@ -239,12 +239,12 @@ fn parse_io_stat_bytes(value: &str) -> Result<Option<(u64, u64)>> {
             .ok_or_else(|| stats_error(format!("io.stat line {line_number} is missing rbytes")))?;
         let device_write_bytes = device_write_bytes
             .ok_or_else(|| stats_error(format!("io.stat line {line_number} is missing wbytes")))?;
-        read_bytes = read_bytes.checked_add(device_read_bytes).ok_or_else(|| {
-            stats_error("io.stat aggregate read byte counter overflowed".to_string())
-        })?;
-        write_bytes = write_bytes.checked_add(device_write_bytes).ok_or_else(|| {
-            stats_error("io.stat aggregate write byte counter overflowed".to_string())
-        })?;
+        read_bytes = read_bytes
+            .checked_add(device_read_bytes)
+            .ok_or_else(|| stats_error("io.stat aggregate read byte counter overflowed"))?;
+        write_bytes = write_bytes
+            .checked_add(device_write_bytes)
+            .ok_or_else(|| stats_error("io.stat aggregate write byte counter overflowed"))?;
         saw_device = true;
     }
 
