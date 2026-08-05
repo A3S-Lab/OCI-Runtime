@@ -325,12 +325,15 @@ For either layout, update preserves omitted fields, applies supported memory,
 CPU, cpuset, and PID changes with exact read-back, and rolls earlier writes
 back in reverse order if a later write fails. Stats normalizes CPU counters to
 nanoseconds, memory counters to bytes, and includes PID plus memory/PID event
-counters. Pause writes `1` to `cgroup.freeze`, resume writes `0`, and neither
-operation returns until `cgroup.events` reports the exact `frozen` state. The
-process inventory refreshes the init and exec supervisors, excludes terminal
-processes, and returns only positive PIDs bound to the exact container
-generation. Exec is rejected while the workload target is frozen. Force
-cleanup thaws a paused target before signaling and reaping its processes.
+counters. It also sums `io.stat` read and write bytes across every workload
+block device into `io.read_bytes` and `io.write_bytes`; an unavailable I/O
+controller leaves those optional metrics absent. Pause writes `1` to
+`cgroup.freeze`, resume writes `0`, and neither operation returns until
+`cgroup.events` reports the exact `frozen` state. The process inventory
+refreshes the init and exec supervisors, excludes terminal processes, and
+returns only positive PIDs bound to the exact container generation. Exec is
+rejected while the workload target is frozen. Force cleanup thaws a paused
+target before signaling and reaping its processes.
 
 Exact request retries are fingerprinted by `OperationId`, and reused IDs with
 different requests fail. This includes pause, resume, and resource update.

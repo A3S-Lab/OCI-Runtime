@@ -721,6 +721,12 @@ pub struct MemoryStats {
     pub peak_bytes: Option<u64>,
 }
 
+/// Aggregate bytes read by the workload across all block devices.
+pub const IO_READ_BYTES_METRIC: &str = "io.read_bytes";
+
+/// Aggregate bytes written by the workload across all block devices.
+pub const IO_WRITE_BYTES_METRIC: &str = "io.write_bytes";
+
 /// Runtime resource snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerStats {

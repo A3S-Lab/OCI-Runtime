@@ -64,7 +64,9 @@ shares/quota/period/cpuset, and PID-limit changes with exact read-back and
 reverse-order rollback after a partial failure. Stats returns a typed,
 generation-bound snapshot with a positive Unix-nanosecond timestamp,
 normalized CPU nanoseconds, memory bytes, process count, and named cgroup
-integer counters.
+integer counters. When the workload cgroup exposes `io.stat`, the executor
+publishes aggregate block-device byte counters under the stable
+`io.read_bytes` and `io.write_bytes` metric names.
 
 Protocol version 6 adds `read-output`, `write-stdin`, and `close-stdin`.
 Every request carries an exact process target. Output polls use one globally
