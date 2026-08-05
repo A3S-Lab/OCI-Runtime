@@ -218,18 +218,10 @@ fn parse_io_stat_bytes(value: &str) -> Result<Option<(u64, u64)>> {
             })?;
             match name {
                 "rbytes" => {
-                    if device_read_bytes.replace(counter).is_some() {
-                        return Err(stats_error(format!(
-                            "io.stat line {line_number} contains duplicate rbytes"
-                        )));
-                    }
+                    record_io_stat_counter(&mut device_read_bytes, counter, "rbytes", line_number)?
                 }
                 "wbytes" => {
-                    if device_write_bytes.replace(counter).is_some() {
-                        return Err(stats_error(format!(
-                            "io.stat line {line_number} contains duplicate wbytes"
-                        )));
-                    }
+                    record_io_stat_counter(&mut device_write_bytes, counter, "wbytes", line_number)?
                 }
                 _ => {}
             }
@@ -249,6 +241,20 @@ fn parse_io_stat_bytes(value: &str) -> Result<Option<(u64, u64)>> {
     }
 
     Ok(saw_device.then_some((read_bytes, write_bytes)))
+}
+
+fn record_io_stat_counter(
+    slot: &mut Option<u64>,
+    counter: u64,
+    name: &str,
+    line_number: usize,
+) -> Result<()> {
+    if slot.replace(counter).is_some() {
+        return Err(stats_error(format!(
+            "io.stat line {line_number} contains duplicate {name}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
