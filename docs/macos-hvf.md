@@ -698,8 +698,40 @@ Guest executor enforced that explicit mapping without changing the checked-in
 rootful fixture.
 
 This is real VM cleanup evidence for all nine Host/Guest `create` transitions
-and both Host shutdown stages. Other operations, durable `HostRuntimeService`
-reopen, and actual VM/owner replacement remain open.
+and both Host shutdown stages. It does not by itself prove durable service
+reopen or a replacement VM owner.
+
+## Durable Host reopen and VM owner replacement
+
+`oci-vm-reopen-replacement` takes the first real recovery slice through the
+durable Host service instead of calling the diagnostic Agent client directly:
+
+```sh
+reopen_dir="$(mktemp -d)"
+target/debug/a3s-oci oci-vm-reopen-replacement \
+  --shim "$smoke_dir/a3s-oci-krun-shim" \
+  --vm-rootfs "$rootfs" \
+  --bundle "$bundle" \
+  --console-dir "$reopen_dir"
+```
+
+The first qualification-only HVF driver opens a real authenticated VM and
+injects `host-before-request-write` into `create`. The retryable error leaves
+the exact durable record and OperationId in `creating`; that VM must then exit
+with its endpoint, processes, Guest runtime root, and Host descriptor inventory
+fully restored. A second `HostRuntimeService` opens the same scratch state root
+around a fresh VM/session owner. Its recovery hook accepts only that one
+`creating` record and returns `DriverRecovery::none`, so retrying the unchanged
+request completes the same generation through the replacement Guest. The
+diagnostic then force-deletes it and requires the durable list to be empty.
+
+`a3s.oci.oci-vm-reopen-replacement.v1` retains both nested VM reports and fails
+unless their endpoint, shim PID, and direct VM-worker PID identities differ.
+It also requires generation and OperationId reuse, one replacement recovery
+call, complete force-delete cleanup, and removal of the newly created scratch
+state root. The August 10, 2026 Apple Silicon run passed with two fresh VMs.
+This closes one real `create` recovery path; the remaining transport stages and
+operations still need the same replacement treatment.
 
 ## Remaining workload gates
 

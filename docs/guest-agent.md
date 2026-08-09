@@ -410,7 +410,15 @@ four Guest points fail the current call; the post-response point delivers that
 response and fails a follow-up request. Each shutdown point first delivers
 `create`, faults one retained-client close, and then completes idempotent owner
 cleanup. Malformed protocol input, service errors, and cleanup errors remain
-failures. Durable Host reopen and replacement VM/owner paths are still open.
+failures.
+
+The first durable replacement path now interrupts `create` before the Host
+writes its request, closes that VM, and reopens the same `creating` record with
+a new `HostRuntimeService` and a fresh authenticated Guest. The unchanged
+OperationId and generation complete exactly once on the replacement connection;
+force delete then leaves no durable record or Guest runtime state. Both VM
+reports must prove different endpoint and process owners plus complete Host
+descriptor restoration. The remaining stages and operations are still open.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

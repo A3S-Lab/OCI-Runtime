@@ -1,7 +1,10 @@
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestPath};
 use a3s_oci_agent_protocol::{
     AgentCloseStdinRequest, AgentContainerOperationRequest, AgentDeleteRequest, AgentExecRequest,
@@ -11,23 +14,39 @@ use a3s_oci_agent_protocol::{
     GuestAgentService, AGENT_MAX_IO_PAYLOAD_BYTES,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+use a3s_oci_sdk::RuntimeOperation;
 use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
     FilesystemRequest, FilesystemResponse, OperationContext, OperationId, OutputChunk,
-    ProcessRecord, Result, RuntimeOperation,
+    ProcessRecord, Result,
 };
 use sha2::{Digest, Sha256};
 
-#[cfg(target_os = "windows")]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use crate::driver::DriverCreateRequest;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+use crate::driver::OciHookPhase;
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverDeleteRequest,
     DriverExecRequest, DriverKillRequest, DriverProcess, DriverReadOutputRequest,
     DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
     DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
-    OciHookPhase,
 };
 
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 20] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
@@ -51,6 +70,10 @@ pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 20] = [
     RuntimeOperation::Filesystem,
 ];
 
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 pub(crate) const AGENT_DRIVER_HOOKS: [OciHookPhase; 6] = OciHookPhase::ALL;
 
 /// Driver-facing mapping around either an in-process executor or one
@@ -72,6 +95,7 @@ impl fmt::Debug for AgentDriverClient {
     }
 }
 
+#[cfg_attr(all(target_os = "macos", target_arch = "aarch64"), allow(dead_code))]
 impl AgentDriverClient {
     pub(crate) fn new(
         service: Arc<dyn GuestAgentService>,
@@ -85,7 +109,10 @@ impl AgentDriverClient {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     pub(crate) async fn create(
         &self,
         request: DriverCreateRequest,

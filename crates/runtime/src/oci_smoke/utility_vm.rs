@@ -18,6 +18,8 @@ mod fault_cleanup;
 mod lifecycle;
 mod multi_container;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod reopen_replacement;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod soak;
 mod transport_fault_cleanup;
 
@@ -41,6 +43,16 @@ pub(super) async fn run_transport_fault_cleanup(
     stage: a3s_oci_agent_protocol::AgentTransportFaultStage,
 ) -> crate::OciVmTransportFaultCleanupReport {
     transport_fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, stage).await
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(super) async fn run_reopen_replacement(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_directory: &Path,
+    console_directory: &Path,
+) -> crate::OciVmReopenReplacementReport {
+    reopen_replacement::run(shim, vm_rootfs, bundle_directory, console_directory).await
 }
 
 pub(super) async fn run_multi_container(

@@ -308,7 +308,13 @@ Guest cleanup evidence where applicable, VM and process reap, endpoint removal,
 an unchanged runtime-root inventory, and complete Host descriptor restoration.
 Twenty-four fresh local VMs passed the repeated Host request-response v2 gate
 and five more passed its Guest gate. The final v3 requalification passed all
-eleven stages in eleven fresh VMs. This proves real transport cleanup, not
-durable service reopen: other operations,
-`HostRuntimeService` reopen, and VM/owner replacement remain part of the
-persistence gate above.
+eleven stages in eleven fresh VMs.
+
+One additional real-HVF path now carries `host-before-request-write` through
+the durable layer. The first VM closes while the original Create OperationId
+and generation remain in `creating`; a new `HostRuntimeService` and distinct
+VM/session owner reopen that record, complete the same Create, force-delete it,
+and leave no durable container or transient Host/Guest resource. The retained
+`a3s.oci.oci-vm-reopen-replacement.v1` report includes both VM cleanup reports.
+Other operations and transport points still belong to the replacement matrix
+above.

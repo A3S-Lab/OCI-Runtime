@@ -27,14 +27,14 @@ const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const MAX_GUEST_CONSOLE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
-struct HostTransportFault {
+pub(super) struct HostTransportFault {
     stage: AgentTransportFaultStage,
     crossings: AtomicU32,
     protocol_version: AtomicU16,
 }
 
 impl HostTransportFault {
-    const fn new(stage: AgentTransportFaultStage) -> Self {
+    pub(super) const fn new(stage: AgentTransportFaultStage) -> Self {
         Self {
             stage,
             crossings: AtomicU32::new(0),
@@ -42,18 +42,18 @@ impl HostTransportFault {
         }
     }
 
-    fn crossing_count(&self) -> u32 {
+    pub(super) fn crossing_count(&self) -> u32 {
         self.crossings.load(Ordering::SeqCst)
     }
 
-    fn protocol_version(&self) -> Option<u16> {
+    pub(super) fn protocol_version(&self) -> Option<u16> {
         match self.protocol_version.load(Ordering::SeqCst) {
             0 => None,
             version => Some(version),
         }
     }
 
-    fn injected_point(&self) -> Option<String> {
+    pub(super) fn injected_point(&self) -> Option<String> {
         self.protocol_version().map(|protocol_version| {
             match self.stage {
                 AgentTransportFaultStage::Operation(stage) => AgentTransportFaultPoint::Operation {

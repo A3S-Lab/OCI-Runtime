@@ -694,9 +694,20 @@ enforce it. No property is silently ignored.
     Host descriptor cleanup. Apple Silicon HVF passed both points in two fresh
     VMs, then passed the complete eleven-stage matrix in eleven fresh VMs with
     `a3s.oci.oci-vm-transport-fault-cleanup.v3` evidence.
-  - [ ] Carry all operations through `HostRuntimeService` reopen and actual
-    VM/owner replacement. The portable matrix, nine real `create` stages, and
-    two real shutdown stages do not satisfy this gate.
+  - [x] Resume one real `create` after `host-before-request-write` through both
+    `HostRuntimeService` reopen and actual HVF VM/session-owner replacement.
+    The first VM returns a retryable `Unavailable`, closes with complete Host
+    and Guest cleanup, and leaves the durable record in `creating`. A new
+    service and fresh authenticated VM accept that exact record through
+    `DriverRecovery::none`, reuse its OperationId and generation, complete
+    `create`, force-delete it, and return every resource inventory to baseline.
+    The August 10, 2026 Apple Silicon gate passed with two distinct endpoint,
+    shim, and VM-worker identities under
+    `a3s.oci.oci-vm-reopen-replacement.v1`.
+  - [ ] Carry the remaining operations and transport stages through
+    `HostRuntimeService` reopen and actual VM/owner replacement. The portable
+    matrix, eleven real cleanup stages, and first real replacement path do not
+    satisfy the complete matrix gate.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

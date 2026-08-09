@@ -366,6 +366,21 @@ enum Command {
         #[arg(long, value_enum)]
         fault_at: TransportFaultStageArg,
     },
+    /// Reopen durable create state through a fresh macOS HVF VM owner.
+    OciVmReopenReplacement {
+        /// Isolated, entitlement-signed libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// OCI bundle contained by the VM root filesystem.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing directory for two console logs and isolated durable state.
+        #[arg(long, value_name = "DIR")]
+        console_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -898,6 +913,27 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
                 &bundle,
                 &console,
                 a3s_oci_runtime::AgentTransportFaultStage::from(fault_at),
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::OciVmReopenReplacement {
+            shim,
+            vm_rootfs,
+            bundle,
+            console_dir,
+        } => {
+            let report = a3s_oci_runtime::oci_vm_reopen_replacement(
+                &shim,
+                &vm_rootfs,
+                &bundle,
+                &console_dir,
             )
             .await;
             let succeeded = report.is_success();

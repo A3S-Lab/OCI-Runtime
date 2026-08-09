@@ -201,8 +201,16 @@ retryable transport failure after the service has recorded one effect. A newly
 authenticated connection then sends the identical `OperationId` and request,
 receives the original exact-generation response, and leaves the effect count at
 one. Reusing the ID with changed request content returns `Conflict`. This proves
-the protocol and session-local replay boundary; it does not yet prove agent
-restart, utility-VM replacement, or host-service reopen recovery.
+the protocol and session-local replay boundary.
+
+The real `a3s.oci.oci-vm-reopen-replacement.v1` gate now covers the earliest
+Host point through durable service reopen and an actual utility-VM owner
+replacement. `host-before-request-write` leaves the create journal in
+`creating`, the first authenticated VM closes completely, and a fresh VM
+receives the unchanged OperationId and generation from a newly opened
+`HostRuntimeService`. The report retains both owner identities and requires
+force-delete cleanup. In-place Guest-agent restart and the remaining
+operation/stage replacement matrix are not covered by that first slice.
 
 ## Bundle Preservation
 

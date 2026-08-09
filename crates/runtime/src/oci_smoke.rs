@@ -6,7 +6,7 @@ use a3s_oci_core::HostPlatform;
 use crate::report::OciVmSmokeReport;
 use crate::{
     LifecycleFaultPoint, MacosHvfSoakConfig, MacosHvfSoakReport, OciVmFaultCleanupReport,
-    OciVmMultiContainerSmokeReport, OciVmTransportFaultCleanupReport,
+    OciVmMultiContainerSmokeReport, OciVmReopenReplacementReport, OciVmTransportFaultCleanupReport,
     WindowsOciVmMultiContainerSmokeReport,
 };
 
@@ -195,5 +195,30 @@ pub async fn oci_vm_transport_fault_cleanup(
     {
         let _ = (shim, vm_rootfs, bundle, console);
         OciVmTransportFaultCleanupReport::unsupported(HostPlatform::current(), stage)
+    }
+}
+
+/// Resume one interrupted durable create through a replacement macOS HVF owner.
+///
+/// The first VM is interrupted before its Create request is written. The
+/// diagnostic then closes that VM, reopens the same durable host state around
+/// a fresh authenticated VM, reuses the original OperationId and generation,
+/// and force-deletes the completed container through the replacement owner.
+#[must_use]
+pub async fn oci_vm_reopen_replacement(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+) -> OciVmReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_reopen_replacement(shim, vm_rootfs, bundle, console_directory).await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmReopenReplacementReport::unsupported(HostPlatform::current())
     }
 }

@@ -2,7 +2,8 @@
 
 #[cfg(any(
     target_os = "linux",
-    all(target_os = "windows", target_arch = "x86_64")
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 mod agent_driver;
 #[cfg(windows)]
@@ -46,6 +47,7 @@ mod native_service;
 mod native_smoke;
 mod oci_smoke;
 mod platform;
+mod reopen_replacement_report;
 mod report;
 mod rootfs_enforcement;
 mod service;
@@ -112,8 +114,11 @@ pub use native_smoke::{
     native_linux_service_smoke, native_linux_smoke, native_linux_soak,
 };
 pub use oci_smoke::{
-    macos_hvf_soak, oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke,
-    oci_vm_transport_fault_cleanup, windows_oci_vm_multi_container_smoke,
+    macos_hvf_soak, oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_reopen_replacement,
+    oci_vm_smoke, oci_vm_transport_fault_cleanup, windows_oci_vm_multi_container_smoke,
+};
+pub use reopen_replacement_report::{
+    OciVmReopenReplacementReport, OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION,
 };
 pub use report::{
     AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxRootlessSmokeReport,

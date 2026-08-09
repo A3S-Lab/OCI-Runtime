@@ -1018,6 +1018,122 @@ jobs:
             test "$runtime_after" = "$runtime_baseline"
             test ! -e "$marker"
           done
+      - if: runner.os == 'macOS'
+        name: Real macOS host-service reopen and HVF owner replacement
+        shell: bash
+        run: |
+          rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
+          signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
+          bundle_dir="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
+          marker="$bundle_dir/rootfs/.a3s-oci-create-start-smoke"
+          console_dir="$RUNNER_TEMP/a3s-oci-reopen-replacement"
+          support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+          mkdir "$console_dir"
+          endpoint_baseline="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          runtime_baseline="$(
+            find "$rootfs_dir/run" -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+
+          set +e
+          output="$(
+            target/debug/a3s-oci oci-vm-reopen-replacement \
+              --shim "$signed_dir/a3s-oci-krun-shim" \
+              --vm-rootfs "$rootfs_dir" \
+              --bundle "$bundle_dir" \
+              --console-dir "$console_dir"
+          )"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+
+          if [[ "$(uname -m)" == "arm64" && "$support" == "1" ]]; then
+            test "$status" -eq 0
+            jq --exit-status \
+              '.schema_version
+                   == "a3s.oci.oci-vm-reopen-replacement.v1"
+               and .platform == "macos" and .status == "available"
+               and .bundle_loaded
+               and .requested_operation == "create"
+               and .requested_stage == "host-before-request-write"
+               and (.qualification_operation_id | startswith("reopen-"))
+               and (.container_id | startswith("smoke-reopen-"))
+               and .negotiated_protocol == 9
+               and .injected_point
+                   == "agent-v9.create-host-before-request-write"
+               and .fault_crossings == 1
+               and .first_create_error_code == "unavailable"
+               and .first_create_error_operation
+                   == "oci-vm-transport-qualification-fault"
+               and .first_create_error_retryable
+               and .durable_creating_retained
+               and .generation_before_reopen == 1
+               and .host_service_reopened
+               and .replacement_recovery_calls == 1
+               and .create_completed_after_reopen
+               and .generation_after_reopen == .generation_before_reopen
+               and (.replacement_created_pid > 0)
+               and .same_generation_reused
+               and .same_operation_id_reused
+               and .force_delete_completed
+               and .durable_records_empty
+               and .marker_absent_after_cleanup
+               and .first_guest_runtime_clean
+               and .replacement_guest_runtime_clean
+               and .owners_distinct
+               and .state_root_removed
+               and .first_vm.status == "available"
+               and .replacement_vm.status == "available"
+               and .first_vm.selected_protocol == 9
+               and .replacement_vm.selected_protocol == 9
+               and (.first_vm.endpoint_name
+                    != .replacement_vm.endpoint_name)
+               and (.first_vm.shim_process_id
+                    != .replacement_vm.shim_process_id)
+               and (.first_vm.bridge_process_id
+                    != .replacement_vm.bridge_process_id)
+               and .first_vm.macos_cleanup.endpoint_removed
+               and .first_vm.macos_cleanup.shim_reaped
+               and .first_vm.macos_cleanup.bridge_reaped
+               and .first_vm.macos_cleanup.descriptor_inventory_restored
+               and (.first_vm.macos_cleanup.open_descriptors_before
+                    == .first_vm.macos_cleanup.open_descriptors_after)
+               and .replacement_vm.macos_cleanup.endpoint_removed
+               and .replacement_vm.macos_cleanup.shim_reaped
+               and .replacement_vm.macos_cleanup.bridge_reaped
+               and .replacement_vm.macos_cleanup.descriptor_inventory_restored
+               and (.replacement_vm.macos_cleanup.open_descriptors_before
+                    == .replacement_vm.macos_cleanup.open_descriptors_after)
+               and (.reason == null)' \
+              <<<"$output" >/dev/null
+          else
+            test "$status" -eq 2
+            jq --exit-status \
+              '.schema_version
+                   == "a3s.oci.oci-vm-reopen-replacement.v1"
+               and .platform == "macos"
+               and .status != "available"
+               and .requested_operation == "create"
+               and .requested_stage == "host-before-request-write"
+               and (.reason | length > 0)' \
+              <<<"$output" >/dev/null
+          fi
+
+          endpoint_after="$(
+            find /private/tmp -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          runtime_after="$(
+            find "$rootfs_dir/run" -maxdepth 1 \
+              -name 'a3s-oci-agent-*' -print | sort
+          )"
+          test "$endpoint_after" = "$endpoint_baseline"
+          test "$runtime_after" = "$runtime_baseline"
+          test ! -e "$marker"
+          test -z "$(find "$console_dir" -maxdepth 1 -name '*-state' -print)"
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
         env:
