@@ -27,6 +27,7 @@ impl<Request, Response> Default for OperationJournal<Request, Response> {
 #[derive(Debug, Default)]
 struct LifecycleJournal {
     create: OperationJournal<AgentCreateRequest, AgentState>,
+    state_requests: usize,
     start: OperationJournal<AgentStartRequest, AgentState>,
     kill: OperationJournal<AgentKillRequest, AgentState>,
     delete: OperationJournal<AgentDeleteRequest, ()>,
@@ -65,6 +66,13 @@ impl JournaledLifecycleGuest {
             .expect("guest journal lock")
             .create
             .effects
+    }
+
+    pub(super) fn state_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .state_requests
     }
 
     pub(super) fn start_request_count(&self) -> usize {
@@ -148,7 +156,8 @@ impl GuestAgentService for JournaledLifecycleGuest {
     }
 
     async fn state(&self, request: AgentStateRequest) -> Result<AgentState> {
-        let journal = self.journal.lock().expect("guest journal lock");
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.state_requests += 1;
         let response = journal.current.as_ref().ok_or_else(|| {
             Error::new(
                 ErrorCode::NotFound,
