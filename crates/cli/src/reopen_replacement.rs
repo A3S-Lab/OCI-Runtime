@@ -29,6 +29,7 @@ pub(crate) struct Args {
 enum OperationArg {
     Create,
     State,
+    Start,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -87,6 +88,19 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
         }
         OperationArg::State => {
             let report = a3s_oci_runtime::oci_vm_state_reopen_replacement_at(
+                &arguments.shim,
+                &arguments.vm_rootfs,
+                &arguments.bundle,
+                &arguments.console_dir,
+                stage,
+            )
+            .await;
+            let succeeded = report.is_success();
+            super::write_json(&report)?;
+            succeeded
+        }
+        OperationArg::Start => {
+            let report = a3s_oci_runtime::oci_vm_start_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
                 &arguments.bundle,

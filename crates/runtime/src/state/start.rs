@@ -14,7 +14,7 @@ use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
-use super::oci_state::{container_state, rebuild_state};
+use super::oci_state::{container_state, is_paused, rebuild_state};
 use super::operation::{request_digest, validate_deadline, validate_retry};
 use super::{
     claim_active_operation, ensure_active_operation, generation_conflict, DurableStateStore,
@@ -52,7 +52,7 @@ impl DurableStateStore {
                 &digest,
                 "prepare-start",
             )?;
-            return match &operation.outcome {
+            return match operation.outcome.clone() {
                 StoredOperationStatus::Prepared => {
                     let mut stored = self
                         .load_stored_exact(&operation.container_id, operation.generation)
@@ -121,9 +121,9 @@ impl DurableStateStore {
                     }
                 }
                 StoredOperationStatus::Succeeded { response } => {
-                    Ok(RecordOperationPreparation::Replayed(response.clone()))
+                    self.reconcile_succeeded_start(operation, response).await
                 }
-                StoredOperationStatus::Failed { error } => Err(error.clone()),
+                StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -184,6 +184,72 @@ impl DurableStateStore {
         )
         .await?;
         Ok(RecordOperationPreparation::Prepared(stored.record))
+    }
+
+    async fn reconcile_succeeded_start(
+        &self,
+        mut operation: StoredOperation,
+        response: a3s_oci_sdk::ContainerRecord,
+    ) -> Result<RecordOperationPreparation> {
+        let stored = match self.load_stored_container(&operation.container_id).await {
+            Ok(stored) => stored,
+            Err(error) if error.code == ErrorCode::NotFound => {
+                return Ok(RecordOperationPreparation::Replayed(response));
+            }
+            Err(error) => return Err(error),
+        };
+        if stored.record.generation != operation.generation || stored.record == response {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        if *stored.record.state.status() != ContainerState::Running
+            || *response.state.status() != ContainerState::Running
+        {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        if stored.record.state.pid() == response.state.pid() {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        if stored.active_operation.is_some()
+            || is_paused(&stored.record.state)
+            || is_paused(&response.state)
+        {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "reconcile-succeeded-start",
+                format!(
+                    "completed start operation {} differs from its durable container record",
+                    operation.operation_id
+                ),
+            ));
+        }
+        let expected = a3s_oci_sdk::ContainerRecord {
+            state: rebuild_state(
+                &response.state,
+                ContainerState::Running,
+                *stored.record.state.pid(),
+            )?,
+            ..response
+        };
+        if expected != stored.record {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "reconcile-succeeded-start",
+                format!(
+                    "completed start operation {} changed beyond its recovered process identity",
+                    operation.operation_id
+                ),
+            ));
+        }
+        operation.outcome = StoredOperationStatus::Succeeded {
+            response: stored.record.clone(),
+        };
+        self.write_json(
+            DurableMutation::CompleteStartOperation,
+            &self.operation_path(&operation.operation_id),
+            &operation,
+        )
+        .await?;
+        Ok(RecordOperationPreparation::Replayed(stored.record))
     }
 
     pub(crate) async fn complete_start(

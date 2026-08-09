@@ -225,7 +225,16 @@ replacement owner rebuilds that pre-start process with the original Create
 identity and generation. Reissued State must return the recovered durable
 record. At `guest-after-response-write`, the delivered first response must
 also match that record and a second State call must expose the disconnect.
-Replacement coverage for the other 18 operations remains open.
+
+Schema `a3s.oci.oci-vm-operation-reopen-replacement.v2` adds the same real-owner
+matrix for `start`. Before the completed-response point, durable state remains
+`created`; the replacement Guest rebuilds the process and receives the original
+Start OperationId and exact target. At `guest-after-response-write`, durable
+state is already `running`. Recovery recreates and starts that workload, the
+Host rebinds its PID in both completed Create and Start journal responses, and
+the later Start replay does not dispatch again. The gate removes any first-owner
+marker before replacement and requires the exact marker from the new workload.
+Replacement coverage for the other 17 operations remains open.
 
 ## Bundle Preservation
 

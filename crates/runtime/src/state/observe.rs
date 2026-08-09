@@ -6,7 +6,7 @@ use a3s_oci_sdk::{
     ContainerRecord, ContainerTarget, ErrorCode, OciSchemaValidator, Result, RuntimeEventKind,
 };
 
-use crate::driver::DriverState;
+use crate::driver::{DriverState, RecreatedProcess};
 use crate::fault::DurableMutation;
 
 use super::filesystem::state_error;
@@ -32,7 +32,7 @@ impl DurableStateStore {
         pid: Option<i32>,
         paused: bool,
     ) -> Result<ContainerRecord> {
-        self.observe_state_inner(target, status, pid, paused, false)
+        self.observe_state_inner(target, status, pid, paused, RecreatedProcess::None)
             .await
     }
 
@@ -53,7 +53,29 @@ impl DurableStateStore {
             observation.status(),
             observation.pid(),
             observation.paused(),
-            true,
+            RecreatedProcess::Created,
+        )
+        .await
+    }
+
+    pub(crate) async fn observe_recreated_running_process(
+        &self,
+        target: &ContainerTarget,
+        observation: DriverState,
+    ) -> Result<ContainerRecord> {
+        if observation.status() != ContainerState::Running || observation.paused() {
+            return Err(state_error(
+                ErrorCode::InvalidArgument,
+                "observe-recreated-running-process",
+                "replacement-owner recovery requires an unpaused running state",
+            ));
+        }
+        self.observe_state_inner(
+            target,
+            observation.status(),
+            observation.pid(),
+            observation.paused(),
+            RecreatedProcess::Running,
         )
         .await
     }
@@ -64,7 +86,7 @@ impl DurableStateStore {
         status: ContainerState,
         pid: Option<i32>,
         paused: bool,
-        replace_created_process: bool,
+        recreated_process: RecreatedProcess,
     ) -> Result<ContainerRecord> {
         validate_observation(status, pid, paused)?;
         let _guard = self.gate.lock().await;
@@ -88,6 +110,19 @@ impl DurableStateStore {
         } else {
             None
         };
+        if recreated_process == RecreatedProcess::Running
+            && current == ContainerState::Running
+            && is_paused(&stored.record.state)
+        {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "observe-recreated-running-process",
+                format!(
+                    "container {} is paused and cannot use unpaused running-process recovery",
+                    target.id
+                ),
+            ));
+        }
         let completes_active = active
             .as_ref()
             .is_some_and(|operation| observation_completes(operation.kind, status, paused));
@@ -96,12 +131,24 @@ impl DurableStateStore {
             (ContainerState::Created, ContainerState::Created)
             | (ContainerState::Running, ContainerState::Running) => {
                 if *stored.record.state.pid() != pid {
-                    if replace_created_process
-                        && current == ContainerState::Created
-                        && active.is_none()
+                    let replacement_matches = matches!(
+                        (recreated_process, current),
+                        (RecreatedProcess::Created, ContainerState::Created)
+                            | (RecreatedProcess::Running, ContainerState::Running)
+                    );
+                    let active_allows_replacement = active.is_none()
+                        || matches!(
+                            (
+                                recreated_process,
+                                active.as_ref().map(|operation| operation.kind)
+                            ),
+                            (RecreatedProcess::Created, Some(StoredOperationKind::Start))
+                        );
+                    if replacement_matches
+                        && active_allows_replacement
+                        && !is_paused(&stored.record.state)
                     {
-                        stored.record.state =
-                            rebuild_state(&stored.record.state, ContainerState::Created, pid)?;
+                        stored.record.state = rebuild_state(&stored.record.state, current, pid)?;
                         OciSchemaValidator::new()?.validate_state(&stored.record.state)?;
                         state_changed = true;
                     } else {

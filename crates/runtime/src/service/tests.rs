@@ -272,6 +272,12 @@ impl RecordingDriver {
                 .expect("valid recreated created recovery");
     }
 
+    fn set_recreated_running_recovery(&self, observation: DriverState) {
+        *self.recovery.lock().expect("driver recovery lock") =
+            DriverRecovery::recreated_running(observation)
+                .expect("valid recreated running recovery");
+    }
+
     fn set_recovery_exit(&self, status: ExitStatus) {
         *self.recovery.lock().expect("driver recovery lock") =
             DriverRecovery::stopped_with_exit(status).expect("valid recovery exit status");
@@ -2831,6 +2837,116 @@ async fn recreated_created_recovery_rebinds_pid_and_repairs_create_replay() {
     )
     .await
     .expect_err("ordinary recovery must not replace a created PID");
+    assert_eq!(error.code, ErrorCode::Conflict);
+}
+
+#[tokio::test]
+async fn recreated_running_recovery_rebinds_pid_and_repairs_create_and_start_replay() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("recreated-running-state");
+    let first_driver = Arc::new(RecordingDriver::supported());
+    let service = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&first_driver) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("open first owner");
+    let create = create_request(&bundle_directory, "recreated-running-create");
+    let created = service.create(create.clone()).await.expect("first create");
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("recreated-running-start")),
+        target: ContainerTarget::exact(create.id.clone(), created.generation),
+    };
+    let original_running = service.start(start.clone()).await.expect("first start");
+    assert_eq!(*original_running.state.status(), ContainerState::Running);
+    assert_eq!(*original_running.state.pid(), Some(4_242));
+    drop(service);
+
+    let replacement = Arc::new(RecordingDriver::supported());
+    replacement.set_recreated_running_recovery(
+        DriverState::running(5_252).expect("replacement running state"),
+    );
+    let reopened = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&replacement) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("reopen around replacement running owner");
+    let recovered = reopened
+        .list(ListRequest::default())
+        .await
+        .expect("list recovered running record")
+        .pop()
+        .expect("one recovered running record");
+    assert_eq!(*recovered.state.status(), ContainerState::Running);
+    assert_eq!(*recovered.state.pid(), Some(5_252));
+
+    let replayed_create = reopened
+        .create(create.clone())
+        .await
+        .expect("repair and replay completed create");
+    assert_eq!(*replayed_create.state.status(), ContainerState::Created);
+    assert_eq!(*replayed_create.state.pid(), Some(5_252));
+    assert_eq!(replayed_create.generation, recovered.generation);
+    assert_eq!(
+        reopened
+            .start(start.clone())
+            .await
+            .expect("repair and replay completed start"),
+        recovered
+    );
+    assert_eq!(
+        replacement
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Recover(_)))
+            .count(),
+        1
+    );
+    assert!(replacement
+        .calls()
+        .iter()
+        .all(|call| { !matches!(call, DriverCall::Create(_) | DriverCall::Start(_)) }));
+    drop(reopened);
+
+    let journal_reader = Arc::new(RecordingDriver::supported());
+    journal_reader
+        .set_recovery_observation(DriverState::running(5_252).expect("stable running observation"));
+    let reopened_again = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&journal_reader) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("reopen after running journal repair");
+    assert_eq!(
+        *reopened_again
+            .create(create)
+            .await
+            .expect("replay rebound create journal")
+            .state
+            .pid(),
+        Some(5_252)
+    );
+    assert_eq!(
+        reopened_again
+            .start(start)
+            .await
+            .expect("replay rebound start journal"),
+        recovered
+    );
+    drop(reopened_again);
+
+    let unprivileged_recovery = Arc::new(RecordingDriver::supported());
+    unprivileged_recovery
+        .set_recovery_observation(DriverState::running(6_262).expect("different running state"));
+    let error = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&unprivileged_recovery) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect_err("ordinary recovery must not replace a running PID");
     assert_eq!(error.code, ErrorCode::Conflict);
 }
 

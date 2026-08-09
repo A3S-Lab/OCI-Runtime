@@ -182,6 +182,174 @@ async fn exercise_recreated_created_recovery(point: FaultPoint) {
     assert_consistent_layout(recovered.root());
 }
 
+#[tokio::test]
+async fn recreated_created_rebind_preserves_an_active_start_claim() {
+    let fixture = Fixture::new();
+    let create = fixture.create("recreated-created-active-start");
+    let store = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("open active Start store");
+    let created = drive_create(&store, &create)
+        .await
+        .expect("complete Create before active Start");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("recreated-created-active-start-operation")),
+        target: target.clone(),
+    };
+    assert!(matches!(
+        store
+            .prepare_start(&start)
+            .await
+            .expect("prepare active Start"),
+        RecordOperationPreparation::Prepared(_)
+    ));
+
+    let rebound = store
+        .observe_recreated_created_process(
+            &target,
+            DriverState::created(5_252).expect("replacement created state"),
+        )
+        .await
+        .expect("rebind created PID while Start remains active");
+    assert_eq!(*rebound.state.status(), ContainerState::Created);
+    assert_eq!(*rebound.state.pid(), Some(5_252));
+    let RecordOperationPreparation::Replayed(replayed_create) = store
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .expect("repair Create journal around active Start")
+    else {
+        panic!("Create did not replay around active Start");
+    };
+    assert_eq!(*replayed_create.state.pid(), Some(5_252));
+    assert!(matches!(
+        store
+            .prepare_start(&start)
+            .await
+            .expect("resume Start after created rebind"),
+        RecordOperationPreparation::Resume(_)
+    ));
+    let running = store
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(5_252),
+        )
+        .await
+        .expect("complete rebound Start");
+    assert_eq!(*running.state.status(), ContainerState::Running);
+    assert_eq!(*running.state.pid(), Some(5_252));
+}
+
+#[tokio::test]
+async fn recreated_running_pid_and_create_start_journal_repairs_survive_commit_faults() {
+    for mutation in [
+        DurableMutation::ObserveContainer,
+        DurableMutation::CompleteCreateOperation,
+        DurableMutation::CompleteStartOperation,
+    ] {
+        for stage in FileCommitStage::ALL {
+            exercise_recreated_running_recovery(FaultPoint::DurableFile { mutation, stage }).await;
+        }
+    }
+}
+
+async fn exercise_recreated_running_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("recreated-running-fault");
+    let setup = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("open running-process setup");
+    let original = drive_create(&setup, &create)
+        .await
+        .expect("complete original create");
+    let target = ContainerTarget::exact(create.id.clone(), original.generation);
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("recreated-running-start")),
+        target: target.clone(),
+    };
+    drive_start(&setup, &start)
+        .await
+        .expect("complete original start");
+    let mutation = match point {
+        FaultPoint::DurableFile { mutation, .. } => mutation,
+        _ => unreachable!("running-process test uses only selected file faults"),
+    };
+    if mutation != DurableMutation::ObserveContainer {
+        setup
+            .observe_recreated_running_process(
+                &target,
+                DriverState::running(5_252).expect("replacement running state"),
+            )
+            .await
+            .expect("store replacement running PID before journal fault");
+    }
+    if mutation == DurableMutation::CompleteStartOperation {
+        let RecordOperationPreparation::Replayed(replayed) = setup
+            .prepare_create(&create, DriverKind::LibkrunWhpx)
+            .await
+            .expect("repair Create journal before Start journal fault")
+        else {
+            panic!("Create journal did not replay before {point}");
+        };
+        assert_eq!(*replayed.state.pid(), Some(5_252));
+    }
+    drop(setup);
+
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let injected = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open running-process fault store");
+    let result = match mutation {
+        DurableMutation::ObserveContainer => injected
+            .observe_recreated_running_process(
+                &target,
+                DriverState::running(5_252).expect("replacement running state"),
+            )
+            .await
+            .map(|_| ()),
+        DurableMutation::CompleteCreateOperation => injected
+            .prepare_create(&create, DriverKind::LibkrunWhpx)
+            .await
+            .map(|_| ()),
+        DurableMutation::CompleteStartOperation => injected.prepare_start(&start).await.map(|_| ()),
+        _ => unreachable!("running-process test uses only selected mutations"),
+    };
+    let error = result.expect_err("running-process checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(injected);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen running-process state");
+    recovered
+        .observe_recreated_running_process(
+            &target,
+            DriverState::running(5_252).expect("replacement running state"),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("recover replacement running PID after {point}: {error}"));
+    let RecordOperationPreparation::Replayed(replayed_create) = recovered
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .unwrap_or_else(|error| panic!("repair Create journal after {point}: {error}"))
+    else {
+        panic!("Create journal did not replay after {point}");
+    };
+    assert_eq!(*replayed_create.state.status(), ContainerState::Created);
+    assert_eq!(*replayed_create.state.pid(), Some(5_252), "{point}");
+    let RecordOperationPreparation::Replayed(replayed_start) = recovered
+        .prepare_start(&start)
+        .await
+        .unwrap_or_else(|error| panic!("repair Start journal after {point}: {error}"))
+    else {
+        panic!("Start journal did not replay after {point}");
+    };
+    assert_eq!(*replayed_start.state.status(), ContainerState::Running);
+    assert_eq!(*replayed_start.state.pid(), Some(5_252), "{point}");
+    assert_consistent_layout(recovered.root());
+}
+
 const fn scenario_for(mutation: DurableMutation) -> Scenario {
     match mutation {
         DurableMutation::RuntimeRootMarker => Scenario::RuntimeRoot,

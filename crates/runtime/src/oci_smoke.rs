@@ -273,3 +273,29 @@ pub async fn oci_vm_state_reopen_replacement_at(
         OciVmOperationReopenReplacementReport::unsupported_state(HostPlatform::current(), stage)
     }
 }
+
+/// Reissue one interrupted Start through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact pre-start process in every stage. When the
+/// first response was already delivered, it also restarts that process and
+/// rebinds the completed Create and Start journals to the fresh Guest PID.
+#[must_use]
+pub async fn oci_vm_start_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_start_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_start(HostPlatform::current(), stage)
+    }
+}

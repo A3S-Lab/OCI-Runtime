@@ -435,6 +435,17 @@ the first response arrived before a follow-up call observed the closed stream.
 All 18 fresh VMs in the August 10, 2026 matrix returned Host and Guest resource
 inventories to baseline.
 
+Start now has the same nine-stage real-owner gate. The first eight interruptions
+leave Host state in `created`; the replacement Guest receives the original
+Create identity, rebuilds the process, and executes the unchanged Start identity.
+The fully written-response point leaves Host state in `running`; replacement
+recovery recreates and starts the workload before Host journal replay, then
+repairs the completed Create and Start responses with the new Guest PID. The
+Start retry returns from the durable journal without another dispatch. Each run
+removes any first-owner marker before replacement and requires the new Guest to
+produce the exact marker. All 18 fresh VMs in the August 10, 2026 matrix returned
+Host and Guest resource inventories to baseline.
+
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,

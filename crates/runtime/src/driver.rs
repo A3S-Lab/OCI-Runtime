@@ -173,7 +173,15 @@ impl DriverState {
 pub struct DriverRecovery {
     observation: Option<DriverState>,
     init_exit_status: Option<ExitStatus>,
-    recreated_created_process: bool,
+    recreated_process: RecreatedProcess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RecreatedProcess {
+    #[default]
+    None,
+    Created,
+    Running,
 }
 
 impl DriverRecovery {
@@ -183,7 +191,7 @@ impl DriverRecovery {
         Self {
             observation: None,
             init_exit_status: None,
-            recreated_created_process: false,
+            recreated_process: RecreatedProcess::None,
         }
     }
 
@@ -193,7 +201,7 @@ impl DriverRecovery {
         Self {
             observation: Some(observation),
             init_exit_status: None,
-            recreated_created_process: false,
+            recreated_process: RecreatedProcess::None,
         }
     }
 
@@ -213,7 +221,27 @@ impl DriverRecovery {
         Ok(Self {
             observation: Some(observation),
             init_exit_status: None,
-            recreated_created_process: true,
+            recreated_process: RecreatedProcess::Created,
+        })
+    }
+
+    /// Report a running init process rebuilt by a replacement driver owner.
+    ///
+    /// This allows the durable running PID plus completed Create and Start
+    /// responses to be rebound to the fresh owner's exact process identity.
+    /// Paused and stopped workloads require their own stronger recovery proof.
+    pub fn recreated_running(observation: DriverState) -> Result<Self> {
+        if observation.status() != ContainerState::Running || observation.paused() {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "recreated process recovery requires an unpaused running driver state",
+            )
+            .for_operation("construct-driver-recovery"));
+        }
+        Ok(Self {
+            observation: Some(observation),
+            init_exit_status: None,
+            recreated_process: RecreatedProcess::Running,
         })
     }
 
@@ -223,12 +251,12 @@ impl DriverRecovery {
         Ok(Self {
             observation: Some(DriverState::stopped()),
             init_exit_status: Some(init_exit_status),
-            recreated_created_process: false,
+            recreated_process: RecreatedProcess::None,
         })
     }
 
-    pub(crate) const fn replaces_created_process(&self) -> bool {
-        self.recreated_created_process
+    pub(crate) const fn recreated_process(&self) -> RecreatedProcess {
+        self.recreated_process
     }
 
     /// Consume the recovery result into its durable components.

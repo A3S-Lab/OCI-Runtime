@@ -331,5 +331,17 @@ the durable `created` record. Once that VM has closed, the replacement recovery
 hook recreates the pre-start process and commits its exact PID through the
 restricted record-rebind path above. A new State query must equal that recovered
 record and preserve the generation before force delete. The August 10, 2026
-Apple Silicon matrix passed all nine stages in 18 fresh VMs. The other 18
+Apple Silicon matrix passed all nine stages in 18 fresh VMs.
+
+Real Start recovery now crosses all nine points under
+`a3s.oci.oci-vm-operation-reopen-replacement.v2`. The first eight interruptions
+leave the exact durable record in `created`; recovery rebuilds that process and
+the unchanged Start identity completes once through the replacement owner. A
+fully written response leaves `running`. Recovery then recreates and starts the
+process, rebinds its new PID, and repairs both completed Create and Start journal
+responses. Replaying Start returns that repaired durable response without a
+second API-driven dispatch. Every path removes any first-owner marker before
+replacement, verifies the replacement workload's exact marker, force-deletes
+the generation, and restores both Host and Guest inventories. The August 10,
+2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs. The other 17
 operations still belong to the replacement matrix above.

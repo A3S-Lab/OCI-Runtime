@@ -733,10 +733,21 @@ enforce it. No property is silently ignored.
     requires a follow-up disconnect probe. The August 10, 2026 matrix passed
     all nine stages in 18 fresh VMs, including real Guest PID changes, distinct
     owners, force delete, and complete Host and Guest cleanup.
+  - [x] Carry all nine Host/Guest `start` stages through durable service reopen
+    and an actual HVF owner replacement. The first eight paths keep the durable
+    record in `created`; replacement recovery rebuilds the pre-start process,
+    rebinds its PID, and reuses the original Create and Start identities before
+    completing Start. A fully written response instead keeps `running`;
+    replacement recovery recreates and starts the process, repairs the completed
+    Create and Start journals with the new PID, and lets the unchanged Start
+    replay return without another driver dispatch. Every path resets any
+    first-owner marker, verifies the replacement workload, force-deletes the
+    generation, and restores Host and Guest inventories. The August 10, 2026
+    matrix passed all nine stages in 18 fresh VMs.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 18 real Create/State replacement paths do not satisfy the
-    complete 20-operation matrix gate.
+    stages, and all 27 real Create/State/Start replacement paths do not satisfy
+    the complete 20-operation matrix gate.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

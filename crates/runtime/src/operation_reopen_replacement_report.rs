@@ -10,14 +10,19 @@ use crate::report::AgentVmSmokeReport;
 
 /// Schema emitted by the real HVF non-Create reopen and owner-replacement diagnostic.
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_SCHEMA_VERSION: &str =
+    "a3s.oci.oci-vm-operation-reopen-replacement.v2";
+
+/// Original State-only schema retained for compatibility with existing evidence.
+pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_STATE_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v1";
 
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 
 /// Retained evidence for one operation reissued through a replacement HVF owner.
 ///
-/// Version 1 qualifies the context-free `state` operation. Later operations can
-/// extend this schema without weakening the exact State recovery invariants.
+/// Version 1 qualifies the context-free `state` operation. Version 2 adds
+/// `start` recovery evidence while State continues to emit the compatible v1
+/// schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmOperationReopenReplacementReport {
     /// Version of this JSON-compatible schema.
@@ -65,6 +70,9 @@ pub struct OciVmOperationReopenReplacementReport {
     pub first_response_matches_durable_record: bool,
     /// Whether the interrupted operation left the exact durable record in `created`.
     pub durable_created_retained: bool,
+    /// Whether a delivered mutating response left the exact durable record in `running`.
+    #[serde(default)]
+    pub durable_running_retained: bool,
     /// Positive init PID retained from the first owner.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_created_pid: Option<i32>,
@@ -82,6 +90,9 @@ pub struct OciVmOperationReopenReplacementReport {
     pub replacement_recovery_calls: u32,
     /// Whether recovery rebuilt the first owner's pre-start process in the fresh Guest.
     pub replacement_rehydrated_created_record: bool,
+    /// Whether recovery also restarted that process before reopening a running record.
+    #[serde(default)]
+    pub replacement_rehydrated_running_record: bool,
     /// Whether the selected operation completed through the replacement owner.
     pub operation_completed_after_reopen: bool,
     /// Generation returned by the replacement operation.
@@ -96,6 +107,27 @@ pub struct OciVmOperationReopenReplacementReport {
     pub same_generation_reused: bool,
     /// Whether replacement recovery reused the original setup Create identity.
     pub setup_create_identity_reused: bool,
+    /// Whether the interrupted operation reused its original identity in the fresh Guest.
+    #[serde(default)]
+    pub same_operation_id_reused: bool,
+    /// Whether Create replay was rebound to the replacement process PID.
+    #[serde(default)]
+    pub setup_create_response_rebound: bool,
+    /// Whether the post-recovery operation replay avoided another driver dispatch.
+    #[serde(default)]
+    pub operation_replayed_without_driver_dispatch: bool,
+    /// Number of operation dispatches recorded by the first qualification driver.
+    #[serde(default)]
+    pub first_operation_dispatches: u32,
+    /// Number of operation dispatches recorded by replacement, including recovery rebuilds.
+    #[serde(default)]
+    pub replacement_operation_dispatches: u32,
+    /// Whether any first-owner workload marker was removed before replacement launch.
+    #[serde(default)]
+    pub marker_reset_before_replacement: bool,
+    /// Whether the replacement workload produced the exact configured marker.
+    #[serde(default)]
+    pub replacement_workload_verified: bool,
     /// Whether force delete completed through the replacement VM owner.
     pub force_delete_completed: bool,
     /// Whether no durable container record remained after delete.
@@ -125,7 +157,7 @@ impl OciVmOperationReopenReplacementReport {
         requested_stage: AgentTransportOperationStage,
     ) -> Self {
         Self {
-            schema_version: OCI_VM_OPERATION_REOPEN_REPLACEMENT_SCHEMA_VERSION.to_string(),
+            schema_version: OCI_VM_OPERATION_REOPEN_REPLACEMENT_STATE_SCHEMA_VERSION.to_string(),
             platform,
             status: CapabilityStatus::Unavailable,
             bundle_loaded: false,
@@ -144,6 +176,7 @@ impl OciVmOperationReopenReplacementReport {
             disconnect_probe_attempted: false,
             first_response_matches_durable_record: false,
             durable_created_retained: false,
+            durable_running_retained: false,
             first_created_pid: None,
             generation_before_reopen: None,
             guest_evidence_verified: false,
@@ -151,12 +184,20 @@ impl OciVmOperationReopenReplacementReport {
             host_service_reopened: false,
             replacement_recovery_calls: 0,
             replacement_rehydrated_created_record: false,
+            replacement_rehydrated_running_record: false,
             operation_completed_after_reopen: false,
             generation_after_reopen: None,
             replacement_created_pid: None,
             replacement_response_matches_durable_record: false,
             same_generation_reused: false,
             setup_create_identity_reused: false,
+            same_operation_id_reused: false,
+            setup_create_response_rebound: false,
+            operation_replayed_without_driver_dispatch: false,
+            first_operation_dispatches: 0,
+            replacement_operation_dispatches: 0,
+            marker_reset_before_replacement: false,
+            replacement_workload_verified: false,
             force_delete_completed: false,
             durable_records_empty: false,
             marker_absent_after_cleanup: false,
@@ -196,6 +237,14 @@ impl OciVmOperationReopenReplacementReport {
     }
 
     pub(crate) fn evidence_succeeded(&self) -> bool {
+        match self.requested_operation {
+            AgentOperation::State => self.state_evidence_succeeded(),
+            AgentOperation::Start => self.start_evidence_succeeded(),
+            _ => false,
+        }
+    }
+
+    fn state_evidence_succeeded(&self) -> bool {
         let expected_point = AgentTransportFaultPoint::Operation {
             protocol_version: AGENT_PROTOCOL_VERSION_MAX,
             operation: self.requested_operation,
@@ -284,6 +333,8 @@ impl OciVmOperationReopenReplacementReport {
                 .is_some_and(|(first, replacement)| first != 0 && first != replacement)
     }
 }
+
+mod start;
 
 #[cfg(test)]
 mod tests {

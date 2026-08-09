@@ -103,7 +103,7 @@ and `experimental` or `supported` readiness.
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
-| Retained evidence | Schema and normative locks, exhaustive durable and authenticated agent fault matrices, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create and State transitions through durable service reopen and VM/session-owner replacement, native Linux real-container, soak, and owner-death safe-termination gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
+| Retained evidence | Schema and normative locks, exhaustive durable and authenticated agent fault matrices, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, and Start transitions through durable service reopen and VM/session-owner replacement, native Linux real-container, soak, and owner-death safe-termination gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
 The current Box adapter at `A3S-Lab/Box@a16772c3` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
@@ -123,6 +123,12 @@ Linux owner. Its blocking x86_64 and aarch64 Linux lanes drive Rust, Python,
 TypeScript, and Go Sandbox lifecycle, exec, filesystem, route-aware stats,
 pause/resume, snapshot restore, restart, and cleanup through the explicit
 production route.
+
+Box completion and Runtime readiness measure different scopes. Box can finish
+its current product contract against a qualified Runtime slice; this repository
+still owns all 20 operations, every advertised driver, owner-replacement
+semantics, OCI conformance, and release qualification. A completed consumer is
+therefore not evidence that the lower-level runtime is complete.
 
 Linux file and filesystem calls execute in a fresh internal helper that inherits
 only the exact retained root, user-namespace, and mount-namespace descriptors.
@@ -257,7 +263,7 @@ reattachment remains open for the Box B2 cutover.
 | --- | --- | --- |
 | Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64/aarch64 Box production-owner composition through all four SDKs plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
 | Linux KVM utility VM | Device access, ioctl result, and KVM API version probes | `probe-only`; workload driver not implemented |
-| macOS arm64/HVF | Real HVF object lifecycle, pinned libkrun context and guest entry, protocol-v9 agent, fixed and multi-container lifecycle, descriptor-confined filesystem sessions, mount/namespace profiles, no-delete cleanup, all nine Host/Guest Create transport stages, both Host shutdown stages, every Create and State transition resumed or reissued through Host-service reopen and a fresh VM/session owner, and 25 fresh-VM waves | `probe-only`; immutable system image, the other 18 operation reopen/replacement matrices, and release hardware qualification remain |
+| macOS arm64/HVF | Real HVF object lifecycle, pinned libkrun context and guest entry, protocol-v9 agent, fixed and multi-container lifecycle, descriptor-confined filesystem sessions, mount/namespace profiles, no-delete cleanup, all nine Host/Guest Create transport stages, both Host shutdown stages, every Create, State, and Start transition resumed or replayed through Host-service reopen and a fresh VM/session owner, and 25 fresh-VM waves | `probe-only`; immutable system image, the 17 remaining operation reopen/replacement matrices, and release hardware qualification remain |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup | `probe-only`; pinned immutable system root and in-process native-handle reclamation remain before `experimental` |
 
 Linux discovery and Native Linux development must work when `/dev/kvm` is
@@ -354,6 +360,7 @@ The repository turns release claims into checked inventories:
 | Real HVF Create Host/Guest plus Host shutdown interruption and cleanup stages | 11 |
 | Real HVF durable Create reopen plus VM/session-owner replacement paths | 9 |
 | Real HVF durable State reopen plus VM/session-owner replacement paths | 9 |
+| Real HVF durable Start reopen plus VM/session-owner replacement paths | 9 |
 | Guest operations behind protocol v9 | 20 |
 
 The locks prove inventory and exercised boundaries, not full conformance by
@@ -370,7 +377,7 @@ qualification must all pass before a driver becomes `supported`.
 - live Native Linux process-I/O reattachment across owner death and exact
   terminal evidence when a persistent authenticated reaper can retain it;
 - pinned immutable utility-VM system roots;
-- the other 18 operation real utility-VM host-service-reopen and replacement
+- the 17 remaining operation real utility-VM host-service-reopen and replacement
   matrix plus hook recovery/security certification;
 - the default and cross-platform A3S Box cutover and OCI Runtime-owned
   containerd shim;

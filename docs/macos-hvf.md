@@ -703,13 +703,13 @@ reopen or a replacement VM owner.
 
 ## Durable service reopen and VM owner replacement
 
-`oci-vm-reopen-replacement` carries all nine Host/Guest transitions for Create
-and State through the durable Host service instead of calling the diagnostic
-Agent client directly:
+`oci-vm-reopen-replacement` carries all nine Host/Guest transitions for Create,
+State, and Start through the durable Host service instead of calling the
+diagnostic Agent client directly:
 
 ```sh
 reopen_dir="$(mktemp -d)"
-for operation in create state; do
+for operation in create state start; do
   for fault_stage in \
     host-before-request-write \
     host-after-request-write \
@@ -771,7 +771,24 @@ delivered and match durable state before a second query exposes the disconnect.
 `a3s.oci.oci-vm-operation-reopen-replacement.v1` retains this State evidence.
 The August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs,
 including real PID changes across owners and complete cleanup after force
-delete. The other 18 operations still need the same replacement treatment.
+delete.
+
+For Start, the first owner completes Create and injects the selected point into
+the exact-generation Start request. The first eight points leave the durable
+record in `created`. Replacement recovery rebuilds the pre-start process with
+the original Create identity, rebinds the replacement PID, and sends the
+unchanged Start identity once. At `guest-after-response-write`, the durable
+record is already `running`; replacement recovery recreates and starts the
+workload, repairs the completed Create and Start responses with the replacement
+PID, and the subsequent Start replay returns without another driver dispatch.
+Every path removes any marker written by the first owner before starting the
+replacement and then requires the exact replacement marker.
+
+`a3s.oci.oci-vm-operation-reopen-replacement.v2` retains this Start evidence.
+The August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs,
+including the completed-running replay path, distinct owners, and complete
+cleanup after force delete. The other 17 operations still need the same
+replacement treatment.
 
 ## Remaining workload gates
 

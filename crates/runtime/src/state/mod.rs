@@ -41,7 +41,7 @@ use model::{
     StoredContainer, StoredGeneration, StoredOperation, StoredOperationKind, StoredOperationStatus,
     CONTAINER_SCHEMA_VERSION, GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION,
 };
-use oci_state::{build_state, container_state, rebuild_state};
+use oci_state::{build_state, container_state, is_paused, rebuild_state};
 use operation::validate_deadline;
 
 const CONTAINER_RECORD_FILE: &str = "record.json";
@@ -354,13 +354,33 @@ impl DurableStateStore {
             }
             Err(error) => return Err(error),
         };
-        if stored.record.generation != operation.generation
-            || stored.record == response
-            || *stored.record.state.status() != ContainerState::Created
-        {
+        if stored.record.generation != operation.generation || stored.record == response {
             return Ok(RecordOperationPreparation::Replayed(response));
         }
-        if stored.active_operation.is_some() || *response.state.status() != ContainerState::Created
+        let durable_status = *stored.record.state.status();
+        if !matches!(
+            durable_status,
+            ContainerState::Created | ContainerState::Running
+        ) {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        if stored.record.state.pid() == response.state.pid() {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        let active_allows_rebind = match stored.active_operation.as_ref() {
+            Some(operation_id) => {
+                let active = self.load_operation(operation_id).await?;
+                active.kind == StoredOperationKind::Start
+                    && active.container_id == stored.id
+                    && active.generation == stored.record.generation
+                    && matches!(active.outcome, StoredOperationStatus::Prepared)
+                    && durable_status == ContainerState::Created
+            }
+            None => true,
+        };
+        if !active_allows_rebind
+            || *response.state.status() != ContainerState::Created
+            || is_paused(&stored.record.state)
         {
             return Err(state_error(
                 ErrorCode::Conflict,
@@ -371,15 +391,11 @@ impl DurableStateStore {
                 ),
             ));
         }
-        let expected = ContainerRecord {
-            state: rebuild_state(
-                &response.state,
-                ContainerState::Created,
-                *stored.record.state.pid(),
-            )?,
-            ..response
+        let expected_durable = ContainerRecord {
+            state: rebuild_state(&response.state, durable_status, *stored.record.state.pid())?,
+            ..response.clone()
         };
-        if expected != stored.record {
+        if expected_durable != stored.record {
             return Err(state_error(
                 ErrorCode::Conflict,
                 "reconcile-succeeded-create",
@@ -389,8 +405,16 @@ impl DurableStateStore {
                 ),
             ));
         }
+        let rebound_response = ContainerRecord {
+            state: rebuild_state(
+                &response.state,
+                ContainerState::Created,
+                *stored.record.state.pid(),
+            )?,
+            ..response
+        };
         operation.outcome = StoredOperationStatus::Succeeded {
-            response: stored.record.clone(),
+            response: rebound_response.clone(),
         };
         self.write_json(
             DurableMutation::CompleteCreateOperation,
@@ -398,7 +422,7 @@ impl DurableStateStore {
             &operation,
         )
         .await?;
-        Ok(RecordOperationPreparation::Replayed(stored.record))
+        Ok(RecordOperationPreparation::Replayed(rebound_response))
     }
 
     /// Commit driver create completion with the prepared init-process PID.
