@@ -261,13 +261,15 @@ descriptor-relative path operations, real-host qualification of restart-stable
 WHPX exit evidence (or qualified reattachment where another driver promises
 it), and carrying all 180 host/agent fault pairs through a real utility VM and
 host-service reopen below the `RuntimeDriver` boundary. The portable
-create/state/start/kill/delete matrix already reopens the durable host around a
-new authenticated connection and driver at all nine request/response stages
-for each operation. Mutations distinguish pre-dispatch execution,
+create/state/start/kill/delete/wait matrix already reopens the durable host
+around a new authenticated connection and driver at all nine request/response
+stages for each operation. Mutations distinguish pre-dispatch execution,
 post-dispatch guest replay, and completed durable-host replay while preserving
 the same generation and one effect. Read-only state resolves a current target
 to the exact durable generation and is safely reissued after reopen, including
-after a fully written first response; stale generations fail before host driver
-dispatch and at the guest boundary. A fully completed delete leaves no live
-container record, so service reopen skips driver recovery and replays the
-durable delete journal directly.
+after a fully written first response. Wait is reissued only until the host
+receives and durably caches one exact terminal result; a fully written response
+and every later retry replay that cache without another driver dispatch. Stale
+state and wait generations fail before host driver dispatch and at the guest
+boundary. A fully completed delete leaves no live container record, so service
+reopen skips driver recovery and replays the durable delete journal directly.

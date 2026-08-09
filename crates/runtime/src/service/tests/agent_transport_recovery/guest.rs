@@ -1,11 +1,11 @@
 use std::sync::Mutex;
 
 use a3s_oci_agent_protocol::{
-    AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, GuestAgentService,
+    AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentOperation,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, Result};
+use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, ExitStatus, Result};
 
 #[derive(Debug)]
 struct OperationJournal<Request, Response> {
@@ -31,6 +31,8 @@ struct LifecycleJournal {
     start: OperationJournal<AgentStartRequest, AgentState>,
     kill: OperationJournal<AgentKillRequest, AgentState>,
     delete: OperationJournal<AgentDeleteRequest, ()>,
+    wait_requests: usize,
+    init_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
 }
 
@@ -43,9 +45,17 @@ pub(super) struct JournaledLifecycleGuest {
 impl JournaledLifecycleGuest {
     pub(super) fn new() -> Self {
         Self {
-            capabilities: AgentCapabilities::core(
+            capabilities: AgentCapabilities::new(
                 "host-service-reopen-test",
                 std::env::consts::ARCH,
+                vec![
+                    AgentOperation::Create,
+                    AgentOperation::State,
+                    AgentOperation::Start,
+                    AgentOperation::Kill,
+                    AgentOperation::Delete,
+                    AgentOperation::Wait,
+                ],
             )
             .expect("test guest capabilities"),
             journal: Mutex::new(LifecycleJournal::default()),
@@ -122,6 +132,13 @@ impl JournaledLifecycleGuest {
             .delete
             .effects
     }
+
+    pub(super) fn wait_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .wait_requests
+    }
 }
 
 #[async_trait]
@@ -151,6 +168,7 @@ impl GuestAgentService for JournaledLifecycleGuest {
         )?;
         journal.create.effects += 1;
         journal.create.entry = Some((request, response.clone()));
+        journal.init_exit_status = None;
         journal.current = Some(response.clone());
         Ok(response)
     }
@@ -279,8 +297,10 @@ impl GuestAgentService for JournaledLifecycleGuest {
             None,
             current.config_digest(),
         )?;
+        let exit_status = ExitStatus::signaled(request.signal.get(), false)?;
         journal.kill.effects += 1;
         journal.kill.entry = Some((request, response.clone()));
+        journal.init_exit_status = Some(exit_status);
         journal.current = Some(response.clone());
         Ok(response)
     }
@@ -325,8 +345,43 @@ impl GuestAgentService for JournaledLifecycleGuest {
 
         journal.delete.effects += 1;
         journal.delete.entry = Some((request, ()));
+        journal.init_exit_status = None;
         journal.current = None;
         Ok(())
+    }
+
+    async fn wait(&self, request: AgentWaitRequest) -> Result<ExitStatus> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.wait_requests += 1;
+        let current = journal.current.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-wait")
+        })?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-wait"));
+        }
+        if current.status() != ContainerState::Stopped {
+            return Err(Error::new(
+                ErrorCode::DeadlineExceeded,
+                "guest init process is still running",
+            )
+            .for_operation("agent-wait")
+            .retryable(true));
+        }
+        journal.init_exit_status.clone().ok_or_else(|| {
+            Error::new(
+                ErrorCode::Internal,
+                "guest stopped state has no init exit status",
+            )
+            .for_operation("agent-wait")
+        })
     }
 }
 

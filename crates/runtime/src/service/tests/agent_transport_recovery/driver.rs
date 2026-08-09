@@ -4,22 +4,31 @@ use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, GuestPath,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest, GuestPath,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerTarget, Error, ErrorCode, OciBundle, OperationContext,
-    ProcessIo, Result,
+    async_trait, ContainerRecord, ContainerTarget, Error, ErrorCode, ExitStatus, OciBundle,
+    OperationContext, ProcessIo, Result, RuntimeOperation,
 };
 use tokio::io::DuplexStream;
 
 use crate::{
     DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverRecovery,
-    DriverStartRequest, DriverState, RuntimeDriver,
+    DriverStartRequest, DriverState, DriverWaitRequest, RuntimeDriver,
 };
+
+const DRIVER_OPERATIONS: [RuntimeOperation; 6] = [
+    RuntimeOperation::Create,
+    RuntimeOperation::State,
+    RuntimeOperation::Start,
+    RuntimeOperation::Kill,
+    RuntimeOperation::Delete,
+    RuntimeOperation::Wait,
+];
 
 #[derive(Debug, Default)]
 pub(super) struct DriverMetrics {
@@ -28,6 +37,7 @@ pub(super) struct DriverMetrics {
     start_dispatches: AtomicUsize,
     kill_dispatches: AtomicUsize,
     delete_dispatches: AtomicUsize,
+    wait_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -50,6 +60,10 @@ impl DriverMetrics {
 
     pub(super) fn delete_dispatches(&self) -> usize {
         self.delete_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn wait_dispatches(&self) -> usize {
+        self.wait_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -83,6 +97,10 @@ impl RuntimeDriver for AgentLifecycleDriver {
                 "authenticated-in-memory-agent".to_string(),
             )]),
         }
+    }
+
+    fn operations(&self) -> &[RuntimeOperation] {
+        &DRIVER_OPERATIONS
     }
 
     async fn recover(&self, _record: &ContainerRecord) -> Result<DriverRecovery> {
@@ -158,6 +176,16 @@ impl RuntimeDriver for AgentLifecycleDriver {
                 context: request.context,
                 target: request.target,
                 mode: request.mode,
+            })
+            .await
+    }
+
+    async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        self.metrics.wait_dispatches.fetch_add(1, Ordering::SeqCst);
+        self.client
+            .wait(AgentWaitRequest {
+                target: request.target,
+                timeout_ms: request.timeout_ms,
             })
             .await
     }
