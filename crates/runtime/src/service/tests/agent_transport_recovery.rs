@@ -3,6 +3,7 @@ mod create;
 mod delete;
 mod driver;
 mod exec;
+mod file;
 mod guest;
 mod guest_journal;
 mod kill;

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
@@ -15,7 +15,8 @@ use a3s_oci_core::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus,
-    OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord, Result, RuntimeOperation,
+    FileRequest, FileResponse, OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord,
+    Result, RuntimeOperation,
 };
 use tokio::io::DuplexStream;
 
@@ -27,7 +28,11 @@ use crate::{
     DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 18] = [
+mod metrics;
+
+pub(super) use metrics::DriverMetrics;
+
+const DRIVER_OPERATIONS: [RuntimeOperation; 19] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -46,108 +51,8 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 18] = [
     RuntimeOperation::WriteStdin,
     RuntimeOperation::CloseStdin,
     RuntimeOperation::Resize,
+    RuntimeOperation::File,
 ];
-
-#[derive(Debug, Default)]
-pub(super) struct DriverMetrics {
-    create_dispatches: AtomicUsize,
-    state_dispatches: AtomicUsize,
-    start_dispatches: AtomicUsize,
-    kill_dispatches: AtomicUsize,
-    delete_dispatches: AtomicUsize,
-    wait_dispatches: AtomicUsize,
-    exec_dispatches: AtomicUsize,
-    signal_process_dispatches: AtomicUsize,
-    wait_process_dispatches: AtomicUsize,
-    pause_dispatches: AtomicUsize,
-    resume_dispatches: AtomicUsize,
-    processes_dispatches: AtomicUsize,
-    update_dispatches: AtomicUsize,
-    stats_dispatches: AtomicUsize,
-    read_output_dispatches: AtomicUsize,
-    write_stdin_dispatches: AtomicUsize,
-    close_stdin_dispatches: AtomicUsize,
-    resize_dispatches: AtomicUsize,
-    recoveries: AtomicUsize,
-}
-
-impl DriverMetrics {
-    pub(super) fn create_dispatches(&self) -> usize {
-        self.create_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn state_dispatches(&self) -> usize {
-        self.state_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn start_dispatches(&self) -> usize {
-        self.start_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn kill_dispatches(&self) -> usize {
-        self.kill_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn delete_dispatches(&self) -> usize {
-        self.delete_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn wait_dispatches(&self) -> usize {
-        self.wait_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn exec_dispatches(&self) -> usize {
-        self.exec_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn signal_process_dispatches(&self) -> usize {
-        self.signal_process_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn wait_process_dispatches(&self) -> usize {
-        self.wait_process_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn pause_dispatches(&self) -> usize {
-        self.pause_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn resume_dispatches(&self) -> usize {
-        self.resume_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn processes_dispatches(&self) -> usize {
-        self.processes_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn update_dispatches(&self) -> usize {
-        self.update_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn stats_dispatches(&self) -> usize {
-        self.stats_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn read_output_dispatches(&self) -> usize {
-        self.read_output_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn write_stdin_dispatches(&self) -> usize {
-        self.write_stdin_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn close_stdin_dispatches(&self) -> usize {
-        self.close_stdin_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn resize_dispatches(&self) -> usize {
-        self.resize_dispatches.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn recoveries(&self) -> usize {
-        self.recoveries.load(Ordering::SeqCst)
-    }
-}
 
 #[derive(Debug)]
 pub(super) struct AgentLifecycleDriver {
@@ -431,6 +336,11 @@ impl RuntimeDriver for AgentLifecycleDriver {
                 size: request.size,
             })
             .await
+    }
+
+    async fn file(&self, request: FileRequest) -> Result<FileResponse> {
+        self.metrics.file_dispatches.fetch_add(1, Ordering::SeqCst);
+        self.client.file(request).await
     }
 }
 

@@ -645,6 +645,13 @@ enforce it. No property is silently ignored.
     second resize effect, replay a fully written response from the completed
     host journal without another dispatch, and reject changed dimensions under
     the same operation ID at both boundaries.
+  - [x] Carry a journaled file upload through all nine portable `file` reopen
+    stages. Resolve the current host target to the exact generation and retain
+    the path, user, base64 payload, operation context, and acknowledgement.
+    Reissue the session-scoped request after every reopen, including after a
+    fully written first response, while the guest journal guarantees one upload
+    effect. Reject changed upload content through that journal and reject stale
+    generations at the guest boundary and before host driver dispatch.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.
