@@ -629,6 +629,14 @@ enforce it. No property is silently ignored.
     a post-dispatch guest request without a second input effect, replay a fully
     written response from the completed host journal without another dispatch,
     and reject changed bytes under the same operation ID at both boundaries.
+  - [x] Carry replay-safe `close-stdin` through all nine portable reopen stages
+    for a running init process. Resolve the current host target to the exact
+    generation, retain the original operation context, and keep the durable
+    claim resumable after each retryable first-call failure. Replay a
+    post-dispatch guest request without a second close effect, replay a fully
+    written response from the completed host journal without another dispatch,
+    and reject changed process targets under the same operation ID at both
+    boundaries.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

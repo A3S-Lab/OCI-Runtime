@@ -1,4 +1,6 @@
-use a3s_oci_agent_protocol::{AgentReadOutputRequest, AgentWriteStdinRequest};
+use a3s_oci_agent_protocol::{
+    AgentCloseStdinRequest, AgentReadOutputRequest, AgentWriteStdinRequest,
+};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{Error, ErrorCode, OutputChunk, OutputStream, Result};
 
@@ -143,6 +145,78 @@ impl JournaledLifecycleGuest {
             .lock()
             .expect("guest journal lock")
             .write_stdin
+            .entry
+            .as_ref()
+            .map(|(request, ())| request.clone())
+    }
+
+    pub(super) fn close_process_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.close_stdin.requests += 1;
+        let operation_id = request
+            .context
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::InvalidArgument,
+                    "guest stdin close requires an operation context",
+                )
+                .for_operation("agent-close-stdin")
+            })?
+            .operation_id
+            .clone();
+        if let Some((recorded, ())) = journal.close_stdin.entry.as_ref() {
+            let recorded_operation_id = &recorded
+                .context
+                .as_ref()
+                .expect("recorded stdin close context")
+                .operation_id;
+            if recorded_operation_id == &operation_id {
+                if recorded != &request {
+                    return Err(changed_request("close-stdin"));
+                }
+                return Ok(());
+            }
+            return Err(already_exists("close-stdin"));
+        }
+
+        let current = journal.current.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-close-stdin")
+        })?;
+        if current.target() != &request.process.container {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-close-stdin"));
+        }
+        if !request.process.process_id.is_init()
+            && journal
+                .exec
+                .entry
+                .as_ref()
+                .is_none_or(|(_, process)| process.target() != &request.process)
+        {
+            return Err(
+                Error::new(ErrorCode::NotFound, "guest process is unavailable")
+                    .for_operation("agent-close-stdin"),
+            );
+        }
+
+        journal.close_stdin.effects += 1;
+        journal.close_stdin.entry = Some((request, ()));
+        Ok(())
+    }
+
+    pub(in super::super) fn recorded_close_stdin_request(&self) -> Option<AgentCloseStdinRequest> {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .close_stdin
             .entry
             .as_ref()
             .map(|(request, ())| request.clone())

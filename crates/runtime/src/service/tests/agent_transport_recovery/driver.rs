@@ -3,10 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
-    AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
-    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentBundle, AgentClient, AgentCloseStdinRequest, AgentContainerOperationRequest,
+    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
+    AgentProcessesRequest, AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest,
+    AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
     AgentWaitRequest, AgentWriteStdinRequest, GuestPath,
 };
 use a3s_oci_core::{
@@ -20,13 +20,14 @@ use a3s_oci_sdk::{
 use tokio::io::DuplexStream;
 
 use crate::{
-    DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverRecovery,
-    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
-    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateRequest,
+    DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverReadOutputRequest, DriverRecovery, DriverSignalProcessRequest, DriverStartRequest,
+    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverWriteStdinRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 16] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 17] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -43,6 +44,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 16] = [
     RuntimeOperation::Stats,
     RuntimeOperation::ReadOutput,
     RuntimeOperation::WriteStdin,
+    RuntimeOperation::CloseStdin,
 ];
 
 #[derive(Debug, Default)]
@@ -63,6 +65,7 @@ pub(super) struct DriverMetrics {
     stats_dispatches: AtomicUsize,
     read_output_dispatches: AtomicUsize,
     write_stdin_dispatches: AtomicUsize,
+    close_stdin_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -129,6 +132,10 @@ impl DriverMetrics {
 
     pub(super) fn write_stdin_dispatches(&self) -> usize {
         self.write_stdin_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn close_stdin_dispatches(&self) -> usize {
+        self.close_stdin_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -391,6 +398,18 @@ impl RuntimeDriver for AgentLifecycleDriver {
                 context: Some(request.context),
                 process: request.target,
                 data: request.data,
+            })
+            .await
+    }
+
+    async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
+        self.metrics
+            .close_stdin_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        self.client
+            .close_stdin(AgentCloseStdinRequest {
+                context: Some(request.context),
+                process: request.target,
             })
             .await
     }

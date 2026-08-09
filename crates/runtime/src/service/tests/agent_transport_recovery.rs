@@ -1,3 +1,4 @@
+mod close_stdin;
 mod create;
 mod delete;
 mod driver;
