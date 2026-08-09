@@ -5,7 +5,7 @@ use a3s_oci_agent_protocol::{
     AgentState, AgentStateRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{async_trait, Error, ErrorCode, Result};
+use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, Result};
 
 #[derive(Debug)]
 struct OperationJournal<Request, Response> {
@@ -29,6 +29,7 @@ struct LifecycleJournal {
     create: OperationJournal<AgentCreateRequest, AgentState>,
     start: OperationJournal<AgentStartRequest, AgentState>,
     kill: OperationJournal<AgentKillRequest, AgentState>,
+    delete: OperationJournal<AgentDeleteRequest, ()>,
     current: Option<AgentState>,
 }
 
@@ -95,6 +96,22 @@ impl JournaledLifecycleGuest {
             .lock()
             .expect("guest journal lock")
             .kill
+            .effects
+    }
+
+    pub(super) fn delete_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .delete
+            .requests
+    }
+
+    pub(super) fn delete_effect_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .delete
             .effects
     }
 }
@@ -259,8 +276,48 @@ impl GuestAgentService for JournaledLifecycleGuest {
         Ok(response)
     }
 
-    async fn delete(&self, _request: AgentDeleteRequest) -> Result<()> {
-        Err(Error::unsupported("agent-delete"))
+    async fn delete(&self, request: AgentDeleteRequest) -> Result<()> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.delete.requests += 1;
+        if let Some((recorded, ())) = journal.delete.entry.as_ref() {
+            if recorded.context.operation_id == request.context.operation_id {
+                if recorded != &request {
+                    return Err(changed_request("delete"));
+                }
+                return Ok(());
+            }
+            return Err(already_exists("delete"));
+        }
+
+        let current = journal.current.clone().ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-delete")
+        })?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-delete"));
+        }
+        if request.mode == DeleteMode::StoppedOnly && current.status() != ContainerState::Stopped {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "guest stopped-only delete requires stopped state, found {}",
+                    current.status()
+                ),
+            )
+            .for_operation("agent-delete"));
+        }
+
+        journal.delete.effects += 1;
+        journal.delete.entry = Some((request, ()));
+        journal.current = None;
+        Ok(())
     }
 }
 

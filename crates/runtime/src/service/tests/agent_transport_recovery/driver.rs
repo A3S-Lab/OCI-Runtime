@@ -26,6 +26,7 @@ pub(super) struct DriverMetrics {
     create_dispatches: AtomicUsize,
     start_dispatches: AtomicUsize,
     kill_dispatches: AtomicUsize,
+    delete_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -40,6 +41,10 @@ impl DriverMetrics {
 
     pub(super) fn kill_dispatches(&self) -> usize {
         self.kill_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn delete_dispatches(&self) -> usize {
+        self.delete_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -139,6 +144,9 @@ impl RuntimeDriver for AgentLifecycleDriver {
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
+        self.metrics
+            .delete_dispatches
+            .fetch_add(1, Ordering::SeqCst);
         self.client
             .delete(AgentDeleteRequest {
                 context: request.context,

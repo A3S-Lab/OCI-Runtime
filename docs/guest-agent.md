@@ -357,15 +357,17 @@ dispatch, drops the response before it is written, authenticates a new
 connection, and replays the identical `OperationId` and request without a
 second effect; changed content under the same ID fails with `Conflict`. A
 portable agent-backed `RuntimeDriver` matrix now carries all nine create, all
-nine start, and all nine kill stages through `HostRuntimeService` reopen.
-Faults before guest dispatch leave the durable operation resumable and perform
-the first effect on the replacement connection. Faults after dispatch replay
-the cached guest response, including a guest that reached `running` while the
-durable host still records `created`, or reached `stopped` while the durable
-host still records `running`. A fault after the response write lets the
-completed durable host journal answer the retry without a second driver
-dispatch. Every case uses a newly authenticated connection and driver,
-preserves the same generation, and produces one effect per operation;
+nine start, all nine kill, and all nine delete stages through
+`HostRuntimeService` reopen. Faults before guest dispatch leave the durable
+operation resumable and perform the first effect on the replacement connection.
+Faults after dispatch replay the cached guest response, including a guest that
+reached `running` while the durable host still records `created`, reached
+`stopped` while the durable host still records `running`, or removed the
+generation while the durable host still records `stopped`. A fault after the
+response write lets the completed durable host journal answer the retry without
+a second driver dispatch; completed delete also leaves no live record to send
+through driver recovery. Every case uses a newly authenticated connection and
+driver, preserves the same generation, and produces one effect per operation;
 durable-host drift and guest-request drift fail closed. This is portable
 in-memory host-service reopen evidence, not yet the required real utility-VM
 replacement and complete transition matrix.
