@@ -264,7 +264,7 @@ host-service reopen below the `RuntimeDriver` boundary. The portable matrix
 already reopens the durable host around a new authenticated connection and
 driver at all nine request/response stages for create, state, start, kill,
 delete, wait, exec, signal-process, wait-process, pause, resume, processes,
-update, stats, read-output, write-stdin, and close-stdin, retaining 153
+update, stats, read-output, write-stdin, close-stdin, and resize, retaining 162
 operation-stage pairs. Mutations distinguish pre-dispatch execution,
 post-dispatch guest replay, and completed durable-host replay while preserving
 the same generation and one effect. Exec additionally preserves its exact
@@ -275,7 +275,9 @@ flag exactly once, including when the first guest effect preceded the lost
 response; update preserves the complete OCI `LinuxResources` request and one
 exact resource effect; write-stdin preserves the exact process target,
 operation context, input bytes, and one input effect; close-stdin preserves the
-exact process target and operation context with one close effect.
+exact process target and operation context with one close effect; resize
+preserves the exact terminal process target, operation context, dimensions, and
+one resize effect.
 Read-only state, process inventory, normalized stats, and captured-output polls
 resolve a current target to the exact durable generation and are safely
 reissued after reopen, including after a fully written first response. Process

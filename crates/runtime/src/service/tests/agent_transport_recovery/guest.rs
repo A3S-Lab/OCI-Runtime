@@ -3,9 +3,9 @@ use std::sync::Mutex;
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentOperation, AgentProcess,
-    AgentProcessesRequest, AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
-    AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
+    AgentProcessesRequest, AgentReadOutputRequest, AgentResizeRequest, AgentSignalProcessRequest,
+    AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
@@ -41,6 +41,7 @@ struct LifecycleJournal {
     read_output_requests: usize,
     write_stdin: OperationJournal<AgentWriteStdinRequest, ()>,
     close_stdin: OperationJournal<AgentCloseStdinRequest, ()>,
+    resize: OperationJournal<AgentResizeRequest, ()>,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -76,6 +77,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::ReadOutput,
                     AgentOperation::WriteStdin,
                     AgentOperation::CloseStdin,
+                    AgentOperation::Resize,
                 ],
             )
             .expect("test guest capabilities"),
@@ -467,5 +469,9 @@ impl GuestAgentService for JournaledLifecycleGuest {
 
     async fn close_stdin(&self, request: AgentCloseStdinRequest) -> Result<()> {
         self.close_process_stdin(request)
+    }
+
+    async fn resize(&self, request: AgentResizeRequest) -> Result<()> {
+        self.resize_terminal(request)
     }
 }

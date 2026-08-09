@@ -218,4 +218,20 @@ impl JournaledLifecycleGuest {
             .close_stdin
             .effects
     }
+
+    pub(in super::super) fn resize_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .resize
+            .requests
+    }
+
+    pub(in super::super) fn resize_effect_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .resize
+            .effects
+    }
 }

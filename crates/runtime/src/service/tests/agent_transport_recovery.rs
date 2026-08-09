@@ -9,6 +9,7 @@ mod kill;
 mod pause;
 mod processes;
 mod read_output;
+mod resize;
 mod resume;
 mod signal_process;
 mod start;

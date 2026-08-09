@@ -1,5 +1,5 @@
 use a3s_oci_agent_protocol::{
-    AgentCloseStdinRequest, AgentReadOutputRequest, AgentWriteStdinRequest,
+    AgentCloseStdinRequest, AgentReadOutputRequest, AgentResizeRequest, AgentWriteStdinRequest,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{Error, ErrorCode, OutputChunk, OutputStream, Result};
@@ -217,6 +217,85 @@ impl JournaledLifecycleGuest {
             .lock()
             .expect("guest journal lock")
             .close_stdin
+            .entry
+            .as_ref()
+            .map(|(request, ())| request.clone())
+    }
+
+    pub(super) fn resize_terminal(&self, request: AgentResizeRequest) -> Result<()> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.resize.requests += 1;
+        let operation_id = request
+            .context
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::InvalidArgument,
+                    "guest terminal resize requires an operation context",
+                )
+                .for_operation("agent-resize")
+            })?
+            .operation_id
+            .clone();
+        if let Some((recorded, ())) = journal.resize.entry.as_ref() {
+            let recorded_operation_id = &recorded
+                .context
+                .as_ref()
+                .expect("recorded terminal resize context")
+                .operation_id;
+            if recorded_operation_id == &operation_id {
+                if recorded != &request {
+                    return Err(changed_request("resize"));
+                }
+                return Ok(());
+            }
+            return Err(already_exists("resize"));
+        }
+
+        let current = journal.current.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-resize")
+        })?;
+        if current.target() != &request.process.container {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-resize"));
+        }
+        if current.status() == ContainerState::Stopped {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "guest terminal process has already exited",
+            )
+            .for_operation("agent-resize"));
+        }
+        if !request.process.process_id.is_init()
+            && journal
+                .exec
+                .entry
+                .as_ref()
+                .is_none_or(|(_, process)| process.target() != &request.process)
+        {
+            return Err(
+                Error::new(ErrorCode::NotFound, "guest process is unavailable")
+                    .for_operation("agent-resize"),
+            );
+        }
+
+        journal.resize.effects += 1;
+        journal.resize.entry = Some((request, ()));
+        Ok(())
+    }
+
+    pub(in super::super) fn recorded_resize_request(&self) -> Option<AgentResizeRequest> {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .resize
             .entry
             .as_ref()
             .map(|(request, ())| request.clone())
