@@ -28,6 +28,7 @@ use crate::{
     SessionToken,
 };
 
+mod fault_matrix;
 mod process;
 mod protocol;
 mod response_replay;

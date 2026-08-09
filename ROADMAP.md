@@ -344,9 +344,11 @@ Completed:
   plus protocol-v9 descriptor-confined file and filesystem sessions;
 - an exhaustive negotiated-version fault registry for all twenty guest
   operations, spanning four host request/response stages, five guest
-  read/dispatch/write stages, and two host shutdown stages. In-memory evidence
-  drops one create response after dispatch, reconnects through a newly
-  authenticated stream, and replays the exact request with one effect;
+  read/dispatch/write stages, and two host shutdown stages. An authenticated
+  in-memory matrix injects every one of the 180 operation-stage pairs, proves
+  one crossing and terminal disconnect per point, and separately drops one
+  create response after dispatch, reconnects through a newly authenticated
+  stream, and replays the exact request with one effect;
 - existing `features` CLI path routed through the Rust SDK;
 - reconnectable local SDK endpoints that expose the first broken-stream result
   without hidden replay, discard the poisoned stream, and renegotiate on the
@@ -393,7 +395,8 @@ Completed:
 
 Not yet complete:
 
-- fault injection inside every utility-VM host/agent transport transition;
+- real utility-VM and host-service-reopen injection at every host/agent
+  transport transition;
 - descriptor-relative path resolution;
 - complete shared guest OCI executor;
 - a production workload driver;
@@ -498,6 +501,10 @@ enforce it. No property is silently ignored.
     response is lost can reconnect over a newly authenticated stream and replay
     the exact `OperationId` and request with one effect, while changed content
     under that ID fails with `Conflict`.
+  - [x] Arm and cross all 180 current operation-stage pairs over authenticated
+    in-memory streams. Require each selected point exactly once, disconnect the
+    session after every injected failure, and prove that a fault after a fully
+    written response preserves that response but fails the next request.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

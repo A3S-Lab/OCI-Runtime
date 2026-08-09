@@ -909,6 +909,10 @@ impl<T> AgentClient<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
+    pub(crate) async fn call_for_test(&self, request: AgentRequest) -> Result<AgentResponse> {
+        self.call(request).await
+    }
+
     pub(crate) async fn connect_for_test(
         stream: T,
         token: SessionToken,

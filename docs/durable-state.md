@@ -259,5 +259,5 @@ without fabricated exit evidence.
 The remaining persistence gates are startup-wide orphan scanning,
 descriptor-relative path operations, real-host qualification of restart-stable
 WHPX exit evidence (or qualified reattachment where another driver promises
-it), and fault injection inside the utility-VM host/agent transport below the
-`RuntimeDriver` boundary.
+it), and carrying the exhaustive in-memory host/agent fault matrix through a
+real utility VM plus host-service reopen below the `RuntimeDriver` boundary.

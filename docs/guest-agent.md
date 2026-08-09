@@ -350,12 +350,14 @@ is not implemented yet.
 Qualification can now interrupt an exact negotiated-version boundary for any
 of the twenty guest operations: four host request/response stages, five guest
 read/dispatch/write stages, and two explicit host shutdown stages. Production
-uses a no-op injector. In-memory evidence completes one create dispatch, drops
-the response before it is written, authenticates a new connection, and replays
-the identical `OperationId` and request without a second effect; changed
-content under the same ID fails with `Conflict`. This is session-local protocol
-evidence, not yet the required utility-VM replacement and host-service reopen
-matrix.
+uses a no-op injector. An authenticated in-memory matrix injects every one of
+the 180 operation-stage pairs, requires one exact crossing, and proves the
+connection terminates after each fault. Separate evidence completes one create
+dispatch, drops the response before it is written, authenticates a new
+connection, and replays the identical `OperationId` and request without a
+second effect; changed content under the same ID fails with `Conflict`. This is
+session-local protocol evidence, not yet the required utility-VM replacement
+and host-service reopen matrix.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

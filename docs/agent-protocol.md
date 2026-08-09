@@ -168,6 +168,14 @@ error response still crosses both response-write stages. Explicit host close
 has separate before-shutdown and after-shutdown points. An injected host error
 poisons the clone-shared client and releases its stream before returning.
 
+The exhaustive in-memory matrix opens a fresh authenticated session for every
+one of the twenty operations at each of the nine request/response stages. All
+180 pairs must be unique, the selected point must be crossed exactly once, and
+the connection must reject its next request. A fault before the response is
+fully written fails the current request. A fault immediately after the complete
+response write preserves the delivered response and makes the disconnect
+visible on the following request.
+
 In-memory qualification drops a create response at the guest's
 after-dispatch/before-response-write boundary. The first client receives a
 retryable transport failure after the service has recorded one effect. A newly
@@ -230,8 +238,9 @@ In-memory duplex tests cover:
   and response-shape mismatch, with permanent connection poisoning and
   immediate transport release while client clones remain;
 - the complete versioned fault-point registry, all four ordered host operation
-  stages, both host shutdown stages, guest validation-error response stages,
-  and post-dispatch create-response loss followed by authenticated exact replay
+  stages, all five guest operation stages, all 180 current operation-stage
+  pairs, both host shutdown stages, guest validation-error response stages, and
+  post-dispatch create-response loss followed by authenticated exact replay
   with one service effect;
 - clone-wide explicit close, idempotent repeat close, and rejection of every
   later request through any retained client clone;
