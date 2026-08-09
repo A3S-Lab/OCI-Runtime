@@ -261,7 +261,8 @@ descriptor-relative path operations, real-host qualification of restart-stable
 WHPX exit evidence (or qualified reattachment where another driver promises
 it), and carrying all 180 host/agent fault pairs through a real utility VM and
 host-service reopen below the `RuntimeDriver` boundary. The portable
-create matrix already reopens the durable host around a new authenticated
-connection and driver at all nine request/response stages. It distinguishes
-pre-dispatch execution, post-dispatch guest replay, and completed durable-host
-replay while preserving the same generation and one guest effect.
+create/start matrix already reopens the durable host around a new authenticated
+connection and driver at all nine request/response stages for each operation.
+It distinguishes pre-dispatch execution, post-dispatch guest replay, and
+completed durable-host replay while preserving the same generation and one
+effect per operation.

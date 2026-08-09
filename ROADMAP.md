@@ -347,12 +347,12 @@ Completed:
   read/dispatch/write stages, and two host shutdown stages. An authenticated
   in-memory matrix injects every one of the 180 operation-stage pairs, proves
   one crossing and terminal disconnect per point. A portable agent-backed
-  `RuntimeDriver` matrix also arms each of the nine create stages exactly once
-  across durable `HostRuntimeService` reopen. Pre-dispatch faults perform the
-  effect on the replacement connection, post-dispatch faults replay the guest
-  journal, and a fully written response replays the completed durable record;
-  every path preserves one generation and one guest effect, while changed host
-  and guest requests fail closed;
+  `RuntimeDriver` matrix also arms each of the nine create and start stages
+  exactly once across durable `HostRuntimeService` reopen. Pre-dispatch faults
+  perform the effect on the replacement connection, post-dispatch faults replay
+  the guest journal, and a fully written response replays the completed durable
+  record; every path preserves one generation and one effect per operation,
+  while changed host and guest requests fail closed;
 - existing `features` CLI path routed through the Rust SDK;
 - reconnectable local SDK endpoints that expose the first broken-stream result
   without hidden replay, discard the poisoned stream, and renegotiate on the
@@ -520,6 +520,12 @@ enforce it. No property is silently ignored.
     faults perform the first effect after reopen, post-dispatch faults replay
     one cached guest effect, and a fully written response replays directly from
     the completed durable host journal without a second driver dispatch.
+  - [x] Apply the same nine-stage portable reopen matrix to `start` after an
+    exact durable create. Keep the host record `created` after every retryable
+    first-call failure even when the guest already reached `running`, resume
+    through the original operation on a new authenticated connection and
+    driver, and prove exactly one start effect. A fully written start response
+    must replay from the completed durable journal without another dispatch.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

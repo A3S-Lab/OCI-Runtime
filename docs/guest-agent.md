@@ -355,17 +355,18 @@ the 180 operation-stage pairs, requires one exact crossing, and proves the
 connection terminates after each fault. Separate evidence completes one create
 dispatch, drops the response before it is written, authenticates a new
 connection, and replays the identical `OperationId` and request without a
-second effect; changed content under the same ID fails with `Conflict`. The
-A portable agent-backed `RuntimeDriver` matrix now carries all nine create
-stages through `HostRuntimeService` reopen. Faults before guest dispatch leave
-the durable record resumable and perform the first effect on the replacement
-connection. Faults after dispatch replay the cached guest response, while a
-fault after the response write lets the completed durable host journal answer
-the retry without a second driver dispatch. Every case uses a newly
-authenticated connection and driver, completes the same generation, and
-produces one guest effect; durable-host drift and guest-request drift fail
-closed. This is portable in-memory host-service reopen evidence, not yet the
-required real utility-VM replacement and complete transition matrix.
+second effect; changed content under the same ID fails with `Conflict`. A
+portable agent-backed `RuntimeDriver` matrix now carries all nine create and
+all nine start stages through `HostRuntimeService` reopen. Faults before guest
+dispatch leave the durable operation resumable and perform the first effect on
+the replacement connection. Faults after dispatch replay the cached guest
+response, including a guest that reached `running` while the durable host still
+records `created`. A fault after the response write lets the completed durable
+host journal answer the retry without a second driver dispatch. Every case uses
+a newly authenticated connection and driver, preserves the same generation,
+and produces one effect per operation; durable-host drift and guest-request
+drift fail closed. This is portable in-memory host-service reopen evidence, not
+yet the required real utility-VM replacement and complete transition matrix.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
