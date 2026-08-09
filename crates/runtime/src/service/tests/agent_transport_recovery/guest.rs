@@ -28,6 +28,7 @@ impl<Request, Response> Default for OperationJournal<Request, Response> {
 struct LifecycleJournal {
     create: OperationJournal<AgentCreateRequest, AgentState>,
     start: OperationJournal<AgentStartRequest, AgentState>,
+    kill: OperationJournal<AgentKillRequest, AgentState>,
     current: Option<AgentState>,
 }
 
@@ -78,6 +79,22 @@ impl JournaledLifecycleGuest {
             .lock()
             .expect("guest journal lock")
             .start
+            .effects
+    }
+
+    pub(super) fn kill_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .kill
+            .requests
+    }
+
+    pub(super) fn kill_effect_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .kill
             .effects
     }
 }
@@ -189,8 +206,57 @@ impl GuestAgentService for JournaledLifecycleGuest {
         Ok(response)
     }
 
-    async fn kill(&self, _request: AgentKillRequest) -> Result<AgentState> {
-        Err(Error::unsupported("agent-kill"))
+    async fn kill(&self, request: AgentKillRequest) -> Result<AgentState> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.kill.requests += 1;
+        if let Some((recorded, response)) = journal.kill.entry.as_ref() {
+            if recorded.context.operation_id == request.context.operation_id {
+                if recorded != &request {
+                    return Err(changed_request("kill"));
+                }
+                return Ok(response.clone());
+            }
+            return Err(already_exists("kill"));
+        }
+
+        let current = journal.current.clone().ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-kill")
+        })?;
+        if current.target() != &request.target {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-kill"));
+        }
+        if !matches!(
+            current.status(),
+            ContainerState::Created | ContainerState::Running
+        ) {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "guest kill requires created or running state, found {}",
+                    current.status()
+                ),
+            )
+            .for_operation("agent-kill"));
+        }
+
+        let response = AgentState::new(
+            request.target.clone(),
+            ContainerState::Stopped,
+            None,
+            current.config_digest(),
+        )?;
+        journal.kill.effects += 1;
+        journal.kill.entry = Some((request, response.clone()));
+        journal.current = Some(response.clone());
+        Ok(response)
     }
 
     async fn delete(&self, _request: AgentDeleteRequest) -> Result<()> {

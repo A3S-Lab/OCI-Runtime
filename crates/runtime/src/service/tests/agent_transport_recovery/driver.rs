@@ -25,6 +25,7 @@ use crate::{
 pub(super) struct DriverMetrics {
     create_dispatches: AtomicUsize,
     start_dispatches: AtomicUsize,
+    kill_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -35,6 +36,10 @@ impl DriverMetrics {
 
     pub(super) fn start_dispatches(&self) -> usize {
         self.start_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn kill_dispatches(&self) -> usize {
+        self.kill_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -119,6 +124,7 @@ impl RuntimeDriver for AgentLifecycleDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        self.metrics.kill_dispatches.fetch_add(1, Ordering::SeqCst);
         let expected_target = request.target.clone();
         let state = self
             .client
