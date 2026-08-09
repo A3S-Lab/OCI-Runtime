@@ -380,9 +380,9 @@ enum Command {
         /// Existing directory for two console logs and isolated durable state.
         #[arg(long, value_name = "DIR")]
         console_dir: PathBuf,
-        /// Host-side Create request/response transition to interrupt.
+        /// Host- or Guest-side Create request/response transition to interrupt.
         #[arg(long, value_enum, default_value = "host-before-request-write")]
-        fault_at: HostCreateFaultStageArg,
+        fault_at: CreateReopenFaultStageArg,
     },
 }
 
@@ -473,7 +473,7 @@ impl From<TransportFaultStageArg> for a3s_oci_runtime::AgentTransportFaultStage 
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum HostCreateFaultStageArg {
+enum CreateReopenFaultStageArg {
     #[value(name = "host-before-request-write")]
     BeforeRequestWrite,
     #[value(name = "host-after-request-write")]
@@ -482,15 +482,30 @@ enum HostCreateFaultStageArg {
     BeforeResponseRead,
     #[value(name = "host-after-response-read")]
     AfterResponseRead,
+    #[value(name = "guest-after-request-read")]
+    GuestAfterRequestRead,
+    #[value(name = "guest-before-dispatch")]
+    GuestBeforeDispatch,
+    #[value(name = "guest-after-dispatch")]
+    GuestAfterDispatch,
+    #[value(name = "guest-before-response-write")]
+    GuestBeforeResponseWrite,
+    #[value(name = "guest-after-response-write")]
+    GuestAfterResponseWrite,
 }
 
-impl From<HostCreateFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
-    fn from(value: HostCreateFaultStageArg) -> Self {
+impl From<CreateReopenFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
+    fn from(value: CreateReopenFaultStageArg) -> Self {
         match value {
-            HostCreateFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
-            HostCreateFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
-            HostCreateFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
-            HostCreateFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
+            CreateReopenFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
+            CreateReopenFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
+            CreateReopenFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
+            CreateReopenFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
+            CreateReopenFaultStageArg::GuestAfterRequestRead => Self::GuestAfterRequestRead,
+            CreateReopenFaultStageArg::GuestBeforeDispatch => Self::GuestBeforeDispatch,
+            CreateReopenFaultStageArg::GuestAfterDispatch => Self::GuestAfterDispatch,
+            CreateReopenFaultStageArg::GuestBeforeResponseWrite => Self::GuestBeforeResponseWrite,
+            CreateReopenFaultStageArg::GuestAfterResponseWrite => Self::GuestAfterResponseWrite,
         }
     }
 }

@@ -412,13 +412,18 @@ response and fails a follow-up request. Each shutdown point first delivers
 cleanup. Malformed protocol input, service errors, and cleanup errors remain
 failures.
 
-The durable replacement gate now interrupts `create` at each of the four Host
-request/response points, closes that VM, and reopens the same `creating` record
-with a new `HostRuntimeService` and a fresh authenticated Guest. The unchanged
-OperationId and generation complete on the replacement connection; force delete
-then leaves no durable record or Guest runtime state. Both VM reports must prove
-different endpoint and process owners plus complete Host descriptor restoration.
-Guest-side replacement stages and the remaining operations are still open.
+The durable replacement gate now covers all nine Host/Guest `create`
+transitions. Eight interruptions close the first VM with the exact durable
+record still in `creating`; the unchanged OperationId and generation complete
+through a new `HostRuntimeService` and fresh authenticated Guest. At
+`guest-after-response-write`, the first Guest finishes cleanup after delivering
+the response. The replacement Guest rebuilds the pre-start container during
+driver recovery, and the Host reconciles any new Guest PID into both the live
+record and completed Create journal. Each Guest stage requires nonce-bound
+cleanup evidence. Force delete then leaves no durable record or Guest runtime
+state, while both VM reports prove different endpoint and process owners plus
+complete Host descriptor restoration. Replacement coverage for the remaining
+operations is still open.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

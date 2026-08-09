@@ -170,18 +170,25 @@ impl HostRuntimeService {
                 operation: DriverOperation::Recover,
                 stage: DriverBoundaryStage::AfterCall,
             })?;
+            let replaces_created_process = recovery.replaces_created_process();
             let target =
                 ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
             let (observation, init_exit_status) = recovery.into_parts();
             if let Some(observation) = observation {
-                store
-                    .observe_state_with_pause(
-                        &target,
-                        observation.status(),
-                        observation.pid(),
-                        observation.paused(),
-                    )
-                    .await?;
+                if replaces_created_process {
+                    store
+                        .observe_recreated_created_process(&target, observation)
+                        .await?;
+                } else {
+                    store
+                        .observe_state_with_pause(
+                            &target,
+                            observation.status(),
+                            observation.pid(),
+                            observation.paused(),
+                        )
+                        .await?;
+                }
             }
             if let Some(status) = init_exit_status {
                 store

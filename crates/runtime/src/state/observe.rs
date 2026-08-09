@@ -6,6 +6,7 @@ use a3s_oci_sdk::{
     ContainerRecord, ContainerTarget, ErrorCode, OciSchemaValidator, Result, RuntimeEventKind,
 };
 
+use crate::driver::DriverState;
 use crate::fault::DurableMutation;
 
 use super::filesystem::state_error;
@@ -30,6 +31,40 @@ impl DurableStateStore {
         status: ContainerState,
         pid: Option<i32>,
         paused: bool,
+    ) -> Result<ContainerRecord> {
+        self.observe_state_inner(target, status, pid, paused, false)
+            .await
+    }
+
+    pub(crate) async fn observe_recreated_created_process(
+        &self,
+        target: &ContainerTarget,
+        observation: DriverState,
+    ) -> Result<ContainerRecord> {
+        if observation.status() != ContainerState::Created || observation.paused() {
+            return Err(state_error(
+                ErrorCode::InvalidArgument,
+                "observe-recreated-created-process",
+                "replacement-owner recovery requires an unpaused created state",
+            ));
+        }
+        self.observe_state_inner(
+            target,
+            observation.status(),
+            observation.pid(),
+            observation.paused(),
+            true,
+        )
+        .await
+    }
+
+    async fn observe_state_inner(
+        &self,
+        target: &ContainerTarget,
+        status: ContainerState,
+        pid: Option<i32>,
+        paused: bool,
+        replace_created_process: bool,
     ) -> Result<ContainerRecord> {
         validate_observation(status, pid, paused)?;
         let _guard = self.gate.lock().await;
@@ -61,15 +96,25 @@ impl DurableStateStore {
             (ContainerState::Created, ContainerState::Created)
             | (ContainerState::Running, ContainerState::Running) => {
                 if *stored.record.state.pid() != pid {
-                    return Err(state_error(
-                        ErrorCode::Conflict,
-                        "observe-state",
-                        format!(
-                            "container {} PID mismatch: durable {:?}, driver {pid:?}",
-                            target.id,
-                            stored.record.state.pid()
-                        ),
-                    ));
+                    if replace_created_process
+                        && current == ContainerState::Created
+                        && active.is_none()
+                    {
+                        stored.record.state =
+                            rebuild_state(&stored.record.state, ContainerState::Created, pid)?;
+                        OciSchemaValidator::new()?.validate_state(&stored.record.state)?;
+                        state_changed = true;
+                    } else {
+                        return Err(state_error(
+                            ErrorCode::Conflict,
+                            "observe-state",
+                            format!(
+                                "container {} PID mismatch: durable {:?}, driver {pid:?}",
+                                target.id,
+                                stored.record.state.pid()
+                            ),
+                        ));
+                    }
                 }
                 if is_paused(&stored.record.state) != paused {
                     stored.record.state = rebuild_paused_state(&stored.record.state, paused)?;

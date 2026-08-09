@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentTransportFaultInjector, AgentTransportFaultStage, AgentTransportOperationStage,
-    GuestAgentService,
+    AgentOperation, AgentTransportFaultInjector, AgentTransportFaultStage,
+    AgentTransportOperationStage, AgentTransportQualificationRequest, GuestAgentService,
+    AGENT_PROTOCOL_VERSION_MAX,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
@@ -15,11 +16,11 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode,
     DeleteRequest, Error, ErrorCode, IoMode, IsolationRequest, ListRequest, OciBundle,
-    OciRuntimeService, OperationContext, OperationId, ProcessIo, Result,
+    OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, StateRequest,
 };
 use tokio::time::timeout;
 
-use super::transport_fault_cleanup::HostTransportFault;
+use super::transport_fault_cleanup::{read_guest_qualification_evidence, HostTransportFault};
 use super::{
     canonical_directory, fixed_rootfs, guest_path, path_exists, remove_marker, runtime_entries,
     target, unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
@@ -27,10 +28,11 @@ use super::{
 use crate::agent_driver::AgentDriverClient;
 use crate::agent_session::UtilityVmSession;
 use crate::driver::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverStartRequest, DriverState,
-    RuntimeDriver,
+    DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
+    DriverStartRequest, DriverState, RuntimeDriver,
 };
 use crate::host_cleanup::MacosHostCleanupTracker;
+use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::{AgentVmSmokeReport, DriverRecovery, OciVmReopenReplacementReport};
 
 const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -44,15 +46,6 @@ pub(super) async fn run(
     stage: AgentTransportOperationStage,
 ) -> OciVmReopenReplacementReport {
     let mut report = OciVmReopenReplacementReport::initial(HostPlatform::current(), stage);
-    if !stage.is_host() {
-        return failed(
-            report,
-            format!(
-                "real utility-VM owner replacement accepts only a Host Create stage, not {}",
-                stage.as_str()
-            ),
-        );
-    }
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
@@ -154,6 +147,23 @@ pub(super) async fn run(
         isolation: IsolationRequest::DedicatedVm,
         attachments,
     };
+    let guest_qualification = if stage.is_guest() {
+        match AgentTransportQualificationRequest::new(
+            operation_id.clone(),
+            AgentOperation::Create,
+            stage,
+        ) {
+            Ok(request) => Some(request),
+            Err(error) => {
+                return failed(
+                    report,
+                    format!("failed to construct Guest reopen qualification: {error}"),
+                );
+            }
+        }
+    } else {
+        None
+    };
     report.qualification_operation_id = Some(operation_id);
     report.container_id = Some(exact_target.id.clone());
 
@@ -175,6 +185,7 @@ pub(super) async fn run(
         &delete_operation_id,
         &baseline_runtime_entries,
         stage,
+        guest_qualification.as_ref(),
         &mut report,
     )
     .await;
@@ -236,20 +247,34 @@ async fn exercise(
     delete_operation_id: &OperationId,
     baseline_runtime_entries: &std::collections::BTreeSet<String>,
     stage: AgentTransportOperationStage,
+    guest_qualification: Option<&AgentTransportQualificationRequest>,
     report: &mut OciVmReopenReplacementReport,
 ) -> std::result::Result<(), String> {
     let faults = Arc::new(HostTransportFault::new(AgentTransportFaultStage::from(
         stage,
     )));
     let first_cleanup = MacosHostCleanupTracker::capture();
-    let first_session = match UtilityVmSession::connect_with_host_fault_injector(
-        shim,
-        vm_rootfs,
-        first_console,
-        Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
-    )
-    .await
-    {
+    let first_session_result = match guest_qualification {
+        Some(qualification) => {
+            UtilityVmSession::connect_with_guest_qualification(
+                shim,
+                vm_rootfs,
+                first_console,
+                qualification,
+            )
+            .await
+        }
+        None => {
+            UtilityVmSession::connect_with_host_fault_injector(
+                shim,
+                vm_rootfs,
+                first_console,
+                Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
+            )
+            .await
+        }
+    };
+    let first_session = match first_session_result {
         Ok(session) => Arc::new(session),
         Err(mut bridge) => {
             first_cleanup.apply(&mut bridge).await;
@@ -264,6 +289,7 @@ async fn exercise(
     let first_driver = Arc::new(QualificationHvfDriver::new(
         Arc::clone(&first_session),
         vm_rootfs.to_path_buf(),
+        request.clone(),
     ));
     let first_service = match crate::HostRuntimeService::open(
         state_root,
@@ -281,47 +307,106 @@ async fn exercise(
         }
     };
 
-    let mut first_failure =
-        match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
-            Ok(Err(error)) => {
-                report.first_create_error_code = Some(error.code);
-                report.first_create_error_operation = error.operation.clone();
-                report.first_create_error_retryable = error.retryable;
-                if error.code == ErrorCode::Unavailable
-                    && error.operation.as_deref() == Some(FAULT_OPERATION)
-                    && error.retryable
-                {
-                    None
-                } else {
-                    Some(format!(
-                        "first create returned an unexpected transport error: {error}"
-                    ))
+    let response_delivered = matches!(stage, AgentTransportOperationStage::GuestAfterResponseWrite);
+    let mut first_failure = None;
+    match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
+        Ok(Err(error)) if !response_delivered => {
+            if let Err(reason) = record_first_interruption(report, error, stage) {
+                append_failure(&mut first_failure, reason);
+            }
+        }
+        Ok(Err(error)) => append_failure(
+            &mut first_failure,
+            format!(
+                "{} did not deliver its completed Create response: {error}",
+                stage.as_str()
+            ),
+        ),
+        Ok(Ok(record)) if response_delivered => {
+            report.first_create_response_received = true;
+            if *record.state.status() != ContainerState::Created {
+                append_failure(
+                    &mut first_failure,
+                    format!(
+                        "{} returned {} instead of created",
+                        stage.as_str(),
+                        record.state.status()
+                    ),
+                );
+            }
+            report.disconnect_probe_attempted = true;
+            let probe = StateRequest {
+                target: ContainerTarget::exact(request.id.clone(), record.generation),
+            };
+            match timeout(QUALIFICATION_TIMEOUT, first_service.state(probe)).await {
+                Ok(Err(error)) => {
+                    if let Err(reason) = record_first_interruption(report, error, stage) {
+                        append_failure(&mut first_failure, reason);
+                    }
                 }
+                Ok(Ok(_)) => append_failure(
+                    &mut first_failure,
+                    format!("{} disconnect probe unexpectedly succeeded", stage.as_str()),
+                ),
+                Err(_) => append_failure(
+                    &mut first_failure,
+                    format!(
+                        "{} disconnect probe exceeded the {} second timeout",
+                        stage.as_str(),
+                        QUALIFICATION_TIMEOUT.as_secs()
+                    ),
+                ),
             }
-            Ok(Ok(_)) => {
-                Some("first create unexpectedly completed before owner replacement".into())
-            }
-            Err(_) => Some(format!(
+        }
+        Ok(Ok(_)) => append_failure(
+            &mut first_failure,
+            "first create unexpectedly completed before owner replacement",
+        ),
+        Err(_) => append_failure(
+            &mut first_failure,
+            format!(
                 "first create exceeded the {} second timeout",
                 QUALIFICATION_TIMEOUT.as_secs()
-            )),
-        };
-    report.negotiated_protocol = faults.protocol_version();
-    report.injected_point = faults.injected_point();
-    report.fault_crossings = faults.crossing_count();
+            ),
+        ),
+    }
+    if stage.is_host() {
+        report.negotiated_protocol = faults.protocol_version();
+        report.injected_point = faults.injected_point();
+        report.fault_crossings = faults.crossing_count();
+    }
 
     match first_service.list(ListRequest::default()).await {
         Ok(records) if records.len() == 1 => {
             let record = &records[0];
             report.generation_before_reopen = Some(record.generation);
-            report.durable_creating_retained = *record.state.status() == ContainerState::Creating
-                && record.state.id() == request.id.as_str()
+            let exact_record = record.state.id() == request.id.as_str()
                 && record.driver == DriverKind::LibkrunHvf
                 && record.isolation == IsolationClass::DedicatedVm;
-            if !report.durable_creating_retained {
+            report.durable_creating_retained =
+                exact_record && *record.state.status() == ContainerState::Creating;
+            report.durable_created_retained =
+                exact_record && *record.state.status() == ContainerState::Created;
+            if report.durable_created_retained {
+                report.first_created_pid = *record.state.pid();
+            }
+            let expected_record_retained = if response_delivered {
+                report.durable_created_retained
+            } else {
+                report.durable_creating_retained
+            };
+            if !expected_record_retained {
                 append_failure(
                     &mut first_failure,
-                    "interrupted create did not retain the exact durable creating record",
+                    format!(
+                        "interrupted create retained {} instead of the exact durable {} record",
+                        record.state.status(),
+                        if response_delivered {
+                            "created"
+                        } else {
+                            "creating"
+                        }
+                    ),
                 );
             }
         }
@@ -343,6 +428,26 @@ async fn exercise(
     report.first_guest_runtime_clean = runtime_entries(vm_rootfs)
         .await
         .is_ok_and(|entries| &entries == baseline_runtime_entries);
+    if let Some(qualification) = guest_qualification {
+        match read_guest_qualification_evidence(first_console, qualification).await {
+            Ok(evidence) => {
+                report.negotiated_protocol = Some(evidence.protocol_version());
+                report.injected_point = Some(evidence.injected_point());
+                report.fault_crossings = evidence.fault_crossings();
+                report.guest_evidence_operation_id = Some(evidence.operation_id().clone());
+                report.guest_evidence_verified = evidence.matches_request(qualification)
+                    && evidence.protocol_version() == AGENT_PROTOCOL_VERSION_MAX
+                    && evidence.fault_crossings() == 1;
+                if !report.guest_evidence_verified {
+                    append_failure(
+                        &mut first_failure,
+                        "Guest reopen qualification evidence did not match the exact request",
+                    );
+                }
+            }
+            Err(reason) => append_failure(&mut first_failure, reason),
+        }
+    }
     if !report.first_vm.is_success() {
         append_failure(
             &mut first_failure,
@@ -391,6 +496,7 @@ async fn exercise(
     let replacement_driver = Arc::new(QualificationHvfDriver::new(
         Arc::clone(&replacement_session),
         vm_rootfs.to_path_buf(),
+        request.clone(),
     ));
     let replacement_service = match crate::HostRuntimeService::open(
         state_root,
@@ -401,10 +507,14 @@ async fn exercise(
         Ok(service) => {
             report.host_service_reopened = true;
             report.replacement_recovery_calls = replacement_driver.recovery_calls();
+            report.replacement_rehydrated_created_record =
+                replacement_driver.rehydrated_created_record();
             service
         }
         Err(error) => {
             report.replacement_recovery_calls = replacement_driver.recovery_calls();
+            report.replacement_rehydrated_created_record =
+                replacement_driver.rehydrated_created_record();
             report.replacement_vm = replacement_driver.shutdown().await;
             replacement_cleanup.apply(&mut report.replacement_vm).await;
             return Err(format!(
@@ -559,12 +669,18 @@ struct QualificationHvfDriver {
     client: AgentDriverClient,
     session: Arc<UtilityVmSession>,
     vm_rootfs: PathBuf,
+    recovery_create: CreateRequest,
     recovery_calls: AtomicU32,
+    rehydrated_created_record: AtomicBool,
     create_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
 }
 
 impl QualificationHvfDriver {
-    fn new(session: Arc<UtilityVmSession>, vm_rootfs: PathBuf) -> Self {
+    fn new(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+    ) -> Self {
         let service: Arc<dyn GuestAgentService> = Arc::new(session.client());
         Self {
             client: AgentDriverClient::new(
@@ -574,13 +690,19 @@ impl QualificationHvfDriver {
             ),
             session,
             vm_rootfs,
+            recovery_create,
             recovery_calls: AtomicU32::new(0),
+            rehydrated_created_record: AtomicBool::new(false),
             create_identity: StdMutex::new(None),
         }
     }
 
     fn recovery_calls(&self) -> u32 {
         self.recovery_calls.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_created_record(&self) -> bool {
+        self.rehydrated_created_record.load(Ordering::SeqCst)
     }
 
     async fn shutdown(&self) -> AgentVmSmokeReport {
@@ -600,6 +722,57 @@ impl QualificationHvfDriver {
             Error::new(ErrorCode::FailedPrecondition, reason)
                 .for_operation("map-qualification-hvf-bundle")
         })
+    }
+
+    fn recovery_driver_request(&self, record: &ContainerRecord) -> Result<DriverCreateRequest> {
+        let attachments_digest = self.recovery_create.attachments.digest()?;
+        if record.state.id() != self.recovery_create.id.as_str()
+            || record.driver != DriverKind::LibkrunHvf
+            || record.isolation != self.recovery_create.isolation.class()
+            || record.config_digest != self.recovery_create.bundle.config_digest()
+            || record.attachments_digest.as_deref() != Some(attachments_digest.as_str())
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery record differs from the original Create request",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverCreateRequest {
+            context: self.recovery_create.context.clone(),
+            target: ContainerTarget::exact(self.recovery_create.id.clone(), record.generation),
+            bundle: self.recovery_create.bundle.clone(),
+            isolation: self.recovery_create.isolation.clone(),
+            io: self.recovery_create.attachments.process_io().clone(),
+            attachment_contract: self.recovery_create.attachments.clone(),
+            attachments: DriverCreateAttachments::None,
+        })
+    }
+
+    async fn dispatch_create(&self, request: DriverCreateRequest) -> Result<DriverState> {
+        let identity = (request.context.operation_id.clone(), request.target.clone());
+        {
+            let mut retained = self.create_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF create-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-create")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed create identity",
+                    )
+                    .for_operation("qualification-hvf-create"));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        let guest_bundle = self.guest_bundle(&request.bundle)?;
+        self.client.create(request, guest_bundle).await
     }
 }
 
@@ -625,11 +798,14 @@ impl RuntimeDriver for QualificationHvfDriver {
     async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
         if record.driver != DriverKind::LibkrunHvf
             || record.isolation != IsolationClass::DedicatedVm
-            || *record.state.status() != ContainerState::Creating
+            || !matches!(
+                record.state.status(),
+                ContainerState::Creating | ContainerState::Created
+            )
         {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
-                "qualification HVF replacement accepts only its interrupted creating record",
+                "qualification HVF replacement accepts only its interrupted Create record",
             )
             .for_operation("recover-qualification-hvf"));
         }
@@ -641,33 +817,29 @@ impl RuntimeDriver for QualificationHvfDriver {
             )
             .for_operation("recover-qualification-hvf"));
         }
+        if *record.state.status() == ContainerState::Created {
+            let observed = self
+                .dispatch_create(self.recovery_driver_request(record)?)
+                .await?;
+            if observed.status() != ContainerState::Created {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    format!(
+                        "replacement Guest rebuilt {} with PID {:?}; durable state requires created",
+                        observed.status(),
+                        observed.pid()
+                    ),
+                )
+                .for_operation("recover-qualification-hvf"));
+            }
+            self.rehydrated_created_record.store(true, Ordering::SeqCst);
+            return DriverRecovery::recreated_created(observed);
+        }
         Ok(DriverRecovery::none())
     }
 
     async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
-        let identity = (request.context.operation_id.clone(), request.target.clone());
-        {
-            let mut retained = self.create_identity.lock().map_err(|_| {
-                Error::new(
-                    ErrorCode::Internal,
-                    "qualification HVF create-identity lock was poisoned",
-                )
-                .for_operation("qualification-hvf-create")
-            })?;
-            match retained.as_ref() {
-                Some(existing) if existing != &identity => {
-                    return Err(Error::new(
-                        ErrorCode::Conflict,
-                        "qualification HVF driver received a changed create identity",
-                    )
-                    .for_operation("qualification-hvf-create"));
-                }
-                Some(_) => {}
-                None => *retained = Some(identity),
-            }
-        }
-        let guest_bundle = self.guest_bundle(&request.bundle)?;
-        self.client.create(request, guest_bundle).await
+        self.dispatch_create(request).await
     }
 
     async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
@@ -733,6 +905,32 @@ fn owner_identities_are_distinct(
             .bridge_process_id
             .zip(replacement.bridge_process_id)
             .is_some_and(|(first, replacement)| first != 0 && first != replacement)
+}
+
+fn record_first_interruption(
+    report: &mut OciVmReopenReplacementReport,
+    error: Error,
+    stage: AgentTransportOperationStage,
+) -> std::result::Result<(), String> {
+    report.first_create_error_code = Some(error.code);
+    report.first_create_error_operation = error.operation.clone();
+    report.first_create_error_retryable = error.retryable;
+    let expected_operation = if stage.is_guest() {
+        error
+            .operation
+            .as_deref()
+            .is_some_and(is_retryable_disconnect_operation)
+    } else {
+        error.operation.as_deref() == Some(FAULT_OPERATION)
+    };
+    if error.code == ErrorCode::Unavailable && error.retryable && expected_operation {
+        Ok(())
+    } else {
+        Err(format!(
+            "first owner returned an unexpected transport error at {}: {error}",
+            stage.as_str()
+        ))
+    }
 }
 
 fn append_failure(target: &mut Option<String>, reason: impl Into<String>) {

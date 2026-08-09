@@ -175,7 +175,7 @@ impl DurableStateStore {
             .await?
         {
             validate_create_retry(&operation, request, &request_digest)?;
-            return match &operation.outcome {
+            return match operation.outcome.clone() {
                 StoredOperationStatus::Prepared => {
                     let mut stored = self
                         .reconcile_prepared_create(request, driver, operation.generation)
@@ -198,11 +198,11 @@ impl DurableStateStore {
                     Ok(RecordOperationPreparation::Resume(stored.record))
                 }
                 StoredOperationStatus::Succeeded { response } => {
-                    Ok(RecordOperationPreparation::Replayed(response.clone()))
+                    self.reconcile_succeeded_create(operation, response).await
                 }
                 StoredOperationStatus::Failed { error } => {
                     self.reconcile_failed_create(&operation).await?;
-                    Err(error.clone())
+                    Err(error)
                 }
                 StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
@@ -340,6 +340,65 @@ impl DurableStateStore {
         )
         .await?;
         Ok(stored)
+    }
+
+    async fn reconcile_succeeded_create(
+        &self,
+        mut operation: StoredOperation,
+        response: ContainerRecord,
+    ) -> Result<RecordOperationPreparation> {
+        let stored = match self.load_stored_container(&operation.container_id).await {
+            Ok(stored) => stored,
+            Err(error) if error.code == ErrorCode::NotFound => {
+                return Ok(RecordOperationPreparation::Replayed(response));
+            }
+            Err(error) => return Err(error),
+        };
+        if stored.record.generation != operation.generation
+            || stored.record == response
+            || *stored.record.state.status() != ContainerState::Created
+        {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        if stored.active_operation.is_some() || *response.state.status() != ContainerState::Created
+        {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "reconcile-succeeded-create",
+                format!(
+                    "completed create operation {} differs from its durable container record",
+                    operation.operation_id
+                ),
+            ));
+        }
+        let expected = ContainerRecord {
+            state: rebuild_state(
+                &response.state,
+                ContainerState::Created,
+                *stored.record.state.pid(),
+            )?,
+            ..response
+        };
+        if expected != stored.record {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "reconcile-succeeded-create",
+                format!(
+                    "completed create operation {} changed beyond its recovered process identity",
+                    operation.operation_id
+                ),
+            ));
+        }
+        operation.outcome = StoredOperationStatus::Succeeded {
+            response: stored.record.clone(),
+        };
+        self.write_json(
+            DurableMutation::CompleteCreateOperation,
+            &self.operation_path(&operation.operation_id),
+            &operation,
+        )
+        .await?;
+        Ok(RecordOperationPreparation::Replayed(stored.record))
     }
 
     /// Commit driver create completion with the prepared init-process PID.

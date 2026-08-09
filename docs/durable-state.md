@@ -310,11 +310,18 @@ Twenty-four fresh local VMs passed the repeated Host request-response v2 gate
 and five more passed its Guest gate. The final v3 requalification passed all
 eleven stages in eleven fresh VMs.
 
-All four Host-side Create request/response points now pass through the durable
-layer on real HVF. For each point, the first VM closes while the original
-OperationId and generation remain in `creating`; a new `HostRuntimeService` and
-distinct VM/session owner reopen that record, complete the same Create,
-force-delete it, and leave no durable container or transient Host/Guest
-resource. Each retained `a3s.oci.oci-vm-reopen-replacement.v1` report includes
-both VM cleanup reports. Guest-side stages and other operations still belong to
-the replacement matrix above.
+All nine Host/Guest Create transitions now pass through the durable layer on
+real HVF. Eight paths close the first VM while the original OperationId and
+generation remain in `creating`; a new `HostRuntimeService` and distinct
+VM/session owner reopen that record and complete the same Create. The fully
+written Guest response is different: it leaves a completed `created` record,
+then a follow-up State request exposes the disconnect. Replacement recovery
+rebuilds that pre-start process and uses the explicit
+`DriverRecovery::recreated_created` contract to reconcile its exact PID. The
+next Create replay repairs and returns the same recovered record instead of the
+stale cached response. Ordinary recovery observations still reject PID drift.
+Both the record rebind and journal repair recover across every durable
+file-commit fault stage.
+Every `a3s.oci.oci-vm-reopen-replacement.v2` path then force-deletes the
+generation and leaves no durable container or transient Host/Guest resource.
+The other operations still belong to the replacement matrix above.

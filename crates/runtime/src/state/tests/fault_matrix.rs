@@ -9,6 +9,7 @@ mod process;
 mod process_io;
 
 use super::*;
+use crate::driver::DriverState;
 use crate::fault::testing::RecordingFaultInjector;
 use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
 use crate::state::model::{StoredContainer, StoredGeneration};
@@ -91,6 +92,94 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
         };
         exercise(scenario_for(mutation), point).await;
     }
+}
+
+#[tokio::test]
+async fn recreated_created_pid_and_create_journal_repair_survive_commit_faults() {
+    for mutation in [
+        DurableMutation::ObserveContainer,
+        DurableMutation::CompleteCreateOperation,
+    ] {
+        for stage in FileCommitStage::ALL {
+            exercise_recreated_created_recovery(FaultPoint::DurableFile { mutation, stage }).await;
+        }
+    }
+}
+
+async fn exercise_recreated_created_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("recreated-created-fault");
+    let setup = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("open recreated-process setup");
+    let original = drive_create(&setup, &create)
+        .await
+        .expect("complete original create");
+    let target = ContainerTarget::exact(create.id.clone(), original.generation);
+    if matches!(
+        point,
+        FaultPoint::DurableFile {
+            mutation: DurableMutation::CompleteCreateOperation,
+            ..
+        }
+    ) {
+        setup
+            .observe_recreated_created_process(
+                &target,
+                DriverState::created(5_252).expect("replacement created state"),
+            )
+            .await
+            .expect("store replacement PID before journal fault");
+    }
+    drop(setup);
+
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let injected = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open recreated-process fault store");
+    let result = match point {
+        FaultPoint::DurableFile {
+            mutation: DurableMutation::ObserveContainer,
+            ..
+        } => injected
+            .observe_recreated_created_process(
+                &target,
+                DriverState::created(5_252).expect("replacement created state"),
+            )
+            .await
+            .map(|_| ()),
+        FaultPoint::DurableFile {
+            mutation: DurableMutation::CompleteCreateOperation,
+            ..
+        } => injected
+            .prepare_create(&create, DriverKind::LibkrunWhpx)
+            .await
+            .map(|_| ()),
+        _ => unreachable!("recreated-process test uses only selected file faults"),
+    };
+    let error = result.expect_err("recreated-process checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(injected);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen recreated-process state");
+    recovered
+        .observe_recreated_created_process(
+            &target,
+            DriverState::created(5_252).expect("replacement created state"),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("recover replacement PID after {point}: {error}"));
+    let replayed = recovered
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .unwrap_or_else(|error| panic!("repair Create journal after {point}: {error}"));
+    let RecordOperationPreparation::Replayed(replayed) = replayed else {
+        panic!("Create journal did not replay after {point}");
+    };
+    assert_eq!(*replayed.state.pid(), Some(5_252), "{point}");
+    assert_consistent_layout(recovered.root());
 }
 
 const fn scenario_for(mutation: DurableMutation) -> Scenario {

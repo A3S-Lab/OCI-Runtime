@@ -221,11 +221,11 @@ pub async fn oci_vm_reopen_replacement(
     .await
 }
 
-/// Resume one Host-interrupted durable create through a replacement macOS HVF owner.
+/// Resume one transport-interrupted durable create through a replacement macOS HVF owner.
 ///
-/// The selected stage must be one of the four Host-side Create request/response
-/// transitions. The first VM returns a retryable transport error, and a fresh
-/// authenticated VM must complete the original durable operation and generation.
+/// The selected stage may be any Host- or Guest-side Create request/response
+/// transition. A fresh authenticated VM must recover or complete the original
+/// durable operation and generation after the first owner disconnects.
 #[must_use]
 pub async fn oci_vm_reopen_replacement_at(
     shim: &Path,

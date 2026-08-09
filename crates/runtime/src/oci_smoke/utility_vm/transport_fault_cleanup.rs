@@ -484,7 +484,7 @@ fn record_guest_disconnect(
     }
 }
 
-async fn read_guest_qualification_evidence(
+pub(super) async fn read_guest_qualification_evidence(
     console: &Path,
     request: &AgentTransportQualificationRequest,
 ) -> Result<AgentTransportQualificationEvidence, String> {

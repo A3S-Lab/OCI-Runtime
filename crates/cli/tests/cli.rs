@@ -541,7 +541,7 @@ fn oci_vm_reopen_replacement_fails_closed_with_versioned_output() {
         .expect("reopen-replacement diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.oci-vm-reopen-replacement.v1"
+        "a3s.oci.oci-vm-reopen-replacement.v2"
     );
     assert_eq!(report["requested_operation"], "create");
     assert_eq!(report["requested_stage"], "host-before-request-write");
@@ -549,12 +549,17 @@ fn oci_vm_reopen_replacement_fails_closed_with_versioned_output() {
 }
 
 #[test]
-fn oci_vm_reopen_replacement_accepts_each_host_create_stage() {
+fn oci_vm_reopen_replacement_accepts_each_create_transport_stage() {
     for stage in [
         "host-before-request-write",
         "host-after-request-write",
         "host-before-response-read",
         "host-after-response-read",
+        "guest-after-request-read",
+        "guest-before-dispatch",
+        "guest-after-dispatch",
+        "guest-before-response-write",
+        "guest-after-response-write",
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
             .args([

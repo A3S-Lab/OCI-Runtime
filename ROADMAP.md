@@ -703,17 +703,30 @@ enforce it. No property is silently ignored.
     `create`, force-delete it, and return every resource inventory to baseline.
     The August 10, 2026 Apple Silicon gate passed with two distinct endpoint,
     shim, and VM-worker identities under
-    `a3s.oci.oci-vm-reopen-replacement.v1`.
+    `a3s.oci.oci-vm-reopen-replacement.v2`.
   - [x] Carry the other three Host-side `create` request/response stages through
     the same durable reopen and actual HVF owner replacement. The selected
     point is explicit in the CLI and retained report; every run requires the
     original OperationId and generation, a distinct endpoint/shim/VM-worker
     owner, force delete, and complete Host and Guest cleanup. The August 10,
     2026 four-stage matrix passed in eight fresh VMs.
-  - [ ] Carry the Guest-side stages and remaining operations through
-    `HostRuntimeService` reopen and actual VM/owner replacement. The portable
-    matrix, eleven real cleanup stages, and four Host-side replacement paths do
-    not satisfy the complete matrix gate.
+  - [x] Carry all five Guest-side `create` stages through the same durable
+    reopen and actual HVF owner replacement. The first four points retain
+    `creating` and complete on the replacement Guest. The fully written
+    response retains `created`; a State probe exposes the disconnect, then an
+    explicit recreated-process recovery rebuilds the pre-start workload,
+    reconciles a changed Guest PID when necessary, and repairs the completed
+    Create journal before replay. Nonce-bound Guest evidence, exact
+    OperationId and generation reuse, two distinct owners, force delete, and
+    complete cleanup are required. Rebinding the record and repairing the
+    journal each pass all seven durable file-commit fault stages. The August
+    10, 2026 five-stage matrix passed in ten fresh VMs; three additional
+    post-response waves passed in six fresh VMs, including a real replacement
+    PID change.
+  - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
+    actual VM/owner replacement. The portable matrix, eleven real cleanup
+    stages, and all nine real Create replacement paths do not satisfy the
+    complete operation matrix gate.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

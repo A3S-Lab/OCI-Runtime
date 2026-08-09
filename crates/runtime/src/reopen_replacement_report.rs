@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::report::AgentVmSmokeReport;
 
 /// Schema emitted by the real HVF host-service reopen and VM replacement diagnostic.
-pub const OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-reopen-replacement.v1";
+pub const OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-reopen-replacement.v2";
 
 const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 
@@ -26,7 +26,7 @@ pub struct OciVmReopenReplacementReport {
     pub bundle_loaded: bool,
     /// Operation interrupted at the selected point in the first VM session.
     pub requested_operation: AgentOperation,
-    /// Exact Host transport point used to force the owner handoff.
+    /// Exact Host or Guest transport point used to force the owner handoff.
     pub requested_stage: AgentTransportOperationStage,
     /// Stable create identity reused after the host service reopened.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,16 +42,30 @@ pub struct OciVmReopenReplacementReport {
     pub injected_point: Option<String>,
     /// Number of times the selected point was crossed.
     pub fault_crossings: u32,
-    /// Stable error class returned by the first create attempt.
+    /// Stable error class returned by the first create or disconnect probe.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_create_error_code: Option<ErrorCode>,
-    /// Operation attached to the first create error.
+    /// Operation attached to the first create or disconnect-probe error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_create_error_operation: Option<String>,
-    /// Whether the first create error explicitly allowed replay.
+    /// Whether the first owner error explicitly allowed replay.
     pub first_create_error_retryable: bool,
+    /// Whether the first owner delivered the complete Create response.
+    pub first_create_response_received: bool,
+    /// Whether a follow-up State request exposed a post-response disconnect.
+    pub disconnect_probe_attempted: bool,
     /// Whether the interrupted durable record remained in OCI `creating`.
     pub durable_creating_retained: bool,
+    /// Whether a delivered Create response left the durable record in OCI `created`.
+    pub durable_created_retained: bool,
+    /// Positive init PID committed by the first owner when Create completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_created_pid: Option<i32>,
+    /// Whether nonce-bound Guest console evidence passed exact validation.
+    pub guest_evidence_verified: bool,
+    /// Operation identity decoded independently from Guest console evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guest_evidence_operation_id: Option<OperationId>,
     /// Generation reserved before the first host service closed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_before_reopen: Option<Generation>,
@@ -59,6 +73,8 @@ pub struct OciVmReopenReplacementReport {
     pub host_service_reopened: bool,
     /// Number of durable records accepted by the replacement driver's recovery hook.
     pub replacement_recovery_calls: u32,
+    /// Whether recovery rebuilt a completed first-owner Create in the fresh Guest.
+    pub replacement_rehydrated_created_record: bool,
     /// Whether retrying the original create completed through the replacement VM.
     pub create_completed_after_reopen: bool,
     /// Generation returned by the completed replacement create.
@@ -114,10 +130,17 @@ impl OciVmReopenReplacementReport {
             first_create_error_code: None,
             first_create_error_operation: None,
             first_create_error_retryable: false,
+            first_create_response_received: false,
+            disconnect_probe_attempted: false,
             durable_creating_retained: false,
+            durable_created_retained: false,
+            first_created_pid: None,
+            guest_evidence_verified: false,
+            guest_evidence_operation_id: None,
             generation_before_reopen: None,
             host_service_reopened: false,
             replacement_recovery_calls: 0,
+            replacement_rehydrated_created_record: false,
             create_completed_after_reopen: false,
             generation_after_reopen: None,
             replacement_created_pid: None,
@@ -168,21 +191,58 @@ impl OciVmReopenReplacementReport {
             stage: self.requested_stage,
         }
         .to_string();
+        let guest_stage = self.requested_stage.is_guest();
+        let response_delivered = matches!(
+            self.requested_stage,
+            AgentTransportOperationStage::GuestAfterResponseWrite
+        );
+        let expected_interruption = if response_delivered {
+            self.first_create_response_received
+                && self.disconnect_probe_attempted
+                && !self.durable_creating_retained
+                && self.durable_created_retained
+                && self
+                    .first_created_pid
+                    .is_some_and(|process_id| process_id > 0)
+                && self.replacement_rehydrated_created_record
+        } else {
+            !self.first_create_response_received
+                && !self.disconnect_probe_attempted
+                && self.durable_creating_retained
+                && !self.durable_created_retained
+                && self.first_created_pid.is_none()
+                && !self.replacement_rehydrated_created_record
+        };
+        let expected_error_operation = if guest_stage {
+            self.first_create_error_operation
+                .as_deref()
+                .is_some_and(crate::transport_cleanup_report::is_retryable_disconnect_operation)
+        } else {
+            self.first_create_error_operation.as_deref() == Some(QUALIFICATION_FAULT_OPERATION)
+        };
+        let expected_guest_evidence = if guest_stage {
+            self.guest_evidence_verified
+                && self.guest_evidence_operation_id == self.qualification_operation_id
+        } else {
+            !self.guest_evidence_verified && self.guest_evidence_operation_id.is_none()
+        };
+
         matches!(self.platform, HostPlatform::Macos)
             && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Create
-            && self.requested_stage.is_host()
+            && (self.requested_stage.is_host() || guest_stage)
             && self.qualification_operation_id.is_some()
             && self.container_id.is_some()
             && self.negotiated_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
             && self.injected_point.as_deref() == Some(expected_point.as_str())
             && self.fault_crossings == 1
             && self.first_create_error_code == Some(ErrorCode::Unavailable)
-            && self.first_create_error_operation.as_deref() == Some(QUALIFICATION_FAULT_OPERATION)
+            && expected_error_operation
             && self.first_create_error_retryable
-            && self.durable_creating_retained
+            && expected_interruption
+            && expected_guest_evidence
             && self.generation_before_reopen.is_some()
             && self.host_service_reopened
             && self.replacement_recovery_calls == 1
@@ -292,13 +352,55 @@ mod tests {
             assert!(stage_report.is_success(), "{stage_report:?}");
         }
 
-        let mut guest_stage = report.clone();
-        guest_stage.requested_stage = AgentTransportOperationStage::GuestAfterRequestRead;
-        guest_stage.injected_point = Some(format!(
+        for stage in [
+            AgentTransportOperationStage::GuestAfterRequestRead,
+            AgentTransportOperationStage::GuestBeforeDispatch,
+            AgentTransportOperationStage::GuestAfterDispatch,
+            AgentTransportOperationStage::GuestBeforeResponseWrite,
+        ] {
+            let mut stage_report = report.clone();
+            stage_report.requested_stage = stage;
+            stage_report.injected_point = Some(format!(
+                "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
+                stage.as_str()
+            ));
+            stage_report.first_create_error_operation = Some("read-agent-frame-header".to_string());
+            stage_report.guest_evidence_verified = true;
+            stage_report.guest_evidence_operation_id =
+                stage_report.qualification_operation_id.clone();
+            assert!(stage_report.is_success(), "{stage_report:?}");
+        }
+
+        let mut delivered_response = report.clone();
+        delivered_response.requested_stage = AgentTransportOperationStage::GuestAfterResponseWrite;
+        delivered_response.injected_point = Some(format!(
             "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
-            guest_stage.requested_stage.as_str()
+            delivered_response.requested_stage.as_str()
         ));
-        assert!(!guest_stage.is_success());
+        delivered_response.first_create_error_operation =
+            Some("read-agent-frame-header".to_string());
+        delivered_response.first_create_response_received = true;
+        delivered_response.disconnect_probe_attempted = true;
+        delivered_response.durable_creating_retained = false;
+        delivered_response.durable_created_retained = true;
+        delivered_response.first_created_pid = Some(41);
+        delivered_response.guest_evidence_verified = true;
+        delivered_response.guest_evidence_operation_id =
+            delivered_response.qualification_operation_id.clone();
+        delivered_response.replacement_rehydrated_created_record = true;
+        assert!(delivered_response.is_success(), "{delivered_response:?}");
+
+        let missing_guest_evidence = OciVmReopenReplacementReport {
+            guest_evidence_verified: false,
+            ..delivered_response.clone()
+        };
+        assert!(!missing_guest_evidence.is_success());
+
+        let missing_rehydration = OciVmReopenReplacementReport {
+            replacement_rehydrated_created_record: false,
+            ..delivered_response
+        };
+        assert!(!missing_rehydration.is_success());
 
         for incomplete in [
             OciVmReopenReplacementReport {

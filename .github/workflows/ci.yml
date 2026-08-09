@@ -1019,7 +1019,7 @@ jobs:
             test ! -e "$marker"
           done
       - if: runner.os == 'macOS'
-        name: Real macOS Host-stage reopen and HVF owner replacement
+        name: Real macOS Create-stage reopen and HVF owner replacement
         shell: bash
         run: |
           rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
@@ -1042,7 +1042,12 @@ jobs:
             host-before-request-write \
             host-after-request-write \
             host-before-response-read \
-            host-after-response-read
+            host-after-response-read \
+            guest-after-request-read \
+            guest-before-dispatch \
+            guest-after-dispatch \
+            guest-before-response-write \
+            guest-after-response-write
           do
             stage_console_dir="$console_dir/$fault_stage"
             mkdir "$stage_console_dir"
@@ -1063,7 +1068,7 @@ jobs:
               test "$gate_exit_code" -eq 0
               jq --exit-status --arg stage "$fault_stage" \
                 '.schema_version
-                     == "a3s.oci.oci-vm-reopen-replacement.v1"
+                     == "a3s.oci.oci-vm-reopen-replacement.v2"
                  and .platform == "macos" and .status == "available"
                  and .bundle_loaded
                  and .requested_operation == "create"
@@ -1074,10 +1079,45 @@ jobs:
                  and .injected_point == ("agent-v9.create-" + $stage)
                  and .fault_crossings == 1
                  and .first_create_error_code == "unavailable"
-                 and .first_create_error_operation
-                     == "oci-vm-transport-qualification-fault"
                  and .first_create_error_retryable
-                 and .durable_creating_retained
+                 and (if ($stage | startswith("guest-")) then
+                        (.first_create_error_operation
+                         | IN("agent-protocol",
+                              "read-agent-frame-header",
+                              "read-agent-frame-payload",
+                              "write-agent-frame-header",
+                              "write-agent-frame-payload",
+                              "flush-agent-frame"))
+                        and .guest_evidence_verified
+                        and (.guest_evidence_operation_id
+                             == .qualification_operation_id)
+                        and (if $stage == "guest-after-response-write" then
+                               .first_create_response_received
+                               and .disconnect_probe_attempted
+                               and (.durable_creating_retained | not)
+                               and .durable_created_retained
+                               and (.first_created_pid > 0)
+                               and .replacement_rehydrated_created_record
+                             else
+                               (.first_create_response_received | not)
+                               and (.disconnect_probe_attempted | not)
+                               and .durable_creating_retained
+                               and (.durable_created_retained | not)
+                               and (.first_created_pid == null)
+                               and (.replacement_rehydrated_created_record | not)
+                             end)
+                      else
+                        .first_create_error_operation
+                          == "oci-vm-transport-qualification-fault"
+                        and (.first_create_response_received | not)
+                        and (.disconnect_probe_attempted | not)
+                        and .durable_creating_retained
+                        and (.durable_created_retained | not)
+                        and (.first_created_pid == null)
+                        and (.guest_evidence_verified | not)
+                        and (.guest_evidence_operation_id == null)
+                        and (.replacement_rehydrated_created_record | not)
+                      end)
                  and .generation_before_reopen == 1
                  and .host_service_reopened
                  and .replacement_recovery_calls == 1
@@ -1121,7 +1161,7 @@ jobs:
               test "$gate_exit_code" -eq 2
               jq --exit-status --arg stage "$fault_stage" \
                 '.schema_version
-                     == "a3s.oci.oci-vm-reopen-replacement.v1"
+                     == "a3s.oci.oci-vm-reopen-replacement.v2"
                  and .platform == "macos"
                  and .status != "available"
                  and .requested_operation == "create"

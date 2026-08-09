@@ -701,11 +701,11 @@ This is real VM cleanup evidence for all nine Host/Guest `create` transitions
 and both Host shutdown stages. It does not by itself prove durable service
 reopen or a replacement VM owner.
 
-## Durable Host reopen and VM owner replacement
+## Durable service reopen and VM owner replacement
 
-`oci-vm-reopen-replacement` carries all four Host-side Create request/response
-points through the durable Host service instead of calling the diagnostic Agent
-client directly:
+`oci-vm-reopen-replacement` carries all nine Host/Guest Create transitions
+through the durable Host service instead of calling the diagnostic Agent client
+directly:
 
 ```sh
 reopen_dir="$(mktemp -d)"
@@ -713,7 +713,12 @@ for fault_stage in \
   host-before-request-write \
   host-after-request-write \
   host-before-response-read \
-  host-after-response-read
+  host-after-response-read \
+  guest-after-request-read \
+  guest-before-dispatch \
+  guest-after-dispatch \
+  guest-before-response-write \
+  guest-after-response-write
 do
   stage_dir="$reopen_dir/$fault_stage"
   mkdir "$stage_dir"
@@ -727,22 +732,30 @@ done
 ```
 
 The first qualification-only HVF driver opens a real authenticated VM and
-injects the selected Host point into `create`. The retryable error leaves the
-exact durable record and OperationId in `creating`; that VM must then exit with
-its endpoint, processes, Guest runtime root, and Host descriptor inventory fully
-restored. A second `HostRuntimeService` opens the same scratch state root around
-a fresh VM/session owner. Its recovery hook accepts only that one `creating`
-record and returns `DriverRecovery::none`, so retrying the unchanged request
-completes the same generation through the replacement Guest. The diagnostic
-then force-deletes it and requires the durable list to be empty.
+injects the selected point into `create`. Host points and the first four Guest
+points leave the exact durable record and OperationId in `creating`; the VM then
+exits with its endpoint, processes, Guest runtime root, and Host descriptor
+inventory fully restored. A second `HostRuntimeService` opens the same scratch
+state root around a fresh VM/session owner. Its recovery hook accepts that one
+record, and retrying the unchanged request completes the same generation.
 
-`a3s.oci.oci-vm-reopen-replacement.v1` retains both nested VM reports and fails
-unless their endpoint, shim PID, and direct VM-worker PID identities differ.
-It also requires generation and OperationId reuse, one replacement recovery
-call, complete force-delete cleanup, and removal of the newly created scratch
-state root. The August 10, 2026 Apple Silicon matrix passed all four Host points
-in eight fresh VMs. This closes the Host-side `create` recovery paths; the five
-Guest stages and remaining operations still need the same replacement treatment.
+`guest-after-response-write` has a separate contract because the first Create
+response has already reached durable `created`. A State probe observes the
+closed connection. The replacement driver rebuilds the pre-start Guest process
+inside `recover`, returns `DriverRecovery::recreated_created`, and permits only
+that recovery path to reconcile a changed PID. The next Create replay repairs
+its cached response from the recovered record. Ordinary state and recovery
+observations still reject PID replacement.
+
+`a3s.oci.oci-vm-reopen-replacement.v2` retains nonce-bound Guest evidence and
+both nested VM reports, and fails unless the endpoint, shim PID, and direct
+VM-worker PID identities differ. It also requires generation and OperationId
+reuse, one replacement recovery call, complete force-delete cleanup, and
+removal of the scratch state root. The August 10, 2026 Apple Silicon matrix
+passed all nine points in 18 fresh VMs. Three additional post-response waves
+passed in six fresh VMs; one changed the Guest PID across owners and exercised
+the journal repair path. This closes the `create` recovery paths. The remaining
+operations still need the same replacement treatment.
 
 ## Remaining workload gates
 
