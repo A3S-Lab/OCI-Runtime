@@ -3,13 +3,13 @@ use std::sync::Mutex;
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
     AgentExecRequest, AgentKillRequest, AgentOperation, AgentProcess, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
     AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, DeleteMode, Error, ErrorCode, ExitStatus, ProcessId, ProcessRecord, ProcessTarget,
-    Result,
+    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, ProcessId,
+    ProcessRecord, ProcessTarget, Result,
 };
 
 use super::guest_journal::{already_exists, changed_request, OperationJournal};
@@ -17,6 +17,7 @@ use super::guest_journal::{already_exists, changed_request, OperationJournal};
 mod freezer;
 mod metrics;
 mod resource;
+mod stats;
 
 #[derive(Debug, Default)]
 struct LifecycleJournal {
@@ -33,6 +34,7 @@ struct LifecycleJournal {
     resume: OperationJournal<AgentContainerOperationRequest, AgentState>,
     processes_requests: usize,
     update: OperationJournal<AgentUpdateRequest, AgentState>,
+    stats_requests: usize,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -64,6 +66,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::Resume,
                     AgentOperation::Processes,
                     AgentOperation::Update,
+                    AgentOperation::Stats,
                 ],
             )
             .expect("test guest capabilities"),
@@ -476,5 +479,9 @@ impl GuestAgentService for JournaledLifecycleGuest {
 
     async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
         self.update_resources(request)
+    }
+
+    async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
+        self.read_stats(request)
     }
 }

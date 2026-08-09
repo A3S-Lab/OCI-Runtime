@@ -608,6 +608,13 @@ enforce it. No property is silently ignored.
     response from the durable host journal without another dispatch. Require
     one resource-update effect and reject changed resources under the same
     operation ID at both boundaries.
+  - [x] Carry read-only `stats` through all nine portable reopen stages after an
+    exact durable create and start. Resolve the current host target to the exact
+    generation, validate the same normalized CPU, memory, process-count, and
+    named metrics after reconnect, and reissue the observation after every
+    retryable first-call failure, including a fully written first response.
+    Keep durable state unchanged and reject stale generations before host
+    driver dispatch and at the guest boundary.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

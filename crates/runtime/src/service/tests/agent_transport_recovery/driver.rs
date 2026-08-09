@@ -5,7 +5,7 @@ use std::sync::Arc;
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
     AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
 };
 use a3s_oci_core::{
@@ -13,8 +13,8 @@ use a3s_oci_core::{
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerTarget, Error, ErrorCode, ExitStatus, OciBundle,
-    OperationContext, ProcessIo, ProcessRecord, Result, RuntimeOperation,
+    async_trait, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus,
+    OciBundle, OperationContext, ProcessIo, ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::io::DuplexStream;
 
@@ -25,7 +25,7 @@ use crate::{
     DriverWaitRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 13] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 14] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -39,6 +39,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 13] = [
     RuntimeOperation::Resume,
     RuntimeOperation::Processes,
     RuntimeOperation::Update,
+    RuntimeOperation::Stats,
 ];
 
 #[derive(Debug, Default)]
@@ -56,6 +57,7 @@ pub(super) struct DriverMetrics {
     resume_dispatches: AtomicUsize,
     processes_dispatches: AtomicUsize,
     update_dispatches: AtomicUsize,
+    stats_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -110,6 +112,10 @@ impl DriverMetrics {
 
     pub(super) fn update_dispatches(&self) -> usize {
         self.update_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn stats_dispatches(&self) -> usize {
+        self.stats_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -342,6 +348,11 @@ impl RuntimeDriver for AgentLifecycleDriver {
             })
             .await?;
         map_agent_state(&expected_target, None, state)
+    }
+
+    async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        self.metrics.stats_dispatches.fetch_add(1, Ordering::SeqCst);
+        self.client.stats(AgentStatsRequest { target }).await
     }
 }
 

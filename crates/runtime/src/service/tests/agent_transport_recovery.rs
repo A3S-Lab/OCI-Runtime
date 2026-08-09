@@ -11,6 +11,7 @@ mod resume;
 mod signal_process;
 mod start;
 mod state;
+mod stats;
 mod transport;
 mod update;
 mod wait;

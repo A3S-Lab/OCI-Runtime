@@ -172,4 +172,11 @@ impl JournaledLifecycleGuest {
             .update
             .effects
     }
+
+    pub(in super::super) fn stats_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .stats_requests
+    }
 }
