@@ -125,8 +125,8 @@ pub use soak_report::{
     NATIVE_LINUX_SOAK_SCHEMA_VERSION,
 };
 pub use transport_cleanup_report::{
-    is_supported_host_stage, OciVmTransportFaultCleanupReport,
-    OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION,
+    is_supported_guest_stage, is_supported_host_stage, is_supported_transport_stage,
+    OciVmTransportFaultCleanupReport, OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION,
 };
 pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,

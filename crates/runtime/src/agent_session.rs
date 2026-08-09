@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentClient, AgentOperation, AgentTransportFaultInjector, AgentVsockEndpoint,
-    NoAgentTransportFaultInjector, SessionToken, AGENT_PROTOCOL_VERSION_MAX,
-    AGENT_SESSION_TOKEN_ENV,
+    AgentClient, AgentOperation, AgentTransportFaultInjector, AgentTransportQualificationRequest,
+    AgentVsockEndpoint, NoAgentTransportFaultInjector, SessionToken, AGENT_PROTOCOL_VERSION_MAX,
+    AGENT_SESSION_TOKEN_ENV, AGENT_TRANSPORT_QUALIFICATION_ENV,
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use a3s_oci_agent_protocol::{AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_FILE_NAME};
@@ -106,6 +106,24 @@ impl UtilityVmSession {
         })
     }
 
+    pub(crate) async fn connect_with_guest_qualification(
+        shim: &Path,
+        rootfs: &Path,
+        console: &Path,
+        qualification: &AgentTransportQualificationRequest,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let owner =
+            AgentVmSession::connect_with_guest_qualification(shim, rootfs, console, qualification)
+                .await?;
+        Ok(Self {
+            client: owner.client().clone(),
+            state: Mutex::new(UtilityVmSessionState {
+                owner: Some(owner),
+                completed: None,
+            }),
+        })
+    }
+
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     pub(crate) async fn connect_with_recovery(
         shim: &Path,
@@ -183,6 +201,7 @@ impl AgentVmSession {
             console,
             recovery_report,
             Arc::new(NoAgentTransportFaultInjector),
+            None,
         )
         .await
     }
@@ -193,7 +212,25 @@ impl AgentVmSession {
         console: &Path,
         faults: Arc<dyn AgentTransportFaultInjector>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        Self::connect_inner(shim, rootfs, None, console, None, faults).await
+        Self::connect_inner(shim, rootfs, None, console, None, faults, None).await
+    }
+
+    async fn connect_with_guest_qualification(
+        shim: &Path,
+        rootfs: &Path,
+        console: &Path,
+        qualification: &AgentTransportQualificationRequest,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        Self::connect_inner(
+            shim,
+            rootfs,
+            None,
+            console,
+            None,
+            Arc::new(NoAgentTransportFaultInjector),
+            Some(qualification),
+        )
+        .await
     }
 
     async fn connect_inner(
@@ -203,6 +240,7 @@ impl AgentVmSession {
         console: &Path,
         recovery_report: Option<&Path>,
         faults: Arc<dyn AgentTransportFaultInjector>,
+        guest_qualification: Option<&AgentTransportQualificationRequest>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
         let platform = HostPlatform::current();
         let mut report = AgentVmSmokeReport::initial(platform);
@@ -269,6 +307,13 @@ impl AgentVmSession {
         };
 
         let encoded_token = token.expose_hex();
+        let encoded_qualification = match guest_qualification
+            .map(AgentTransportQualificationRequest::to_json)
+            .transpose()
+        {
+            Ok(encoded) => encoded,
+            Err(error) => return Err(failed(report, error.to_string())),
+        };
         let mut command = Command::new(&shim);
         command
             .arg("agent-vm-smoke")
@@ -293,11 +338,15 @@ impl AgentVmSession {
             }
         }
         command
+            .env_remove(AGENT_TRANSPORT_QUALIFICATION_ENV)
             .env(AGENT_SESSION_TOKEN_ENV, encoded_token.as_str())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if let Some(encoded) = &encoded_qualification {
+            command.env(AGENT_TRANSPORT_QUALIFICATION_ENV, encoded);
+        }
         let mut running = match RunningShim::spawn(&mut command) {
             Ok(running) => running,
             Err(error) => {

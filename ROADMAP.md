@@ -172,6 +172,10 @@ Completed:
   boundaries, with exact fault identity, guest executor shutdown, endpoint and
   marker removal, shim/worker reap, descriptor-inventory restoration, and no
   new guest runtime root;
+- real macOS protocol-v9 `create` interruption at all four Host and five Guest
+  request/dispatch/response transitions, with one exact crossing, nonce-bound
+  Guest cleanup evidence, no normal delete, complete Guest runtime cleanup,
+  and Host endpoint, process, and descriptor restoration;
 - bounded, versioned macOS HVF soak orchestration that starts a fresh utility
   VM for every complete two-container lifecycle, namespace-join, rootfs/mount,
   and PID-supervision matrix, and retains unique endpoint, process,
@@ -669,12 +673,22 @@ enforce it. No property is silently ignored.
     and host descriptor inventory to return to baseline. The Apple Silicon HVF
     gate passed all four stages once and then five repeated four-stage waves
     (24 fresh VMs total) with a valid unprivileged UID/GID mapping. The
-    machine-readable evidence schema is
-    `a3s.oci.oci-vm-transport-fault-cleanup.v1`.
-  - [ ] Extend the real-VM diagnostic through the five Guest dispatch/response
-    stages and both Host shutdown stages, then carry recovery or exact cleanup
-    through `HostRuntimeService` reopen and actual VM/owner replacement. The
-    portable matrix and the four real Host stages do not satisfy this gate.
+    machine-readable evidence now uses the expanded
+    `a3s.oci.oci-vm-transport-fault-cleanup.v2` schema.
+  - [x] Cross the five Guest-side `create` read/dispatch/response transitions
+    inside fresh authenticated utility VMs. The qualification handoff is
+    versioned, accepted only for Guest stages, and bound to the exact validated
+    `OperationId` carried by `create`. The one-shot Guest injector emits a
+    nonce-bound console record only after the Linux executor has completed
+    cleanup. The four pre-response points expose a retryable disconnect on the
+    current call; the fully written response is delivered and a follow-up
+    request must expose the disconnect. Apple Silicon HVF passed all five
+    stages in five fresh VMs with exact endpoint, process, descriptor, marker,
+    and runtime-root cleanup.
+  - [ ] Extend the real-VM diagnostic through both Host shutdown stages, then
+    carry all operations through `HostRuntimeService` reopen and actual
+    VM/owner replacement. The portable matrix and nine real `create` stages do
+    not satisfy this gate.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

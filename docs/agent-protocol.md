@@ -176,6 +176,18 @@ fully written fails the current request. A fault immediately after the complete
 response write preserves the delivered response and makes the disconnect
 visible on the following request.
 
+The real-VM `create` gate uses the same nine-stage registry without exposing a
+production fault switch. Host stages install a qualification-only client
+injector. Guest stages pass one bounded, versioned request through the runtime
+and fixed shim to the Guest agent. That request carries the exact validated
+`OperationId`, operation, and Guest stage. The server presents the request ID
+to the injector at every Guest transition, so an unrelated call cannot consume
+the fault. After the injected disconnect, the Guest emits one prefixed,
+versioned console record only if `LinuxExecutor` cleanup succeeds. The Host
+accepts it only when the operation ID, stage, protocol version, point, and one
+crossing all match. A fault after the response write must deliver the primary
+response; a follow-up request then proves that the connection ended.
+
 In-memory qualification drops a create response at the guest's
 after-dispatch/before-response-write boundary. The first client receives a
 retryable transport failure after the service has recorded one effect. A newly

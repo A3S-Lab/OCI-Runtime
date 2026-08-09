@@ -10,12 +10,15 @@ use std::io::Write;
 use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
+use a3s_oci_agent_protocol::AgentTransportFaultInjector;
+#[cfg(target_os = "linux")]
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_TAG;
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentStartRequest,
-    AgentState, AgentStateRequest, GuestAgentService, SessionToken, AGENT_RUNTIME_SHARE_ENV,
-    AGENT_RUNTIME_SHARE_GUEST_ROOT, AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV,
-    AGENT_SESSION_TOKEN_FILE_ENV, AGENT_SESSION_TOKEN_FILE_NAME,
+    AgentState, AgentStateRequest, AgentTransportQualificationRequest, GuestAgentService,
+    SessionToken, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_GUEST_ROOT,
+    AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_ENV,
+    AGENT_SESSION_TOKEN_FILE_NAME,
 };
 #[cfg(target_os = "linux")]
 use a3s_oci_agent_protocol::{AgentRecoveryRecord, AgentRecoveryReport, AGENT_RECOVERY_REPORT_ENV};
@@ -28,6 +31,7 @@ use zeroize::Zeroizing;
 
 #[cfg(target_os = "linux")]
 mod executor;
+mod transport_qualification;
 #[cfg(target_os = "linux")]
 mod vsock;
 
@@ -191,6 +195,15 @@ pub fn take_session_token() -> Result<SessionToken> {
     }
 }
 
+/// Consume the dedicated, versioned guest transport qualification handoff.
+///
+/// Normal production launches do not set this variable and therefore remain
+/// on the non-configurable production protocol entry point.
+pub fn take_transport_qualification_request() -> Result<Option<AgentTransportQualificationRequest>>
+{
+    transport_qualification::take_request()
+}
+
 /// Remove and decode the protected bootstrap token from this process.
 pub fn take_session_token_from_environment() -> Result<SessionToken> {
     let encoded = Zeroizing::new(std::env::var(AGENT_SESSION_TOKEN_ENV).map_err(|error| {
@@ -334,6 +347,23 @@ fn invalid_token_path() -> Error {
 /// Connect to the host bridge and serve the fail-closed Linux executor.
 #[cfg(target_os = "linux")]
 pub fn run(token: SessionToken) -> Result<()> {
+    run_linux(token, None)
+}
+
+/// Run one explicitly armed real-VM guest transport qualification session.
+#[cfg(target_os = "linux")]
+pub fn run_transport_qualification(
+    token: SessionToken,
+    request: AgentTransportQualificationRequest,
+) -> Result<()> {
+    run_linux(token, Some(request))
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux(
+    token: SessionToken,
+    qualification: Option<AgentTransportQualificationRequest>,
+) -> Result<()> {
     let recovery_path = take_recovery_report_path()?;
     let recovery_token = token.clone();
     let stream = vsock::connect_host_with_retry()?;
@@ -358,12 +388,34 @@ pub fn run(token: SessionToken) -> Result<()> {
         })?;
         let service = Arc::new(LinuxExecutor::new().await?);
         let protocol_service: Arc<dyn GuestAgentService> = service.clone();
-        let serve_result =
-            a3s_oci_agent_protocol::serve_agent_connection(stream, token, protocol_service).await;
+        let (serve_result, qualification_fault) = match qualification {
+            Some(request) => {
+                let fault = Arc::new(
+                    transport_qualification::GuestTransportQualificationFault::new(request),
+                );
+                let protocol_fault: Arc<dyn AgentTransportFaultInjector> = fault.clone();
+                let result = a3s_oci_agent_protocol::serve_agent_connection_with_fault_injector(
+                    stream,
+                    token,
+                    protocol_service,
+                    protocol_fault,
+                )
+                .await;
+                (result, Some(fault))
+            }
+            None => (
+                a3s_oci_agent_protocol::serve_agent_connection(stream, token, protocol_service)
+                    .await,
+                None,
+            ),
+        };
         let cleanup_result = service.shutdown_with_recovery().await.and_then(|records| {
             write_recovery_report(recovery_path.as_deref(), &recovery_token, records)
         });
-        finish_guest_session(serve_result, cleanup_result)
+        match qualification_fault {
+            Some(fault) => transport_qualification::finish(serve_result, cleanup_result, &fault),
+            None => finish_guest_session(serve_result, cleanup_result),
+        }
     })
 }
 
@@ -525,6 +577,19 @@ pub fn run(_token: SessionToken) -> Result<()> {
     Err(Error::new(
         ErrorCode::Unsupported,
         "the OCI guest agent requires Linux AF_VSOCK",
+    )
+    .for_operation("run-guest-agent"))
+}
+
+/// Report that guest transport qualification requires the Linux guest agent.
+#[cfg(not(target_os = "linux"))]
+pub fn run_transport_qualification(
+    _token: SessionToken,
+    _request: AgentTransportQualificationRequest,
+) -> Result<()> {
+    Err(Error::new(
+        ErrorCode::Unsupported,
+        "guest transport qualification requires a Linux utility VM",
     )
     .for_operation("run-guest-agent"))
 }

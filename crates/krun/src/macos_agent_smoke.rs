@@ -6,7 +6,8 @@ use std::thread;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentVsockEndpoint, SessionToken, AGENT_SESSION_TOKEN_ENV, AGENT_VSOCK_PORT,
+    AgentTransportQualificationRequest, AgentVsockEndpoint, SessionToken, AGENT_SESSION_TOKEN_ENV,
+    AGENT_TRANSPORT_QUALIFICATION_ENV, AGENT_VSOCK_PORT,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,7 @@ pub(crate) fn agent_vm_smoke(
     endpoint: &AgentVsockEndpoint,
     socket: &Path,
     token: &SessionToken,
+    transport_qualification: Option<&AgentTransportQualificationRequest>,
     config: VmConfig,
 ) -> KrunAgentVmSmokeReport {
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
@@ -124,9 +126,23 @@ pub(crate) fn agent_vm_smoke(
         .arg(&console)
         .arg("--socket-path")
         .arg(&socket)
+        .env_remove(AGENT_TRANSPORT_QUALIFICATION_ENV)
         .env(AGENT_SESSION_TOKEN_ENV, encoded_token.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    let encoded_qualification = match transport_qualification
+        .map(AgentTransportQualificationRequest::to_json)
+        .transpose()
+    {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    if let Some(encoded) = &encoded_qualification {
+        command.env(AGENT_TRANSPORT_QUALIFICATION_ENV, encoded);
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -239,6 +255,7 @@ pub(crate) fn run_worker(
     console: &Path,
     socket: &Path,
     token: &SessionToken,
+    transport_qualification: Option<&AgentTransportQualificationRequest>,
 ) -> bool {
     let mut evidence = WorkerEvidence::initial();
     let rootfs = match resolve_rootfs(rootfs) {
@@ -289,10 +306,18 @@ pub(crate) fn run_worker(
     }
 
     let token_hex = token.expose_hex();
-    let environment = Zeroizing::new(vec![(
+    let mut environment = vec![(
         AGENT_SESSION_TOKEN_ENV.to_string(),
         token_hex.as_str().to_string(),
-    )]);
+    )];
+    if let Some(request) = transport_qualification {
+        let encoded = match request.to_json() {
+            Ok(encoded) => encoded,
+            Err(error) => return fail_worker(&mut evidence, error.to_string()),
+        };
+        environment.push((AGENT_TRANSPORT_QUALIFICATION_ENV.to_string(), encoded));
+    }
+    let environment = Zeroizing::new(environment);
     if let Err(error) = context.set_exec(AGENT_GUEST_PATH, &[], &environment) {
         return fail_worker(&mut evidence, error.to_string());
     }

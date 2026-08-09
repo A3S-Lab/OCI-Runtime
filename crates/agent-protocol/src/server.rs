@@ -188,6 +188,7 @@ where
 
     while let Some(envelope) = read_frame::<RequestEnvelope, _>(&mut stream).await? {
         let operation = envelope.request.operation();
+        let operation_id = envelope.request.operation_id().cloned();
         if let Err(error) = envelope.validate(selected_version) {
             let terminal = envelope.version != selected_version || envelope.request_id == 0;
             write_response_with_fault_injector(
@@ -198,6 +199,7 @@ where
                     error: error.clone(),
                 },
                 operation,
+                operation_id.as_ref(),
                 faults.as_ref(),
             )
             .await?;
@@ -207,22 +209,31 @@ where
             continue;
         }
 
-        faults.check(operation_fault_point(
-            selected_version,
-            operation,
-            AgentTransportOperationStage::GuestAfterRequestRead,
-        ))?;
-        faults.check(operation_fault_point(
-            selected_version,
-            operation,
-            AgentTransportOperationStage::GuestBeforeDispatch,
-        ))?;
+        faults.check_operation(
+            operation_fault_point(
+                selected_version,
+                operation,
+                AgentTransportOperationStage::GuestAfterRequestRead,
+            ),
+            operation_id.as_ref(),
+        )?;
+        faults.check_operation(
+            operation_fault_point(
+                selected_version,
+                operation,
+                AgentTransportOperationStage::GuestBeforeDispatch,
+            ),
+            operation_id.as_ref(),
+        )?;
         let dispatched = dispatch(service.as_ref(), envelope.request).await;
-        faults.check(operation_fault_point(
-            selected_version,
-            operation,
-            AgentTransportOperationStage::GuestAfterDispatch,
-        ))?;
+        faults.check_operation(
+            operation_fault_point(
+                selected_version,
+                operation,
+                AgentTransportOperationStage::GuestAfterDispatch,
+            ),
+            operation_id.as_ref(),
+        )?;
         let outcome = match dispatched {
             Ok(response) => match response.validate() {
                 Ok(()) => ResponseOutcome::Succeeded {
@@ -240,6 +251,7 @@ where
             envelope.request_id,
             outcome,
             operation,
+            operation_id.as_ref(),
             faults.as_ref(),
         )
         .await?;
@@ -359,22 +371,29 @@ async fn write_response_with_fault_injector<T>(
     request_id: u64,
     outcome: ResponseOutcome,
     operation: crate::AgentOperation,
+    operation_id: Option<&a3s_oci_sdk::OperationId>,
     faults: &dyn AgentTransportFaultInjector,
 ) -> Result<()>
 where
     T: AsyncWrite + Unpin,
 {
-    faults.check(operation_fault_point(
-        version,
-        operation,
-        AgentTransportOperationStage::GuestBeforeResponseWrite,
-    ))?;
+    faults.check_operation(
+        operation_fault_point(
+            version,
+            operation,
+            AgentTransportOperationStage::GuestBeforeResponseWrite,
+        ),
+        operation_id,
+    )?;
     write_response(stream, version, request_id, outcome).await?;
-    faults.check(operation_fault_point(
-        version,
-        operation,
-        AgentTransportOperationStage::GuestAfterResponseWrite,
-    ))
+    faults.check_operation(
+        operation_fault_point(
+            version,
+            operation,
+            AgentTransportOperationStage::GuestAfterResponseWrite,
+        ),
+        operation_id,
+    )
 }
 
 const fn operation_fault_point(

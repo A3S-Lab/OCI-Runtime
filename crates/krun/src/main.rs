@@ -143,6 +143,13 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            let transport_qualification = match take_transport_qualification() {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("a3s-oci-krun-shim: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             let socket_path = Some(socket_path.as_path());
             #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
@@ -207,7 +214,8 @@ fn main() -> ExitCode {
                         runtime_share.as_deref(),
                         Some(bootstrap.guest_path()),
                         recovery.as_ref().map(|recovery| recovery.guest_path()),
-                    ),
+                    )
+                    .with_transport_qualification(transport_qualification.as_ref()),
                 );
                 let recovery_result = recovery.map(|recovery| recovery.persist(&token));
                 if let Err(error) = bootstrap.cleanup() {
@@ -232,7 +240,8 @@ fn main() -> ExitCode {
                 &endpoint,
                 socket_path,
                 &token,
-                a3s_oci_krun::AgentVmHandoff::default(),
+                a3s_oci_krun::AgentVmHandoff::default()
+                    .with_transport_qualification(transport_qualification.as_ref()),
             );
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
@@ -270,7 +279,20 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            if a3s_oci_krun::run_macos_agent_vm_worker(&rootfs, &console, &socket_path, &token) {
+            let transport_qualification = match take_transport_qualification() {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("a3s-oci-krun-shim: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if a3s_oci_krun::run_macos_agent_vm_worker(
+                &rootfs,
+                &console,
+                &socket_path,
+                &token,
+                transport_qualification.as_ref(),
+            ) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(2)
@@ -287,6 +309,21 @@ fn take_session_token() -> Result<a3s_oci_agent_protocol::SessionToken, String> 
     std::env::remove_var(a3s_oci_agent_protocol::AGENT_SESSION_TOKEN_ENV);
     a3s_oci_agent_protocol::SessionToken::from_hex(encoded.as_str())
         .map_err(|error| format!("guest bootstrap token is invalid: {error}"))
+}
+
+fn take_transport_qualification(
+) -> Result<Option<a3s_oci_agent_protocol::AgentTransportQualificationRequest>, String> {
+    let Some(encoded) = std::env::var_os(a3s_oci_agent_protocol::AGENT_TRANSPORT_QUALIFICATION_ENV)
+    else {
+        return Ok(None);
+    };
+    std::env::remove_var(a3s_oci_agent_protocol::AGENT_TRANSPORT_QUALIFICATION_ENV);
+    let encoded = encoded
+        .into_string()
+        .map_err(|_| "guest transport qualification handoff is not valid UTF-8".to_string())?;
+    a3s_oci_agent_protocol::AgentTransportQualificationRequest::from_json(&encoded)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn write_json(value: &impl Serialize) -> Result<(), serde_json::Error> {

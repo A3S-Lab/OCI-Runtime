@@ -1,6 +1,6 @@
 use std::fmt;
 
-use a3s_oci_sdk::Result;
+use a3s_oci_sdk::{OperationId, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::AgentOperation;
@@ -57,6 +57,31 @@ impl AgentTransportOperationStage {
             Self::GuestBeforeResponseWrite => "guest-before-response-write",
             Self::GuestAfterResponseWrite => "guest-after-response-write",
         }
+    }
+
+    /// Whether this transition is observed by the host-side client.
+    #[must_use]
+    pub const fn is_host(self) -> bool {
+        matches!(
+            self,
+            Self::HostBeforeRequestWrite
+                | Self::HostAfterRequestWrite
+                | Self::HostBeforeResponseRead
+                | Self::HostAfterResponseRead
+        )
+    }
+
+    /// Whether this transition is observed by the guest-side server.
+    #[must_use]
+    pub const fn is_guest(self) -> bool {
+        matches!(
+            self,
+            Self::GuestAfterRequestRead
+                | Self::GuestBeforeDispatch
+                | Self::GuestAfterDispatch
+                | Self::GuestBeforeResponseWrite
+                | Self::GuestAfterResponseWrite
+        )
     }
 }
 
@@ -135,6 +160,21 @@ impl fmt::Display for AgentTransportFaultPoint {
 pub trait AgentTransportFaultInjector: fmt::Debug + Send + Sync {
     /// Return an injected error at `point`, or allow the transition to proceed.
     fn check(&self, point: AgentTransportFaultPoint) -> Result<()>;
+
+    /// Check a guest transition with the validated idempotency identity carried
+    /// by the request, when the operation is mutating.
+    ///
+    /// Existing injectors remain operation-stage based. Real-VM guest
+    /// qualification overrides this hook so an unrelated request cannot cross
+    /// an armed transition.
+    fn check_operation(
+        &self,
+        point: AgentTransportFaultPoint,
+        operation_id: Option<&OperationId>,
+    ) -> Result<()> {
+        let _ = operation_id;
+        self.check(point)
+    }
 }
 
 /// Non-configurable production fault injector.

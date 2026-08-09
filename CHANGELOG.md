@@ -6,16 +6,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
-- Real utility-VM transport interruption evidence for the four Host-side
-  protocol-v9 `create` transitions. The new
-  `oci-vm-transport-fault-cleanup` command injects one exact negotiated point,
-  requires the caller to observe a retryable `Unavailable` result without a
-  normal delete, and accepts Guest connection loss only after executor cleanup
-  succeeds. Its versioned report also requires the workload marker and Guest
-  runtime root to be absent, the VM endpoint, shim, and bridge process to be
-  reaped, and the Host descriptor inventory to return to baseline. Apple
-  Silicon HVF passed the four stages once plus five repeated waves (24 fresh
-  VMs). Guest-side stages, shutdown stages, durable Host reopen, and VM/owner
+- Real utility-VM transport interruption evidence for all nine Host/Guest
+  protocol-v9 `create` transitions. The
+  `oci-vm-transport-fault-cleanup` command injects one exact negotiated point
+  and never sends normal delete. Host points use the qualification-only client
+  injector. Guest points use a dedicated versioned handoff bound to the same
+  `OperationId` as `create`; the fixed Guest emits matching console evidence
+  only after executor cleanup succeeds. The first four Guest points fail the
+  current call with a retryable `Unavailable`, while
+  `guest-after-response-write` delivers the completed response and requires a
+  follow-up request to observe the disconnect. Report v2 also requires the
+  workload marker and Guest runtime root to be absent, the VM endpoint, shim,
+  and bridge process to be reaped, and the Host descriptor inventory to return
+  to baseline. Apple Silicon HVF passed the four Host stages once plus five
+  repeated waves (24 fresh VMs) and the five Guest stages in five fresh VMs.
+  Shutdown stages, durable Host reopen, other operations, and VM/owner
   replacement remain open.
 - Native Linux owner-death recovery with fail-closed, PID-reuse-safe cleanup.
   Every executor instance and exact container generation now persists a

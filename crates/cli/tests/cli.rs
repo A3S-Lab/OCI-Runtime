@@ -510,7 +510,7 @@ fn oci_vm_transport_fault_cleanup_fails_closed_with_versioned_output() {
         .expect("transport diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.oci-vm-transport-fault-cleanup.v1"
+        "a3s.oci.oci-vm-transport-fault-cleanup.v2"
     );
     assert_eq!(report["requested_operation"], "create");
     assert_eq!(report["requested_stage"], "host-after-request-write");

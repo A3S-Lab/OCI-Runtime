@@ -2,16 +2,16 @@ use a3s_oci_agent_protocol::{
     AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
-use a3s_oci_sdk::ErrorCode;
+use a3s_oci_sdk::{ErrorCode, OperationId};
 use serde::{Deserialize, Serialize};
 
 use crate::report::AgentVmSmokeReport;
 
-/// Schema emitted by the real utility-VM host-transport cleanup diagnostic.
+/// Schema emitted by the real utility-VM Host/Guest transport cleanup diagnostic.
 pub const OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION: &str =
-    "a3s.oci.oci-vm-transport-fault-cleanup.v1";
+    "a3s.oci.oci-vm-transport-fault-cleanup.v2";
 
-/// Retained evidence for one real utility-VM host-side transport interruption.
+/// Retained evidence for one real utility-VM transport interruption.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmTransportFaultCleanupReport {
     /// Version of this JSON-compatible schema.
@@ -24,7 +24,10 @@ pub struct OciVmTransportFaultCleanupReport {
     pub bundle_loaded: bool,
     /// Operation selected for real transport interruption.
     pub requested_operation: AgentOperation,
-    /// Host-side request/response transition selected for interruption.
+    /// Nonce-bearing idempotency identity selected for this qualification run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualification_operation_id: Option<OperationId>,
+    /// Host- or guest-side request/response transition selected for interruption.
     pub requested_stage: AgentTransportOperationStage,
     /// Negotiated protocol version observed at the selected transition.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,6 +45,15 @@ pub struct OciVmTransportFaultCleanupReport {
     pub observed_error_operation: Option<String>,
     /// Whether the interrupted call was explicitly retryable.
     pub observed_error_retryable: bool,
+    /// Whether the primary Create response was fully observed by the host.
+    pub primary_response_received: bool,
+    /// Whether a follow-up request proved disconnect after a delivered response.
+    pub disconnect_probe_attempted: bool,
+    /// Whether nonce-bound Guest console evidence passed exact validation.
+    pub guest_evidence_verified: bool,
+    /// Operation identity decoded independently from Guest console evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guest_evidence_operation_id: Option<OperationId>,
     /// Whether the diagnostic attempted normal OCI delete after interruption.
     pub normal_delete_attempted: bool,
     /// Whether the configured workload marker remained absent after cleanup.
@@ -63,6 +75,7 @@ impl OciVmTransportFaultCleanupReport {
             status: CapabilityStatus::Unavailable,
             bundle_loaded: false,
             requested_operation: AgentOperation::Create,
+            qualification_operation_id: None,
             requested_stage: stage,
             negotiated_protocol: None,
             injected_point: None,
@@ -70,6 +83,10 @@ impl OciVmTransportFaultCleanupReport {
             observed_error_code: None,
             observed_error_operation: None,
             observed_error_retryable: false,
+            primary_response_received: false,
+            disconnect_probe_attempted: false,
+            guest_evidence_verified: false,
+            guest_evidence_operation_id: None,
             normal_delete_attempted: false,
             marker_absent_after_cleanup: false,
             guest_runtime_clean: false,
@@ -106,35 +123,75 @@ impl OciVmTransportFaultCleanupReport {
             "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
             self.requested_stage.as_str()
         );
-        matches!(self.platform, HostPlatform::Macos | HostPlatform::Windows)
+        let common = matches!(self.platform, HostPlatform::Macos | HostPlatform::Windows)
             && self.platform == self.bridge.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Create
-            && is_supported_host_stage(self.requested_stage)
+            && self.qualification_operation_id.is_some()
+            && is_supported_transport_stage(self.requested_stage)
             && self.negotiated_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
             && self.injected_point.as_deref() == Some(expected_point.as_str())
             && self.fault_crossings == 1
             && self.observed_error_code == Some(ErrorCode::Unavailable)
-            && self.observed_error_operation.as_deref()
-                == Some("oci-vm-transport-qualification-fault")
             && self.observed_error_retryable
             && !self.normal_delete_attempted
             && self.marker_absent_after_cleanup
             && self.guest_runtime_clean
             && self.bridge.is_success()
-            && self.reason.is_none()
+            && self.reason.is_none();
+        if !common {
+            return false;
+        }
+
+        if is_supported_host_stage(self.requested_stage) {
+            self.observed_error_operation.as_deref() == Some("oci-vm-transport-qualification-fault")
+                && !self.primary_response_received
+                && !self.disconnect_probe_attempted
+                && !self.guest_evidence_verified
+                && self.guest_evidence_operation_id.is_none()
+        } else {
+            self.observed_error_operation
+                .as_deref()
+                .is_some_and(is_retryable_disconnect_operation)
+                && self.guest_evidence_verified
+                && self.guest_evidence_operation_id == self.qualification_operation_id
+                && self.primary_response_received
+                    == matches!(
+                        self.requested_stage,
+                        AgentTransportOperationStage::GuestAfterResponseWrite
+                    )
+                && self.disconnect_probe_attempted == self.primary_response_received
+        }
     }
 }
 
 /// Whether the first real-host diagnostic implements this exact transition.
 #[must_use]
 pub const fn is_supported_host_stage(stage: AgentTransportOperationStage) -> bool {
+    stage.is_host()
+}
+
+/// Whether the real-host diagnostic implements this Guest transition.
+#[must_use]
+pub const fn is_supported_guest_stage(stage: AgentTransportOperationStage) -> bool {
+    stage.is_guest()
+}
+
+/// Whether the real-host diagnostic implements this operation transition.
+#[must_use]
+pub const fn is_supported_transport_stage(stage: AgentTransportOperationStage) -> bool {
+    stage.is_host() || stage.is_guest()
+}
+
+pub(crate) fn is_retryable_disconnect_operation(operation: &str) -> bool {
     matches!(
-        stage,
-        AgentTransportOperationStage::HostBeforeRequestWrite
-            | AgentTransportOperationStage::HostAfterRequestWrite
-            | AgentTransportOperationStage::HostBeforeResponseRead
-            | AgentTransportOperationStage::HostAfterResponseRead
+        operation,
+        "agent-protocol"
+            | "read-agent-frame-header"
+            | "read-agent-frame-payload"
+            | "write-agent-frame-header"
+            | "write-agent-frame-payload"
+            | "flush-agent-frame"
     )
 }
 
@@ -144,7 +201,7 @@ mod tests {
         AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
     };
     use a3s_oci_core::{CapabilityStatus, HostPlatform};
-    use a3s_oci_sdk::ErrorCode;
+    use a3s_oci_sdk::{ErrorCode, OperationId};
     use serde_json::json;
 
     use super::OciVmTransportFaultCleanupReport;
@@ -156,6 +213,8 @@ mod tests {
         let mut report = OciVmTransportFaultCleanupReport::initial(HostPlatform::Macos, stage);
         report.status = CapabilityStatus::Available;
         report.bundle_loaded = true;
+        report.qualification_operation_id =
+            Some(OperationId::new("transport-report-create").expect("operation ID"));
         report.negotiated_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
         report.injected_point = Some(format!(
             "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
@@ -200,12 +259,31 @@ mod tests {
     }
 
     #[test]
-    fn transport_report_rejects_unimplemented_guest_stages() {
-        let mut report = OciVmTransportFaultCleanupReport::initial(
-            HostPlatform::Macos,
-            AgentTransportOperationStage::GuestAfterDispatch,
-        );
+    fn transport_report_requires_nonce_bound_evidence_for_guest_stages() {
+        let stage = AgentTransportOperationStage::GuestAfterDispatch;
+        let mut report = OciVmTransportFaultCleanupReport::initial(HostPlatform::Macos, stage);
         report.status = CapabilityStatus::Available;
+        report.bundle_loaded = true;
+        report.qualification_operation_id =
+            Some(OperationId::new("guest-transport-report-create").expect("operation ID"));
+        report.negotiated_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.injected_point = Some(format!(
+            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
+            stage.as_str()
+        ));
+        report.fault_crossings = 1;
+        report.observed_error_code = Some(ErrorCode::Unavailable);
+        report.observed_error_operation = Some("agent-protocol".to_string());
+        report.observed_error_retryable = true;
+        report.marker_absent_after_cleanup = true;
+        report.guest_runtime_clean = true;
+        report.bridge = complete_macos_bridge();
+        assert!(!report.is_success());
+        report.guest_evidence_verified = true;
+        report.guest_evidence_operation_id = report.qualification_operation_id.clone();
+        assert!(report.is_success());
+
+        report.primary_response_received = true;
         assert!(!report.is_success());
     }
 

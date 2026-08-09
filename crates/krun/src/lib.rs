@@ -316,8 +316,9 @@ pub fn run_macos_agent_vm_worker(
     console: &Path,
     socket: &Path,
     token: &a3s_oci_agent_protocol::SessionToken,
+    transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
-    macos_agent_smoke::run_worker(rootfs, console, socket, token)
+    macos_agent_smoke::run_worker(rootfs, console, socket, token, transport_qualification)
 }
 
 pub(crate) fn fallback_config() -> VmConfig {

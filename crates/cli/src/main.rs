@@ -362,9 +362,9 @@ enum Command {
         /// New host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
-        /// Host-side create request/response transition to interrupt.
+        /// Exact Host- or Guest-side create request/response transition to interrupt.
         #[arg(long, value_enum)]
-        fault_at: HostTransportFaultStageArg,
+        fault_at: TransportFaultStageArg,
     },
 }
 
@@ -389,7 +389,7 @@ impl From<FaultPointArg> for a3s_oci_runtime::LifecycleFaultPoint {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum HostTransportFaultStageArg {
+enum TransportFaultStageArg {
     #[value(name = "host-before-request-write")]
     BeforeRequestWrite,
     #[value(name = "host-after-request-write")]
@@ -398,15 +398,30 @@ enum HostTransportFaultStageArg {
     BeforeResponseRead,
     #[value(name = "host-after-response-read")]
     AfterResponseRead,
+    #[value(name = "guest-after-request-read")]
+    GuestAfterRequestRead,
+    #[value(name = "guest-before-dispatch")]
+    GuestBeforeDispatch,
+    #[value(name = "guest-after-dispatch")]
+    GuestAfterDispatch,
+    #[value(name = "guest-before-response-write")]
+    GuestBeforeResponseWrite,
+    #[value(name = "guest-after-response-write")]
+    GuestAfterResponseWrite,
 }
 
-impl From<HostTransportFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
-    fn from(value: HostTransportFaultStageArg) -> Self {
+impl From<TransportFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
+    fn from(value: TransportFaultStageArg) -> Self {
         match value {
-            HostTransportFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
-            HostTransportFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
-            HostTransportFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
-            HostTransportFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
+            TransportFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
+            TransportFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
+            TransportFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
+            TransportFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
+            TransportFaultStageArg::GuestAfterRequestRead => Self::GuestAfterRequestRead,
+            TransportFaultStageArg::GuestBeforeDispatch => Self::GuestBeforeDispatch,
+            TransportFaultStageArg::GuestAfterDispatch => Self::GuestAfterDispatch,
+            TransportFaultStageArg::GuestBeforeResponseWrite => Self::GuestBeforeResponseWrite,
+            TransportFaultStageArg::GuestAfterResponseWrite => Self::GuestAfterResponseWrite,
         }
     }
 }

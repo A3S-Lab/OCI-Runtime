@@ -783,6 +783,47 @@ impl AgentRequest {
             Self::Filesystem(_) => AgentOperation::Filesystem,
         }
     }
+
+    /// Idempotency identity carried by a mutating request, when present.
+    #[must_use]
+    pub fn operation_id(&self) -> Option<&a3s_oci_sdk::OperationId> {
+        match self {
+            Self::Create(request) => Some(&request.context.operation_id),
+            Self::Start(request) => Some(&request.context.operation_id),
+            Self::Kill(request) => Some(&request.context.operation_id),
+            Self::Delete(request) => Some(&request.context.operation_id),
+            Self::Exec(request) => Some(&request.context.operation_id),
+            Self::SignalProcess(request) => Some(&request.context.operation_id),
+            Self::Pause(request) | Self::Resume(request) => Some(&request.context.operation_id),
+            Self::Update(request) => Some(&request.context.operation_id),
+            Self::WriteStdin(request) => request
+                .context
+                .as_ref()
+                .map(|context| &context.operation_id),
+            Self::CloseStdin(request) => request
+                .context
+                .as_ref()
+                .map(|context| &context.operation_id),
+            Self::Resize(request) => request
+                .context
+                .as_ref()
+                .map(|context| &context.operation_id),
+            Self::File(request) => request
+                .context
+                .as_ref()
+                .map(|context| &context.operation_id),
+            Self::Filesystem(request) => request
+                .context
+                .as_ref()
+                .map(|context| &context.operation_id),
+            Self::State(_)
+            | Self::Wait(_)
+            | Self::WaitProcess(_)
+            | Self::Processes(_)
+            | Self::Stats(_)
+            | Self::ReadOutput(_) => None,
+        }
+    }
 }
 
 /// Guest-observed init-process state for one exact generation.

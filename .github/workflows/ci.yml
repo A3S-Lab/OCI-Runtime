@@ -874,7 +874,7 @@ jobs:
             test ! -e "$marker"
           done
       - if: runner.os == 'macOS'
-        name: Real macOS utility-VM host transport interruptions
+        name: Real macOS utility-VM Host and Guest transport interruptions
         shell: bash
         run: |
           rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
@@ -895,7 +895,12 @@ jobs:
             host-before-request-write \
             host-after-request-write \
             host-before-response-read \
-            host-after-response-read
+            host-after-response-read \
+            guest-after-request-read \
+            guest-before-dispatch \
+            guest-after-dispatch \
+            guest-before-response-write \
+            guest-after-response-write
           do
             console="$RUNNER_TEMP/a3s-oci-transport-$transport_stage.log"
             set +e
@@ -915,18 +920,44 @@ jobs:
               test "$status" -eq 0
               jq --exit-status --arg stage "$transport_stage" \
                 '.schema_version
-                     == "a3s.oci.oci-vm-transport-fault-cleanup.v1"
+                     == "a3s.oci.oci-vm-transport-fault-cleanup.v2"
                  and .platform == "macos" and .status == "available"
                  and .bundle_loaded
                  and .requested_operation == "create"
+                 and (.qualification_operation_id
+                      | startswith("transport-fault-"))
                  and .requested_stage == $stage
                  and .negotiated_protocol == 9
                  and .injected_point == ("agent-v9.create-" + $stage)
                  and .fault_crossings == 1
                  and .observed_error_code == "unavailable"
-                 and .observed_error_operation
-                     == "oci-vm-transport-qualification-fault"
                  and .observed_error_retryable
+                 and (if ($stage | startswith("host-")) then
+                        .observed_error_operation
+                          == "oci-vm-transport-qualification-fault"
+                        and (.primary_response_received | not)
+                        and (.disconnect_probe_attempted | not)
+                        and (.guest_evidence_verified | not)
+                        and (.guest_evidence_operation_id == null)
+                      else
+                        (.observed_error_operation == "agent-protocol"
+                         or .observed_error_operation
+                              == "read-agent-frame-header"
+                         or .observed_error_operation
+                              == "read-agent-frame-payload"
+                         or .observed_error_operation
+                              == "write-agent-frame-header"
+                         or .observed_error_operation
+                              == "write-agent-frame-payload"
+                         or .observed_error_operation == "flush-agent-frame")
+                        and .guest_evidence_verified
+                        and (.guest_evidence_operation_id
+                             == .qualification_operation_id)
+                        and (.primary_response_received
+                             == ($stage == "guest-after-response-write"))
+                        and (.disconnect_probe_attempted
+                             == ($stage == "guest-after-response-write"))
+                      end)
                  and (.normal_delete_attempted | not)
                  and .marker_absent_after_cleanup
                  and .guest_runtime_clean
@@ -949,7 +980,7 @@ jobs:
               test "$status" -eq 2
               jq --exit-status --arg stage "$transport_stage" \
                 '.schema_version
-                     == "a3s.oci.oci-vm-transport-fault-cleanup.v1"
+                     == "a3s.oci.oci-vm-transport-fault-cleanup.v2"
                  and .platform == "macos" and .status != "available"
                  and .requested_operation == "create"
                  and .requested_stage == $stage

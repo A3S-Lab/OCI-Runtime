@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use a3s_oci_agent_protocol::{AgentVsockEndpoint, SessionToken};
+use a3s_oci_agent_protocol::{
+    AgentTransportQualificationRequest, AgentVsockEndpoint, SessionToken,
+};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use a3s_oci_agent_protocol::{
     AGENT_RECOVERY_REPORT_ENV, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_TAG,
@@ -18,6 +20,7 @@ pub struct AgentVmHandoff<'a> {
     runtime_share: Option<&'a Path>,
     guest_token_file: Option<&'a str>,
     guest_recovery_report: Option<&'a str>,
+    transport_qualification: Option<&'a AgentTransportQualificationRequest>,
 }
 
 impl<'a> AgentVmHandoff<'a> {
@@ -32,7 +35,18 @@ impl<'a> AgentVmHandoff<'a> {
             runtime_share,
             guest_token_file,
             guest_recovery_report,
+            transport_qualification: None,
         }
+    }
+
+    /// Attach an explicit guest transport qualification request.
+    #[must_use]
+    pub const fn with_transport_qualification(
+        mut self,
+        request: Option<&'a AgentTransportQualificationRequest>,
+    ) -> Self {
+        self.transport_qualification = request;
+        self
     }
 }
 
@@ -72,6 +86,7 @@ pub fn agent_vm_smoke(
             endpoint,
             guest_token_file,
             handoff.guest_recovery_report,
+            handoff.transport_qualification,
             config,
         )
     }
@@ -94,6 +109,7 @@ pub fn agent_vm_smoke(
             endpoint,
             socket_path,
             token,
+            handoff.transport_qualification,
             config,
         )
     }
@@ -112,6 +128,7 @@ pub fn agent_vm_smoke(
             handoff.runtime_share,
             handoff.guest_token_file,
             handoff.guest_recovery_report,
+            handoff.transport_qualification,
         );
         KrunAgentVmSmokeReport::unsupported(HostPlatform::current(), config)
     }
@@ -125,6 +142,7 @@ fn agent_vm_smoke_windows(
     endpoint: &AgentVsockEndpoint,
     guest_token_file: &str,
     guest_recovery_report: Option<&str>,
+    transport_qualification: Option<&AgentTransportQualificationRequest>,
     config: VmConfig,
 ) -> KrunAgentVmSmokeReport {
     use std::fs;
@@ -240,6 +258,19 @@ fn agent_vm_smoke_windows(
     }
     if let Some(path) = guest_recovery_report {
         environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));
+    }
+    if let Some(request) = transport_qualification {
+        let encoded = match request.to_json() {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                report.reason = Some(error.to_string());
+                return report;
+            }
+        };
+        environment.push((
+            a3s_oci_agent_protocol::AGENT_TRANSPORT_QUALIFICATION_ENV.to_string(),
+            encoded,
+        ));
     }
     if let Err(error) = context.set_exec("/usr/bin/a3s-oci-agent", &[], &environment) {
         report.reason = Some(error.to_string());

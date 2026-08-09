@@ -8,6 +8,7 @@ mod client;
 mod fault;
 mod inherited_descriptor;
 mod model;
+mod qualification;
 mod recovery;
 mod server;
 mod transport;
@@ -34,6 +35,13 @@ pub use model::{
     AGENT_PROTOCOL_VERSION_MAX, AGENT_PROTOCOL_VERSION_MIN, AGENT_SESSION_TOKEN_BYTES,
     AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_ENV, AGENT_SESSION_TOKEN_FILE_ENV,
     AGENT_SESSION_TOKEN_FILE_NAME,
+};
+pub use qualification::{
+    AgentTransportQualificationEvidence, AgentTransportQualificationRequest,
+    AGENT_TRANSPORT_QUALIFICATION_ENV, AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_PREFIX,
+    AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_SCHEMA_VERSION,
+    AGENT_TRANSPORT_QUALIFICATION_FAULT_OPERATION,
+    AGENT_TRANSPORT_QUALIFICATION_REQUEST_SCHEMA_VERSION,
 };
 pub use recovery::{
     AgentRecoveryRecord, AgentRecoveryReport, AuthenticatedAgentRecoveryReport,
