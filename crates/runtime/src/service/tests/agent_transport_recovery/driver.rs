@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
-    AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentSignalProcessRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest,
-    GuestPath,
+    AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -14,7 +14,7 @@ use a3s_oci_core::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerTarget, Error, ErrorCode, ExitStatus, OciBundle,
-    OperationContext, ProcessIo, Result, RuntimeOperation,
+    OperationContext, ProcessIo, ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::io::DuplexStream;
 
@@ -24,7 +24,7 @@ use crate::{
     DriverStartRequest, DriverState, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 11] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 12] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -36,6 +36,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 11] = [
     RuntimeOperation::WaitProcess,
     RuntimeOperation::Pause,
     RuntimeOperation::Resume,
+    RuntimeOperation::Processes,
 ];
 
 #[derive(Debug, Default)]
@@ -51,6 +52,7 @@ pub(super) struct DriverMetrics {
     wait_process_dispatches: AtomicUsize,
     pause_dispatches: AtomicUsize,
     resume_dispatches: AtomicUsize,
+    processes_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -97,6 +99,10 @@ impl DriverMetrics {
 
     pub(super) fn resume_dispatches(&self) -> usize {
         self.resume_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn processes_dispatches(&self) -> usize {
+        self.processes_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -304,6 +310,15 @@ impl RuntimeDriver for AgentLifecycleDriver {
             })
             .await?;
         map_agent_state(&expected_target, None, state)
+    }
+
+    async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        self.metrics
+            .processes_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        self.client
+            .processes(AgentProcessesRequest { target })
+            .await
     }
 }
 

@@ -594,6 +594,13 @@ enforce it. No property is silently ignored.
     driver, and prove exactly one resume effect. A fully written response must
     replay from the durable host journal without another dispatch, and changed
     targets under the same operation ID must fail closed at both boundaries.
+  - [x] Carry read-only `processes` through all nine portable reopen stages
+    after an exact durable create, start, and exec. Resolve the current host
+    target to the exact generation, return the same live init and exec process
+    identities after reconnect, and reissue the observation after every
+    retryable first-call failure, including a fully written first response.
+    Keep durable state unchanged and reject stale generations before host
+    driver dispatch and at the guest boundary.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

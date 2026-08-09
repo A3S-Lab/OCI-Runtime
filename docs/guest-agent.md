@@ -357,11 +357,10 @@ dispatch, drops the response before it is written, authenticates a new
 connection, and replays the identical `OperationId` and request without a
 second effect; changed content under the same ID fails with `Conflict`. A
 portable agent-backed `RuntimeDriver` matrix now carries all nine create,
-state, start, kill, delete, wait, exec, signal-process, wait-process, pause, and
-resume stages through `HostRuntimeService` reopen: 99 retained operation-stage
-pairs. Faults before
-guest dispatch leave a mutation resumable and perform its first effect on the
-replacement connection.
+state, start, kill, delete, wait, exec, signal-process, wait-process, pause,
+resume, and processes stages through `HostRuntimeService` reopen: 108 retained
+operation-stage pairs. Faults before guest dispatch leave a mutation resumable
+and perform its first effect on the replacement connection.
 Faults after dispatch replay the cached mutation response, including a guest
 that reached `running` while the durable host still records `created`, reached
 `stopped` while the durable host still records `running`, removed the generation
@@ -371,18 +370,19 @@ guest while the durable host still records it as unpaused, or thawed it while
 the host still records it as paused. Exec replay preserves the exact process
 ID, PID, and terminal mode; signal-process replay preserves the exact target
 and signal; pause and resume replay preserve one exact freezer effect each.
-State, wait, and wait-process have no guest
-mutation journal: state is safely reissued after every reopen, while both wait
-forms are reissued only until the host durably caches the guest's stable exact
-terminal result. A fully written wait response and every later retry avoid a
-second driver or guest dispatch. All three observations resolve a current host
+State, processes, wait, and wait-process have no guest mutation journal: state
+and the exact live init/exec inventory are safely reissued after every reopen,
+while both wait forms are reissued only until the host durably caches the
+guest's stable exact terminal result. A fully written wait response and every
+later retry avoid a second driver or guest dispatch. All four observations
+resolve a current host
 target to the exact generation and reject stale host and guest targets. A fault
 after a mutation response write lets the completed durable host journal answer
 the retry without a second driver dispatch; completed delete also leaves no
 live record to send through driver recovery. Every case uses a newly
 authenticated connection and driver and preserves the same generation;
-mutations produce one effect and
-reject changed retries. This is portable in-memory host-service reopen evidence,
+mutations produce one effect and reject changed retries. This is portable
+in-memory host-service reopen evidence,
 not yet the required real utility-VM replacement and complete transition
 matrix.
 
