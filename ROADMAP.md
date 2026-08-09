@@ -93,6 +93,31 @@ Conformance is continuous across M1-M6. R5 is the final audit, not the first
 time normative requirements are enforced. Box migration starts after the M1
 vertical slice and does not wait for every optional OCI feature.
 
+## Remaining Work Execution Plan
+
+The detailed workstreams below are the canonical task checklist. This section
+orders that work; it does not maintain a second completion state.
+
+| Wave | Outcome | Canonical workstreams | Exit evidence |
+| --- | --- | --- | --- |
+| W0 - Evidence and host safety | Close normative classification, descriptor-relative ownership, and utility-VM transport recovery gaps before widening launch claims | R0, R1, R5 | No unclassified requirement or silent path fallback; every injected host/agent interruption recovers or cleans up the exact generation |
+| W1 - Native Linux qualification | Turn the existing explicit Native Linux path into a packaged, reproducible A3S Box Sandbox baseline without KVM | R3, R4 | Signed or checksummed packages pass the complete Rust, Python, TypeScript, and Go Sandbox suites on x86_64 and aarch64 with `/dev/kvm` absent and inaccessible |
+| W2 - Real-driver restart continuity | Reattach supported live process, I/O, and filesystem sessions after an out-of-process runtime restart, or terminate them with exact durable evidence | R1, R6 | Native Linux and one utility-VM driver pass the same owner-death and service-restart matrix without duplicate effects, invented exit status, or leaked resources |
+| W3 - Utility-VM experimental drivers | Qualify immutable guest assets and complete WHPX first, followed by HVF and KVM through the same SDK and guest-agent contract | R2, R2M, R2L, R3 | Each promoted driver independently passes lifecycle, I/O, filesystem, resource, recovery, negative-isolation, multi-container, and soak gates on a fresh host |
+| W4 - A3S Box cutover | Route both Box isolation choices through the SDK and remove fallback only after behavior and recovery parity pass | R6 | `microvm` and `sandbox` use recorded SDK routes with no direct VMM path, no silent fallback, and complete cross-platform behavior and soak evidence |
+| W5 - Downstream adapters and extensions | Add containerd and optional parity mechanisms without moving product policy into the runtime | R7, R8 | Each adapter or extension is version-negotiated, separately advertised, restart-safe, and tested through public SDK contracts |
+| W6 - Supported release | Finish upstream OCI, adversarial security, upgrade, packaging, and long-running qualification against exact release artifacts | R5, M6 | The release report binds every advertised driver and operation to passing evidence from the published artifacts |
+
+R5 work runs throughout every wave. W6 is the final audit of evidence produced
+earlier, not a late conformance implementation phase. Work within a wave may
+run in parallel, but a readiness promotion waits for that wave's complete exit
+evidence.
+
+Every retained real-host report must identify the source commit, package or
+runtime-asset digest, platform, architecture, driver, isolation class, schema
+version, and exact test profile. A green capability probe, an unretained local
+run, or evidence from a different artifact does not satisfy an exit gate.
+
 ## Current Baseline
 
 Completed:
@@ -373,6 +398,9 @@ Not yet complete:
 - production-ready native Linux execution;
 - real-driver live process and filesystem session reattachment;
 - A3S Box default routing and cross-platform real-host cutover;
+- containerd runtime-v2 task, restart, I/O, and cleanup integration;
+- versioned storage, networking, reusable-session, checkpoint/restore, and TEE
+  extensions;
 - upstream conformance and security certification.
 
 The built-in WHPX driver remains `probe-only`, and the default host service
@@ -399,8 +427,15 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Review and bind all 630 pending common, Linux, and VM normative entries
-  to exact rules, enforcement owners, and positive and negative evidence.
+- [ ] Close the 630-entry pending normative evidence backlog.
+  - [ ] Classify every entry by common/process, Linux, VM, state, or feature
+    semantics and record whether it is applicable to each driver profile.
+  - [ ] Bind every applicable entry to an exact validator, enforcement owner,
+    positive test, negative test, and retained evidence field; bind every
+    inapplicable entry to a reviewed reason.
+  - [ ] Make CI reject pending, unclassified, duplicate, stale, or
+    source-digest-mismatched entries and require the generated ledger to reach
+    zero pending entries.
 - [x] Add version-negotiated local IPC transport for out-of-process callers.
 
 Exit gate: every OCI 1.3.0 schema property is accounted for as accepted,
@@ -413,7 +448,9 @@ enforce it. No property is silently ignored.
   checks, bounded reads, and atomic file replacement.
 - [x] Create, apply, and verify runtime ownership plus protected Windows state
   DACLs limited to the runtime principal and LocalSystem.
-- [ ] Use descriptor-relative path operations on every supported host.
+- [ ] Use descriptor-relative path operations on every supported host and
+  prove that symlink, mount, and Windows reparse-point replacement cannot move
+  a validated runtime-owned path before mutation.
 - [x] Add atomic creating/created records with exact configuration snapshots
   and monotonically increasing generations.
 - [x] Add a global idempotent create journal keyed by `OperationId`.
@@ -443,6 +480,9 @@ enforce it. No property is silently ignored.
 - [x] Verify the barrier against the real Linux guest bootstrap executor.
 - [x] Fault-inject every registered core-lifecycle durable commit stage and
   every `RuntimeDriver` method boundary, then reopen and replay.
+- [ ] Fault-inject every versioned utility-VM host/agent request, response,
+  disconnect, replay, and shutdown transition, then prove exact-generation
+  recovery or complete cleanup after host-service reopen.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.
@@ -497,6 +537,13 @@ the utility-VM host/agent transport portion remains open.
     exact owner termination, both Recover fault boundaries, service reopen,
     terminal replay, stopped-only delete, and complete transient cleanup.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
+  - [ ] Record source revisions, reproducible build inputs, checksums, and the
+    runtime-to-guest compatibility level in the release evidence.
+  - [ ] Mount the immutable system root separately from the protected
+    per-generation runtime share and reject any digest or provenance drift
+    before VM entry.
+  - [ ] Run the complete WHPX SDK and recovery matrices against those exact
+    assets on a fresh Windows host.
 - [x] Establish the named-pipe/vsock bridge.
 - [x] Negotiate the guest protocol and retain boot evidence.
 - [x] Run a fixed configured process through distinct OCI create and start
@@ -559,7 +606,10 @@ then may WHPX become `experimental`.
   cleanup.
 - [x] Retain fail-closed unavailable-HVF and missing-entitlement evidence
   without accepting pre-entry configuration as guest execution.
-- [ ] Boot the pinned A3S Linux kernel and immutable system root.
+- [ ] Boot the same pinned A3S Linux kernel and immutable system root through
+  HVF, retain their digests in the host report, keep the writable
+  per-generation share separate, and rerun the complete macOS SDK and soak
+  matrices against those exact assets.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
   authenticate protocol-v9 negotiation with a one-time token.
@@ -583,6 +633,34 @@ Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
 fixed OCI lifecycle through the authenticated guest agent, validates negative
 isolation cases, and leaves no process, descriptor, or runtime-root leak. Only
 then may HVF become `experimental`.
+
+### R2L — Linux KVM Utility VM
+
+- [x] Report `/dev/kvm` presence, access, ioctl, and API-version evidence
+  independently from Native Linux readiness.
+- [ ] Pin and verify the Linux libkrun runtime, A3S Linux kernel, immutable
+  system root, and guest agent as one compatibility set for every advertised
+  architecture.
+- [ ] Start the KVM worker in an isolated shim, mount only the protected
+  per-generation runtime share, and authenticate the AF_VSOCK guest-agent
+  session without falling back to host-kernel execution.
+- [ ] Implement a launch-ready KVM `RuntimeDriver` through the shared
+  twenty-operation adapter with exact-generation routing, bounded shutdown,
+  and complete process, endpoint, share, and runtime-root ownership.
+- [ ] Run the same lifecycle, process I/O, filesystem, resource, namespace,
+  multi-container, fault-cleanup, owner-death, and service-restart matrices
+  used to qualify WHPX and HVF.
+- [ ] Add a bounded real-host KVM soak for every advertised architecture and
+  retain per-wave process, descriptor, marker, cgroup, endpoint, and
+  runtime-root leak evidence.
+- [ ] Retain fail-closed evidence for an absent, inaccessible, wrong-version,
+  or initialization-failing KVM device and for invalid or drifted runtime
+  assets.
+
+Exit gate: a fresh KVM-capable Linux host boots the pinned utility VM, passes
+the complete SDK and recovery matrices through the authenticated guest agent,
+and leaves no process, descriptor, cgroup, endpoint, share, or runtime-root
+leak. Only then may KVM become `experimental`.
 
 ### R3 — Shared Linux Executor And Guest Agent
 
@@ -668,11 +746,25 @@ then may HVF become `experimental`.
 - [x] Enforce the bounded A3S Box static device-node profile with
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   CAP_MKNOD exclusion, and verified device-node creation.
-- [ ] Rootless ID-mapping policy, remaining credentials, scheduler,
-  I/O priority, affinity, LSMs, multi-architecture/notification seccomp, and
-  broader device policies.
-- [ ] cgroup v2 I/O, hugepage, RDMA, unified resources, device-access BPF,
-  delegation breadth, and full lifecycle evidence.
+- [ ] Complete the remaining process and rootless configuration boundary.
+  - [ ] Enforce or explicitly reject supplementary credentials, scheduler,
+    I/O priority, CPU affinity, and unsupported rootless ID-mapping shapes
+    before executor mutation.
+  - [ ] Advertise and enforce the exact supported LSM set, with fail-closed
+    behavior and positive and negative evidence for every reported module.
+  - [ ] Extend seccomp classification and enforcement to every advertised
+    architecture and notification mode; reject every other requested action,
+    flag, or architecture before launch.
+  - [ ] Replace the Box-specific device profile boundary with an exact
+    generated support policy or reject broader OCI device requests without
+    mutating the rootfs or cgroup.
+- [ ] Complete the remaining cgroup v2 resource boundary.
+  - [ ] Enforce or explicitly reject I/O, hugepage, RDMA, and unified resource
+    requests with exact read-back and rollback.
+  - [ ] Add device-access BPF and the required delegation model for every
+    advertised rootful or rootless profile.
+  - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
+    for every newly advertised controller on x86_64 and aarch64.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
   all remaining namespace processes after the configured process exits, and
   preserve that process's exact exit code or terminating signal.
@@ -768,15 +860,20 @@ pass on supported x86_64 and aarch64 Linux hosts without KVM.
 
 ### R5 — Full OCI 1.3 Conformance
 
-- [ ] Complete common configuration and process semantics.
-- [ ] Complete Linux configuration and feature reporting.
+- [ ] Complete common configuration and process semantics and bind every
+  accepted or rejected field to the zero-pending normative evidence ledger.
+- [ ] Complete Linux configuration enforcement and generate feature reporting
+  from the same driver-specific support data used by validation and execution.
 - [ ] Complete applicable VM configuration semantics without executing
-  untrusted hypervisor, kernel, or firmware paths.
-- [ ] Pass OCI JSON schema validation for config, state, and features.
-- [ ] Pass upstream lifecycle validation tools.
+  untrusted hypervisor, kernel, or firmware paths during validation.
+- [ ] Pass the pinned OCI JSON schema suites for config, state, and features
+  using fixtures emitted by every advertised driver profile.
+- [ ] Pass upstream lifecycle validation tools on every supported platform and
+  architecture using the exact packaged runtime binaries.
 - [ ] Cross-check supported bundles with upstream OCI lifecycle validation
   tools without shipping a second runtime backend.
-- [ ] Run hook-order, rollback, recovery, security-negative, and soak suites.
+- [ ] Run hook-order, rollback, crash-recovery, security-negative, and
+  long-running soak suites on every advertised driver profile.
 - [ ] Publish an exact, generated support manifest with no unclassified field.
 
 Exit gate: the release report contains retained evidence for every applicable
@@ -843,6 +940,61 @@ composition passes WHPX, and the default/MicroVM cutover is complete. OCI
 Runtime independently proves that abrupt Native Linux owner death safely
 terminates and reconciles the exact generation without inventing terminal
 evidence.
+
+### R7 — containerd Runtime V2
+
+- [ ] Define the supported containerd runtime-v2 API and version matrix, the
+  shim binary and package layout, and the exact mapping from containerd
+  namespace and task identity to OCI container ID and runtime generation.
+- [ ] Load the containerd-provided OCI bundle and translate create, start,
+  state, wait, kill, delete, exec, resize, close-I/O, and stats operations into
+  public `a3s-oci-sdk` calls without invoking A3S Box or importing driver
+  internals.
+- [ ] Preserve containerd stdin/stdout/stderr and terminal semantics through
+  the SDK's bounded process-I/O contract, including reconnect, EOF, resize,
+  exact exit status, and cancellation cleanup.
+- [ ] Reconcile shim and containerd restart at every lifecycle boundary using
+  the runtime's durable generation and operation identities; prove that
+  restart never duplicates a mutation, reroutes a driver, or invents process
+  state.
+- [ ] Run real `containerd` and `ctr` integration suites for lifecycle, exec,
+  I/O, signals, stats, restart, forced cleanup, stale identity, and parallel
+  tasks against every advertised driver profile.
+- [ ] Publish the shim with signed or checksummed runtime packages and retain
+  the exact containerd, shim, SDK, runtime, and driver compatibility record.
+
+Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
+public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
+or leaked runtime resources.
+
+### R8 — Optional Parity Extensions
+
+- [ ] Add versioned extension discovery and negotiation so an optional
+  operation is advertised only when the selected driver and exact release
+  artifact passed its own gate.
+- [ ] Accept already-authorized storage attachments with immutable identity,
+  access mode, ownership, and cleanup contracts while leaving named-volume
+  and snapshot policy in A3S Box.
+- [ ] Accept already-authorized network attachments with exact namespace,
+  interface, and cleanup identities while leaving IPAM, DNS, and network
+  policy in A3S Box.
+- [ ] Add reusable guest-session ownership with trust-domain, isolation,
+  generation, capacity, reset, and leak fences; never reuse a guest across an
+  incompatible or undeclared trust boundary.
+- [ ] Implement checkpoint and restore as generation-fenced SDK operations
+  with immutable artifact identity, compatibility validation, durable replay,
+  rollback, and exact restored-process evidence.
+- [ ] Carry TEE launch measurements and attestation evidence through typed SDK
+  contracts without moving attestation authorization or product policy into
+  the runtime.
+- [ ] Run Box storage, networking, warm-session, snapshot, restart, and
+  security suites through only the public extensions on each driver that
+  advertises them.
+
+Exit gate: every advertised extension has a versioned contract, fail-closed
+capability report, recovery semantics, exact release-artifact evidence, and a
+passing Box consumer gate. Unadvertised optional extensions do not block a
+supported core runtime release.
 
 ## Platform Promotion
 
