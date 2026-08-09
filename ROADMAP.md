@@ -348,7 +348,7 @@ Completed:
   in-memory matrix injects every one of the 180 operation-stage pairs, proves
   one crossing and terminal disconnect per point. A portable agent-backed
   `RuntimeDriver` matrix also arms each of the nine create, state, start, kill,
-  delete, and wait stages exactly once across durable `HostRuntimeService`
+  delete, wait, and exec stages exactly once across durable `HostRuntimeService`
   reopen. Pre-dispatch faults defer the guest request until the replacement
   connection; post-dispatch mutation faults replay the guest journal while
   read-only state and uncached wait observations are safely reissued. A fully
@@ -356,7 +356,8 @@ Completed:
   written wait response replays its durable terminal cache. Every path
   preserves the exact generation; mutations retain one effect and reject
   changed retries, state resolves a current target to that exact generation,
-  and wait returns one stable exact exit result while stale targets fail closed;
+  wait returns one stable exact exit result while stale targets fail closed,
+  and exec preserves the exact process ID, PID, and terminal mode;
 - existing `features` CLI path routed through the Rust SDK;
 - reconnectable local SDK endpoints that expose the first broken-stream result
   without hidden replay, discard the poisoned stream, and renegotiate on the
@@ -558,6 +559,13 @@ enforce it. No property is silently ignored.
     reopen in the durable terminal cache without another driver or guest
     dispatch; all later waits must use that cache, and stale host and guest
     generations must fail closed.
+  - [x] Carry `exec` through all nine portable reopen stages after an exact
+    durable create and start. Keep the prepared process claim resumable after
+    every retryable first-call failure, replay post-dispatch effects through the
+    exact guest request journal, and replay a fully written response from the
+    completed durable host journal without another dispatch. Preserve the exact
+    generation, process ID, PID, and terminal mode, require one exec effect, and
+    reject changed content under the same operation ID at both boundaries.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

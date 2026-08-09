@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
-    AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest, GuestPath,
+    AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
+    AgentKillRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest,
+    GuestPath,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -17,17 +18,18 @@ use a3s_oci_sdk::{
 use tokio::io::DuplexStream;
 
 use crate::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverRecovery,
-    DriverStartRequest, DriverState, DriverWaitRequest, RuntimeDriver,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverRecovery, DriverStartRequest, DriverState, DriverWaitRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 6] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 7] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
     RuntimeOperation::Kill,
     RuntimeOperation::Delete,
     RuntimeOperation::Wait,
+    RuntimeOperation::Exec,
 ];
 
 #[derive(Debug, Default)]
@@ -38,6 +40,7 @@ pub(super) struct DriverMetrics {
     kill_dispatches: AtomicUsize,
     delete_dispatches: AtomicUsize,
     wait_dispatches: AtomicUsize,
+    exec_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -64,6 +67,10 @@ impl DriverMetrics {
 
     pub(super) fn wait_dispatches(&self) -> usize {
         self.wait_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn exec_dispatches(&self) -> usize {
+        self.exec_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -188,6 +195,36 @@ impl RuntimeDriver for AgentLifecycleDriver {
                 timeout_ms: request.timeout_ms,
             })
             .await
+    }
+
+    async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
+        self.metrics.exec_dispatches.fetch_add(1, Ordering::SeqCst);
+        let expected_target = request.target.clone();
+        let expected_terminal = request.process.terminal().unwrap_or(false);
+        let process = self
+            .client
+            .exec(AgentExecRequest {
+                context: request.context,
+                target: request.target,
+                process: request.process,
+                io: request.io,
+            })
+            .await?;
+        if process.target() != &expected_target {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest returned a different exec process target",
+            )
+            .for_operation("map-agent-process"));
+        }
+        if process.terminal() != expected_terminal {
+            return Err(Error::new(
+                ErrorCode::Conflict,
+                "guest returned a different exec terminal mode",
+            )
+            .for_operation("map-agent-process"));
+        }
+        DriverProcess::new(process.pid(), process.terminal())
     }
 }
 

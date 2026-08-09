@@ -1,8 +1,9 @@
 use std::sync::Mutex;
 
 use a3s_oci_agent_protocol::{
-    AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest, AgentOperation,
-    AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest, GuestAgentService,
+    AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
+    AgentOperation, AgentProcess, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, ExitStatus, Result};
@@ -32,6 +33,7 @@ struct LifecycleJournal {
     kill: OperationJournal<AgentKillRequest, AgentState>,
     delete: OperationJournal<AgentDeleteRequest, ()>,
     wait_requests: usize,
+    exec: OperationJournal<AgentExecRequest, AgentProcess>,
     init_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
 }
@@ -55,6 +57,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::Kill,
                     AgentOperation::Delete,
                     AgentOperation::Wait,
+                    AgentOperation::Exec,
                 ],
             )
             .expect("test guest capabilities"),
@@ -138,6 +141,22 @@ impl JournaledLifecycleGuest {
             .lock()
             .expect("guest journal lock")
             .wait_requests
+    }
+
+    pub(super) fn exec_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .exec
+            .requests
+    }
+
+    pub(super) fn exec_effect_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .exec
+            .effects
     }
 }
 
@@ -382,6 +401,51 @@ impl GuestAgentService for JournaledLifecycleGuest {
             )
             .for_operation("agent-wait")
         })
+    }
+
+    async fn exec(&self, request: AgentExecRequest) -> Result<AgentProcess> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.exec.requests += 1;
+        if let Some((recorded, response)) = journal.exec.entry.as_ref() {
+            if recorded.context.operation_id == request.context.operation_id {
+                if recorded != &request {
+                    return Err(changed_request("exec"));
+                }
+                return Ok(response.clone());
+            }
+            return Err(already_exists("exec"));
+        }
+
+        let current = journal.current.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-exec")
+        })?;
+        if current.target() != &request.target.container {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-exec"));
+        }
+        if current.status() != ContainerState::Running {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "guest exec requires running state, found {}",
+                    current.status()
+                ),
+            )
+            .for_operation("agent-exec"));
+        }
+
+        let terminal = request.process.terminal().unwrap_or(false);
+        let response = AgentProcess::new(request.target.clone(), 6_202, terminal)?;
+        journal.exec.effects += 1;
+        journal.exec.entry = Some((request, response.clone()));
+        Ok(response)
     }
 }
 

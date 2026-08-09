@@ -1,6 +1,7 @@
 mod create;
 mod delete;
 mod driver;
+mod exec;
 mod guest;
 mod kill;
 mod start;
