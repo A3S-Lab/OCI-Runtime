@@ -24,7 +24,7 @@ use crate::{
     DriverStartRequest, DriverState, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 10] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 11] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -35,6 +35,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 10] = [
     RuntimeOperation::SignalProcess,
     RuntimeOperation::WaitProcess,
     RuntimeOperation::Pause,
+    RuntimeOperation::Resume,
 ];
 
 #[derive(Debug, Default)]
@@ -49,6 +50,7 @@ pub(super) struct DriverMetrics {
     signal_process_dispatches: AtomicUsize,
     wait_process_dispatches: AtomicUsize,
     pause_dispatches: AtomicUsize,
+    resume_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -91,6 +93,10 @@ impl DriverMetrics {
 
     pub(super) fn pause_dispatches(&self) -> usize {
         self.pause_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn resume_dispatches(&self) -> usize {
+        self.resume_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -278,6 +284,21 @@ impl RuntimeDriver for AgentLifecycleDriver {
         let state = self
             .client
             .pause(AgentContainerOperationRequest {
+                context: request.context,
+                target: request.target,
+            })
+            .await?;
+        map_agent_state(&expected_target, None, state)
+    }
+
+    async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.metrics
+            .resume_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        let expected_target = request.target.clone();
+        let state = self
+            .client
+            .resume(AgentContainerOperationRequest {
                 context: request.context,
                 target: request.target,
             })

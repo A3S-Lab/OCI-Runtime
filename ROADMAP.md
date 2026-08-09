@@ -587,6 +587,13 @@ enforce it. No property is silently ignored.
     driver, and prove exactly one pause effect. A fully written response must
     replay from the durable host journal without another dispatch, and changed
     targets under the same operation ID must fail closed at both boundaries.
+  - [x] Carry `resume` through all nine portable reopen stages after an exact
+    durable create, start, and pause. Keep the host record running and paused
+    after every retryable first-call failure even when the guest is already
+    thawed, retry the original operation on a new authenticated connection and
+    driver, and prove exactly one resume effect. A fully written response must
+    replay from the durable host journal without another dispatch, and changed
+    targets under the same operation ID must fail closed at both boundaries.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

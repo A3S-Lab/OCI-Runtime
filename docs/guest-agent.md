@@ -356,10 +356,9 @@ connection terminates after each fault. Separate evidence completes one create
 dispatch, drops the response before it is written, authenticates a new
 connection, and replays the identical `OperationId` and request without a
 second effect; changed content under the same ID fails with `Conflict`. A
-portable agent-backed `RuntimeDriver` matrix now carries all nine create, all
-nine state, all nine start, all nine kill, all nine delete, all nine wait, all
-all nine exec, all nine signal-process, all nine wait-process, and all nine
-pause stages through `HostRuntimeService` reopen: 90 retained operation-stage
+portable agent-backed `RuntimeDriver` matrix now carries all nine create,
+state, start, kill, delete, wait, exec, signal-process, wait-process, pause, and
+resume stages through `HostRuntimeService` reopen: 99 retained operation-stage
 pairs. Faults before
 guest dispatch leave a mutation resumable and perform its first effect on the
 replacement connection.
@@ -367,10 +366,11 @@ Faults after dispatch replay the cached mutation response, including a guest
 that reached `running` while the durable host still records `created`, reached
 `stopped` while the durable host still records `running`, removed the generation
 while the durable host still records `stopped`, or created an exec process while
-the durable host still retains its prepared process claim, or froze a running
-guest while the durable host still records it as unpaused. Exec replay preserves
-the exact process ID, PID, and terminal mode; signal-process replay preserves
-the exact target and signal; pause replay preserves one exact freeze effect.
+the durable host still retains its prepared process claim, froze a running
+guest while the durable host still records it as unpaused, or thawed it while
+the host still records it as paused. Exec replay preserves the exact process
+ID, PID, and terminal mode; signal-process replay preserves the exact target
+and signal; pause and resume replay preserve one exact freezer effect each.
 State, wait, and wait-process have no guest
 mutation journal: state is safely reissued after every reopen, while both wait
 forms are reissued only until the host durably caches the guest's stable exact

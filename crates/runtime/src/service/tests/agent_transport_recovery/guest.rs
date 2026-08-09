@@ -11,6 +11,7 @@ use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, ExitStatus, Result}
 
 use super::guest_journal::{already_exists, changed_request, OperationJournal};
 
+mod freezer;
 mod metrics;
 
 #[derive(Debug, Default)]
@@ -25,6 +26,7 @@ struct LifecycleJournal {
     signal_process: OperationJournal<AgentSignalProcessRequest, ()>,
     wait_process_requests: usize,
     pause: OperationJournal<AgentContainerOperationRequest, AgentState>,
+    resume: OperationJournal<AgentContainerOperationRequest, AgentState>,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -53,6 +55,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::SignalProcess,
                     AgentOperation::WaitProcess,
                     AgentOperation::Pause,
+                    AgentOperation::Resume,
                 ],
             )
             .expect("test guest capabilities"),
@@ -415,50 +418,10 @@ impl GuestAgentService for JournaledLifecycleGuest {
     }
 
     async fn pause(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
-        let mut journal = self.journal.lock().expect("guest journal lock");
-        journal.pause.requests += 1;
-        if let Some((recorded, response)) = journal.pause.entry.as_ref() {
-            if recorded.context.operation_id == request.context.operation_id {
-                if recorded != &request {
-                    return Err(changed_request("pause"));
-                }
-                return Ok(response.clone());
-            }
-            return Err(already_exists("pause"));
-        }
+        self.set_paused(request, true)
+    }
 
-        let current = journal.current.clone().ok_or_else(|| {
-            Error::new(
-                ErrorCode::NotFound,
-                "guest container generation is unavailable",
-            )
-            .for_operation("agent-pause")
-        })?;
-        if current.target() != &request.target {
-            return Err(Error::new(
-                ErrorCode::NotFound,
-                "guest container generation is unavailable",
-            )
-            .for_operation("agent-pause"));
-        }
-        if current.status() != ContainerState::Running || current.paused() {
-            return Err(Error::new(
-                ErrorCode::FailedPrecondition,
-                "guest pause requires an unfrozen running container",
-            )
-            .for_operation("agent-pause"));
-        }
-
-        let response = AgentState::new_with_pause(
-            request.target.clone(),
-            ContainerState::Running,
-            current.pid(),
-            current.config_digest(),
-            true,
-        )?;
-        journal.pause.effects += 1;
-        journal.pause.entry = Some((request, response.clone()));
-        journal.current = Some(response.clone());
-        Ok(response)
+    async fn resume(&self, request: AgentContainerOperationRequest) -> Result<AgentState> {
+        self.set_paused(request, false)
     }
 }
