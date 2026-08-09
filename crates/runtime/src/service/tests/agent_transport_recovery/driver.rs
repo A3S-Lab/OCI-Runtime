@@ -15,8 +15,8 @@ use a3s_oci_core::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus,
-    FileRequest, FileResponse, OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord,
-    Result, RuntimeOperation,
+    FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, OciBundle, OperationContext,
+    OutputChunk, ProcessIo, ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::io::DuplexStream;
 
@@ -32,7 +32,7 @@ mod metrics;
 
 pub(super) use metrics::DriverMetrics;
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 19] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 20] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -52,6 +52,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 19] = [
     RuntimeOperation::CloseStdin,
     RuntimeOperation::Resize,
     RuntimeOperation::File,
+    RuntimeOperation::Filesystem,
 ];
 
 #[derive(Debug)]
@@ -341,6 +342,13 @@ impl RuntimeDriver for AgentLifecycleDriver {
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
         self.metrics.file_dispatches.fetch_add(1, Ordering::SeqCst);
         self.client.file(request).await
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.metrics
+            .filesystem_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        self.client.filesystem(request).await
     }
 }
 

@@ -250,4 +250,20 @@ impl JournaledLifecycleGuest {
             .file
             .effects
     }
+
+    pub(in super::super) fn filesystem_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .filesystem
+            .requests
+    }
+
+    pub(in super::super) fn filesystem_effect_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .filesystem
+            .effects
+    }
 }

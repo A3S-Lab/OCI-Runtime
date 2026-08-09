@@ -359,7 +359,7 @@ second effect; changed content under the same ID fails with `Conflict`. A
 portable agent-backed `RuntimeDriver` matrix now carries all nine create,
 state, start, kill, delete, wait, exec, signal-process, wait-process, pause,
 resume, processes, update, stats, read-output, write-stdin, close-stdin, resize,
-and file stages through `HostRuntimeService` reopen: 171 retained
+file, and filesystem stages through `HostRuntimeService` reopen: all 180
 operation-stage pairs. Faults before guest dispatch leave a mutation resumable
 and perform its first effect on the replacement connection.
 Faults after dispatch replay the cached mutation response, including a guest
@@ -370,17 +370,18 @@ the durable host still retains its prepared process claim, froze a running
 guest while the durable host still records it as unpaused, or thawed it while
 the host still records it as paused, or applied a resource update while its
 durable host operation remained pending, delivered stdin, closed stdin, or
-resized a terminal while the matching durable operation remained pending, or
-uploaded a file before its response was lost. Exec replay preserves the exact
-process ID, PID, and terminal mode; signal-process replay preserves the exact
-target and signal; pause and resume replay preserve one exact freezer effect
-each; update replay preserves the complete resources and one effect; write-stdin
-replay preserves the exact operation context, process target, bytes, and one
-input effect; close-stdin replay preserves the exact operation context and
-process target with one close effect; resize replay preserves the exact terminal
-process target, operation context, dimensions, and one resize effect; file
-replay preserves the path, user, payload, context, acknowledgement, and one
-upload effect.
+resized a terminal while the matching durable operation remained pending,
+uploaded a file, or created a directory before its response was lost. Exec
+replay preserves the exact process ID, PID, and terminal mode; signal-process
+replay preserves the exact target and signal; pause and resume replay preserve
+one exact freezer effect each; update replay preserves the complete resources
+and one effect; write-stdin replay preserves the exact operation context,
+process target, bytes, and one input effect; close-stdin replay preserves the
+exact operation context and process target with one close effect; resize replay
+preserves the exact terminal process target, operation context, dimensions, and
+one resize effect; file replay preserves the path, user, payload, context,
+acknowledgement, and one upload effect; filesystem replay preserves the path,
+user, context, directory metadata, and one mkdir effect.
 State, processes, stats, read-output, wait, and wait-process have no guest
 mutation journal: state, exact live init/exec inventory, normalized counters,
 and cursor-bounded output are safely reissued after every reopen, while both
@@ -390,14 +391,14 @@ avoid a second driver or guest dispatch. All six observations resolve a current
 host target to the exact generation and reject stale host and guest targets. A
 fault after a durably journaled host mutation response write lets the completed
 host journal answer the retry without a second driver dispatch; completed
-delete also leaves no live record to send through driver recovery. File uploads
-are session-scoped and are dispatched again after every reopen, including after
-a fully written response; the guest journal returns the same acknowledgement
-without another upload effect. Every case uses a newly authenticated connection
-and driver and preserves the same generation; mutations produce one effect and
-reject changed retries. This is portable in-memory host-service reopen evidence,
-not yet the required real utility-VM replacement and complete transition
-matrix.
+delete also leaves no live record to send through driver recovery. File and
+filesystem mutations are session-scoped and are dispatched again after every
+reopen, including after a fully written response; the guest journals return the
+same response without another mutation effect. Every case uses a newly
+authenticated connection and driver and preserves the same generation;
+mutations produce one effect and reject changed retries. This completes the
+portable in-memory matrix, not the required real utility-VM replacement and
+complete transition matrix.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

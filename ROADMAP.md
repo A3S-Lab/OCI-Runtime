@@ -652,6 +652,15 @@ enforce it. No property is silently ignored.
     fully written first response, while the guest journal guarantees one upload
     effect. Reject changed upload content through that journal and reject stale
     generations at the guest boundary and before host driver dispatch.
+  - [x] Carry a journaled directory creation through all nine portable
+    `filesystem` reopen stages. Resolve the current host target to the exact
+    generation and retain the path, user, operation context, and directory
+    metadata response. Reissue the session-scoped request after every reopen,
+    including after a fully written first response, while the guest journal
+    guarantees one mkdir effect. Reject changed paths through that journal and
+    reject stale generations at the guest boundary and before host driver
+    dispatch. This completes the portable 20-operation, 180-pair matrix without
+    claiming real utility-VM replacement evidence.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

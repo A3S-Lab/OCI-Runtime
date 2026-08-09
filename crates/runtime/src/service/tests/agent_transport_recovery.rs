@@ -4,6 +4,7 @@ mod delete;
 mod driver;
 mod exec;
 mod file;
+mod filesystem;
 mod guest;
 mod guest_journal;
 mod kill;

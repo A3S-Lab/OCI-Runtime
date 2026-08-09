@@ -21,6 +21,7 @@ pub(in super::super) struct DriverMetrics {
     pub(super) close_stdin_dispatches: AtomicUsize,
     pub(super) resize_dispatches: AtomicUsize,
     pub(super) file_dispatches: AtomicUsize,
+    pub(super) filesystem_dispatches: AtomicUsize,
     pub(super) recoveries: AtomicUsize,
 }
 
@@ -99,6 +100,10 @@ impl DriverMetrics {
 
     pub(in super::super) fn file_dispatches(&self) -> usize {
         self.file_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(in super::super) fn filesystem_dispatches(&self) -> usize {
+        self.filesystem_dispatches.load(Ordering::SeqCst)
     }
 
     pub(in super::super) fn recoveries(&self) -> usize {

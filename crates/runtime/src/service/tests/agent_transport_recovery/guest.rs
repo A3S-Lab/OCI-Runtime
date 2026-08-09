@@ -10,7 +10,7 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest,
-    FileResponse, OutputChunk, ProcessRecord, Result,
+    FileResponse, FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
 };
 
 use super::guest_journal::{already_exists, changed_request, OperationJournal};
@@ -44,6 +44,7 @@ struct LifecycleJournal {
     close_stdin: OperationJournal<AgentCloseStdinRequest, ()>,
     resize: OperationJournal<AgentResizeRequest, ()>,
     file: OperationJournal<FileRequest, FileResponse>,
+    filesystem: OperationJournal<FilesystemRequest, FilesystemResponse>,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -81,6 +82,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::CloseStdin,
                     AgentOperation::Resize,
                     AgentOperation::File,
+                    AgentOperation::Filesystem,
                 ],
             )
             .expect("test guest capabilities"),
@@ -480,5 +482,9 @@ impl GuestAgentService for JournaledLifecycleGuest {
 
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
         self.transfer_file(request)
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.mutate_filesystem(request)
     }
 }

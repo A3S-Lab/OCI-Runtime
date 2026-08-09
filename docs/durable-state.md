@@ -264,11 +264,12 @@ host-service reopen below the `RuntimeDriver` boundary. The portable matrix
 already reopens the durable host around a new authenticated connection and
 driver at all nine request/response stages for create, state, start, kill,
 delete, wait, exec, signal-process, wait-process, pause, resume, processes,
-update, stats, read-output, write-stdin, close-stdin, resize, and file, retaining
-171 operation-stage pairs. Durably journaled host mutations distinguish
-pre-dispatch execution, post-dispatch guest replay, and completed durable-host
-replay while preserving the same generation and one effect. Exec additionally
-preserves its exact process ID, guest PID, and terminal mode;
+update, stats, read-output, write-stdin, close-stdin, resize, file, and
+filesystem, retaining all 180 operation-stage pairs. Durably journaled host
+mutations distinguish pre-dispatch execution, post-dispatch guest replay, and
+completed durable-host replay while preserving the same generation and one
+effect. Exec additionally preserves its exact process ID, guest PID, and
+terminal mode;
 signal-process preserves that exact process target and the delivered signal;
 pause and resume preserve the running state and commit the matching freezer
 flag exactly once, including when the first guest effect preceded the lost
@@ -278,12 +279,13 @@ operation context, input bytes, and one input effect; close-stdin preserves the
 exact process target and operation context with one close effect; resize
 preserves the exact terminal process target, operation context, dimensions, and
 one resize effect.
-File upload remains a session-scoped operation rather than a durable host
-journal entry. Every retry after reopen, including one after a fully written
-first response, resolves and dispatches the same exact-generation request. The
-guest upload journal returns the same acknowledgement and keeps one upload
-effect; changed content under the same operation ID conflicts, while stale
-generations fail before host dispatch and at the guest boundary.
+File uploads and filesystem mutations remain session-scoped operations rather
+than durable host journal entries. Every retry after reopen, including one after
+a fully written first response, resolves and dispatches the same
+exact-generation request. The guest journals return the same upload
+acknowledgement or directory metadata and keep one mutation effect; changed
+content under the same operation ID conflicts, while stale generations fail
+before host dispatch and at the guest boundary.
 Read-only state, process inventory, normalized stats, and captured-output polls
 resolve a current target to the exact durable generation and are safely
 reissued after reopen, including after a fully written first response. Process
