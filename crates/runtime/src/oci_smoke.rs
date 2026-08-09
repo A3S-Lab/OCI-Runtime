@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use a3s_oci_agent_protocol::AgentTransportFaultStage;
+use a3s_oci_agent_protocol::{AgentTransportFaultStage, AgentTransportOperationStage};
 use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
@@ -211,14 +211,37 @@ pub async fn oci_vm_reopen_replacement(
     bundle: &Path,
     console_directory: &Path,
 ) -> OciVmReopenReplacementReport {
+    oci_vm_reopen_replacement_at(
+        shim,
+        vm_rootfs,
+        bundle,
+        console_directory,
+        AgentTransportOperationStage::HostBeforeRequestWrite,
+    )
+    .await
+}
+
+/// Resume one Host-interrupted durable create through a replacement macOS HVF owner.
+///
+/// The selected stage must be one of the four Host-side Create request/response
+/// transitions. The first VM returns a retryable transport error, and a fresh
+/// authenticated VM must complete the original durable operation and generation.
+#[must_use]
+pub async fn oci_vm_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_reopen_replacement(shim, vm_rootfs, bundle, console_directory).await
+        utility_vm::run_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage).await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
         let _ = (shim, vm_rootfs, bundle, console_directory);
-        OciVmReopenReplacementReport::unsupported(HostPlatform::current())
+        OciVmReopenReplacementReport::unsupported(HostPlatform::current(), stage)
     }
 }

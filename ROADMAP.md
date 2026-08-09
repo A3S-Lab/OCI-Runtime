@@ -704,10 +704,16 @@ enforce it. No property is silently ignored.
     The August 10, 2026 Apple Silicon gate passed with two distinct endpoint,
     shim, and VM-worker identities under
     `a3s.oci.oci-vm-reopen-replacement.v1`.
-  - [ ] Carry the remaining operations and transport stages through
+  - [x] Carry the other three Host-side `create` request/response stages through
+    the same durable reopen and actual HVF owner replacement. The selected
+    point is explicit in the CLI and retained report; every run requires the
+    original OperationId and generation, a distinct endpoint/shim/VM-worker
+    owner, force delete, and complete Host and Guest cleanup. The August 10,
+    2026 four-stage matrix passed in eight fresh VMs.
+  - [ ] Carry the Guest-side stages and remaining operations through
     `HostRuntimeService` reopen and actual VM/owner replacement. The portable
-    matrix, eleven real cleanup stages, and first real replacement path do not
-    satisfy the complete matrix gate.
+    matrix, eleven real cleanup stages, and four Host-side replacement paths do
+    not satisfy the complete matrix gate.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

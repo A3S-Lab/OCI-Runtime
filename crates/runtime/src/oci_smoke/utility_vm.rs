@@ -51,8 +51,9 @@ pub(super) async fn run_reopen_replacement(
     vm_rootfs: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
+    stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmReopenReplacementReport {
-    reopen_replacement::run(shim, vm_rootfs, bundle_directory, console_directory).await
+    reopen_replacement::run(shim, vm_rootfs, bundle_directory, console_directory, stage).await
 }
 
 pub(super) async fn run_multi_container(

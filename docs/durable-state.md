@@ -310,11 +310,11 @@ Twenty-four fresh local VMs passed the repeated Host request-response v2 gate
 and five more passed its Guest gate. The final v3 requalification passed all
 eleven stages in eleven fresh VMs.
 
-One additional real-HVF path now carries `host-before-request-write` through
-the durable layer. The first VM closes while the original Create OperationId
-and generation remain in `creating`; a new `HostRuntimeService` and distinct
-VM/session owner reopen that record, complete the same Create, force-delete it,
-and leave no durable container or transient Host/Guest resource. The retained
-`a3s.oci.oci-vm-reopen-replacement.v1` report includes both VM cleanup reports.
-Other operations and transport points still belong to the replacement matrix
-above.
+All four Host-side Create request/response points now pass through the durable
+layer on real HVF. For each point, the first VM closes while the original
+OperationId and generation remain in `creating`; a new `HostRuntimeService` and
+distinct VM/session owner reopen that record, complete the same Create,
+force-delete it, and leave no durable container or transient Host/Guest
+resource. Each retained `a3s.oci.oci-vm-reopen-replacement.v1` report includes
+both VM cleanup reports. Guest-side stages and other operations still belong to
+the replacement matrix above.

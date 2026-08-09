@@ -41,8 +41,18 @@ pub(super) async fn run(
     vm_rootfs: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
+    stage: AgentTransportOperationStage,
 ) -> OciVmReopenReplacementReport {
-    let mut report = OciVmReopenReplacementReport::initial(HostPlatform::current());
+    let mut report = OciVmReopenReplacementReport::initial(HostPlatform::current(), stage);
+    if !stage.is_host() {
+        return failed(
+            report,
+            format!(
+                "real utility-VM owner replacement accepts only a Host Create stage, not {}",
+                stage.as_str()
+            ),
+        );
+    }
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
@@ -164,6 +174,7 @@ pub(super) async fn run(
         &request,
         &delete_operation_id,
         &baseline_runtime_entries,
+        stage,
         &mut report,
     )
     .await;
@@ -224,9 +235,9 @@ async fn exercise(
     request: &CreateRequest,
     delete_operation_id: &OperationId,
     baseline_runtime_entries: &std::collections::BTreeSet<String>,
+    stage: AgentTransportOperationStage,
     report: &mut OciVmReopenReplacementReport,
 ) -> std::result::Result<(), String> {
-    let stage = AgentTransportOperationStage::HostBeforeRequestWrite;
     let faults = Arc::new(HostTransportFault::new(AgentTransportFaultStage::from(
         stage,
     )));

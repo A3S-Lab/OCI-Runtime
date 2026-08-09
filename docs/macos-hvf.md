@@ -703,35 +703,46 @@ reopen or a replacement VM owner.
 
 ## Durable Host reopen and VM owner replacement
 
-`oci-vm-reopen-replacement` takes the first real recovery slice through the
-durable Host service instead of calling the diagnostic Agent client directly:
+`oci-vm-reopen-replacement` carries all four Host-side Create request/response
+points through the durable Host service instead of calling the diagnostic Agent
+client directly:
 
 ```sh
 reopen_dir="$(mktemp -d)"
-target/debug/a3s-oci oci-vm-reopen-replacement \
-  --shim "$smoke_dir/a3s-oci-krun-shim" \
-  --vm-rootfs "$rootfs" \
-  --bundle "$bundle" \
-  --console-dir "$reopen_dir"
+for fault_stage in \
+  host-before-request-write \
+  host-after-request-write \
+  host-before-response-read \
+  host-after-response-read
+do
+  stage_dir="$reopen_dir/$fault_stage"
+  mkdir "$stage_dir"
+  target/debug/a3s-oci oci-vm-reopen-replacement \
+    --shim "$smoke_dir/a3s-oci-krun-shim" \
+    --vm-rootfs "$rootfs" \
+    --bundle "$bundle" \
+    --console-dir "$stage_dir" \
+    --fault-at "$fault_stage"
+done
 ```
 
 The first qualification-only HVF driver opens a real authenticated VM and
-injects `host-before-request-write` into `create`. The retryable error leaves
-the exact durable record and OperationId in `creating`; that VM must then exit
-with its endpoint, processes, Guest runtime root, and Host descriptor inventory
-fully restored. A second `HostRuntimeService` opens the same scratch state root
-around a fresh VM/session owner. Its recovery hook accepts only that one
-`creating` record and returns `DriverRecovery::none`, so retrying the unchanged
-request completes the same generation through the replacement Guest. The
-diagnostic then force-deletes it and requires the durable list to be empty.
+injects the selected Host point into `create`. The retryable error leaves the
+exact durable record and OperationId in `creating`; that VM must then exit with
+its endpoint, processes, Guest runtime root, and Host descriptor inventory fully
+restored. A second `HostRuntimeService` opens the same scratch state root around
+a fresh VM/session owner. Its recovery hook accepts only that one `creating`
+record and returns `DriverRecovery::none`, so retrying the unchanged request
+completes the same generation through the replacement Guest. The diagnostic
+then force-deletes it and requires the durable list to be empty.
 
 `a3s.oci.oci-vm-reopen-replacement.v1` retains both nested VM reports and fails
 unless their endpoint, shim PID, and direct VM-worker PID identities differ.
 It also requires generation and OperationId reuse, one replacement recovery
 call, complete force-delete cleanup, and removal of the newly created scratch
-state root. The August 10, 2026 Apple Silicon run passed with two fresh VMs.
-This closes one real `create` recovery path; the remaining transport stages and
-operations still need the same replacement treatment.
+state root. The August 10, 2026 Apple Silicon matrix passed all four Host points
+in eight fresh VMs. This closes the Host-side `create` recovery paths; the five
+Guest stages and remaining operations still need the same replacement treatment.
 
 ## Remaining workload gates
 

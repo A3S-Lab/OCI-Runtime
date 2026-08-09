@@ -24,7 +24,7 @@ pub struct OciVmReopenReplacementReport {
     pub status: CapabilityStatus,
     /// Whether the host loaded and validated the submitted OCI bundle.
     pub bundle_loaded: bool,
-    /// Operation interrupted before the first VM received a request.
+    /// Operation interrupted at the selected point in the first VM session.
     pub requested_operation: AgentOperation,
     /// Exact Host transport point used to force the owner handoff.
     pub requested_stage: AgentTransportOperationStage,
@@ -95,14 +95,17 @@ pub struct OciVmReopenReplacementReport {
 }
 
 impl OciVmReopenReplacementReport {
-    pub(crate) fn initial(platform: HostPlatform) -> Self {
+    pub(crate) fn initial(
+        platform: HostPlatform,
+        requested_stage: AgentTransportOperationStage,
+    ) -> Self {
         Self {
             schema_version: OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION.to_string(),
             platform,
             status: CapabilityStatus::Unavailable,
             bundle_loaded: false,
             requested_operation: AgentOperation::Create,
-            requested_stage: AgentTransportOperationStage::HostBeforeRequestWrite,
+            requested_stage,
             qualification_operation_id: None,
             container_id: None,
             negotiated_protocol: None,
@@ -134,8 +137,11 @@ impl OciVmReopenReplacementReport {
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-    pub(crate) fn unsupported(platform: HostPlatform) -> Self {
-        let mut report = Self::initial(platform);
+    pub(crate) fn unsupported(
+        platform: HostPlatform,
+        requested_stage: AgentTransportOperationStage,
+    ) -> Self {
+        let mut report = Self::initial(platform, requested_stage);
         report.status = CapabilityStatus::Unsupported;
         report.first_vm.status = CapabilityStatus::Unsupported;
         report.first_vm.reason = Some("the first HVF owner was not started".to_string());
@@ -159,7 +165,7 @@ impl OciVmReopenReplacementReport {
         let expected_point = AgentTransportFaultPoint::Operation {
             protocol_version: AGENT_PROTOCOL_VERSION_MAX,
             operation: AgentOperation::Create,
-            stage: AgentTransportOperationStage::HostBeforeRequestWrite,
+            stage: self.requested_stage,
         }
         .to_string();
         matches!(self.platform, HostPlatform::Macos)
@@ -167,7 +173,7 @@ impl OciVmReopenReplacementReport {
             && self.replacement_vm.platform == self.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Create
-            && self.requested_stage == AgentTransportOperationStage::HostBeforeRequestWrite
+            && self.requested_stage.is_host()
             && self.qualification_operation_id.is_some()
             && self.container_id.is_some()
             && self.negotiated_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
@@ -221,7 +227,9 @@ impl OciVmReopenReplacementReport {
 
 #[cfg(test)]
 mod tests {
-    use a3s_oci_agent_protocol::{AgentOperation, AGENT_PROTOCOL_VERSION_MAX};
+    use a3s_oci_agent_protocol::{
+        AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
+    };
     use a3s_oci_core::{CapabilityStatus, HostPlatform};
     use a3s_oci_sdk::{ContainerId, ErrorCode, Generation, OperationId};
     use serde_json::json;
@@ -231,7 +239,10 @@ mod tests {
 
     #[test]
     fn report_requires_reopen_replay_distinct_owners_and_complete_cleanup() {
-        let mut report = OciVmReopenReplacementReport::initial(HostPlatform::Macos);
+        let mut report = OciVmReopenReplacementReport::initial(
+            HostPlatform::Macos,
+            AgentTransportOperationStage::HostBeforeRequestWrite,
+        );
         report.status = CapabilityStatus::Available;
         report.bundle_loaded = true;
         report.qualification_operation_id =
@@ -265,6 +276,29 @@ mod tests {
         report.first_vm = complete_macos_bridge("first", 11, 12);
         report.replacement_vm = complete_macos_bridge("replacement", 21, 22);
         assert!(report.is_success());
+
+        for stage in [
+            AgentTransportOperationStage::HostBeforeRequestWrite,
+            AgentTransportOperationStage::HostAfterRequestWrite,
+            AgentTransportOperationStage::HostBeforeResponseRead,
+            AgentTransportOperationStage::HostAfterResponseRead,
+        ] {
+            let mut stage_report = report.clone();
+            stage_report.requested_stage = stage;
+            stage_report.injected_point = Some(format!(
+                "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
+                stage.as_str()
+            ));
+            assert!(stage_report.is_success(), "{stage_report:?}");
+        }
+
+        let mut guest_stage = report.clone();
+        guest_stage.requested_stage = AgentTransportOperationStage::GuestAfterRequestRead;
+        guest_stage.injected_point = Some(format!(
+            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
+            guest_stage.requested_stage.as_str()
+        ));
+        assert!(!guest_stage.is_success());
 
         for incomplete in [
             OciVmReopenReplacementReport {

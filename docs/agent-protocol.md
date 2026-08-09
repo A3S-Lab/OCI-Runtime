@@ -203,14 +203,14 @@ receives the original exact-generation response, and leaves the effect count at
 one. Reusing the ID with changed request content returns `Conflict`. This proves
 the protocol and session-local replay boundary.
 
-The real `a3s.oci.oci-vm-reopen-replacement.v1` gate now covers the earliest
-Host point through durable service reopen and an actual utility-VM owner
-replacement. `host-before-request-write` leaves the create journal in
-`creating`, the first authenticated VM closes completely, and a fresh VM
-receives the unchanged OperationId and generation from a newly opened
-`HostRuntimeService`. The report retains both owner identities and requires
-force-delete cleanup. In-place Guest-agent restart and the remaining
-operation/stage replacement matrix are not covered by that first slice.
+The real `a3s.oci.oci-vm-reopen-replacement.v1` gate now covers all four
+Host-side Create request/response points through durable service reopen and an
+actual utility-VM owner replacement. At each selected point the create journal
+remains in `creating`, the first authenticated VM closes completely, and a
+fresh VM receives the unchanged OperationId and generation from a newly opened
+`HostRuntimeService`. Each report retains both owner identities and requires
+force-delete cleanup. Guest-side replacement, in-place Guest-agent restart, and
+the remaining operations are not covered by this Host matrix.
 
 ## Bundle Preservation
 

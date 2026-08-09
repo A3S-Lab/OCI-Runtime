@@ -380,6 +380,9 @@ enum Command {
         /// Existing directory for two console logs and isolated durable state.
         #[arg(long, value_name = "DIR")]
         console_dir: PathBuf,
+        /// Host-side Create request/response transition to interrupt.
+        #[arg(long, value_enum, default_value = "host-before-request-write")]
+        fault_at: HostCreateFaultStageArg,
     },
 }
 
@@ -465,6 +468,29 @@ impl From<TransportFaultStageArg> for a3s_oci_runtime::AgentTransportFaultStage 
             TransportFaultStageArg::HostAfterShutdown => {
                 Self::Shutdown(a3s_oci_runtime::AgentTransportShutdownStage::HostAfterShutdown)
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum HostCreateFaultStageArg {
+    #[value(name = "host-before-request-write")]
+    BeforeRequestWrite,
+    #[value(name = "host-after-request-write")]
+    AfterRequestWrite,
+    #[value(name = "host-before-response-read")]
+    BeforeResponseRead,
+    #[value(name = "host-after-response-read")]
+    AfterResponseRead,
+}
+
+impl From<HostCreateFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
+    fn from(value: HostCreateFaultStageArg) -> Self {
+        match value {
+            HostCreateFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
+            HostCreateFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
+            HostCreateFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
+            HostCreateFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
         }
     }
 }
@@ -928,12 +954,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
             vm_rootfs,
             bundle,
             console_dir,
+            fault_at,
         } => {
-            let report = a3s_oci_runtime::oci_vm_reopen_replacement(
+            let report = a3s_oci_runtime::oci_vm_reopen_replacement_at(
                 &shim,
                 &vm_rootfs,
                 &bundle,
                 &console_dir,
+                fault_at.into(),
             )
             .await;
             let succeeded = report.is_success();

@@ -547,3 +547,36 @@ fn oci_vm_reopen_replacement_fails_closed_with_versioned_output() {
     assert_eq!(report["requested_stage"], "host-before-request-write");
     assert_ne!(report["status"], "available");
 }
+
+#[test]
+fn oci_vm_reopen_replacement_accepts_each_host_create_stage() {
+    for stage in [
+        "host-before-request-write",
+        "host-after-request-write",
+        "host-before-response-read",
+        "host-after-response-read",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+            .args([
+                "oci-vm-reopen-replacement",
+                "--shim",
+                "missing-a3s-oci-krun-shim",
+                "--vm-rootfs",
+                "missing-a3s-oci-vm-rootfs",
+                "--bundle",
+                "missing-a3s-oci-bundle",
+                "--console-dir",
+                "missing-a3s-oci-console-directory",
+                "--fault-at",
+                stage,
+            ])
+            .output()
+            .expect("OCI VM reopen-replacement command must start");
+
+        assert_eq!(output.status.code(), Some(2));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .expect("reopen-replacement diagnostic output must be valid JSON");
+        assert_eq!(report["requested_stage"], stage);
+        assert_ne!(report["status"], "available");
+    }
+}
