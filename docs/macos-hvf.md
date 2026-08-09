@@ -641,6 +641,50 @@ Both local Apple Silicon qualification and macOS CI run all three boundaries;
 the CI shell compares endpoint and guest-runtime inventories around every
 command.
 
+## Host transport interruption cleanup
+
+`oci-vm-transport-fault-cleanup` moves the first four protocol-v9 transport
+boundaries out of the in-memory matrix and into a real authenticated HVF VM.
+Each invocation interrupts `create` at one Host transition:
+
+```sh
+transport_dir="$(mktemp -d)"
+for stage in \
+  host-before-request-write \
+  host-after-request-write \
+  host-before-response-read \
+  host-after-response-read
+do
+  target/debug/a3s-oci oci-vm-transport-fault-cleanup \
+    --shim "$smoke_dir/a3s-oci-krun-shim" \
+    --vm-rootfs "$rootfs" \
+    --bundle "$bundle" \
+    --console "$transport_dir/$stage.log" \
+    --fault-at "$stage"
+done
+```
+
+The `a3s.oci.oci-vm-transport-fault-cleanup.v1` report succeeds only when the
+selected versioned point is crossed exactly once, the caller observes a
+retryable `Unavailable` error from the qualification injector, and normal OCI
+delete is never attempted. A Host disconnect during a request or response is a
+successful Guest shutdown only when the Linux executor itself completes
+cleanup; protocol errors, service failures, and cleanup failures remain
+terminal.
+
+Every run also requires the workload marker to remain absent, no new Guest
+runtime directory, a zero Guest and shim exit, exact endpoint removal, shim and
+VM-worker reap, and restoration of the complete Host descriptor inventory. The
+August 9, 2026 Apple Silicon qualification passed the four stages once and five
+more complete waves, for 24 fresh HVF VMs. The unprivileged local bundle mapped
+container UID/GID 0 to the caller-owned rootfs IDs; Runtime validation and the
+Guest executor enforced that explicit mapping without changing the checked-in
+rootful fixture.
+
+This is real VM cleanup evidence for four Host-side `create` transitions. The
+five Guest stages, two Host shutdown stages, other operations, durable
+`HostRuntimeService` reopen, and actual VM/owner replacement remain open.
+
 ## Remaining workload gates
 
 The fixed lifecycle proves the real static A3S Linux guest, transport, and

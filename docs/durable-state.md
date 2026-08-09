@@ -299,3 +299,13 @@ another driver dispatch. Stale observation targets fail before host driver
 dispatch and at the guest boundary. A fully completed delete leaves no live
 container record, so service reopen skips driver recovery and replays the
 durable delete journal directly.
+
+The first real utility-VM slice now interrupts `create` at each of the four
+Host request/response stages inside a fresh authenticated HVF VM. It retains the
+exact protocol-v9 point and retryable error, skips normal delete, and requires
+Guest executor cleanup, VM and process reap, endpoint removal, an unchanged
+runtime-root inventory, and complete Host descriptor restoration. Twenty-four
+fresh local VMs passed the four-stage gate. This proves real transport cleanup,
+not durable service reopen: the five Guest stages, two shutdown stages, other
+operations, `HostRuntimeService` reopen, and VM/owner replacement remain part
+of the persistence gate above.

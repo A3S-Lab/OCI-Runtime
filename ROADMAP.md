@@ -661,6 +661,20 @@ enforce it. No property is silently ignored.
     reject stale generations at the guest boundary and before host driver
     dispatch. This completes the portable 20-operation, 180-pair matrix without
     claiming real utility-VM replacement evidence.
+  - [x] Cross the four host-side `create` request/response transitions inside
+    fresh, authenticated utility VMs. The qualification-only client injector
+    records the exact negotiated protocol-v9 point once, returns a retryable
+    `Unavailable` result, never attempts normal delete, and requires the Guest
+    executor, VM, endpoint, shim, bridge process, workload marker, runtime root,
+    and host descriptor inventory to return to baseline. The Apple Silicon HVF
+    gate passed all four stages once and then five repeated four-stage waves
+    (24 fresh VMs total) with a valid unprivileged UID/GID mapping. The
+    machine-readable evidence schema is
+    `a3s.oci.oci-vm-transport-fault-cleanup.v1`.
+  - [ ] Extend the real-VM diagnostic through the five Guest dispatch/response
+    stages and both Host shutdown stages, then carry recovery or exact cleanup
+    through `HostRuntimeService` reopen and actual VM/owner replacement. The
+    portable matrix and the four real Host stages do not satisfy this gate.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

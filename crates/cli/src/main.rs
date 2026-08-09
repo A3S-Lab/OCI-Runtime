@@ -348,6 +348,24 @@ enum Command {
         #[arg(long, value_enum)]
         fault_after: FaultPointArg,
     },
+    /// Interrupt one real utility-VM create transport stage and prove cleanup.
+    OciVmTransportFaultCleanup {
+        /// Isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        #[arg(long, value_name = "DIR")]
+        vm_rootfs: PathBuf,
+        /// OCI bundle contained by the VM root filesystem.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// New host file that receives the guest console stream.
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+        /// Host-side create request/response transition to interrupt.
+        #[arg(long, value_enum)]
+        fault_at: HostTransportFaultStageArg,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -366,6 +384,29 @@ impl From<FaultPointArg> for a3s_oci_runtime::LifecycleFaultPoint {
             FaultPointArg::Create => Self::AfterCreate,
             FaultPointArg::Start => Self::AfterStart,
             FaultPointArg::Kill => Self::AfterKill,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum HostTransportFaultStageArg {
+    #[value(name = "host-before-request-write")]
+    BeforeRequestWrite,
+    #[value(name = "host-after-request-write")]
+    AfterRequestWrite,
+    #[value(name = "host-before-response-read")]
+    BeforeResponseRead,
+    #[value(name = "host-after-response-read")]
+    AfterResponseRead,
+}
+
+impl From<HostTransportFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
+    fn from(value: HostTransportFaultStageArg) -> Self {
+        match value {
+            HostTransportFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
+            HostTransportFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
+            HostTransportFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
+            HostTransportFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
         }
     }
 }
@@ -791,6 +832,29 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
                 &bundle,
                 &console,
                 fault_after.into(),
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::OciVmTransportFaultCleanup {
+            shim,
+            vm_rootfs,
+            bundle,
+            console,
+            fault_at,
+        } => {
+            let report = a3s_oci_runtime::oci_vm_transport_fault_cleanup(
+                &shim,
+                &vm_rootfs,
+                &bundle,
+                &console,
+                fault_at.into(),
             )
             .await;
             let succeeded = report.is_success();

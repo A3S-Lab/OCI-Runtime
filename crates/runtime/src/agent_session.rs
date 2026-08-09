@@ -1,10 +1,12 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
-    AgentClient, AgentOperation, AgentVsockEndpoint, SessionToken, AGENT_PROTOCOL_VERSION_MAX,
+    AgentClient, AgentOperation, AgentTransportFaultInjector, AgentVsockEndpoint,
+    NoAgentTransportFaultInjector, SessionToken, AGENT_PROTOCOL_VERSION_MAX,
     AGENT_SESSION_TOKEN_ENV,
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -87,6 +89,23 @@ impl UtilityVmSession {
         })
     }
 
+    pub(crate) async fn connect_with_host_fault_injector(
+        shim: &Path,
+        rootfs: &Path,
+        console: &Path,
+        faults: Arc<dyn AgentTransportFaultInjector>,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let owner =
+            AgentVmSession::connect_with_fault_injector(shim, rootfs, console, faults).await?;
+        Ok(Self {
+            client: owner.client().clone(),
+            state: Mutex::new(UtilityVmSessionState {
+                owner: Some(owner),
+                completed: None,
+            }),
+        })
+    }
+
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     pub(crate) async fn connect_with_recovery(
         shim: &Path,
@@ -156,6 +175,34 @@ impl AgentVmSession {
         runtime_share: Option<&Path>,
         console: &Path,
         recovery_report: Option<&Path>,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        Self::connect_inner(
+            shim,
+            rootfs,
+            runtime_share,
+            console,
+            recovery_report,
+            Arc::new(NoAgentTransportFaultInjector),
+        )
+        .await
+    }
+
+    async fn connect_with_fault_injector(
+        shim: &Path,
+        rootfs: &Path,
+        console: &Path,
+        faults: Arc<dyn AgentTransportFaultInjector>,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        Self::connect_inner(shim, rootfs, None, console, None, faults).await
+    }
+
+    async fn connect_inner(
+        shim: &Path,
+        rootfs: &Path,
+        runtime_share: Option<&Path>,
+        console: &Path,
+        recovery_report: Option<&Path>,
+        faults: Arc<dyn AgentTransportFaultInjector>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
         let platform = HostPlatform::current();
         let mut report = AgentVmSmokeReport::initial(platform);
@@ -319,7 +366,12 @@ impl AgentVmSession {
             }
         };
 
-        let client = match timeout(NEGOTIATION_TIMEOUT, AgentClient::connect(stream, token)).await {
+        let client = match timeout(
+            NEGOTIATION_TIMEOUT,
+            AgentClient::connect_with_fault_injector(stream, token, faults),
+        )
+        .await
+        {
             Ok(Ok(client)) => client,
             Ok(Err(error)) => {
                 let completed = running.terminate_and_collect().await;

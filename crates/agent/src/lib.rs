@@ -363,18 +363,40 @@ pub fn run(token: SessionToken) -> Result<()> {
         let cleanup_result = service.shutdown_with_recovery().await.and_then(|records| {
             write_recovery_report(recovery_path.as_deref(), &recovery_token, records)
         });
-        match (serve_result, cleanup_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(cleanup)) => Err(Error::new(
-                error.code,
-                format!("{error}; guest executor cleanup also failed: {cleanup}"),
-            )
-            .for_operation("run-guest-agent")
-            .retryable(error.retryable)),
-        }
+        finish_guest_session(serve_result, cleanup_result)
     })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn finish_guest_session(serve_result: Result<()>, cleanup_result: Result<()>) -> Result<()> {
+    match (serve_result, cleanup_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) if is_clean_host_disconnect(&error) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(cleanup)) => Err(Error::new(
+            error.code,
+            format!("{error}; guest executor cleanup also failed: {cleanup}"),
+        )
+        .for_operation("run-guest-agent")
+        .retryable(error.retryable)),
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_clean_host_disconnect(error: &Error) -> bool {
+    error.code == ErrorCode::Unavailable
+        && error.retryable
+        && matches!(
+            error.operation.as_deref(),
+            Some(
+                "read-agent-frame-header"
+                    | "read-agent-frame-payload"
+                    | "write-agent-frame-header"
+                    | "write-agent-frame-payload"
+                    | "flush-agent-frame"
+            )
+        )
 }
 
 #[cfg(target_os = "linux")]
@@ -512,8 +534,12 @@ mod tests {
     use std::path::Path;
 
     use a3s_oci_agent_protocol::GuestAgentService;
+    use a3s_oci_sdk::{Error, ErrorCode};
 
-    use super::{validate_recovery_report_path, validate_token_path, NegotiationOnlyAgent};
+    use super::{
+        finish_guest_session, validate_recovery_report_path, validate_token_path,
+        NegotiationOnlyAgent,
+    };
 
     #[test]
     fn bootstrap_service_does_not_claim_executor_operations() {
@@ -567,6 +593,47 @@ mod tests {
                 validate_recovery_report_path(Path::new(path)).is_err(),
                 "{path}"
             );
+        }
+    }
+
+    #[test]
+    fn clean_transport_disconnect_succeeds_only_after_executor_cleanup() {
+        for operation in [
+            "read-agent-frame-header",
+            "read-agent-frame-payload",
+            "write-agent-frame-header",
+            "write-agent-frame-payload",
+            "flush-agent-frame",
+        ] {
+            let disconnected = Error::new(ErrorCode::Unavailable, "host disconnected")
+                .for_operation(operation)
+                .retryable(true);
+            assert!(finish_guest_session(Err(disconnected), Ok(())).is_ok());
+        }
+
+        let cleanup = Error::new(ErrorCode::Internal, "cleanup failed")
+            .for_operation("shutdown-guest-executor");
+        let disconnected = Error::new(ErrorCode::Unavailable, "host disconnected")
+            .for_operation("write-agent-frame-payload")
+            .retryable(true);
+        let combined = finish_guest_session(Err(disconnected), Err(cleanup))
+            .expect_err("cleanup failure must remain visible");
+        assert_eq!(combined.operation.as_deref(), Some("run-guest-agent"));
+        assert!(combined.message.contains("cleanup also failed"));
+    }
+
+    #[test]
+    fn protocol_and_service_failures_are_not_normalized_as_disconnects() {
+        for error in [
+            Error::new(ErrorCode::InvalidArgument, "invalid frame")
+                .for_operation("read-agent-frame-payload"),
+            Error::new(ErrorCode::Unavailable, "service unavailable")
+                .for_operation("guest-create")
+                .retryable(true),
+            Error::new(ErrorCode::Unavailable, "terminal transport failure")
+                .for_operation("read-agent-frame-header"),
+        ] {
+            assert!(finish_guest_session(Err(error), Ok(())).is_err());
         }
     }
 }

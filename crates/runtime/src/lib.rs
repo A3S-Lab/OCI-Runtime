@@ -51,6 +51,7 @@ mod rootfs_enforcement;
 mod service;
 mod soak_report;
 mod state;
+mod transport_cleanup_report;
 mod utility_vm_soak_report;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_driver;
@@ -61,6 +62,7 @@ mod windows_security;
 #[cfg(windows)]
 mod windows_service;
 
+pub use a3s_oci_agent_protocol::AgentTransportOperationStage;
 #[cfg(windows)]
 pub use agent_pipe::WindowsAgentPipeListener;
 pub use agent_smoke::agent_vm_smoke;
@@ -109,7 +111,7 @@ pub use native_smoke::{
 };
 pub use oci_smoke::{
     macos_hvf_soak, oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_smoke,
-    windows_oci_vm_multi_container_smoke,
+    oci_vm_transport_fault_cleanup, windows_oci_vm_multi_container_smoke,
 };
 pub use report::{
     AgentVmSmokeReport, HvfSmokeReport, MacosHostCleanupEvidence, NativeLinuxRootlessSmokeReport,
@@ -121,6 +123,10 @@ pub use soak_report::{
     MAX_SOAK_CONCURRENT_CONTAINERS, MAX_SOAK_ITERATIONS, MAX_SOAK_OPERATION_TIMEOUT_MS,
     MIN_SOAK_CONCURRENT_CONTAINERS, MIN_SOAK_OPERATION_TIMEOUT_MS,
     NATIVE_LINUX_SOAK_SCHEMA_VERSION,
+};
+pub use transport_cleanup_report::{
+    is_supported_host_stage, OciVmTransportFaultCleanupReport,
+    OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION,
 };
 pub use utility_vm_soak_report::{
     MacosHvfSoakConfig, MacosHvfSoakReport, MACOS_HVF_SOAK_CONCURRENT_CONTAINERS,

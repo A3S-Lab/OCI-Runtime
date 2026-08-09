@@ -19,6 +19,7 @@ mod lifecycle;
 mod multi_container;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod soak;
+mod transport_fault_cleanup;
 
 use lifecycle::{best_effort_delete, exercise};
 
@@ -30,6 +31,16 @@ pub(super) async fn run_fault_cleanup(
     fault: crate::LifecycleFaultPoint,
 ) -> crate::OciVmFaultCleanupReport {
     fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, fault).await
+}
+
+pub(super) async fn run_transport_fault_cleanup(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_directory: &Path,
+    console: &Path,
+    stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
+) -> crate::OciVmTransportFaultCleanupReport {
+    transport_fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, stage).await
 }
 
 pub(super) async fn run_multi_container(

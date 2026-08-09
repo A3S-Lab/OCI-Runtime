@@ -1,11 +1,13 @@
 use std::fmt;
 
 use a3s_oci_sdk::Result;
+use serde::{Deserialize, Serialize};
 
 use crate::AgentOperation;
 
 /// One host/guest operation transition that qualification can fault-inject.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AgentTransportOperationStage {
     /// Host has not started writing the request frame.
     HostBeforeRequestWrite,
@@ -42,7 +44,8 @@ impl AgentTransportOperationStage {
         Self::GuestAfterResponseWrite,
     ];
 
-    const fn as_str(self) -> &'static str {
+    /// Stable name used in retained qualification reports and CLI arguments.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::HostBeforeRequestWrite => "host-before-request-write",
             Self::HostAfterRequestWrite => "host-after-request-write",
@@ -58,7 +61,8 @@ impl AgentTransportOperationStage {
 }
 
 /// Clone-wide host shutdown transitions exposed to qualification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AgentTransportShutdownStage {
     /// Host has removed the stream from clone-shared ownership but has not
     /// requested an orderly transport shutdown.
@@ -72,7 +76,8 @@ impl AgentTransportShutdownStage {
     /// Complete shutdown transition registry.
     pub const ALL: [Self; 2] = [Self::HostBeforeShutdown, Self::HostAfterShutdown];
 
-    const fn as_str(self) -> &'static str {
+    /// Stable name used in retained qualification reports and CLI arguments.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::HostBeforeShutdown => "host-before-shutdown",
             Self::HostAfterShutdown => "host-after-shutdown",

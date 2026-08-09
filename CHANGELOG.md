@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Real utility-VM transport interruption evidence for the four Host-side
+  protocol-v9 `create` transitions. The new
+  `oci-vm-transport-fault-cleanup` command injects one exact negotiated point,
+  requires the caller to observe a retryable `Unavailable` result without a
+  normal delete, and accepts Guest connection loss only after executor cleanup
+  succeeds. Its versioned report also requires the workload marker and Guest
+  runtime root to be absent, the VM endpoint, shim, and bridge process to be
+  reaped, and the Host descriptor inventory to return to baseline. Apple
+  Silicon HVF passed the four stages once plus five repeated waves (24 fresh
+  VMs). Guest-side stages, shutdown stages, durable Host reopen, and VM/owner
+  replacement remain open.
 - Native Linux owner-death recovery with fail-closed, PID-reuse-safe cleanup.
   Every executor instance and exact container generation now persists a
   private, versioned recovery record bound to the owner, launcher, and init

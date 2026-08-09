@@ -400,6 +400,16 @@ mutations produce one effect and reject changed retries. This completes the
 portable in-memory matrix, not the required real utility-VM replacement and
 complete transition matrix.
 
+A separate real-HVF diagnostic now crosses the four Host-side `create` stages
+inside fresh authenticated protocol-v9 VMs. Each stage must fire once, return a
+retryable `Unavailable` error, avoid normal delete, keep the workload marker
+absent, and leave no Guest runtime root, endpoint, shim, VM worker, or Host
+descriptor drift. A request/response transport disconnect counts as a clean
+Guest exit only after executor cleanup succeeds; malformed protocol input,
+service errors, and cleanup errors remain failures. The five Guest stages, two
+Host shutdown stages, durable Host reopen, and replacement VM/owner paths are
+still open.
+
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,
