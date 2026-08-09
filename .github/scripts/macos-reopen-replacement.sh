@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
+signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
+bundle_dir="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
+marker="$bundle_dir/rootfs/.a3s-oci-create-start-smoke"
+console_root="$RUNNER_TEMP/a3s-oci-reopen-replacement"
+support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+mkdir -p "$console_root/create" "$console_root/state"
+
+endpoint_baseline="$({
+  find /private/tmp -maxdepth 1 -name 'a3s-oci-agent-*' -print | sort
+})"
+runtime_baseline="$({
+  find "$rootfs_dir/run" -maxdepth 1 -name 'a3s-oci-agent-*' -print | sort
+})"
+
+stages=(
+  host-before-request-write
+  host-after-request-write
+  host-before-response-read
+  host-after-response-read
+  guest-after-request-read
+  guest-before-dispatch
+  guest-after-dispatch
+  guest-before-response-write
+  guest-after-response-write
+)
+
+hardware_available() {
+  [[ "$(uname -m)" == "arm64" && "$support" == "1" ]]
+}
+
+assert_cleanup_baseline() {
+  local stage_console_dir="$1"
+  local endpoint_after runtime_after
+  endpoint_after="$({
+    find /private/tmp -maxdepth 1 -name 'a3s-oci-agent-*' -print | sort
+  })"
+  runtime_after="$({
+    find "$rootfs_dir/run" -maxdepth 1 -name 'a3s-oci-agent-*' -print | sort
+  })"
+  test "$endpoint_after" = "$endpoint_baseline"
+  test "$runtime_after" = "$runtime_baseline"
+  test ! -e "$marker"
+  test -z "$(find "$stage_console_dir" -maxdepth 1 -name '*-state' -print)"
+}
+
+run_create_stage() {
+  local fault_stage="$1"
+  local stage_console_dir="$console_root/create/$fault_stage"
+  local output gate_exit_code
+  mkdir "$stage_console_dir"
+  set +e
+  output="$(
+    target/debug/a3s-oci oci-vm-reopen-replacement \
+      --operation create \
+      --shim "$signed_dir/a3s-oci-krun-shim" \
+      --vm-rootfs "$rootfs_dir" \
+      --bundle "$bundle_dir" \
+      --console-dir "$stage_console_dir" \
+      --fault-at "$fault_stage"
+  )"
+  gate_exit_code=$?
+  set -e
+  printf '%s\n' "$output"
+
+  if hardware_available; then
+    test "$gate_exit_code" -eq 0
+    jq --exit-status --arg stage "$fault_stage" \
+      '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v2"
+       and .platform == "macos" and .status == "available"
+       and .bundle_loaded
+       and .requested_operation == "create"
+       and .requested_stage == $stage
+       and (.qualification_operation_id | startswith("reopen-"))
+       and (.container_id | startswith("smoke-reopen-"))
+       and .negotiated_protocol == 9
+       and .injected_point == ("agent-v9.create-" + $stage)
+       and .fault_crossings == 1
+       and .first_create_error_code == "unavailable"
+       and .first_create_error_retryable
+       and (if ($stage | startswith("guest-")) then
+              (.first_create_error_operation
+               | IN("agent-protocol",
+                    "read-agent-frame-header",
+                    "read-agent-frame-payload",
+                    "write-agent-frame-header",
+                    "write-agent-frame-payload",
+                    "flush-agent-frame"))
+              and .guest_evidence_verified
+              and (.guest_evidence_operation_id
+                   == .qualification_operation_id)
+              and (if $stage == "guest-after-response-write" then
+                     .first_create_response_received
+                     and .disconnect_probe_attempted
+                     and (.durable_creating_retained | not)
+                     and .durable_created_retained
+                     and (.first_created_pid > 0)
+                     and .replacement_rehydrated_created_record
+                   else
+                     (.first_create_response_received | not)
+                     and (.disconnect_probe_attempted | not)
+                     and .durable_creating_retained
+                     and (.durable_created_retained | not)
+                     and (.first_created_pid == null)
+                     and (.replacement_rehydrated_created_record | not)
+                   end)
+            else
+              .first_create_error_operation
+                == "oci-vm-transport-qualification-fault"
+              and (.first_create_response_received | not)
+              and (.disconnect_probe_attempted | not)
+              and .durable_creating_retained
+              and (.durable_created_retained | not)
+              and (.first_created_pid == null)
+              and (.guest_evidence_verified | not)
+              and (.guest_evidence_operation_id == null)
+              and (.replacement_rehydrated_created_record | not)
+            end)
+       and .generation_before_reopen == 1
+       and .host_service_reopened
+       and .replacement_recovery_calls == 1
+       and .create_completed_after_reopen
+       and .generation_after_reopen == .generation_before_reopen
+       and (.replacement_created_pid > 0)
+       and .same_generation_reused
+       and .same_operation_id_reused
+       and .force_delete_completed
+       and .durable_records_empty
+       and .marker_absent_after_cleanup
+       and .first_guest_runtime_clean
+       and .replacement_guest_runtime_clean
+       and .owners_distinct
+       and .state_root_removed
+       and .first_vm.status == "available"
+       and .replacement_vm.status == "available"
+       and .first_vm.selected_protocol == 9
+       and .replacement_vm.selected_protocol == 9
+       and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
+       and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
+       and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)
+       and .first_vm.macos_cleanup.endpoint_removed
+       and .first_vm.macos_cleanup.shim_reaped
+       and .first_vm.macos_cleanup.bridge_reaped
+       and .first_vm.macos_cleanup.descriptor_inventory_restored
+       and (.first_vm.macos_cleanup.open_descriptors_before
+            == .first_vm.macos_cleanup.open_descriptors_after)
+       and .replacement_vm.macos_cleanup.endpoint_removed
+       and .replacement_vm.macos_cleanup.shim_reaped
+       and .replacement_vm.macos_cleanup.bridge_reaped
+       and .replacement_vm.macos_cleanup.descriptor_inventory_restored
+       and (.replacement_vm.macos_cleanup.open_descriptors_before
+            == .replacement_vm.macos_cleanup.open_descriptors_after)
+       and (.reason == null)' <<<"$output" >/dev/null
+  else
+    test "$gate_exit_code" -eq 2
+    jq --exit-status --arg stage "$fault_stage" \
+      '.schema_version == "a3s.oci.oci-vm-reopen-replacement.v2"
+       and .platform == "macos"
+       and .status != "available"
+       and .requested_operation == "create"
+       and .requested_stage == $stage
+       and (.reason | length > 0)' <<<"$output" >/dev/null
+  fi
+  assert_cleanup_baseline "$stage_console_dir"
+}
+
+run_state_stage() {
+  local fault_stage="$1"
+  local stage_console_dir="$console_root/state/$fault_stage"
+  local output gate_exit_code
+  mkdir "$stage_console_dir"
+  set +e
+  output="$(
+    target/debug/a3s-oci oci-vm-reopen-replacement \
+      --operation state \
+      --shim "$signed_dir/a3s-oci-krun-shim" \
+      --vm-rootfs "$rootfs_dir" \
+      --bundle "$bundle_dir" \
+      --console-dir "$stage_console_dir" \
+      --fault-at "$fault_stage"
+  )"
+  gate_exit_code=$?
+  set -e
+  printf '%s\n' "$output"
+
+  if hardware_available; then
+    test "$gate_exit_code" -eq 0
+    jq --exit-status --arg stage "$fault_stage" \
+      '.schema_version
+           == "a3s.oci.oci-vm-operation-reopen-replacement.v1"
+       and .platform == "macos" and .status == "available"
+       and .bundle_loaded
+       and .requested_operation == "state"
+       and .requested_stage == $stage
+       and (.qualification_operation_id | startswith("state-reopen-"))
+       and (.setup_create_operation_id | startswith("state-reopen-"))
+       and (.qualification_operation_id != .setup_create_operation_id)
+       and (.container_id | startswith("smoke-state-reopen-"))
+       and .negotiated_protocol == 9
+       and .injected_point == ("agent-v9.state-" + $stage)
+       and .fault_crossings == 1
+       and .first_operation_error_code == "unavailable"
+       and .first_operation_error_retryable
+       and (if ($stage | startswith("guest-")) then
+              (.first_operation_error_operation
+               | IN("agent-protocol",
+                    "read-agent-frame-header",
+                    "read-agent-frame-payload",
+                    "write-agent-frame-header",
+                    "write-agent-frame-payload",
+                    "flush-agent-frame"))
+              and .guest_evidence_verified
+              and (.guest_evidence_operation_id
+                   == .qualification_operation_id)
+            else
+              .first_operation_error_operation
+                == "oci-vm-transport-qualification-fault"
+              and (.guest_evidence_verified | not)
+              and (.guest_evidence_operation_id == null)
+            end)
+       and (if $stage == "guest-after-response-write" then
+              .first_operation_response_received
+              and .disconnect_probe_attempted
+              and .first_response_matches_durable_record
+            else
+              (.first_operation_response_received | not)
+              and (.disconnect_probe_attempted | not)
+              and (.first_response_matches_durable_record | not)
+            end)
+       and .durable_created_retained
+       and (.first_created_pid > 0)
+       and .generation_before_reopen == 1
+       and .host_service_reopened
+       and .replacement_recovery_calls == 1
+       and .replacement_rehydrated_created_record
+       and .operation_completed_after_reopen
+       and .generation_after_reopen == .generation_before_reopen
+       and (.replacement_created_pid > 0)
+       and .replacement_response_matches_durable_record
+       and .same_generation_reused
+       and .setup_create_identity_reused
+       and .force_delete_completed
+       and .durable_records_empty
+       and .marker_absent_after_cleanup
+       and .first_guest_runtime_clean
+       and .replacement_guest_runtime_clean
+       and .owners_distinct
+       and .state_root_removed
+       and .first_vm.status == "available"
+       and .replacement_vm.status == "available"
+       and .first_vm.selected_protocol == 9
+       and .replacement_vm.selected_protocol == 9
+       and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
+       and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
+       and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)
+       and .first_vm.macos_cleanup.endpoint_removed
+       and .first_vm.macos_cleanup.shim_reaped
+       and .first_vm.macos_cleanup.bridge_reaped
+       and .first_vm.macos_cleanup.descriptor_inventory_restored
+       and (.first_vm.macos_cleanup.open_descriptors_before
+            == .first_vm.macos_cleanup.open_descriptors_after)
+       and .replacement_vm.macos_cleanup.endpoint_removed
+       and .replacement_vm.macos_cleanup.shim_reaped
+       and .replacement_vm.macos_cleanup.bridge_reaped
+       and .replacement_vm.macos_cleanup.descriptor_inventory_restored
+       and (.replacement_vm.macos_cleanup.open_descriptors_before
+            == .replacement_vm.macos_cleanup.open_descriptors_after)
+       and (.reason == null)' <<<"$output" >/dev/null
+  else
+    test "$gate_exit_code" -eq 2
+    jq --exit-status --arg stage "$fault_stage" \
+      '.schema_version
+           == "a3s.oci.oci-vm-operation-reopen-replacement.v1"
+       and .platform == "macos"
+       and .status != "available"
+       and .requested_operation == "state"
+       and .requested_stage == $stage
+       and (.reason | length > 0)' <<<"$output" >/dev/null
+  fi
+  assert_cleanup_baseline "$stage_console_dir"
+}
+
+for fault_stage in "${stages[@]}"; do
+  run_create_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_state_stage "$fault_stage"
+done

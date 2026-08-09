@@ -359,6 +359,35 @@ impl AgentOperation {
             Self::Filesystem => "filesystem",
         }
     }
+
+    /// Whether this request must carry an idempotency identity at `protocol_version`.
+    ///
+    /// Observation and wait operations are intentionally context-free. Process-I/O
+    /// mutations gained mandatory operation contexts in protocol version 8; every
+    /// other mutation has carried one since its introduction.
+    #[must_use]
+    pub const fn requires_operation_id(self, protocol_version: u16) -> bool {
+        match self {
+            Self::State
+            | Self::Wait
+            | Self::WaitProcess
+            | Self::Processes
+            | Self::Stats
+            | Self::ReadOutput => false,
+            Self::WriteStdin | Self::CloseStdin | Self::Resize => protocol_version >= 8,
+            Self::Create
+            | Self::Start
+            | Self::Kill
+            | Self::Delete
+            | Self::Exec
+            | Self::SignalProcess
+            | Self::Pause
+            | Self::Resume
+            | Self::Update
+            | Self::File
+            | Self::Filesystem => true,
+        }
+    }
 }
 
 impl fmt::Display for AgentOperation {

@@ -243,8 +243,8 @@ pub trait AgentTransportFaultInjector: fmt::Debug + Send + Sync {
     /// Return an injected error at `point`, or allow the transition to proceed.
     fn check(&self, point: AgentTransportFaultPoint) -> Result<()>;
 
-    /// Check a guest transition with the validated idempotency identity carried
-    /// by the request, when the operation is mutating.
+    /// Check a guest transition after the complete request has validated, with
+    /// its idempotency identity when the operation carries one.
     ///
     /// Existing injectors remain operation-stage based. Real-VM guest
     /// qualification overrides this hook so an unrelated request cannot cross

@@ -9,6 +9,7 @@ use thiserror::Error;
 
 #[cfg(target_os = "linux")]
 mod native_service;
+mod reopen_replacement;
 
 #[derive(Debug, Parser)]
 #[command(name = "a3s-oci", version, about)]
@@ -366,24 +367,8 @@ enum Command {
         #[arg(long, value_enum)]
         fault_at: TransportFaultStageArg,
     },
-    /// Reopen durable create state through a fresh macOS HVF VM owner.
-    OciVmReopenReplacement {
-        /// Isolated, entitlement-signed libkrun shim executable.
-        #[arg(long, value_name = "FILE")]
-        shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
-        #[arg(long, value_name = "DIR")]
-        vm_rootfs: PathBuf,
-        /// OCI bundle contained by the VM root filesystem.
-        #[arg(long, value_name = "DIR")]
-        bundle: PathBuf,
-        /// Existing directory for two console logs and isolated durable state.
-        #[arg(long, value_name = "DIR")]
-        console_dir: PathBuf,
-        /// Host- or Guest-side Create request/response transition to interrupt.
-        #[arg(long, value_enum, default_value = "host-before-request-write")]
-        fault_at: CreateReopenFaultStageArg,
-    },
+    /// Reopen durable operation state through a fresh macOS HVF VM owner.
+    OciVmReopenReplacement(reopen_replacement::Args),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -468,44 +453,6 @@ impl From<TransportFaultStageArg> for a3s_oci_runtime::AgentTransportFaultStage 
             TransportFaultStageArg::HostAfterShutdown => {
                 Self::Shutdown(a3s_oci_runtime::AgentTransportShutdownStage::HostAfterShutdown)
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum CreateReopenFaultStageArg {
-    #[value(name = "host-before-request-write")]
-    BeforeRequestWrite,
-    #[value(name = "host-after-request-write")]
-    AfterRequestWrite,
-    #[value(name = "host-before-response-read")]
-    BeforeResponseRead,
-    #[value(name = "host-after-response-read")]
-    AfterResponseRead,
-    #[value(name = "guest-after-request-read")]
-    GuestAfterRequestRead,
-    #[value(name = "guest-before-dispatch")]
-    GuestBeforeDispatch,
-    #[value(name = "guest-after-dispatch")]
-    GuestAfterDispatch,
-    #[value(name = "guest-before-response-write")]
-    GuestBeforeResponseWrite,
-    #[value(name = "guest-after-response-write")]
-    GuestAfterResponseWrite,
-}
-
-impl From<CreateReopenFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
-    fn from(value: CreateReopenFaultStageArg) -> Self {
-        match value {
-            CreateReopenFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
-            CreateReopenFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
-            CreateReopenFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
-            CreateReopenFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
-            CreateReopenFaultStageArg::GuestAfterRequestRead => Self::GuestAfterRequestRead,
-            CreateReopenFaultStageArg::GuestBeforeDispatch => Self::GuestBeforeDispatch,
-            CreateReopenFaultStageArg::GuestAfterDispatch => Self::GuestAfterDispatch,
-            CreateReopenFaultStageArg::GuestBeforeResponseWrite => Self::GuestBeforeResponseWrite,
-            CreateReopenFaultStageArg::GuestAfterResponseWrite => Self::GuestAfterResponseWrite,
         }
     }
 }
@@ -964,29 +911,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
                 ExitCode::from(2)
             })
         }
-        Command::OciVmReopenReplacement {
-            shim,
-            vm_rootfs,
-            bundle,
-            console_dir,
-            fault_at,
-        } => {
-            let report = a3s_oci_runtime::oci_vm_reopen_replacement_at(
-                &shim,
-                &vm_rootfs,
-                &bundle,
-                &console_dir,
-                fault_at.into(),
-            )
-            .await;
-            let succeeded = report.is_success();
-            write_json(&report)?;
-            Ok(if succeeded {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            })
-        }
+        Command::OciVmReopenReplacement(arguments) => reopen_replacement::run(arguments).await,
     }
 }
 

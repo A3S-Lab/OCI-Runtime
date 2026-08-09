@@ -198,9 +198,12 @@ where
                 ResponseOutcome::Failed {
                     error: error.clone(),
                 },
-                operation,
-                operation_id.as_ref(),
-                faults.as_ref(),
+                ResponseFaultContext {
+                    operation,
+                    operation_id: operation_id.as_ref(),
+                    request_validated: false,
+                    faults: faults.as_ref(),
+                },
             )
             .await?;
             if terminal {
@@ -250,9 +253,12 @@ where
             selected_version,
             envelope.request_id,
             outcome,
-            operation,
-            operation_id.as_ref(),
-            faults.as_ref(),
+            ResponseFaultContext {
+                operation,
+                operation_id: operation_id.as_ref(),
+                request_validated: true,
+                faults: faults.as_ref(),
+            },
         )
         .await?;
     }
@@ -370,30 +376,52 @@ async fn write_response_with_fault_injector<T>(
     version: u16,
     request_id: u64,
     outcome: ResponseOutcome,
-    operation: crate::AgentOperation,
-    operation_id: Option<&a3s_oci_sdk::OperationId>,
-    faults: &dyn AgentTransportFaultInjector,
+    fault_context: ResponseFaultContext<'_>,
 ) -> Result<()>
 where
     T: AsyncWrite + Unpin,
 {
-    faults.check_operation(
+    check_response_fault(
+        fault_context.faults,
         operation_fault_point(
             version,
-            operation,
+            fault_context.operation,
             AgentTransportOperationStage::GuestBeforeResponseWrite,
         ),
-        operation_id,
+        fault_context.operation_id,
+        fault_context.request_validated,
     )?;
     write_response(stream, version, request_id, outcome).await?;
-    faults.check_operation(
+    check_response_fault(
+        fault_context.faults,
         operation_fault_point(
             version,
-            operation,
+            fault_context.operation,
             AgentTransportOperationStage::GuestAfterResponseWrite,
         ),
-        operation_id,
+        fault_context.operation_id,
+        fault_context.request_validated,
     )
+}
+
+struct ResponseFaultContext<'a> {
+    operation: crate::AgentOperation,
+    operation_id: Option<&'a a3s_oci_sdk::OperationId>,
+    request_validated: bool,
+    faults: &'a dyn AgentTransportFaultInjector,
+}
+
+fn check_response_fault(
+    faults: &dyn AgentTransportFaultInjector,
+    point: AgentTransportFaultPoint,
+    operation_id: Option<&a3s_oci_sdk::OperationId>,
+    request_validated: bool,
+) -> Result<()> {
+    if request_validated {
+        faults.check_operation(point, operation_id)
+    } else {
+        faults.check(point)
+    }
 }
 
 const fn operation_fault_point(

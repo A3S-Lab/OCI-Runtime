@@ -28,6 +28,7 @@ const MAX_GUEST_CONSOLE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
 pub(super) struct HostTransportFault {
+    operation: AgentOperation,
     stage: AgentTransportFaultStage,
     crossings: AtomicU32,
     protocol_version: AtomicU16,
@@ -35,7 +36,15 @@ pub(super) struct HostTransportFault {
 
 impl HostTransportFault {
     pub(super) const fn new(stage: AgentTransportFaultStage) -> Self {
+        Self::for_operation(AgentOperation::Create, stage)
+    }
+
+    pub(super) const fn for_operation(
+        operation: AgentOperation,
+        stage: AgentTransportFaultStage,
+    ) -> Self {
         Self {
+            operation,
             stage,
             crossings: AtomicU32::new(0),
             protocol_version: AtomicU16::new(0),
@@ -58,7 +67,7 @@ impl HostTransportFault {
             match self.stage {
                 AgentTransportFaultStage::Operation(stage) => AgentTransportFaultPoint::Operation {
                     protocol_version,
-                    operation: AgentOperation::Create,
+                    operation: self.operation,
                     stage,
                 },
                 AgentTransportFaultStage::Shutdown(stage) => AgentTransportFaultPoint::Shutdown {
@@ -78,10 +87,10 @@ impl AgentTransportFaultInjector for HostTransportFault {
                 AgentTransportFaultStage::Operation(selected),
                 AgentTransportFaultPoint::Operation {
                     protocol_version,
-                    operation: AgentOperation::Create,
+                    operation,
                     stage,
                 },
-            ) if stage == selected => protocol_version,
+            ) if operation == self.operation && stage == selected => protocol_version,
             (
                 AgentTransportFaultStage::Shutdown(selected),
                 AgentTransportFaultPoint::Shutdown {
@@ -605,6 +614,30 @@ mod tests {
             Some(AGENT_PROTOCOL_VERSION_MAX)
         );
         assert_eq!(injector.injected_point(), Some(target.to_string()));
+    }
+
+    #[test]
+    fn real_host_fault_injector_can_select_a_context_free_state_stage() {
+        let selected = AgentTransportOperationStage::HostAfterRequestWrite;
+        let injector = HostTransportFault::for_operation(AgentOperation::State, selected.into());
+        let create = AgentTransportFaultPoint::Operation {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            operation: AgentOperation::Create,
+            stage: selected,
+        };
+        assert!(injector.check(create).is_ok());
+
+        let state = AgentTransportFaultPoint::Operation {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            operation: AgentOperation::State,
+            stage: selected,
+        };
+        let error = injector
+            .check(state)
+            .expect_err("selected State point must fail once");
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert!(error.retryable);
+        assert_eq!(injector.injected_point(), Some(state.to_string()));
     }
 
     #[test]

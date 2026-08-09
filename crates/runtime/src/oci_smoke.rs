@@ -6,7 +6,8 @@ use a3s_oci_core::HostPlatform;
 use crate::report::OciVmSmokeReport;
 use crate::{
     LifecycleFaultPoint, MacosHvfSoakConfig, MacosHvfSoakReport, OciVmFaultCleanupReport,
-    OciVmMultiContainerSmokeReport, OciVmReopenReplacementReport, OciVmTransportFaultCleanupReport,
+    OciVmMultiContainerSmokeReport, OciVmOperationReopenReplacementReport,
+    OciVmReopenReplacementReport, OciVmTransportFaultCleanupReport,
     WindowsOciVmMultiContainerSmokeReport,
 };
 
@@ -243,5 +244,32 @@ pub async fn oci_vm_reopen_replacement_at(
     {
         let _ = (shim, vm_rootfs, bundle, console_directory);
         OciVmReopenReplacementReport::unsupported(HostPlatform::current(), stage)
+    }
+}
+
+/// Reissue one interrupted State query through a replacement macOS HVF owner.
+///
+/// The selected Host or Guest transition interrupts a query against an exact
+/// durable `created` generation. The first VM then closes completely, a fresh
+/// owner rebuilds that pre-start process, and State must observe the recovered
+/// record before force-delete cleanup.
+#[must_use]
+pub async fn oci_vm_state_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_state_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_state(HostPlatform::current(), stage)
     }
 }

@@ -85,9 +85,11 @@ impl AgentTransportFaultInjector for GuestTransportQualificationFault {
         else {
             return Ok(());
         };
+        let identity_matches = operation_id == Some(self.request.operation_id())
+            || (operation_id.is_none() && !operation.requires_operation_id(protocol_version));
         if operation != self.request.operation()
             || stage != self.request.stage()
-            || operation_id != Some(self.request.operation_id())
+            || !identity_matches
         {
             return Ok(());
         }
@@ -207,5 +209,41 @@ mod tests {
         let cleanup = Error::new(ErrorCode::Internal, "cleanup failed")
             .for_operation("shutdown-guest-executor");
         assert!(finish(Err(injected), Err(cleanup), &exact_fault).is_err());
+    }
+
+    #[test]
+    fn context_free_observation_uses_the_handoff_nonce_and_exact_stage() {
+        let operation_id = OperationId::new("guest-qualification-state").expect("operation ID");
+        let selected = AgentTransportOperationStage::GuestAfterDispatch;
+        let request =
+            AgentTransportQualificationRequest::new(operation_id, AgentOperation::State, selected)
+                .expect("qualification request");
+        let fault = GuestTransportQualificationFault::new(request);
+        let unrelated_operation = AgentTransportFaultPoint::Operation {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            operation: AgentOperation::Wait,
+            stage: selected,
+        };
+        assert!(fault.check_operation(unrelated_operation, None).is_ok());
+        let unrelated_stage = AgentTransportFaultPoint::Operation {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            operation: AgentOperation::State,
+            stage: AgentTransportOperationStage::GuestBeforeDispatch,
+        };
+        assert!(fault.check_operation(unrelated_stage, None).is_ok());
+
+        let target = AgentTransportFaultPoint::Operation {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            operation: AgentOperation::State,
+            stage: selected,
+        };
+        let error = fault
+            .check_operation(target, None)
+            .expect_err("exact context-free observation must cross the fault once");
+        assert_eq!(
+            error.operation.as_deref(),
+            Some(AGENT_TRANSPORT_QUALIFICATION_FAULT_OPERATION)
+        );
+        assert!(fault.check_operation(target, None).is_ok());
     }
 }

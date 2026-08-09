@@ -1,54 +1,44 @@
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::path::Path;
+use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
     AgentOperation, AgentTransportFaultInjector, AgentTransportFaultStage,
-    AgentTransportOperationStage, AgentTransportQualificationRequest, GuestAgentService,
-    AGENT_PROTOCOL_VERSION_MAX,
+    AgentTransportOperationStage, AgentTransportQualificationRequest, AGENT_PROTOCOL_VERSION_MAX,
 };
-use a3s_oci_core::{
-    CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, HostPlatform, IsolationClass,
-};
+use a3s_oci_core::{CapabilityStatus, DriverKind, HostPlatform, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, IoMode, IsolationRequest, ListRequest, OciBundle,
-    OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, StateRequest,
+    ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
+    IoMode, IsolationRequest, ListRequest, OciBundle, OciRuntimeService, OperationContext,
+    OperationId, ProcessIo, StateRequest,
 };
 use tokio::time::timeout;
 
-use super::transport_fault_cleanup::{read_guest_qualification_evidence, HostTransportFault};
+use super::super::transport_fault_cleanup::{
+    read_guest_qualification_evidence, HostTransportFault,
+};
+use super::super::{
+    canonical_directory, fixed_rootfs, path_exists, remove_marker, runtime_entries, target,
+    unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
+};
 use super::{
-    canonical_directory, fixed_rootfs, guest_path, path_exists, remove_marker, runtime_entries,
-    target, unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
+    append_failure, create_qualification_state_root, owner_identities_are_distinct,
+    QualificationHvfDriver, FAULT_OPERATION, QUALIFICATION_TIMEOUT,
 };
-use crate::agent_driver::AgentDriverClient;
 use crate::agent_session::UtilityVmSession;
-use crate::driver::{
-    DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
-    DriverStartRequest, DriverState, RuntimeDriver,
-};
 use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
-use crate::{AgentVmSmokeReport, DriverRecovery, OciVmReopenReplacementReport};
+use crate::{OciVmOperationReopenReplacementReport, RuntimeDriver};
 
-const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
-const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
-
-mod state;
-pub(super) use state::run as run_state;
-
-pub(super) async fn run(
+pub(in crate::oci_smoke::utility_vm) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
-) -> OciVmReopenReplacementReport {
-    let mut report = OciVmReopenReplacementReport::initial(HostPlatform::current(), stage);
+) -> OciVmOperationReopenReplacementReport {
+    let mut report =
+        OciVmOperationReopenReplacementReport::initial_state(HostPlatform::current(), stage);
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
@@ -91,7 +81,7 @@ pub(super) async fn run(
             return failed(
                 report,
                 format!(
-                    "refusing to overwrite an existing reopen qualification marker: {}",
+                    "refusing to overwrite an existing State reopen qualification marker: {}",
                     marker.display()
                 ),
             );
@@ -106,27 +96,22 @@ pub(super) async fn run(
         Ok(nonce) => nonce,
         Err(reason) => return failed(report, reason),
     };
-    let exact_target = match target(&format!("reopen-{nonce}")) {
+    let exact_target = match target(&format!("state-reopen-{nonce}")) {
         Ok(target) => target,
         Err(reason) => return failed(report, reason),
     };
-    let operation_id = match OperationId::new(format!("reopen-{nonce}-create")) {
+    let create_operation_id = match operation_id(&format!("state-reopen-{nonce}-create")) {
         Ok(operation_id) => operation_id,
-        Err(error) => {
-            return failed(
-                report,
-                format!("failed to construct reopen create operation ID: {error}"),
-            );
-        }
+        Err(reason) => return failed(report, reason),
     };
-    let delete_operation_id = match OperationId::new(format!("reopen-{nonce}-delete")) {
+    let qualification_operation_id =
+        match operation_id(&format!("state-reopen-{nonce}-qualification")) {
+            Ok(operation_id) => operation_id,
+            Err(reason) => return failed(report, reason),
+        };
+    let delete_operation_id = match operation_id(&format!("state-reopen-{nonce}-delete")) {
         Ok(operation_id) => operation_id,
-        Err(error) => {
-            return failed(
-                report,
-                format!("failed to construct reopen delete operation ID: {error}"),
-            );
-        }
+        Err(reason) => return failed(report, reason),
     };
     let process_io = ProcessIo {
         stdin: IoMode::Null,
@@ -139,12 +124,12 @@ pub(super) async fn run(
         Err(error) => {
             return failed(
                 report,
-                format!("failed to construct reopen create attachments: {error}"),
+                format!("failed to construct State reopen Create attachments: {error}"),
             );
         }
     };
-    let request = CreateRequest {
-        context: OperationContext::new(operation_id.clone()),
+    let create = CreateRequest {
+        context: OperationContext::new(create_operation_id.clone()),
         id: exact_target.id.clone(),
         bundle,
         isolation: IsolationRequest::DedicatedVm,
@@ -152,31 +137,32 @@ pub(super) async fn run(
     };
     let guest_qualification = if stage.is_guest() {
         match AgentTransportQualificationRequest::new(
-            operation_id.clone(),
-            AgentOperation::Create,
+            qualification_operation_id.clone(),
+            AgentOperation::State,
             stage,
         ) {
             Ok(request) => Some(request),
             Err(error) => {
                 return failed(
                     report,
-                    format!("failed to construct Guest reopen qualification: {error}"),
+                    format!("failed to construct Guest State qualification: {error}"),
                 );
             }
         }
     } else {
         None
     };
-    report.qualification_operation_id = Some(operation_id);
+    report.qualification_operation_id = Some(qualification_operation_id);
+    report.setup_create_operation_id = Some(create_operation_id);
     report.container_id = Some(exact_target.id.clone());
 
-    let state_root = console_directory.join(format!("a3s-oci-reopen-{nonce}-state"));
+    let state_root = console_directory.join(format!("a3s-oci-state-reopen-{nonce}-state"));
     if let Err(reason) = create_qualification_state_root(&state_root).await {
         return failed(report, reason);
     }
-    let first_console = console_directory.join(format!("a3s-oci-reopen-{nonce}-first.log"));
+    let first_console = console_directory.join(format!("a3s-oci-state-reopen-{nonce}-first.log"));
     let replacement_console =
-        console_directory.join(format!("a3s-oci-reopen-{nonce}-replacement.log"));
+        console_directory.join(format!("a3s-oci-state-reopen-{nonce}-replacement.log"));
 
     let exercise = exercise(
         shim,
@@ -184,7 +170,7 @@ pub(super) async fn run(
         &state_root,
         &first_console,
         &replacement_console,
-        &request,
+        &create,
         &delete_operation_id,
         &baseline_runtime_entries,
         stage,
@@ -199,7 +185,7 @@ pub(super) async fn run(
             append_reason(
                 &mut report,
                 format!(
-                    "workload marker appeared during create-only reopen qualification: {}",
+                    "workload marker appeared during create-only State qualification: {}",
                     marker.display()
                 ),
             );
@@ -246,16 +232,17 @@ async fn exercise(
     state_root: &Path,
     first_console: &Path,
     replacement_console: &Path,
-    request: &CreateRequest,
+    create: &CreateRequest,
     delete_operation_id: &OperationId,
     baseline_runtime_entries: &std::collections::BTreeSet<String>,
     stage: AgentTransportOperationStage,
     guest_qualification: Option<&AgentTransportQualificationRequest>,
-    report: &mut OciVmReopenReplacementReport,
+    report: &mut OciVmOperationReopenReplacementReport,
 ) -> std::result::Result<(), String> {
-    let faults = Arc::new(HostTransportFault::new(AgentTransportFaultStage::from(
-        stage,
-    )));
+    let faults = Arc::new(HostTransportFault::for_operation(
+        AgentOperation::State,
+        AgentTransportFaultStage::from(stage),
+    ));
     let first_cleanup = MacosHostCleanupTracker::capture();
     let first_session_result = match guest_qualification {
         Some(qualification) => {
@@ -284,7 +271,7 @@ async fn exercise(
             let reason = bridge
                 .reason
                 .clone()
-                .unwrap_or_else(|| "failed to launch the first qualification VM".to_string());
+                .unwrap_or_else(|| "failed to launch the first State qualification VM".to_string());
             report.first_vm = bridge;
             return Err(reason);
         }
@@ -292,7 +279,7 @@ async fn exercise(
     let first_driver = Arc::new(QualificationHvfDriver::new(
         Arc::clone(&first_session),
         vm_rootfs.to_path_buf(),
-        request.clone(),
+        create.clone(),
     ));
     let first_service = match crate::HostRuntimeService::open(
         state_root,
@@ -305,45 +292,72 @@ async fn exercise(
             report.first_vm = first_driver.shutdown().await;
             first_cleanup.apply(&mut report.first_vm).await;
             return Err(format!(
-                "failed to open the first durable host service: {error}"
+                "failed to open the first durable Host service for State: {error}"
             ));
         }
     };
 
-    let response_delivered = matches!(stage, AgentTransportOperationStage::GuestAfterResponseWrite);
+    let created = match timeout(QUALIFICATION_TIMEOUT, first_service.create(create.clone())).await {
+        Ok(Ok(record))
+            if *record.state.status() == ContainerState::Created
+                && record.state.id() == create.id.as_str()
+                && record.state.pid().is_some_and(|pid| pid > 0) =>
+        {
+            record
+        }
+        Ok(Ok(record)) => {
+            drop(first_service);
+            report.first_vm = first_driver.shutdown().await;
+            first_cleanup.apply(&mut report.first_vm).await;
+            return Err(format!(
+                "State qualification setup returned invalid {} record with PID {:?}",
+                record.state.status(),
+                record.state.pid()
+            ));
+        }
+        Ok(Err(error)) => {
+            drop(first_service);
+            report.first_vm = first_driver.shutdown().await;
+            first_cleanup.apply(&mut report.first_vm).await;
+            return Err(format!("State qualification setup Create failed: {error}"));
+        }
+        Err(_) => {
+            drop(first_service);
+            report.first_vm = first_driver.shutdown().await;
+            first_cleanup.apply(&mut report.first_vm).await;
+            return Err(format!(
+                "State qualification setup Create exceeded the {} second timeout",
+                QUALIFICATION_TIMEOUT.as_secs()
+            ));
+        }
+    };
+    let first_create_identity = first_driver.create_identity()?;
+    let state = StateRequest {
+        target: ContainerTarget::exact(create.id.clone(), created.generation),
+    };
+    let response_delivered = stage == AgentTransportOperationStage::GuestAfterResponseWrite;
+    let mut first_response = None;
     let mut first_failure = None;
-    match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
+    match timeout(QUALIFICATION_TIMEOUT, first_service.state(state.clone())).await {
         Ok(Err(error)) if !response_delivered => {
-            if let Err(reason) = record_first_interruption(report, error, stage) {
+            if let Err(reason) = record_interruption(report, error, stage) {
                 append_failure(&mut first_failure, reason);
             }
         }
         Ok(Err(error)) => append_failure(
             &mut first_failure,
             format!(
-                "{} did not deliver its completed Create response: {error}",
+                "{} did not deliver its completed State response: {error}",
                 stage.as_str()
             ),
         ),
         Ok(Ok(record)) if response_delivered => {
-            report.first_create_response_received = true;
-            if *record.state.status() != ContainerState::Created {
-                append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} returned {} instead of created",
-                        stage.as_str(),
-                        record.state.status()
-                    ),
-                );
-            }
+            report.first_operation_response_received = true;
+            first_response = Some(record);
             report.disconnect_probe_attempted = true;
-            let probe = StateRequest {
-                target: ContainerTarget::exact(request.id.clone(), record.generation),
-            };
-            match timeout(QUALIFICATION_TIMEOUT, first_service.state(probe)).await {
+            match timeout(QUALIFICATION_TIMEOUT, first_service.state(state.clone())).await {
                 Ok(Err(error)) => {
-                    if let Err(reason) = record_first_interruption(report, error, stage) {
+                    if let Err(reason) = record_interruption(report, error, stage) {
                         append_failure(&mut first_failure, reason);
                     }
                 }
@@ -363,12 +377,12 @@ async fn exercise(
         }
         Ok(Ok(_)) => append_failure(
             &mut first_failure,
-            "first create unexpectedly completed before owner replacement",
+            "first State unexpectedly completed before owner replacement",
         ),
         Err(_) => append_failure(
             &mut first_failure,
             format!(
-                "first create exceeded the {} second timeout",
+                "first State exceeded the {} second timeout",
                 QUALIFICATION_TIMEOUT.as_secs()
             ),
         ),
@@ -383,46 +397,39 @@ async fn exercise(
         Ok(records) if records.len() == 1 => {
             let record = &records[0];
             report.generation_before_reopen = Some(record.generation);
-            let exact_record = record.state.id() == request.id.as_str()
+            report.first_created_pid = *record.state.pid();
+            report.durable_created_retained = record.state.id() == create.id.as_str()
                 && record.driver == DriverKind::LibkrunHvf
-                && record.isolation == IsolationClass::DedicatedVm;
-            report.durable_creating_retained =
-                exact_record && *record.state.status() == ContainerState::Creating;
-            report.durable_created_retained =
-                exact_record && *record.state.status() == ContainerState::Created;
-            if report.durable_created_retained {
-                report.first_created_pid = *record.state.pid();
-            }
-            let expected_record_retained = if response_delivered {
-                report.durable_created_retained
-            } else {
-                report.durable_creating_retained
-            };
-            if !expected_record_retained {
+                && record.isolation == IsolationClass::DedicatedVm
+                && *record.state.status() == ContainerState::Created
+                && record.generation == created.generation
+                && record.config_digest == created.config_digest;
+            report.first_response_matches_durable_record = first_response
+                .as_ref()
+                .is_some_and(|response| response == record);
+            if !report.durable_created_retained {
                 append_failure(
                     &mut first_failure,
-                    format!(
-                        "interrupted create retained {} instead of the exact durable {} record",
-                        record.state.status(),
-                        if response_delivered {
-                            "created"
-                        } else {
-                            "creating"
-                        }
-                    ),
+                    "interrupted State did not retain the exact durable created record",
+                );
+            }
+            if response_delivered && !report.first_response_matches_durable_record {
+                append_failure(
+                    &mut first_failure,
+                    "delivered first State response differed from its durable record",
                 );
             }
         }
         Ok(records) => append_failure(
             &mut first_failure,
             format!(
-                "interrupted create retained {} durable records instead of one",
+                "interrupted State retained {} durable records instead of one",
                 records.len()
             ),
         ),
         Err(error) => append_failure(
             &mut first_failure,
-            format!("failed to inspect the interrupted durable create: {error}"),
+            format!("failed to inspect durable state after interrupted State: {error}"),
         ),
     }
     drop(first_service);
@@ -444,7 +451,7 @@ async fn exercise(
                 if !report.guest_evidence_verified {
                     append_failure(
                         &mut first_failure,
-                        "Guest reopen qualification evidence did not match the exact request",
+                        "Guest State evidence did not match the exact qualification",
                     );
                 }
             }
@@ -471,7 +478,7 @@ async fn exercise(
         append_failure(
             &mut first_failure,
             format!(
-                "selected transport point crossed {} times instead of once",
+                "selected State transport point crossed {} times instead of once",
                 report.fault_crossings
             ),
         );
@@ -479,7 +486,6 @@ async fn exercise(
     if let Some(reason) = first_failure {
         return Err(reason);
     }
-    let first_create_identity = first_driver.create_identity()?;
     drop(first_driver);
     drop(first_session);
 
@@ -490,7 +496,7 @@ async fn exercise(
             Err(mut bridge) => {
                 replacement_cleanup.apply(&mut bridge).await;
                 let reason = bridge.reason.clone().unwrap_or_else(|| {
-                    "failed to launch the replacement qualification VM".to_string()
+                    "failed to launch the replacement State qualification VM".to_string()
                 });
                 report.replacement_vm = bridge;
                 return Err(reason);
@@ -499,7 +505,7 @@ async fn exercise(
     let replacement_driver = Arc::new(QualificationHvfDriver::new(
         Arc::clone(&replacement_session),
         vm_rootfs.to_path_buf(),
-        request.clone(),
+        create.clone(),
     ));
     let replacement_service = match crate::HostRuntimeService::open(
         state_root,
@@ -521,7 +527,7 @@ async fn exercise(
             report.replacement_vm = replacement_driver.shutdown().await;
             replacement_cleanup.apply(&mut report.replacement_vm).await;
             return Err(format!(
-                "failed to reopen durable host service around the replacement VM: {error}"
+                "failed to reopen durable Host service around the replacement VM: {error}"
             ));
         }
     };
@@ -536,65 +542,93 @@ async fn exercise(
             ),
         );
     }
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        replacement_service.create(request.clone()),
-    )
-    .await
-    {
+    if !report.replacement_rehydrated_created_record {
+        append_failure(
+            &mut replacement_failure,
+            "replacement driver did not rebuild the durable created process",
+        );
+    }
+    let recovered = match replacement_service.list(ListRequest::default()).await {
+        Ok(records) if records.len() == 1 => Some(records[0].clone()),
+        Ok(records) => {
+            append_failure(
+                &mut replacement_failure,
+                format!(
+                    "replacement recovery retained {} durable records instead of one",
+                    records.len()
+                ),
+            );
+            None
+        }
+        Err(error) => {
+            append_failure(
+                &mut replacement_failure,
+                format!("failed to inspect recovered durable State record: {error}"),
+            );
+            None
+        }
+    };
+    match timeout(QUALIFICATION_TIMEOUT, replacement_service.state(state)).await {
         Ok(Ok(record)) => {
             report.generation_after_reopen = Some(record.generation);
             report.replacement_created_pid = *record.state.pid();
-            report.create_completed_after_reopen =
+            report.operation_completed_after_reopen =
                 *record.state.status() == ContainerState::Created;
-            match replacement_driver.create_identity() {
-                Ok(replacement_create_identity) => {
-                    report.same_generation_reused = report.generation_before_reopen
-                        == Some(record.generation)
-                        && first_create_identity.1 == replacement_create_identity.1
-                        && replacement_create_identity.1.generation == Some(record.generation);
-                    report.same_operation_id_reused = first_create_identity.0
-                        == replacement_create_identity.0
-                        && replacement_create_identity.0 == request.context.operation_id;
-                }
-                Err(reason) => append_failure(&mut replacement_failure, reason),
-            }
-            if !report.create_completed_after_reopen {
+            report.replacement_response_matches_durable_record =
+                recovered.as_ref() == Some(&record);
+            report.same_generation_reused =
+                report.generation_before_reopen == Some(record.generation);
+            if !report.operation_completed_after_reopen {
                 append_failure(
                     &mut replacement_failure,
-                    "replacement create did not reach the OCI created state",
+                    "replacement State did not observe the OCI created state",
+                );
+            }
+            if !report.replacement_response_matches_durable_record {
+                append_failure(
+                    &mut replacement_failure,
+                    "replacement State response differed from the recovered durable record",
                 );
             }
             if !report.same_generation_reused {
                 append_failure(
                     &mut replacement_failure,
-                    "replacement create did not reuse the original durable generation",
-                );
-            }
-            if !report.same_operation_id_reused {
-                append_failure(
-                    &mut replacement_failure,
-                    "replacement create did not reuse the original OperationId",
+                    "replacement State did not observe the original durable generation",
                 );
             }
         }
         Ok(Err(error)) => append_failure(
             &mut replacement_failure,
-            format!("replacement create failed: {error}"),
+            format!("replacement State failed: {error}"),
         ),
         Err(_) => append_failure(
             &mut replacement_failure,
             format!(
-                "replacement create exceeded the {} second timeout",
+                "replacement State exceeded the {} second timeout",
                 QUALIFICATION_TIMEOUT.as_secs()
             ),
         ),
+    }
+    match replacement_driver.create_identity() {
+        Ok(replacement_create_identity) => {
+            report.setup_create_identity_reused = replacement_create_identity
+                == first_create_identity
+                && replacement_create_identity.0 == create.context.operation_id
+                && replacement_create_identity.1.generation == report.generation_before_reopen;
+            if !report.setup_create_identity_reused {
+                append_failure(
+                    &mut replacement_failure,
+                    "replacement recovery did not reuse the setup Create identity and generation",
+                );
+            }
+        }
+        Err(reason) => append_failure(&mut replacement_failure, reason),
     }
 
     if let Some(generation) = report.generation_before_reopen {
         let delete = DeleteRequest {
             context: OperationContext::new(delete_operation_id.clone()),
-            target: ContainerTarget::exact(request.id.clone(), generation),
+            target: ContainerTarget::exact(create.id.clone(), generation),
             mode: DeleteMode::Force,
         };
         match timeout(QUALIFICATION_TIMEOUT, replacement_service.delete(delete)).await {
@@ -668,256 +702,19 @@ async fn exercise(
     replacement_failure.map_or(Ok(()), Err)
 }
 
-struct QualificationHvfDriver {
-    client: AgentDriverClient,
-    session: Arc<UtilityVmSession>,
-    vm_rootfs: PathBuf,
-    recovery_create: CreateRequest,
-    recovery_calls: AtomicU32,
-    rehydrated_created_record: AtomicBool,
-    create_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
+fn operation_id(value: &str) -> std::result::Result<OperationId, String> {
+    OperationId::new(value)
+        .map_err(|error| format!("failed to construct State qualification operation ID: {error}"))
 }
 
-impl QualificationHvfDriver {
-    fn new(
-        session: Arc<UtilityVmSession>,
-        vm_rootfs: PathBuf,
-        recovery_create: CreateRequest,
-    ) -> Self {
-        let service: Arc<dyn GuestAgentService> = Arc::new(session.client());
-        Self {
-            client: AgentDriverClient::new(
-                service,
-                "qualification-only HVF guest agent",
-                "qualification-hvf",
-            ),
-            session,
-            vm_rootfs,
-            recovery_create,
-            recovery_calls: AtomicU32::new(0),
-            rehydrated_created_record: AtomicBool::new(false),
-            create_identity: StdMutex::new(None),
-        }
-    }
-
-    fn recovery_calls(&self) -> u32 {
-        self.recovery_calls.load(Ordering::SeqCst)
-    }
-
-    fn rehydrated_created_record(&self) -> bool {
-        self.rehydrated_created_record.load(Ordering::SeqCst)
-    }
-
-    async fn shutdown(&self) -> AgentVmSmokeReport {
-        self.session.shutdown().await
-    }
-
-    fn create_identity(&self) -> std::result::Result<(OperationId, ContainerTarget), String> {
-        self.create_identity
-            .lock()
-            .map_err(|_| "qualification HVF create-identity lock was poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "qualification HVF driver recorded no create dispatch".to_string())
-    }
-
-    fn guest_bundle(&self, bundle: &OciBundle) -> Result<a3s_oci_agent_protocol::GuestPath> {
-        guest_path(&self.vm_rootfs, bundle.directory()).map_err(|reason| {
-            Error::new(ErrorCode::FailedPrecondition, reason)
-                .for_operation("map-qualification-hvf-bundle")
-        })
-    }
-
-    fn recovery_driver_request(&self, record: &ContainerRecord) -> Result<DriverCreateRequest> {
-        let attachments_digest = self.recovery_create.attachments.digest()?;
-        if record.state.id() != self.recovery_create.id.as_str()
-            || record.driver != DriverKind::LibkrunHvf
-            || record.isolation != self.recovery_create.isolation.class()
-            || record.config_digest != self.recovery_create.bundle.config_digest()
-            || record.attachments_digest.as_deref() != Some(attachments_digest.as_str())
-        {
-            return Err(Error::new(
-                ErrorCode::FailedPrecondition,
-                "qualification HVF recovery record differs from the original Create request",
-            )
-            .for_operation("recover-qualification-hvf"));
-        }
-        Ok(DriverCreateRequest {
-            context: self.recovery_create.context.clone(),
-            target: ContainerTarget::exact(self.recovery_create.id.clone(), record.generation),
-            bundle: self.recovery_create.bundle.clone(),
-            isolation: self.recovery_create.isolation.clone(),
-            io: self.recovery_create.attachments.process_io().clone(),
-            attachment_contract: self.recovery_create.attachments.clone(),
-            attachments: DriverCreateAttachments::None,
-        })
-    }
-
-    async fn dispatch_create(&self, request: DriverCreateRequest) -> Result<DriverState> {
-        let identity = (request.context.operation_id.clone(), request.target.clone());
-        {
-            let mut retained = self.create_identity.lock().map_err(|_| {
-                Error::new(
-                    ErrorCode::Internal,
-                    "qualification HVF create-identity lock was poisoned",
-                )
-                .for_operation("qualification-hvf-create")
-            })?;
-            match retained.as_ref() {
-                Some(existing) if existing != &identity => {
-                    return Err(Error::new(
-                        ErrorCode::Conflict,
-                        "qualification HVF driver received a changed create identity",
-                    )
-                    .for_operation("qualification-hvf-create"));
-                }
-                Some(_) => {}
-                None => *retained = Some(identity),
-            }
-        }
-        let guest_bundle = self.guest_bundle(&request.bundle)?;
-        self.client.create(request, guest_bundle).await
-    }
-}
-
-#[async_trait]
-impl RuntimeDriver for QualificationHvfDriver {
-    fn capability(&self) -> DriverCapability {
-        DriverCapability {
-            driver: DriverKind::LibkrunHvf,
-            status: CapabilityStatus::Available,
-            readiness: DriverReadiness::Experimental,
-            isolation_classes: vec![IsolationClass::DedicatedVm],
-            reason: None,
-            evidence: BTreeMap::from([
-                (
-                    "execution_path".to_string(),
-                    "real-hvf-utility-vm".to_string(),
-                ),
-                ("qualification_only".to_string(), "true".to_string()),
-            ]),
-        }
-    }
-
-    async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
-        if record.driver != DriverKind::LibkrunHvf
-            || record.isolation != IsolationClass::DedicatedVm
-            || !matches!(
-                record.state.status(),
-                ContainerState::Creating | ContainerState::Created
-            )
-        {
-            return Err(Error::new(
-                ErrorCode::FailedPrecondition,
-                "qualification HVF replacement accepts only its interrupted Create record",
-            )
-            .for_operation("recover-qualification-hvf"));
-        }
-        let prior = self.recovery_calls.fetch_add(1, Ordering::SeqCst);
-        if prior != 0 {
-            return Err(Error::new(
-                ErrorCode::Conflict,
-                "qualification HVF replacement recovered more than one durable record",
-            )
-            .for_operation("recover-qualification-hvf"));
-        }
-        if *record.state.status() == ContainerState::Created {
-            let observed = self
-                .dispatch_create(self.recovery_driver_request(record)?)
-                .await?;
-            if observed.status() != ContainerState::Created {
-                return Err(Error::new(
-                    ErrorCode::Conflict,
-                    format!(
-                        "replacement Guest rebuilt {} with PID {:?}; durable state requires created",
-                        observed.status(),
-                        observed.pid()
-                    ),
-                )
-                .for_operation("recover-qualification-hvf"));
-            }
-            self.rehydrated_created_record.store(true, Ordering::SeqCst);
-            return DriverRecovery::recreated_created(observed);
-        }
-        Ok(DriverRecovery::none())
-    }
-
-    async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
-        self.dispatch_create(request).await
-    }
-
-    async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
-        self.client.state(target).await
-    }
-
-    async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
-        self.client.start(request).await
-    }
-
-    async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
-        self.client.kill(request).await
-    }
-
-    async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
-        self.client.delete(request).await
-    }
-}
-
-async fn create_qualification_state_root(path: &Path) -> std::result::Result<(), String> {
-    if path_exists(path).await? {
-        return Err(format!(
-            "refusing to reuse qualification state root: {}",
-            path.display()
-        ));
-    }
-    tokio::fs::create_dir(path).await.map_err(|error| {
-        format!(
-            "failed to create qualification state root {}: {error}",
-            path.display()
-        )
-    })?;
-    use std::os::unix::fs::PermissionsExt;
-    if let Err(error) =
-        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await
-    {
-        let cleanup = tokio::fs::remove_dir(path).await.err();
-        return Err(format!(
-            "failed to protect qualification state root {}: {error}{}",
-            path.display(),
-            cleanup.map_or_else(String::new, |cleanup| format!(
-                "; failed to remove the unprotected directory: {cleanup}"
-            ))
-        ));
-    }
-    Ok(())
-}
-
-fn owner_identities_are_distinct(
-    first: &AgentVmSmokeReport,
-    replacement: &AgentVmSmokeReport,
-) -> bool {
-    first
-        .endpoint_name
-        .as_deref()
-        .zip(replacement.endpoint_name.as_deref())
-        .is_some_and(|(first, replacement)| !first.is_empty() && first != replacement)
-        && first
-            .shim_process_id
-            .zip(replacement.shim_process_id)
-            .is_some_and(|(first, replacement)| first != 0 && first != replacement)
-        && first
-            .bridge_process_id
-            .zip(replacement.bridge_process_id)
-            .is_some_and(|(first, replacement)| first != 0 && first != replacement)
-}
-
-fn record_first_interruption(
-    report: &mut OciVmReopenReplacementReport,
+fn record_interruption(
+    report: &mut OciVmOperationReopenReplacementReport,
     error: Error,
     stage: AgentTransportOperationStage,
 ) -> std::result::Result<(), String> {
-    report.first_create_error_code = Some(error.code);
-    report.first_create_error_operation = error.operation.clone();
-    report.first_create_error_retryable = error.retryable;
+    report.first_operation_error_code = Some(error.code);
+    report.first_operation_error_operation = error.operation.clone();
+    report.first_operation_error_retryable = error.retryable;
     let expected_operation = if stage.is_guest() {
         error
             .operation
@@ -930,22 +727,13 @@ fn record_first_interruption(
         Ok(())
     } else {
         Err(format!(
-            "first owner returned an unexpected transport error at {}: {error}",
+            "first owner returned an unexpected State transport error at {}: {error}",
             stage.as_str()
         ))
     }
 }
 
-fn append_failure(target: &mut Option<String>, reason: impl Into<String>) {
-    let reason = reason.into();
-    *target = Some(match target.take() {
-        Some(existing) if existing != reason => format!("{existing}; {reason}"),
-        Some(existing) => existing,
-        None => reason,
-    });
-}
-
-fn append_reason(report: &mut OciVmReopenReplacementReport, reason: impl Into<String>) {
+fn append_reason(report: &mut OciVmOperationReopenReplacementReport, reason: impl Into<String>) {
     let reason = reason.into();
     report.reason = Some(match report.reason.take() {
         Some(existing) if existing != reason => format!("{existing}; {reason}"),
@@ -955,9 +743,9 @@ fn append_reason(report: &mut OciVmReopenReplacementReport, reason: impl Into<St
 }
 
 fn failed(
-    mut report: OciVmReopenReplacementReport,
+    mut report: OciVmOperationReopenReplacementReport,
     reason: impl Into<String>,
-) -> OciVmReopenReplacementReport {
+) -> OciVmOperationReopenReplacementReport {
     append_reason(&mut report, reason);
     report
 }

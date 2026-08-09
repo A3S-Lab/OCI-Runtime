@@ -703,31 +703,34 @@ reopen or a replacement VM owner.
 
 ## Durable service reopen and VM owner replacement
 
-`oci-vm-reopen-replacement` carries all nine Host/Guest Create transitions
-through the durable Host service instead of calling the diagnostic Agent client
-directly:
+`oci-vm-reopen-replacement` carries all nine Host/Guest transitions for Create
+and State through the durable Host service instead of calling the diagnostic
+Agent client directly:
 
 ```sh
 reopen_dir="$(mktemp -d)"
-for fault_stage in \
-  host-before-request-write \
-  host-after-request-write \
-  host-before-response-read \
-  host-after-response-read \
-  guest-after-request-read \
-  guest-before-dispatch \
-  guest-after-dispatch \
-  guest-before-response-write \
-  guest-after-response-write
-do
-  stage_dir="$reopen_dir/$fault_stage"
-  mkdir "$stage_dir"
-  target/debug/a3s-oci oci-vm-reopen-replacement \
-    --shim "$smoke_dir/a3s-oci-krun-shim" \
-    --vm-rootfs "$rootfs" \
-    --bundle "$bundle" \
-    --console-dir "$stage_dir" \
-    --fault-at "$fault_stage"
+for operation in create state; do
+  for fault_stage in \
+    host-before-request-write \
+    host-after-request-write \
+    host-before-response-read \
+    host-after-response-read \
+    guest-after-request-read \
+    guest-before-dispatch \
+    guest-after-dispatch \
+    guest-before-response-write \
+    guest-after-response-write
+  do
+    stage_dir="$reopen_dir/$operation/$fault_stage"
+    mkdir -p "$stage_dir"
+    target/debug/a3s-oci oci-vm-reopen-replacement \
+      --operation "$operation" \
+      --shim "$smoke_dir/a3s-oci-krun-shim" \
+      --vm-rootfs "$rootfs" \
+      --bundle "$bundle" \
+      --console-dir "$stage_dir" \
+      --fault-at "$fault_stage"
+  done
 done
 ```
 
@@ -754,8 +757,21 @@ reuse, one replacement recovery call, complete force-delete cleanup, and
 removal of the scratch state root. The August 10, 2026 Apple Silicon matrix
 passed all nine points in 18 fresh VMs. Three additional post-response waves
 passed in six fresh VMs; one changed the Guest PID across owners and exercised
-the journal repair path. This closes the `create` recovery paths. The remaining
-operations still need the same replacement treatment.
+the journal repair path. This closes the `create` recovery paths.
+
+For State, the first owner completes Create normally and injects the selected
+point into an exact-generation query. The durable record remains `created`.
+State carries no OperationId, so Guest qualification uses an independent
+boot-time nonce and matches only the exact `state` operation and stage. After
+the first VM closes, replacement recovery rebuilds the pre-start process with
+the original Create identity and generation; the new query must equal that
+recovered record. At `guest-after-response-write`, the first response must be
+delivered and match durable state before a second query exposes the disconnect.
+
+`a3s.oci.oci-vm-operation-reopen-replacement.v1` retains this State evidence.
+The August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs,
+including real PID changes across owners and complete cleanup after force
+delete. The other 18 operations still need the same replacement treatment.
 
 ## Remaining workload gates
 

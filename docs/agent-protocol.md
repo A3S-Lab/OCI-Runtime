@@ -214,7 +214,18 @@ then rebuilds the pre-start process, reconciles its exact Guest PID, and repairs
 the cached Create response before replay. Guest points also require nonce-bound
 console evidence emitted after executor cleanup. Every report retains both
 owner identities and requires force-delete cleanup. In-place Guest-agent
-restart and replacement coverage for the other operations remain open.
+restart remains open.
+
+The companion `a3s.oci.oci-vm-operation-reopen-replacement.v1` gate applies
+the same nine points to `state`. State intentionally carries no idempotency
+context, so the Guest injector matches the exact operation and stage while the
+boot handoff nonce binds the retained cleanup evidence. The first owner keeps
+the durable record unchanged in `created`; after complete VM cleanup, the
+replacement owner rebuilds that pre-start process with the original Create
+identity and generation. Reissued State must return the recovered durable
+record. At `guest-after-response-write`, the delivered first response must
+also match that record and a second State call must expose the disconnect.
+Replacement coverage for the other 18 operations remains open.
 
 ## Bundle Preservation
 

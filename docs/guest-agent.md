@@ -422,8 +422,18 @@ driver recovery, and the Host reconciles any new Guest PID into both the live
 record and completed Create journal. Each Guest stage requires nonce-bound
 cleanup evidence. Force delete then leaves no durable record or Guest runtime
 state, while both VM reports prove different endpoint and process owners plus
-complete Host descriptor restoration. Replacement coverage for the remaining
-operations is still open.
+complete Host descriptor restoration. This closes the Create replacement
+matrix.
+
+State now has the same nine-stage real-owner gate. Because State is a
+context-free observation, its Guest qualifier uses the boot handoff nonce to
+bind evidence and matches only the armed `state` operation and stage. The first
+VM leaves the exact durable record in `created`; the replacement Guest rebuilds
+that process with the original Create identity, and the reissued query must
+match the recovered record. The post-response point additionally proves that
+the first response arrived before a follow-up call observed the closed stream.
+All 18 fresh VMs in the August 10, 2026 matrix returned Host and Guest resource
+inventories to baseline.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

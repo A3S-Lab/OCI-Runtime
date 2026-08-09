@@ -723,10 +723,20 @@ enforce it. No property is silently ignored.
     10, 2026 five-stage matrix passed in ten fresh VMs; three additional
     post-response waves passed in six fresh VMs, including a real replacement
     PID change.
+  - [x] Carry all nine Host/Guest `state` stages through durable service reopen
+    and an actual HVF owner replacement. State has no request OperationId, so
+    Guest qualification binds the boot-time nonce, exact operation, and stage;
+    the evidence returns that nonce after cleanup. The durable record stays in
+    `created`, replacement recovery rebuilds the pre-start process with the
+    original Create identity and generation, and the reissued State response
+    must equal the recovered record. A fully written first response also
+    requires a follow-up disconnect probe. The August 10, 2026 matrix passed
+    all nine stages in 18 fresh VMs, including real Guest PID changes, distinct
+    owners, force delete, and complete Host and Guest cleanup.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all nine real Create replacement paths do not satisfy the
-    complete operation matrix gate.
+    stages, and all 18 real Create/State replacement paths do not satisfy the
+    complete 20-operation matrix gate.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

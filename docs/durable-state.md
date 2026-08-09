@@ -324,4 +324,12 @@ Both the record rebind and journal repair recover across every durable
 file-commit fault stage.
 Every `a3s.oci.oci-vm-reopen-replacement.v2` path then force-deletes the
 generation and leaves no durable container or transient Host/Guest resource.
-The other operations still belong to the replacement matrix above.
+
+Real State recovery now crosses the same nine points under
+`a3s.oci.oci-vm-operation-reopen-replacement.v1`. The first query never changes
+the durable `created` record. Once that VM has closed, the replacement recovery
+hook recreates the pre-start process and commits its exact PID through the
+restricted record-rebind path above. A new State query must equal that recovered
+record and preserve the generation before force delete. The August 10, 2026
+Apple Silicon matrix passed all nine stages in 18 fresh VMs. The other 18
+operations still belong to the replacement matrix above.
