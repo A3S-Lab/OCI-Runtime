@@ -1,5 +1,7 @@
+use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::ExitCode;
 
 use a3s_oci_sdk::RuntimeClient;
@@ -476,7 +478,13 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(cli: Cli) -> Result<ExitCode, CliError> {
+type CommandFuture = Pin<Box<dyn Future<Output = Result<ExitCode, CliError>>>>;
+
+fn run(cli: Cli) -> CommandFuture {
+    Box::pin(dispatch(cli))
+}
+
+async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
     match cli.command {
         Command::Features => {
             let client = RuntimeClient::new(a3s_oci_runtime::HostRuntimeService::new());
@@ -921,4 +929,21 @@ fn write_json(value: &impl Serialize) -> Result<(), serde_json::Error> {
     serde_json::to_writer_pretty(&mut output, value)?;
     println!();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run, Cli, Command};
+
+    #[test]
+    fn command_dispatch_future_stays_heap_bounded() {
+        let future = run(Cli {
+            command: Command::Features,
+        });
+
+        assert_eq!(
+            std::mem::size_of_val(&future),
+            2 * std::mem::size_of::<usize>()
+        );
+    }
 }
