@@ -641,11 +641,13 @@ Both local Apple Silicon qualification and macOS CI run all three boundaries;
 the CI shell compares endpoint and guest-runtime inventories around every
 command.
 
-## Host and Guest transport interruption cleanup
+## Host, Guest, and shutdown transport interruption cleanup
 
 `oci-vm-transport-fault-cleanup` moves all nine protocol-v9 request/response
-boundaries out of the in-memory matrix and into a real authenticated HVF VM.
-Each invocation interrupts `create` at one Host or Guest transition:
+boundaries and both explicit Host shutdown points out of the in-memory matrix
+and into a real authenticated HVF VM. Each invocation interrupts `create` at
+one Host or Guest transition, or interrupts the first explicit close after a
+successful `create`:
 
 ```sh
 transport_dir="$(mktemp -d)"
@@ -658,7 +660,9 @@ for stage in \
   guest-before-dispatch \
   guest-after-dispatch \
   guest-before-response-write \
-  guest-after-response-write
+  guest-after-response-write \
+  host-before-shutdown \
+  host-after-shutdown
 do
   target/debug/a3s-oci oci-vm-transport-fault-cleanup \
     --shim "$smoke_dir/a3s-oci-krun-shim" \
@@ -669,7 +673,7 @@ do
 done
 ```
 
-The `a3s.oci.oci-vm-transport-fault-cleanup.v2` report succeeds only when the
+The `a3s.oci.oci-vm-transport-fault-cleanup.v3` report succeeds only when the
 selected versioned point is crossed exactly once and normal OCI delete is never
 attempted. Host points return the qualification injector's retryable
 `Unavailable`. Guest points carry the same validated `OperationId` as
@@ -677,19 +681,24 @@ attempted. Host points return the qualification injector's retryable
 `guest-after-response-write` must deliver the completed response before a
 follow-up request observes the disconnect. The fixed Guest writes a matching
 console record only after the Linux executor has completed cleanup. Protocol,
-service, and cleanup failures remain terminal.
+service, and cleanup failures remain terminal. Both shutdown points require the
+Host to receive the `create` response first. A retained clone then returns the
+selected close fault while the sole VM owner performs an idempotent second
+close and completes cleanup.
 
 Every run also requires the workload marker to remain absent, no new Guest
 runtime directory, a zero Guest and shim exit, exact endpoint removal, shim and
 VM-worker reap, and restoration of the complete Host descriptor inventory. The
 August 9, 2026 Apple Silicon qualification passed the four Host stages once and
 five more complete waves, for 24 fresh HVF VMs, then passed all five Guest
-stages in five fresh VMs. The unprivileged local bundle mapped container UID/GID
-0 to the caller-owned rootfs IDs; Runtime validation and the Guest executor
-enforced that explicit mapping without changing the checked-in rootful fixture.
+stages in five fresh VMs. The final v3 requalification passed the complete
+eleven-stage matrix in eleven fresh VMs. The unprivileged local bundle mapped
+container UID/GID 0 to the caller-owned rootfs IDs; Runtime validation and the
+Guest executor enforced that explicit mapping without changing the checked-in
+rootful fixture.
 
-This is real VM cleanup evidence for all nine Host/Guest `create` transitions.
-The two Host shutdown stages, other operations, durable `HostRuntimeService`
+This is real VM cleanup evidence for all nine Host/Guest `create` transitions
+and both Host shutdown stages. Other operations, durable `HostRuntimeService`
 reopen, and actual VM/owner replacement remain open.
 
 ## Remaining workload gates

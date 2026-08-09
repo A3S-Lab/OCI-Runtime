@@ -7,7 +7,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
 ### Added
 
 - Real utility-VM transport interruption evidence for all nine Host/Guest
-  protocol-v9 `create` transitions. The
+  protocol-v9 `create` transitions and both explicit Host shutdown stages. The
   `oci-vm-transport-fault-cleanup` command injects one exact negotiated point
   and never sends normal delete. Host points use the qualification-only client
   injector. Guest points use a dedicated versioned handoff bound to the same
@@ -15,13 +15,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
   only after executor cleanup succeeds. The first four Guest points fail the
   current call with a retryable `Unavailable`, while
   `guest-after-response-write` delivers the completed response and requires a
-  follow-up request to observe the disconnect. Report v2 also requires the
+  follow-up request to observe the disconnect. A shutdown run first receives a
+  successful `create` response, faults the retained client's first explicit
+  close, and lets the sole VM owner complete the clone-wide idempotent close.
+  Report v3 requires the
   workload marker and Guest runtime root to be absent, the VM endpoint, shim,
   and bridge process to be reaped, and the Host descriptor inventory to return
   to baseline. Apple Silicon HVF passed the four Host stages once plus five
-  repeated waves (24 fresh VMs) and the five Guest stages in five fresh VMs.
-  Shutdown stages, durable Host reopen, other operations, and VM/owner
-  replacement remain open.
+  repeated waves (24 fresh VMs) and the five Guest stages in five fresh VMs
+  during v2 qualification. The final v3 requalification passed all eleven
+  stages in eleven fresh VMs. Durable Host reopen, other operations, and
+  VM/owner replacement remain open.
 - Native Linux owner-death recovery with fail-closed, PID-reuse-safe cleanup.
   Every executor instance and exact container generation now persists a
   private, versioned recovery record bound to the owner, launcher, and init

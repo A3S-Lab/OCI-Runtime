@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use a3s_oci_agent_protocol::AgentTransportOperationStage;
+use a3s_oci_agent_protocol::AgentTransportFaultStage;
 use a3s_oci_core::HostPlatform;
 
 use crate::report::OciVmSmokeReport;
@@ -166,19 +166,20 @@ pub async fn oci_vm_fault_cleanup(
     }
 }
 
-/// Interrupt one real utility-VM `create` transport transition and prove cleanup.
+/// Interrupt one real utility-VM transport transition and prove cleanup.
 ///
-/// This first real-host vertical slice accepts only the four host-side request
-/// and response stages. It does not claim the guest-side or host-service reopen
-/// portions of the complete transport recovery matrix.
+/// The diagnostic covers all nine Host/Guest `create` request-response stages
+/// and both explicit Host shutdown stages. It does not claim durable
+/// host-service reopen or utility-VM owner replacement.
 #[must_use]
 pub async fn oci_vm_transport_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
     bundle: &Path,
     console: &Path,
-    stage: AgentTransportOperationStage,
+    stage: impl Into<AgentTransportFaultStage>,
 ) -> OciVmTransportFaultCleanupReport {
+    let stage = stage.into();
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")

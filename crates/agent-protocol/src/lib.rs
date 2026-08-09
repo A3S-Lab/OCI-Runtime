@@ -17,8 +17,8 @@ mod wire;
 
 pub use client::AgentClient;
 pub use fault::{
-    AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportOperationStage,
-    AgentTransportShutdownStage, NoAgentTransportFaultInjector,
+    AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportFaultStage,
+    AgentTransportOperationStage, AgentTransportShutdownStage, NoAgentTransportFaultInjector,
 };
 pub use inherited_descriptor::{
     AgentInheritedDescriptorRole, AgentInheritedDescriptorSchema, AgentInheritedDescriptorSlot,

@@ -401,15 +401,16 @@ portable in-memory matrix, not the required real utility-VM replacement and
 complete transition matrix.
 
 A separate real-HVF diagnostic now crosses all nine Host/Guest `create` stages
-inside fresh authenticated protocol-v9 VMs. Each stage must fire once, avoid
-normal delete, keep the workload marker absent, and leave no Guest runtime
-root, endpoint, shim, VM worker, or Host descriptor drift. Guest qualification
-is bound to the exact `create` `OperationId` and emits console evidence only
-after executor cleanup. The first four Guest points fail the current call; the
-post-response point delivers that response and fails a follow-up request.
-Malformed protocol input, service errors, and cleanup errors remain failures.
-The two Host shutdown stages, durable Host reopen, and replacement VM/owner
-paths are still open.
+and both explicit Host shutdown stages inside fresh authenticated protocol-v9
+VMs. Each stage must fire once, avoid normal delete, keep the workload marker
+absent, and leave no Guest runtime root, endpoint, shim, VM worker, or Host
+descriptor drift. Guest qualification is bound to the exact `create`
+`OperationId` and emits console evidence only after executor cleanup. The first
+four Guest points fail the current call; the post-response point delivers that
+response and fails a follow-up request. Each shutdown point first delivers
+`create`, faults one retained-client close, and then completes idempotent owner
+cleanup. Malformed protocol input, service errors, and cleanup errors remain
+failures. Durable Host reopen and replacement VM/owner paths are still open.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

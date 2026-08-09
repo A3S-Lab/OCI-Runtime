@@ -300,13 +300,15 @@ dispatch and at the guest boundary. A fully completed delete leaves no live
 container record, so service reopen skips driver recovery and replays the
 durable delete journal directly.
 
-The first real utility-VM slice now interrupts `create` at all nine Host/Guest
-request, dispatch, and response stages inside fresh authenticated HVF VMs. It
-retains the exact protocol-v9 point and retryable disconnect, skips normal
-delete, and requires nonce-bound Guest cleanup evidence, VM and process reap,
-endpoint removal, an unchanged runtime-root inventory, and complete Host
-descriptor restoration. Twenty-four fresh local VMs passed the repeated Host
-gate and five more passed the Guest gate. This proves real transport cleanup,
-not durable service reopen: two shutdown stages, other operations,
+The real utility-VM slice now interrupts `create` at all nine Host/Guest
+request, dispatch, and response stages and crosses both explicit Host shutdown
+points inside fresh authenticated HVF VMs. It retains the exact protocol-v9
+point and retryable disconnect, skips normal delete, and requires nonce-bound
+Guest cleanup evidence where applicable, VM and process reap, endpoint removal,
+an unchanged runtime-root inventory, and complete Host descriptor restoration.
+Twenty-four fresh local VMs passed the repeated Host request-response v2 gate
+and five more passed its Guest gate. The final v3 requalification passed all
+eleven stages in eleven fresh VMs. This proves real transport cleanup, not
+durable service reopen: other operations,
 `HostRuntimeService` reopen, and VM/owner replacement remain part of the
 persistence gate above.

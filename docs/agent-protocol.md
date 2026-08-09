@@ -187,6 +187,13 @@ versioned console record only if `LinuxExecutor` cleanup succeeds. The Host
 accepts it only when the operation ID, stage, protocol version, point, and one
 crossing all match. A fault after the response write must deliver the primary
 response; a follow-up request then proves that the connection ended.
+The same real-VM gate covers both explicit Host shutdown points. It first
+receives the successful `create` response, then closes a retained client clone.
+The selected before- or after-shutdown point returns one qualification error;
+the VM owner's second close is idempotent and must still reap the Guest, shim,
+bridge, endpoint, runtime root, and prepared container. Report schema
+`a3s.oci.oci-vm-transport-fault-cleanup.v3` distinguishes the shutdown point
+from the nine `create` request-response points.
 
 In-memory qualification drops a create response at the guest's
 after-dispatch/before-response-write boundary. The first client receives a

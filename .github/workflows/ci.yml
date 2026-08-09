@@ -900,7 +900,9 @@ jobs:
             guest-before-dispatch \
             guest-after-dispatch \
             guest-before-response-write \
-            guest-after-response-write
+            guest-after-response-write \
+            host-before-shutdown \
+            host-after-shutdown
           do
             console="$RUNNER_TEMP/a3s-oci-transport-$transport_stage.log"
             set +e
@@ -920,7 +922,7 @@ jobs:
               test "$status" -eq 0
               jq --exit-status --arg stage "$transport_stage" \
                 '.schema_version
-                     == "a3s.oci.oci-vm-transport-fault-cleanup.v2"
+                     == "a3s.oci.oci-vm-transport-fault-cleanup.v3"
                  and .platform == "macos" and .status == "available"
                  and .bundle_loaded
                  and .requested_operation == "create"
@@ -928,11 +930,23 @@ jobs:
                       | startswith("transport-fault-"))
                  and .requested_stage == $stage
                  and .negotiated_protocol == 9
-                 and .injected_point == ("agent-v9.create-" + $stage)
+                 and .injected_point
+                     == (if ($stage | endswith("-shutdown")) then
+                           "agent-v9." + $stage
+                         else
+                           "agent-v9.create-" + $stage
+                         end)
                  and .fault_crossings == 1
                  and .observed_error_code == "unavailable"
                  and .observed_error_retryable
-                 and (if ($stage | startswith("host-")) then
+                 and (if ($stage | endswith("-shutdown")) then
+                        .observed_error_operation
+                          == "oci-vm-transport-qualification-fault"
+                        and .primary_response_received
+                        and (.disconnect_probe_attempted | not)
+                        and (.guest_evidence_verified | not)
+                        and (.guest_evidence_operation_id == null)
+                      elif ($stage | startswith("host-")) then
                         .observed_error_operation
                           == "oci-vm-transport-qualification-fault"
                         and (.primary_response_received | not)
@@ -980,7 +994,7 @@ jobs:
               test "$status" -eq 2
               jq --exit-status --arg stage "$transport_stage" \
                 '.schema_version
-                     == "a3s.oci.oci-vm-transport-fault-cleanup.v2"
+                     == "a3s.oci.oci-vm-transport-fault-cleanup.v3"
                  and .platform == "macos" and .status != "available"
                  and .requested_operation == "create"
                  and .requested_stage == $stage

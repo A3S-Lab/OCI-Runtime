@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentCreateRequest, AgentOperation, AgentStateRequest,
-    AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportOperationStage,
-    AgentTransportQualificationEvidence, AgentTransportQualificationRequest,
-    AGENT_PROTOCOL_VERSION_MAX, AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_PREFIX,
+    AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportFaultStage,
+    AgentTransportOperationStage, AgentTransportQualificationEvidence,
+    AgentTransportQualificationRequest, AGENT_PROTOCOL_VERSION_MAX,
+    AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_PREFIX,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, OperationContext, OperationId, ProcessIo};
@@ -19,21 +20,21 @@ use super::{
 };
 use crate::agent_session::UtilityVmSession;
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
-use crate::{is_supported_transport_stage, OciVmTransportFaultCleanupReport};
+use crate::{is_supported_transport_fault_stage, OciVmTransportFaultCleanupReport};
 
-const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
+const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
 const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const MAX_GUEST_CONSOLE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
-struct HostCreateTransportFault {
-    stage: AgentTransportOperationStage,
+struct HostTransportFault {
+    stage: AgentTransportFaultStage,
     crossings: AtomicU32,
     protocol_version: AtomicU16,
 }
 
-impl HostCreateTransportFault {
-    const fn new(stage: AgentTransportOperationStage) -> Self {
+impl HostTransportFault {
+    const fn new(stage: AgentTransportFaultStage) -> Self {
         Self {
             stage,
             crossings: AtomicU32::new(0),
@@ -54,29 +55,42 @@ impl HostCreateTransportFault {
 
     fn injected_point(&self) -> Option<String> {
         self.protocol_version().map(|protocol_version| {
-            AgentTransportFaultPoint::Operation {
-                protocol_version,
-                operation: AgentOperation::Create,
-                stage: self.stage,
+            match self.stage {
+                AgentTransportFaultStage::Operation(stage) => AgentTransportFaultPoint::Operation {
+                    protocol_version,
+                    operation: AgentOperation::Create,
+                    stage,
+                },
+                AgentTransportFaultStage::Shutdown(stage) => AgentTransportFaultPoint::Shutdown {
+                    protocol_version,
+                    stage,
+                },
             }
             .to_string()
         })
     }
 }
 
-impl AgentTransportFaultInjector for HostCreateTransportFault {
+impl AgentTransportFaultInjector for HostTransportFault {
     fn check(&self, point: AgentTransportFaultPoint) -> a3s_oci_sdk::Result<()> {
-        let AgentTransportFaultPoint::Operation {
-            protocol_version,
-            operation: AgentOperation::Create,
-            stage,
-        } = point
-        else {
-            return Ok(());
+        let protocol_version = match (self.stage, point) {
+            (
+                AgentTransportFaultStage::Operation(selected),
+                AgentTransportFaultPoint::Operation {
+                    protocol_version,
+                    operation: AgentOperation::Create,
+                    stage,
+                },
+            ) if stage == selected => protocol_version,
+            (
+                AgentTransportFaultStage::Shutdown(selected),
+                AgentTransportFaultPoint::Shutdown {
+                    protocol_version,
+                    stage,
+                },
+            ) if stage == selected => protocol_version,
+            _ => return Ok(()),
         };
-        if stage != self.stage {
-            return Ok(());
-        }
         self.protocol_version
             .store(protocol_version, Ordering::SeqCst);
         let crossing = self.crossings.fetch_add(1, Ordering::SeqCst) + 1;
@@ -97,10 +111,10 @@ pub(super) async fn run(
     vm_rootfs: &Path,
     bundle_directory: &Path,
     console: &Path,
-    stage: AgentTransportOperationStage,
+    stage: AgentTransportFaultStage,
 ) -> OciVmTransportFaultCleanupReport {
     let mut report = OciVmTransportFaultCleanupReport::initial(HostPlatform::current(), stage);
-    if !is_supported_transport_stage(stage) {
+    if !is_supported_transport_fault_stage(stage) {
         return failed(
             report,
             format!(
@@ -181,23 +195,28 @@ pub(super) async fn run(
     };
     report.qualification_operation_id = Some(operation_id.clone());
     let context = OperationContext::new(operation_id.clone());
-    let guest_qualification = if stage.is_guest() {
-        match AgentTransportQualificationRequest::new(operation_id, AgentOperation::Create, stage) {
-            Ok(request) => Some(request),
-            Err(error) => {
-                return failed(
-                    report,
-                    format!("failed to construct guest transport qualification: {error}"),
-                )
+    let guest_qualification = match stage {
+        AgentTransportFaultStage::Operation(stage) if stage.is_guest() => {
+            match AgentTransportQualificationRequest::new(
+                operation_id,
+                AgentOperation::Create,
+                stage,
+            ) {
+                Ok(request) => Some(request),
+                Err(error) => {
+                    return failed(
+                        report,
+                        format!("failed to construct guest transport qualification: {error}"),
+                    )
+                }
             }
         }
-    } else {
-        None
+        _ => None,
     };
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let faults = Arc::new(HostCreateTransportFault::new(stage));
+    let faults = Arc::new(HostTransportFault::new(stage));
     let session_result = match &guest_qualification {
         Some(qualification) => {
             UtilityVmSession::connect_with_guest_qualification(
@@ -245,22 +264,27 @@ pub(super) async fn run(
             terminal_size: None,
         },
     };
-    let exercise = if stage.is_host() {
-        match timeout(CREATE_TIMEOUT, client.create(request)).await {
-            Ok(Err(error)) => record_host_interruption(&mut report, error),
-            Ok(Ok(_)) => Err("transport-fault create unexpectedly returned success".to_string()),
-            Err(_) => Err(format!(
-                "transport-fault create exceeded the {} second timeout",
-                CREATE_TIMEOUT.as_secs()
-            )),
+    let exercise = match stage {
+        AgentTransportFaultStage::Operation(stage) if stage.is_host() => {
+            match timeout(QUALIFICATION_TIMEOUT, client.create(request)).await {
+                Ok(Err(error)) => record_host_interruption(&mut report, error),
+                Ok(Ok(_)) => {
+                    Err("transport-fault create unexpectedly returned success".to_string())
+                }
+                Err(_) => Err(format!(
+                    "transport-fault create exceeded the {} second timeout",
+                    QUALIFICATION_TIMEOUT.as_secs()
+                )),
+            }
         }
-    } else if stage == AgentTransportOperationStage::GuestAfterResponseWrite {
-        match timeout(CREATE_TIMEOUT, client.create(request)).await {
+        AgentTransportFaultStage::Operation(
+            AgentTransportOperationStage::GuestAfterResponseWrite,
+        ) => match timeout(QUALIFICATION_TIMEOUT, client.create(request)).await {
             Ok(Ok(_)) => {
                 report.primary_response_received = true;
                 report.disconnect_probe_attempted = true;
                 match timeout(
-                    CREATE_TIMEOUT,
+                    QUALIFICATION_TIMEOUT,
                     client.state(AgentStateRequest {
                         target: target.clone(),
                     }),
@@ -274,7 +298,7 @@ pub(super) async fn run(
                     ),
                     Err(_) => Err(format!(
                         "guest-after-response-write disconnect probe exceeded the {} second timeout",
-                        CREATE_TIMEOUT.as_secs()
+                        QUALIFICATION_TIMEOUT.as_secs()
                     )),
                 }
             }
@@ -283,21 +307,50 @@ pub(super) async fn run(
             )),
             Err(_) => Err(format!(
                 "guest-after-response-write create exceeded the {} second timeout",
-                CREATE_TIMEOUT.as_secs()
+                QUALIFICATION_TIMEOUT.as_secs()
             )),
+        },
+        AgentTransportFaultStage::Operation(stage) => {
+            match timeout(QUALIFICATION_TIMEOUT, client.create(request)).await {
+                Ok(Err(error)) => record_guest_disconnect(&mut report, error),
+                Ok(Ok(_)) => Err(format!(
+                    "{} create unexpectedly returned success",
+                    stage.as_str()
+                )),
+                Err(_) => Err(format!(
+                    "{} create exceeded the {} second timeout",
+                    stage.as_str(),
+                    QUALIFICATION_TIMEOUT.as_secs()
+                )),
+            }
         }
-    } else {
-        match timeout(CREATE_TIMEOUT, client.create(request)).await {
-            Ok(Err(error)) => record_guest_disconnect(&mut report, error),
-            Ok(Ok(_)) => Err(format!(
-                "{} create unexpectedly returned success",
-                stage.as_str()
-            )),
-            Err(_) => Err(format!(
-                "{} create exceeded the {} second timeout",
-                stage.as_str(),
-                CREATE_TIMEOUT.as_secs()
-            )),
+        AgentTransportFaultStage::Shutdown(stage) => {
+            match timeout(QUALIFICATION_TIMEOUT, client.create(request)).await {
+                Ok(Ok(_)) => {
+                    report.primary_response_received = true;
+                    match timeout(QUALIFICATION_TIMEOUT, client.close()).await {
+                        Ok(Err(error)) => record_host_interruption(&mut report, error),
+                        Ok(Ok(())) => Err(format!(
+                            "{} close unexpectedly returned success",
+                            stage.as_str()
+                        )),
+                        Err(_) => Err(format!(
+                            "{} close exceeded the {} second timeout",
+                            stage.as_str(),
+                            QUALIFICATION_TIMEOUT.as_secs()
+                        )),
+                    }
+                }
+                Ok(Err(error)) => Err(format!(
+                    "{} setup create returned an unexpected error: {error}",
+                    stage.as_str()
+                )),
+                Err(_) => Err(format!(
+                    "{} setup create exceeded the {} second timeout",
+                    stage.as_str(),
+                    QUALIFICATION_TIMEOUT.as_secs()
+                )),
+            }
         }
     };
     if stage.is_host() {
@@ -406,7 +459,7 @@ fn record_host_interruption(
         Ok(())
     } else {
         Err(format!(
-            "transport-fault create returned an unexpected error: {error}"
+            "transport qualification returned an unexpected injected error: {error}"
         ))
     }
 }
@@ -517,17 +570,17 @@ mod tests {
     use a3s_oci_agent_protocol::{
         AgentOperation, AgentTransportFaultInjector, AgentTransportFaultPoint,
         AgentTransportOperationStage, AgentTransportQualificationEvidence,
-        AgentTransportQualificationRequest, AGENT_PROTOCOL_VERSION_MAX,
-        AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_PREFIX,
+        AgentTransportQualificationRequest, AgentTransportShutdownStage,
+        AGENT_PROTOCOL_VERSION_MAX, AGENT_TRANSPORT_QUALIFICATION_EVIDENCE_PREFIX,
     };
     use a3s_oci_sdk::{ErrorCode, OperationId};
 
-    use super::{read_guest_qualification_evidence, HostCreateTransportFault};
+    use super::{read_guest_qualification_evidence, HostTransportFault};
 
     #[test]
     fn real_host_fault_injector_fires_once_only_at_the_selected_create_stage() {
         let selected = AgentTransportOperationStage::HostBeforeResponseRead;
-        let injector = HostCreateTransportFault::new(selected);
+        let injector = HostTransportFault::new(selected.into());
         let other = AgentTransportFaultPoint::Operation {
             protocol_version: AGENT_PROTOCOL_VERSION_MAX,
             operation: AgentOperation::State,
@@ -551,6 +604,31 @@ mod tests {
             injector.protocol_version(),
             Some(AGENT_PROTOCOL_VERSION_MAX)
         );
+        assert_eq!(injector.injected_point(), Some(target.to_string()));
+    }
+
+    #[test]
+    fn real_host_fault_injector_fires_once_only_at_the_selected_shutdown_stage() {
+        let selected = AgentTransportShutdownStage::HostAfterShutdown;
+        let injector = HostTransportFault::new(selected.into());
+        let other = AgentTransportFaultPoint::Operation {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            operation: AgentOperation::Create,
+            stage: AgentTransportOperationStage::HostAfterResponseRead,
+        };
+        assert!(injector.check(other).is_ok());
+
+        let target = AgentTransportFaultPoint::Shutdown {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            stage: selected,
+        };
+        let error = injector
+            .check(target)
+            .expect_err("selected shutdown point must fail once");
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert!(error.retryable);
+        assert!(injector.check(target).is_ok());
+        assert_eq!(injector.crossing_count(), 2);
         assert_eq!(injector.injected_point(), Some(target.to_string()));
     }
 

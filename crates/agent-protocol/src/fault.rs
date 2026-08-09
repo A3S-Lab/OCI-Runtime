@@ -110,6 +110,88 @@ impl AgentTransportShutdownStage {
     }
 }
 
+/// Operation or shutdown transition selected for transport qualification.
+///
+/// The untagged wire form retains the stable kebab-case stage name used by
+/// CLI arguments and machine-readable evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentTransportFaultStage {
+    /// One request/response transition.
+    Operation(AgentTransportOperationStage),
+    /// One explicit clone-wide Host shutdown transition.
+    Shutdown(AgentTransportShutdownStage),
+}
+
+impl AgentTransportFaultStage {
+    /// Complete qualification registry: nine operation transitions and two
+    /// explicit Host shutdown transitions.
+    pub const ALL: [Self; 11] = [
+        Self::Operation(AgentTransportOperationStage::HostBeforeRequestWrite),
+        Self::Operation(AgentTransportOperationStage::HostAfterRequestWrite),
+        Self::Operation(AgentTransportOperationStage::HostBeforeResponseRead),
+        Self::Operation(AgentTransportOperationStage::HostAfterResponseRead),
+        Self::Operation(AgentTransportOperationStage::GuestAfterRequestRead),
+        Self::Operation(AgentTransportOperationStage::GuestBeforeDispatch),
+        Self::Operation(AgentTransportOperationStage::GuestAfterDispatch),
+        Self::Operation(AgentTransportOperationStage::GuestBeforeResponseWrite),
+        Self::Operation(AgentTransportOperationStage::GuestAfterResponseWrite),
+        Self::Shutdown(AgentTransportShutdownStage::HostBeforeShutdown),
+        Self::Shutdown(AgentTransportShutdownStage::HostAfterShutdown),
+    ];
+
+    /// Stable name used by retained qualification reports and CLI arguments.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Operation(stage) => stage.as_str(),
+            Self::Shutdown(stage) => stage.as_str(),
+        }
+    }
+
+    /// Return the request/response transition, when one was selected.
+    pub const fn operation(self) -> Option<AgentTransportOperationStage> {
+        match self {
+            Self::Operation(stage) => Some(stage),
+            Self::Shutdown(_) => None,
+        }
+    }
+
+    /// Return the shutdown transition, when one was selected.
+    pub const fn shutdown(self) -> Option<AgentTransportShutdownStage> {
+        match self {
+            Self::Operation(_) => None,
+            Self::Shutdown(stage) => Some(stage),
+        }
+    }
+
+    /// Whether this transition is observed by the Host client.
+    #[must_use]
+    pub const fn is_host(self) -> bool {
+        match self {
+            Self::Operation(stage) => stage.is_host(),
+            Self::Shutdown(_) => true,
+        }
+    }
+
+    /// Whether this transition is observed by the Guest server.
+    #[must_use]
+    pub const fn is_guest(self) -> bool {
+        matches!(self, Self::Operation(stage) if stage.is_guest())
+    }
+}
+
+impl From<AgentTransportOperationStage> for AgentTransportFaultStage {
+    fn from(stage: AgentTransportOperationStage) -> Self {
+        Self::Operation(stage)
+    }
+}
+
+impl From<AgentTransportShutdownStage> for AgentTransportFaultStage {
+    fn from(stage: AgentTransportShutdownStage) -> Self {
+        Self::Shutdown(stage)
+    }
+}
+
 /// Exact negotiated protocol boundary presented to a fault injector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentTransportFaultPoint {
@@ -184,5 +266,44 @@ pub struct NoAgentTransportFaultInjector;
 impl AgentTransportFaultInjector for NoAgentTransportFaultInjector {
     fn check(&self, _point: AgentTransportFaultPoint) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AgentTransportFaultStage, AgentTransportOperationStage, AgentTransportShutdownStage,
+    };
+
+    #[test]
+    fn combined_stage_registry_round_trips_stable_names() {
+        assert_eq!(AgentTransportFaultStage::ALL.len(), 11);
+        let expected = AgentTransportOperationStage::ALL
+            .into_iter()
+            .map(AgentTransportFaultStage::from)
+            .chain(
+                AgentTransportShutdownStage::ALL
+                    .into_iter()
+                    .map(AgentTransportFaultStage::from),
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(AgentTransportFaultStage::ALL.as_slice(), expected);
+        for stage in AgentTransportFaultStage::ALL {
+            let encoded = serde_json::to_string(&stage).expect("serialize transport stage");
+            assert_eq!(encoded, format!("\"{}\"", stage.as_str()));
+            let decoded: AgentTransportFaultStage =
+                serde_json::from_str(&encoded).expect("deserialize transport stage");
+            assert_eq!(decoded, stage);
+        }
+        assert_eq!(
+            AgentTransportFaultStage::from(AgentTransportOperationStage::GuestAfterResponseWrite)
+                .operation(),
+            Some(AgentTransportOperationStage::GuestAfterResponseWrite)
+        );
+        assert_eq!(
+            AgentTransportFaultStage::from(AgentTransportShutdownStage::HostAfterShutdown)
+                .shutdown(),
+            Some(AgentTransportShutdownStage::HostAfterShutdown)
+        );
     }
 }

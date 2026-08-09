@@ -1,5 +1,6 @@
 use a3s_oci_agent_protocol::{
-    AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
+    AgentOperation, AgentTransportFaultPoint, AgentTransportFaultStage,
+    AgentTransportOperationStage, AgentTransportShutdownStage, AGENT_PROTOCOL_VERSION_MAX,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use a3s_oci_sdk::{ErrorCode, OperationId};
@@ -9,7 +10,7 @@ use crate::report::AgentVmSmokeReport;
 
 /// Schema emitted by the real utility-VM Host/Guest transport cleanup diagnostic.
 pub const OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION: &str =
-    "a3s.oci.oci-vm-transport-fault-cleanup.v2";
+    "a3s.oci.oci-vm-transport-fault-cleanup.v3";
 
 /// Retained evidence for one real utility-VM transport interruption.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,8 +28,8 @@ pub struct OciVmTransportFaultCleanupReport {
     /// Nonce-bearing idempotency identity selected for this qualification run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qualification_operation_id: Option<OperationId>,
-    /// Host- or guest-side request/response transition selected for interruption.
-    pub requested_stage: AgentTransportOperationStage,
+    /// Host/Guest request-response or Host shutdown transition selected for interruption.
+    pub requested_stage: AgentTransportFaultStage,
     /// Negotiated protocol version observed at the selected transition.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub negotiated_protocol: Option<u16>,
@@ -68,7 +69,7 @@ pub struct OciVmTransportFaultCleanupReport {
 }
 
 impl OciVmTransportFaultCleanupReport {
-    pub(crate) fn initial(platform: HostPlatform, stage: AgentTransportOperationStage) -> Self {
+    pub(crate) fn initial(platform: HostPlatform, stage: AgentTransportFaultStage) -> Self {
         Self {
             schema_version: OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION.to_string(),
             platform,
@@ -99,7 +100,7 @@ impl OciVmTransportFaultCleanupReport {
         all(target_os = "windows", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     )))]
-    pub(crate) fn unsupported(platform: HostPlatform, stage: AgentTransportOperationStage) -> Self {
+    pub(crate) fn unsupported(platform: HostPlatform, stage: AgentTransportFaultStage) -> Self {
         let mut report = Self::initial(platform, stage);
         report.status = CapabilityStatus::Unsupported;
         report.bridge.status = CapabilityStatus::Unsupported;
@@ -119,16 +120,24 @@ impl OciVmTransportFaultCleanupReport {
     }
 
     pub(crate) fn evidence_succeeded(&self) -> bool {
-        let expected_point = format!(
-            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
-            self.requested_stage.as_str()
-        );
+        let expected_point = match self.requested_stage {
+            AgentTransportFaultStage::Operation(stage) => AgentTransportFaultPoint::Operation {
+                protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+                operation: AgentOperation::Create,
+                stage,
+            },
+            AgentTransportFaultStage::Shutdown(stage) => AgentTransportFaultPoint::Shutdown {
+                protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+                stage,
+            },
+        }
+        .to_string();
         let common = matches!(self.platform, HostPlatform::Macos | HostPlatform::Windows)
             && self.platform == self.bridge.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Create
             && self.qualification_operation_id.is_some()
-            && is_supported_transport_stage(self.requested_stage)
+            && is_supported_transport_fault_stage(self.requested_stage)
             && self.negotiated_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
             && self.injected_point.as_deref() == Some(expected_point.as_str())
             && self.fault_crossings == 1
@@ -143,24 +152,34 @@ impl OciVmTransportFaultCleanupReport {
             return false;
         }
 
-        if is_supported_host_stage(self.requested_stage) {
-            self.observed_error_operation.as_deref() == Some("oci-vm-transport-qualification-fault")
-                && !self.primary_response_received
-                && !self.disconnect_probe_attempted
-                && !self.guest_evidence_verified
-                && self.guest_evidence_operation_id.is_none()
-        } else {
-            self.observed_error_operation
-                .as_deref()
-                .is_some_and(is_retryable_disconnect_operation)
-                && self.guest_evidence_verified
-                && self.guest_evidence_operation_id == self.qualification_operation_id
-                && self.primary_response_received
-                    == matches!(
-                        self.requested_stage,
-                        AgentTransportOperationStage::GuestAfterResponseWrite
-                    )
-                && self.disconnect_probe_attempted == self.primary_response_received
+        match self.requested_stage {
+            AgentTransportFaultStage::Operation(stage) if is_supported_host_stage(stage) => {
+                self.observed_error_operation.as_deref()
+                    == Some("oci-vm-transport-qualification-fault")
+                    && !self.primary_response_received
+                    && !self.disconnect_probe_attempted
+                    && !self.guest_evidence_verified
+                    && self.guest_evidence_operation_id.is_none()
+            }
+            AgentTransportFaultStage::Operation(stage) => {
+                self.observed_error_operation
+                    .as_deref()
+                    .is_some_and(is_retryable_disconnect_operation)
+                    && self.guest_evidence_verified
+                    && self.guest_evidence_operation_id == self.qualification_operation_id
+                    && self.primary_response_received
+                        == matches!(stage, AgentTransportOperationStage::GuestAfterResponseWrite)
+                    && self.disconnect_probe_attempted == self.primary_response_received
+            }
+            AgentTransportFaultStage::Shutdown(stage) => {
+                is_supported_shutdown_stage(stage)
+                    && self.observed_error_operation.as_deref()
+                        == Some("oci-vm-transport-qualification-fault")
+                    && self.primary_response_received
+                    && !self.disconnect_probe_attempted
+                    && !self.guest_evidence_verified
+                    && self.guest_evidence_operation_id.is_none()
+            }
         }
     }
 }
@@ -177,10 +196,29 @@ pub const fn is_supported_guest_stage(stage: AgentTransportOperationStage) -> bo
     stage.is_guest()
 }
 
+/// Whether the real-host diagnostic implements this shutdown transition.
+#[must_use]
+pub const fn is_supported_shutdown_stage(stage: AgentTransportShutdownStage) -> bool {
+    matches!(
+        stage,
+        AgentTransportShutdownStage::HostBeforeShutdown
+            | AgentTransportShutdownStage::HostAfterShutdown
+    )
+}
+
 /// Whether the real-host diagnostic implements this operation transition.
 #[must_use]
 pub const fn is_supported_transport_stage(stage: AgentTransportOperationStage) -> bool {
     stage.is_host() || stage.is_guest()
+}
+
+/// Whether the real-host diagnostic implements this operation or shutdown transition.
+#[must_use]
+pub const fn is_supported_transport_fault_stage(stage: AgentTransportFaultStage) -> bool {
+    match stage {
+        AgentTransportFaultStage::Operation(stage) => is_supported_transport_stage(stage),
+        AgentTransportFaultStage::Shutdown(stage) => is_supported_shutdown_stage(stage),
+    }
 }
 
 pub(crate) fn is_retryable_disconnect_operation(operation: &str) -> bool {
@@ -198,7 +236,8 @@ pub(crate) fn is_retryable_disconnect_operation(operation: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use a3s_oci_agent_protocol::{
-        AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
+        AgentOperation, AgentTransportFaultPoint, AgentTransportOperationStage,
+        AgentTransportShutdownStage, AGENT_PROTOCOL_VERSION_MAX,
     };
     use a3s_oci_core::{CapabilityStatus, HostPlatform};
     use a3s_oci_sdk::{ErrorCode, OperationId};
@@ -210,7 +249,8 @@ mod tests {
     #[test]
     fn transport_report_requires_the_exact_fault_and_complete_vm_cleanup() {
         let stage = AgentTransportOperationStage::HostAfterRequestWrite;
-        let mut report = OciVmTransportFaultCleanupReport::initial(HostPlatform::Macos, stage);
+        let mut report =
+            OciVmTransportFaultCleanupReport::initial(HostPlatform::Macos, stage.into());
         report.status = CapabilityStatus::Available;
         report.bundle_loaded = true;
         report.qualification_operation_id =
@@ -261,7 +301,8 @@ mod tests {
     #[test]
     fn transport_report_requires_nonce_bound_evidence_for_guest_stages() {
         let stage = AgentTransportOperationStage::GuestAfterDispatch;
-        let mut report = OciVmTransportFaultCleanupReport::initial(HostPlatform::Macos, stage);
+        let mut report =
+            OciVmTransportFaultCleanupReport::initial(HostPlatform::Macos, stage.into());
         report.status = CapabilityStatus::Available;
         report.bundle_loaded = true;
         report.qualification_operation_id =
@@ -284,6 +325,37 @@ mod tests {
         assert!(report.is_success());
 
         report.primary_response_received = true;
+        assert!(!report.is_success());
+    }
+
+    #[test]
+    fn transport_report_requires_a_successful_create_before_shutdown_fault() {
+        let stage = AgentTransportShutdownStage::HostBeforeShutdown;
+        let mut report =
+            OciVmTransportFaultCleanupReport::initial(HostPlatform::Macos, stage.into());
+        report.status = CapabilityStatus::Available;
+        report.bundle_loaded = true;
+        report.qualification_operation_id =
+            Some(OperationId::new("shutdown-transport-report-create").expect("operation ID"));
+        report.negotiated_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.injected_point = Some(
+            AgentTransportFaultPoint::Shutdown {
+                protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+                stage,
+            }
+            .to_string(),
+        );
+        report.fault_crossings = 1;
+        report.observed_error_code = Some(ErrorCode::Unavailable);
+        report.observed_error_operation = Some("oci-vm-transport-qualification-fault".to_string());
+        report.observed_error_retryable = true;
+        report.primary_response_received = true;
+        report.marker_absent_after_cleanup = true;
+        report.guest_runtime_clean = true;
+        report.bridge = complete_macos_bridge();
+        assert!(report.is_success());
+
+        report.primary_response_received = false;
         assert!(!report.is_success());
     }
 

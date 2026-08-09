@@ -38,7 +38,7 @@ pub(super) async fn run_transport_fault_cleanup(
     vm_rootfs: &Path,
     bundle_directory: &Path,
     console: &Path,
-    stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
+    stage: a3s_oci_agent_protocol::AgentTransportFaultStage,
 ) -> crate::OciVmTransportFaultCleanupReport {
     transport_fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, stage).await
 }

@@ -62,7 +62,9 @@ mod windows_security;
 #[cfg(windows)]
 mod windows_service;
 
-pub use a3s_oci_agent_protocol::AgentTransportOperationStage;
+pub use a3s_oci_agent_protocol::{
+    AgentTransportFaultStage, AgentTransportOperationStage, AgentTransportShutdownStage,
+};
 #[cfg(windows)]
 pub use agent_pipe::WindowsAgentPipeListener;
 pub use agent_smoke::agent_vm_smoke;
@@ -125,7 +127,8 @@ pub use soak_report::{
     NATIVE_LINUX_SOAK_SCHEMA_VERSION,
 };
 pub use transport_cleanup_report::{
-    is_supported_guest_stage, is_supported_host_stage, is_supported_transport_stage,
+    is_supported_guest_stage, is_supported_host_stage, is_supported_shutdown_stage,
+    is_supported_transport_fault_stage, is_supported_transport_stage,
     OciVmTransportFaultCleanupReport, OCI_VM_TRANSPORT_FAULT_CLEANUP_SCHEMA_VERSION,
 };
 pub use utility_vm_soak_report::{

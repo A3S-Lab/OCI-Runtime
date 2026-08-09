@@ -348,7 +348,7 @@ enum Command {
         #[arg(long, value_enum)]
         fault_after: FaultPointArg,
     },
-    /// Interrupt one real utility-VM create transport stage and prove cleanup.
+    /// Interrupt one real utility-VM transport stage and prove cleanup.
     OciVmTransportFaultCleanup {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
@@ -362,7 +362,7 @@ enum Command {
         /// New host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
-        /// Exact Host- or Guest-side create request/response transition to interrupt.
+        /// Exact Host/Guest request-response or Host shutdown transition to interrupt.
         #[arg(long, value_enum)]
         fault_at: TransportFaultStageArg,
     },
@@ -408,20 +408,48 @@ enum TransportFaultStageArg {
     GuestBeforeResponseWrite,
     #[value(name = "guest-after-response-write")]
     GuestAfterResponseWrite,
+    #[value(name = "host-before-shutdown")]
+    HostBeforeShutdown,
+    #[value(name = "host-after-shutdown")]
+    HostAfterShutdown,
 }
 
-impl From<TransportFaultStageArg> for a3s_oci_runtime::AgentTransportOperationStage {
+impl From<TransportFaultStageArg> for a3s_oci_runtime::AgentTransportFaultStage {
     fn from(value: TransportFaultStageArg) -> Self {
         match value {
-            TransportFaultStageArg::BeforeRequestWrite => Self::HostBeforeRequestWrite,
-            TransportFaultStageArg::AfterRequestWrite => Self::HostAfterRequestWrite,
-            TransportFaultStageArg::BeforeResponseRead => Self::HostBeforeResponseRead,
-            TransportFaultStageArg::AfterResponseRead => Self::HostAfterResponseRead,
-            TransportFaultStageArg::GuestAfterRequestRead => Self::GuestAfterRequestRead,
-            TransportFaultStageArg::GuestBeforeDispatch => Self::GuestBeforeDispatch,
-            TransportFaultStageArg::GuestAfterDispatch => Self::GuestAfterDispatch,
-            TransportFaultStageArg::GuestBeforeResponseWrite => Self::GuestBeforeResponseWrite,
-            TransportFaultStageArg::GuestAfterResponseWrite => Self::GuestAfterResponseWrite,
+            TransportFaultStageArg::BeforeRequestWrite => Self::Operation(
+                a3s_oci_runtime::AgentTransportOperationStage::HostBeforeRequestWrite,
+            ),
+            TransportFaultStageArg::AfterRequestWrite => Self::Operation(
+                a3s_oci_runtime::AgentTransportOperationStage::HostAfterRequestWrite,
+            ),
+            TransportFaultStageArg::BeforeResponseRead => Self::Operation(
+                a3s_oci_runtime::AgentTransportOperationStage::HostBeforeResponseRead,
+            ),
+            TransportFaultStageArg::AfterResponseRead => Self::Operation(
+                a3s_oci_runtime::AgentTransportOperationStage::HostAfterResponseRead,
+            ),
+            TransportFaultStageArg::GuestAfterRequestRead => Self::Operation(
+                a3s_oci_runtime::AgentTransportOperationStage::GuestAfterRequestRead,
+            ),
+            TransportFaultStageArg::GuestBeforeDispatch => {
+                Self::Operation(a3s_oci_runtime::AgentTransportOperationStage::GuestBeforeDispatch)
+            }
+            TransportFaultStageArg::GuestAfterDispatch => {
+                Self::Operation(a3s_oci_runtime::AgentTransportOperationStage::GuestAfterDispatch)
+            }
+            TransportFaultStageArg::GuestBeforeResponseWrite => Self::Operation(
+                a3s_oci_runtime::AgentTransportOperationStage::GuestBeforeResponseWrite,
+            ),
+            TransportFaultStageArg::GuestAfterResponseWrite => Self::Operation(
+                a3s_oci_runtime::AgentTransportOperationStage::GuestAfterResponseWrite,
+            ),
+            TransportFaultStageArg::HostBeforeShutdown => {
+                Self::Shutdown(a3s_oci_runtime::AgentTransportShutdownStage::HostBeforeShutdown)
+            }
+            TransportFaultStageArg::HostAfterShutdown => {
+                Self::Shutdown(a3s_oci_runtime::AgentTransportShutdownStage::HostAfterShutdown)
+            }
         }
     }
 }
@@ -869,7 +897,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CliError> {
                 &vm_rootfs,
                 &bundle,
                 &console,
-                fault_at.into(),
+                a3s_oci_runtime::AgentTransportFaultStage::from(fault_at),
             )
             .await;
             let succeeded = report.is_success();
