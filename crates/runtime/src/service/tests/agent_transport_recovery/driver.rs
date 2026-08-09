@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
-    AgentKillRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentWaitRequest,
-    GuestPath,
+    AgentKillRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentWaitRequest, GuestPath,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -19,10 +19,11 @@ use tokio::io::DuplexStream;
 
 use crate::{
     DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverRecovery, DriverStartRequest, DriverState, DriverWaitRequest, RuntimeDriver,
+    DriverRecovery, DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverWaitRequest,
+    RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 7] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 8] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -30,6 +31,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 7] = [
     RuntimeOperation::Delete,
     RuntimeOperation::Wait,
     RuntimeOperation::Exec,
+    RuntimeOperation::SignalProcess,
 ];
 
 #[derive(Debug, Default)]
@@ -41,6 +43,7 @@ pub(super) struct DriverMetrics {
     delete_dispatches: AtomicUsize,
     wait_dispatches: AtomicUsize,
     exec_dispatches: AtomicUsize,
+    signal_process_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -71,6 +74,10 @@ impl DriverMetrics {
 
     pub(super) fn exec_dispatches(&self) -> usize {
         self.exec_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn signal_process_dispatches(&self) -> usize {
+        self.signal_process_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -225,6 +232,19 @@ impl RuntimeDriver for AgentLifecycleDriver {
             .for_operation("map-agent-process"));
         }
         DriverProcess::new(process.pid(), process.terminal())
+    }
+
+    async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        self.metrics
+            .signal_process_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        self.client
+            .signal_process(AgentSignalProcessRequest {
+                context: request.context,
+                target: request.target,
+                signal: request.signal,
+            })
+            .await
     }
 }
 

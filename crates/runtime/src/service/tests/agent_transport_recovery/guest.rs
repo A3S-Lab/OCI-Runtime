@@ -2,28 +2,13 @@ use std::sync::Mutex;
 
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
-    AgentOperation, AgentProcess, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitRequest, GuestAgentService,
+    AgentOperation, AgentProcess, AgentSignalProcessRequest, AgentStartRequest, AgentState,
+    AgentStateRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, ExitStatus, Result};
 
-#[derive(Debug)]
-struct OperationJournal<Request, Response> {
-    entry: Option<(Request, Response)>,
-    requests: usize,
-    effects: usize,
-}
-
-impl<Request, Response> Default for OperationJournal<Request, Response> {
-    fn default() -> Self {
-        Self {
-            entry: None,
-            requests: 0,
-            effects: 0,
-        }
-    }
-}
+use super::guest_journal::{already_exists, changed_request, OperationJournal};
 
 #[derive(Debug, Default)]
 struct LifecycleJournal {
@@ -34,6 +19,7 @@ struct LifecycleJournal {
     delete: OperationJournal<AgentDeleteRequest, ()>,
     wait_requests: usize,
     exec: OperationJournal<AgentExecRequest, AgentProcess>,
+    signal_process: OperationJournal<AgentSignalProcessRequest, ()>,
     init_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
 }
@@ -58,6 +44,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::Delete,
                     AgentOperation::Wait,
                     AgentOperation::Exec,
+                    AgentOperation::SignalProcess,
                 ],
             )
             .expect("test guest capabilities"),
@@ -156,6 +143,22 @@ impl JournaledLifecycleGuest {
             .lock()
             .expect("guest journal lock")
             .exec
+            .effects
+    }
+
+    pub(super) fn signal_process_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .signal_process
+            .requests
+    }
+
+    pub(super) fn signal_process_effect_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .signal_process
             .effects
     }
 }
@@ -447,20 +450,38 @@ impl GuestAgentService for JournaledLifecycleGuest {
         journal.exec.entry = Some((request, response.clone()));
         Ok(response)
     }
-}
 
-fn changed_request(operation: &'static str) -> Error {
-    Error::new(
-        ErrorCode::Conflict,
-        format!("{operation} operation ID was reused with a different guest request"),
-    )
-    .for_operation(format!("agent-{operation}"))
-}
+    async fn signal_process(&self, request: AgentSignalProcessRequest) -> Result<()> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.signal_process.requests += 1;
+        if let Some((recorded, ())) = journal.signal_process.entry.as_ref() {
+            if recorded.context.operation_id == request.context.operation_id {
+                if recorded != &request {
+                    return Err(changed_request("signal-process"));
+                }
+                return Ok(());
+            }
+            return Err(already_exists("signal-process"));
+        }
 
-fn already_exists(operation: &'static str) -> Error {
-    Error::new(
-        ErrorCode::AlreadyExists,
-        format!("the exact guest container generation already has a {operation} journal"),
-    )
-    .for_operation(format!("agent-{operation}"))
+        let process = journal
+            .exec
+            .entry
+            .as_ref()
+            .map(|(_, process)| process)
+            .ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "guest exec process is unavailable")
+                    .for_operation("agent-signal-process")
+            })?;
+        if process.target() != &request.target {
+            return Err(
+                Error::new(ErrorCode::NotFound, "guest exec process is unavailable")
+                    .for_operation("agent-signal-process"),
+            );
+        }
+
+        journal.signal_process.effects += 1;
+        journal.signal_process.entry = Some((request, ()));
+        Ok(())
+    }
 }
