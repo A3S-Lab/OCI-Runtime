@@ -179,4 +179,11 @@ impl JournaledLifecycleGuest {
             .expect("guest journal lock")
             .stats_requests
     }
+
+    pub(in super::super) fn read_output_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .read_output_requests
+    }
 }

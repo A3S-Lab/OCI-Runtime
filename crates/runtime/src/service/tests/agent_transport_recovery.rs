@@ -7,6 +7,7 @@ mod guest_journal;
 mod kill;
 mod pause;
 mod processes;
+mod read_output;
 mod resume;
 mod signal_process;
 mod start;

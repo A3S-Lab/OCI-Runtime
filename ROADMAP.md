@@ -615,6 +615,13 @@ enforce it. No property is silently ignored.
     retryable first-call failure, including a fully written first response.
     Keep durable state unchanged and reject stale generations before host
     driver dispatch and at the guest boundary.
+  - [x] Carry read-only `read-output` through all nine portable reopen stages
+    for an exact running init process. Resolve the current host target to the
+    exact container generation, preserve the inclusive byte cursor and response
+    limit, and return the same contiguous stdout chunk after reconnect. Reissue
+    the poll after every retryable first-call failure, including a fully written
+    first response, and reject stale process generations before host driver
+    dispatch and at the guest boundary.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

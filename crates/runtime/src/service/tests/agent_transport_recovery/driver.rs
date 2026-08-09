@@ -5,8 +5,9 @@ use std::sync::Arc;
 use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
+    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
+    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentWaitRequest, GuestPath,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -14,18 +15,18 @@ use a3s_oci_core::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus,
-    OciBundle, OperationContext, ProcessIo, ProcessRecord, Result, RuntimeOperation,
+    OciBundle, OperationContext, OutputChunk, ProcessIo, ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::io::DuplexStream;
 
 use crate::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverRecovery, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
-    DriverWaitRequest, RuntimeDriver,
+    DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverRecovery,
+    DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
+    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 14] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 15] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -40,6 +41,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 14] = [
     RuntimeOperation::Processes,
     RuntimeOperation::Update,
     RuntimeOperation::Stats,
+    RuntimeOperation::ReadOutput,
 ];
 
 #[derive(Debug, Default)]
@@ -58,6 +60,7 @@ pub(super) struct DriverMetrics {
     processes_dispatches: AtomicUsize,
     update_dispatches: AtomicUsize,
     stats_dispatches: AtomicUsize,
+    read_output_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -116,6 +119,10 @@ impl DriverMetrics {
 
     pub(super) fn stats_dispatches(&self) -> usize {
         self.stats_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn read_output_dispatches(&self) -> usize {
+        self.read_output_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -353,6 +360,20 @@ impl RuntimeDriver for AgentLifecycleDriver {
     async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
         self.metrics.stats_dispatches.fetch_add(1, Ordering::SeqCst);
         self.client.stats(AgentStatsRequest { target }).await
+    }
+
+    async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.metrics
+            .read_output_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        self.client
+            .read_output(AgentReadOutputRequest {
+                process: request.target,
+                after_sequence: request.after_sequence,
+                max_bytes: request.max_bytes,
+                wait_timeout_ms: request.wait_timeout_ms,
+            })
+            .await
     }
 }
 

@@ -264,21 +264,22 @@ host-service reopen below the `RuntimeDriver` boundary. The portable matrix
 already reopens the durable host around a new authenticated connection and
 driver at all nine request/response stages for create, state, start, kill,
 delete, wait, exec, signal-process, wait-process, pause, resume, processes,
-update, and stats, retaining 126 operation-stage pairs. Mutations distinguish
-pre-dispatch execution, post-dispatch guest replay, and completed durable-host
-replay while preserving the same generation and one effect. Exec additionally
-preserves its exact process ID, guest PID, and terminal mode;
+update, stats, and read-output, retaining 135 operation-stage pairs. Mutations
+distinguish pre-dispatch execution, post-dispatch guest replay, and completed
+durable-host replay while preserving the same generation and one effect. Exec
+additionally preserves its exact process ID, guest PID, and terminal mode;
 signal-process preserves that exact process target and the delivered signal;
 pause and resume preserve the running state and commit the matching freezer
 flag exactly once, including when the first guest effect preceded the lost
 response; update preserves the complete OCI `LinuxResources` request and one
 exact resource effect.
-Read-only state, process inventory, and normalized stats resolve a current
-target to the exact durable generation and are safely reissued after reopen,
-including after a fully written first response. Process inventory retains the
-same exact live init and exec identities, while stats retain their validated
-timestamp, CPU, memory, process-count, and named metrics without changing
-durable state. Init and exec waits
+Read-only state, process inventory, normalized stats, and captured-output polls
+resolve a current target to the exact durable generation and are safely
+reissued after reopen, including after a fully written first response. Process
+inventory retains the same exact live init and exec identities, stats retain
+their validated timestamp, CPU, memory, process-count, and named metrics, and
+output retains its inclusive byte cursor, limit, and contiguous stream chunk
+without changing durable state. Init and exec waits
 are reissued only until the host receives and durably caches one exact terminal
 result; a fully written response and every later retry replay that cache without
 another driver dispatch. Stale observation targets fail before host driver

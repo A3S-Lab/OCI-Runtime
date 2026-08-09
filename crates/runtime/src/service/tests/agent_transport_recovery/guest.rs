@@ -3,18 +3,20 @@ use std::sync::Mutex;
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
     AgentExecRequest, AgentKillRequest, AgentOperation, AgentProcess, AgentProcessesRequest,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
+    AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
+    AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
+    AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, ProcessId,
+    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, OutputChunk, ProcessId,
     ProcessRecord, ProcessTarget, Result,
 };
 
 use super::guest_journal::{already_exists, changed_request, OperationJournal};
 
 mod freezer;
+mod io;
 mod metrics;
 mod resource;
 mod stats;
@@ -35,6 +37,7 @@ struct LifecycleJournal {
     processes_requests: usize,
     update: OperationJournal<AgentUpdateRequest, AgentState>,
     stats_requests: usize,
+    read_output_requests: usize,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -67,6 +70,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::Processes,
                     AgentOperation::Update,
                     AgentOperation::Stats,
+                    AgentOperation::ReadOutput,
                 ],
             )
             .expect("test guest capabilities"),
@@ -483,5 +487,9 @@ impl GuestAgentService for JournaledLifecycleGuest {
 
     async fn stats(&self, request: AgentStatsRequest) -> Result<ContainerStats> {
         self.read_stats(request)
+    }
+
+    async fn read_output(&self, request: AgentReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.read_captured_output(request)
     }
 }
