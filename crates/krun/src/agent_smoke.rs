@@ -72,23 +72,8 @@ pub fn agent_vm_smoke(
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        let _ = socket_path;
-        let Some(guest_token_file) = handoff.guest_token_file else {
-            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Windows, config);
-            report.reason = Some("the Windows guest-agent bridge requires a token file".into());
-            return report;
-        };
-        let _ = token;
-        agent_vm_smoke_windows(
-            rootfs,
-            handoff.runtime_share,
-            console,
-            endpoint,
-            guest_token_file,
-            handoff.guest_recovery_report,
-            handoff.transport_qualification,
-            config,
-        )
+        let _ = (socket_path, token);
+        agent_vm_smoke_windows(rootfs, console, endpoint, handoff, config)
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -137,18 +122,19 @@ pub fn agent_vm_smoke(
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 fn agent_vm_smoke_windows(
     rootfs: &Path,
-    runtime_share: Option<&Path>,
     console: &Path,
     endpoint: &AgentVsockEndpoint,
-    guest_token_file: &str,
-    guest_recovery_report: Option<&str>,
-    transport_qualification: Option<&AgentTransportQualificationRequest>,
+    handoff: AgentVmHandoff<'_>,
     config: VmConfig,
 ) -> KrunAgentVmSmokeReport {
     use std::fs;
 
     use crate::context::KrunContext;
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Windows, config);
+    let Some(guest_token_file) = handoff.guest_token_file else {
+        report.reason = Some("the Windows guest-agent bridge requires a token file".into());
+        return report;
+    };
     let rootfs = match rootfs.canonicalize() {
         Ok(path) if path.is_dir() => path,
         Ok(path) => {
@@ -173,7 +159,7 @@ fn agent_vm_smoke_windows(
     }
     report.agent_binary_present = true;
 
-    let runtime_share = match runtime_share {
+    let runtime_share = match handoff.runtime_share {
         Some(path) => match path.canonicalize() {
             Ok(path) if path.is_dir() => Some(path),
             Ok(path) => {
@@ -256,10 +242,10 @@ fn agent_vm_smoke_windows(
             AGENT_RUNTIME_SHARE_TAG.to_string(),
         ));
     }
-    if let Some(path) = guest_recovery_report {
+    if let Some(path) = handoff.guest_recovery_report {
         environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));
     }
-    if let Some(request) = transport_qualification {
+    if let Some(request) = handoff.transport_qualification {
         let encoded = match request.to_json() {
             Ok(encoded) => encoded,
             Err(error) => {
