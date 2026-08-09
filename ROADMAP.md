@@ -601,6 +601,13 @@ enforce it. No property is silently ignored.
     retryable first-call failure, including a fully written first response.
     Keep durable state unchanged and reject stale generations before host
     driver dispatch and at the guest boundary.
+  - [x] Carry `update` through all nine portable reopen stages after an exact
+    durable create and start. Keep the complete OCI `LinuxResources` request
+    resumable after every retryable first-call failure, replay post-dispatch
+    effects through the exact guest request journal, and replay a fully written
+    response from the durable host journal without another dispatch. Require
+    one resource-update effect and reject changed resources under the same
+    operation ID at both boundaries.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

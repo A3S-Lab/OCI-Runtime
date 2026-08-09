@@ -4,7 +4,7 @@ use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
     AgentExecRequest, AgentKillRequest, AgentOperation, AgentProcess, AgentProcessesRequest,
     AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
@@ -16,6 +16,7 @@ use super::guest_journal::{already_exists, changed_request, OperationJournal};
 
 mod freezer;
 mod metrics;
+mod resource;
 
 #[derive(Debug, Default)]
 struct LifecycleJournal {
@@ -31,6 +32,7 @@ struct LifecycleJournal {
     pause: OperationJournal<AgentContainerOperationRequest, AgentState>,
     resume: OperationJournal<AgentContainerOperationRequest, AgentState>,
     processes_requests: usize,
+    update: OperationJournal<AgentUpdateRequest, AgentState>,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -61,6 +63,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::Pause,
                     AgentOperation::Resume,
                     AgentOperation::Processes,
+                    AgentOperation::Update,
                 ],
             )
             .expect("test guest capabilities"),
@@ -469,5 +472,9 @@ impl GuestAgentService for JournaledLifecycleGuest {
             }
         }
         Ok(processes)
+    }
+
+    async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
+        self.update_resources(request)
     }
 }

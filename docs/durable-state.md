@@ -263,15 +263,16 @@ it), and carrying all 180 host/agent fault pairs through a real utility VM and
 host-service reopen below the `RuntimeDriver` boundary. The portable matrix
 already reopens the durable host around a new authenticated connection and
 driver at all nine request/response stages for create, state, start, kill,
-delete, wait, exec, signal-process, wait-process, pause, resume, and processes,
-retaining 108 operation-stage pairs. Mutations distinguish pre-dispatch
+delete, wait, exec, signal-process, wait-process, pause, resume, processes, and
+update, retaining 117 operation-stage pairs. Mutations distinguish pre-dispatch
 execution, post-dispatch guest replay, and completed durable-host replay while
 preserving the same generation and one effect. Exec additionally preserves its
 exact process ID, guest PID, and terminal mode;
 signal-process preserves that exact process target and the delivered signal;
 pause and resume preserve the running state and commit the matching freezer
 flag exactly once, including when the first guest effect preceded the lost
-response.
+response; update preserves the complete OCI `LinuxResources` request and one
+exact resource effect.
 Read-only state and process inventory resolve a current target to the exact
 durable generation and are safely reissued after reopen, including after a
 fully written first response. Process inventory retains the same exact live

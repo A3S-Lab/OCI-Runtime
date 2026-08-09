@@ -358,18 +358,20 @@ connection, and replays the identical `OperationId` and request without a
 second effect; changed content under the same ID fails with `Conflict`. A
 portable agent-backed `RuntimeDriver` matrix now carries all nine create,
 state, start, kill, delete, wait, exec, signal-process, wait-process, pause,
-resume, and processes stages through `HostRuntimeService` reopen: 108 retained
-operation-stage pairs. Faults before guest dispatch leave a mutation resumable
-and perform its first effect on the replacement connection.
+resume, processes, and update stages through `HostRuntimeService` reopen: 117
+retained operation-stage pairs. Faults before guest dispatch leave a mutation
+resumable and perform its first effect on the replacement connection.
 Faults after dispatch replay the cached mutation response, including a guest
 that reached `running` while the durable host still records `created`, reached
 `stopped` while the durable host still records `running`, removed the generation
 while the durable host still records `stopped`, or created an exec process while
 the durable host still retains its prepared process claim, froze a running
 guest while the durable host still records it as unpaused, or thawed it while
-the host still records it as paused. Exec replay preserves the exact process
-ID, PID, and terminal mode; signal-process replay preserves the exact target
-and signal; pause and resume replay preserve one exact freezer effect each.
+the host still records it as paused, or applied a resource update while its
+durable host operation remained pending. Exec replay preserves the exact
+process ID, PID, and terminal mode; signal-process replay preserves the exact
+target and signal; pause and resume replay preserve one exact freezer effect
+each; update replay preserves the complete resources and one effect.
 State, processes, wait, and wait-process have no guest mutation journal: state
 and the exact live init/exec inventory are safely reissued after every reopen,
 while both wait forms are reissued only until the host durably caches the

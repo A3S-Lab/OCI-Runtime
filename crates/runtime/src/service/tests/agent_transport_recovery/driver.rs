@@ -6,7 +6,7 @@ use a3s_oci_agent_protocol::{
     AgentBundle, AgentClient, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
     AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestPath,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -21,10 +21,11 @@ use tokio::io::DuplexStream;
 use crate::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverRecovery, DriverSignalProcessRequest,
-    DriverStartRequest, DriverState, DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
+    DriverWaitRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 12] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 13] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -37,6 +38,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 12] = [
     RuntimeOperation::Pause,
     RuntimeOperation::Resume,
     RuntimeOperation::Processes,
+    RuntimeOperation::Update,
 ];
 
 #[derive(Debug, Default)]
@@ -53,6 +55,7 @@ pub(super) struct DriverMetrics {
     pause_dispatches: AtomicUsize,
     resume_dispatches: AtomicUsize,
     processes_dispatches: AtomicUsize,
+    update_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -103,6 +106,10 @@ impl DriverMetrics {
 
     pub(super) fn processes_dispatches(&self) -> usize {
         self.processes_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn update_dispatches(&self) -> usize {
+        self.update_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -319,6 +326,22 @@ impl RuntimeDriver for AgentLifecycleDriver {
         self.client
             .processes(AgentProcessesRequest { target })
             .await
+    }
+
+    async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        self.metrics
+            .update_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        let expected_target = request.target.clone();
+        let state = self
+            .client
+            .update(AgentUpdateRequest {
+                context: request.context,
+                target: request.target,
+                resources: request.resources,
+            })
+            .await?;
+        map_agent_state(&expected_target, None, state)
     }
 }
 
