@@ -355,9 +355,15 @@ the 180 operation-stage pairs, requires one exact crossing, and proves the
 connection terminates after each fault. Separate evidence completes one create
 dispatch, drops the response before it is written, authenticates a new
 connection, and replays the identical `OperationId` and request without a
-second effect; changed content under the same ID fails with `Conflict`. This is
-session-local protocol evidence, not yet the required utility-VM replacement
-and host-service reopen matrix.
+second effect; changed content under the same ID fails with `Conflict`. The
+same response-loss case now runs through an agent-backed `RuntimeDriver`: the
+first `HostRuntimeService` retains its durable `creating` record after the
+retryable disconnect, and a newly authenticated connection plus new driver
+reopens that state root and completes the same generation. Two driver
+dispatches still produce one guest effect, while both durable-host drift and
+guest-request drift fail closed. This is portable in-memory host-service reopen
+evidence, not yet the required real utility-VM replacement and complete
+transition matrix.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

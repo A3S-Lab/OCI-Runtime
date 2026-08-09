@@ -259,5 +259,8 @@ without fabricated exit evidence.
 The remaining persistence gates are startup-wide orphan scanning,
 descriptor-relative path operations, real-host qualification of restart-stable
 WHPX exit evidence (or qualified reattachment where another driver promises
-it), and carrying the exhaustive in-memory host/agent fault matrix through a
-real utility VM plus host-service reopen below the `RuntimeDriver` boundary.
+it), and carrying all 180 host/agent fault pairs through a real utility VM and
+host-service reopen below the `RuntimeDriver` boundary. The portable
+post-dispatch create-response-loss case already reopens the durable host around
+a new authenticated connection and driver, resumes the same generation, and
+proves two driver dispatches produce one guest effect.

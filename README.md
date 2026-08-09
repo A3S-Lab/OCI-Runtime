@@ -103,7 +103,7 @@ and `experimental` or `supported` readiness.
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
-| Retained evidence | Schema and normative locks, exhaustive durable fault matrices, native Linux real-container, soak, and owner-death safe-termination gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
+| Retained evidence | Schema and normative locks, exhaustive durable and authenticated agent fault matrices, portable create-response-loss host reopen, native Linux real-container, soak, and owner-death safe-termination gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
 The current Box adapter at `A3S-Lab/Box@a16772c3` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
@@ -349,6 +349,7 @@ The repository turns release claims into checked inventories:
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Registered durable commit fault stages | 657 |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
+| Authenticated agent operation-stage fault pairs | 180 |
 | Guest operations behind protocol v9 | 20 |
 
 The locks prove inventory and exercised boundaries, not full conformance by
@@ -365,7 +366,7 @@ qualification must all pass before a driver becomes `supported`.
 - live Native Linux process-I/O reattachment across owner death and exact
   terminal evidence when a persistent authenticated reaper can retain it;
 - pinned immutable utility-VM system roots;
-- remaining utility-VM transport fault injection and hook recovery/security
+- real utility-VM transport reopen fault injection and hook recovery/security
   certification;
 - the default and cross-platform A3S Box cutover and OCI Runtime-owned
   containerd shim;

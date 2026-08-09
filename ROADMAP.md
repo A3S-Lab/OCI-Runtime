@@ -346,9 +346,11 @@ Completed:
   operations, spanning four host request/response stages, five guest
   read/dispatch/write stages, and two host shutdown stages. An authenticated
   in-memory matrix injects every one of the 180 operation-stage pairs, proves
-  one crossing and terminal disconnect per point, and separately drops one
-  create response after dispatch, reconnects through a newly authenticated
-  stream, and replays the exact request with one effect;
+  one crossing and terminal disconnect per point. The post-dispatch create
+  response-loss case also crosses a portable agent-backed `RuntimeDriver` and
+  durable `HostRuntimeService` reopen: a new authenticated stream and driver
+  resume the same generation with two driver dispatches but one guest effect,
+  while changed host and guest requests fail closed;
 - existing `features` CLI path routed through the Rust SDK;
 - reconnectable local SDK endpoints that expose the first broken-stream result
   without hidden replay, discard the poisoned stream, and renegotiate on the
@@ -505,6 +507,12 @@ enforce it. No property is silently ignored.
     in-memory streams. Require each selected point exactly once, disconnect the
     session after every injected failure, and prove that a fault after a fully
     written response preserves that response but fails the next request.
+  - [x] Carry the post-dispatch create-response-loss case through a portable
+    agent-backed `RuntimeDriver`: retain the durable `creating` record after the
+    first retryable failure, open a new authenticated connection and driver,
+    reopen `HostRuntimeService`, and resume the same generation with two driver
+    dispatches but one guest effect. Reject changed content at both the durable
+    host and guest journals. Real utility-VM reopen evidence remains required.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

@@ -42,6 +42,7 @@ use crate::{
     DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
 
+mod agent_transport_recovery;
 mod fault_matrix;
 mod filesystem_operations;
 mod io_durability;
