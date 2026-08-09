@@ -5,6 +5,7 @@ mod exec;
 mod guest;
 mod guest_journal;
 mod kill;
+mod pause;
 mod signal_process;
 mod start;
 mod state;

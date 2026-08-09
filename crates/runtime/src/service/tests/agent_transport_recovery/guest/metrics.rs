@@ -117,4 +117,20 @@ impl JournaledLifecycleGuest {
             .expect("guest journal lock")
             .wait_process_requests
     }
+
+    pub(in super::super) fn pause_request_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .pause
+            .requests
+    }
+
+    pub(in super::super) fn pause_effect_count(&self) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .pause
+            .effects
+    }
 }

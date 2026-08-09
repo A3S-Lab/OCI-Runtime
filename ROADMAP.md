@@ -580,6 +580,13 @@ enforce it. No property is silently ignored.
     exact exit result. A fully written response and every later retry must avoid
     another driver or guest dispatch; current targets resolve to the exact
     generation and process ID, and stale targets fail closed at both boundaries.
+  - [x] Carry `pause` through all nine portable reopen stages after an exact
+    durable create and start. Keep the host record running and unpaused after
+    every retryable first-call failure even when the guest is already frozen,
+    resume through the original operation on a new authenticated connection and
+    driver, and prove exactly one pause effect. A fully written response must
+    replay from the durable host journal without another dispatch, and changed
+    targets under the same operation ID must fail closed at both boundaries.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

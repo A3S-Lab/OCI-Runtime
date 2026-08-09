@@ -358,17 +358,20 @@ connection, and replays the identical `OperationId` and request without a
 second effect; changed content under the same ID fails with `Conflict`. A
 portable agent-backed `RuntimeDriver` matrix now carries all nine create, all
 nine state, all nine start, all nine kill, all nine delete, all nine wait, all
-nine exec, all nine signal-process, and all nine wait-process stages through
-`HostRuntimeService` reopen: 81 retained operation-stage pairs. Faults before
+all nine exec, all nine signal-process, all nine wait-process, and all nine
+pause stages through `HostRuntimeService` reopen: 90 retained operation-stage
+pairs. Faults before
 guest dispatch leave a mutation resumable and perform its first effect on the
 replacement connection.
 Faults after dispatch replay the cached mutation response, including a guest
 that reached `running` while the durable host still records `created`, reached
 `stopped` while the durable host still records `running`, removed the generation
 while the durable host still records `stopped`, or created an exec process while
-the durable host still retains its prepared process claim. Exec replay preserves
+the durable host still retains its prepared process claim, or froze a running
+guest while the durable host still records it as unpaused. Exec replay preserves
 the exact process ID, PID, and terminal mode; signal-process replay preserves
-the exact target and signal. State, wait, and wait-process have no guest
+the exact target and signal; pause replay preserves one exact freeze effect.
+State, wait, and wait-process have no guest
 mutation journal: state is safely reissued after every reopen, while both wait
 forms are reissued only until the host durably caches the guest's stable exact
 terminal result. A fully written wait response and every later retry avoid a
