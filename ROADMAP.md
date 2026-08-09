@@ -346,11 +346,13 @@ Completed:
   operations, spanning four host request/response stages, five guest
   read/dispatch/write stages, and two host shutdown stages. An authenticated
   in-memory matrix injects every one of the 180 operation-stage pairs, proves
-  one crossing and terminal disconnect per point. The post-dispatch create
-  response-loss case also crosses a portable agent-backed `RuntimeDriver` and
-  durable `HostRuntimeService` reopen: a new authenticated stream and driver
-  resume the same generation with two driver dispatches but one guest effect,
-  while changed host and guest requests fail closed;
+  one crossing and terminal disconnect per point. A portable agent-backed
+  `RuntimeDriver` matrix also arms each of the nine create stages exactly once
+  across durable `HostRuntimeService` reopen. Pre-dispatch faults perform the
+  effect on the replacement connection, post-dispatch faults replay the guest
+  journal, and a fully written response replays the completed durable record;
+  every path preserves one generation and one guest effect, while changed host
+  and guest requests fail closed;
 - existing `features` CLI path routed through the Rust SDK;
 - reconnectable local SDK endpoints that expose the first broken-stream result
   without hidden replay, discard the poisoned stream, and renegotiate on the
@@ -513,6 +515,11 @@ enforce it. No property is silently ignored.
     reopen `HostRuntimeService`, and resume the same generation with two driver
     dispatches but one guest effect. Reject changed content at both the durable
     host and guest journals. Real utility-VM reopen evidence remains required.
+  - [x] Expand portable create recovery across all nine host/guest transport
+    stages and require each selected boundary exactly once. Prove pre-dispatch
+    faults perform the first effect after reopen, post-dispatch faults replay
+    one cached guest effect, and a fully written response replays directly from
+    the completed durable host journal without a second driver dispatch.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

@@ -1,441 +1,240 @@
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use a3s_oci_agent_protocol::{
-    serve_agent_connection, serve_agent_connection_with_fault_injector, AgentBundle,
-    AgentCapabilities, AgentClient, AgentCreateRequest, AgentDeleteRequest, AgentKillRequest,
-    AgentOperation, AgentStartRequest, AgentState, AgentStateRequest, AgentTransportFaultInjector,
-    AgentTransportFaultPoint, AgentTransportOperationStage, GuestAgentService, GuestPath,
-    SessionToken, AGENT_PROTOCOL_VERSION_MAX,
-};
-use a3s_oci_core::{
-    CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
+    serve_agent_connection, serve_agent_connection_with_fault_injector, AgentClient,
+    AgentOperation, AgentTransportFaultInjector, AgentTransportFaultPoint,
+    AgentTransportOperationStage, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerTarget, CreateAttachments, Error, ErrorCode, IoMode,
-    ListRequest, OciBundle, OciRuntimeService, OperationContext, ProcessIo, Result,
+    ContainerTarget, CreateAttachments, ErrorCode, IoMode, ListRequest, OciRuntimeService,
 };
 use tokio::io::DuplexStream;
+use tokio::task::JoinHandle;
 
 use super::create_request;
-use crate::{
-    DriverCreateRequest, DriverDeleteRequest, DriverKillRequest, DriverRecovery,
-    DriverStartRequest, DriverState, HostRuntimeService, RuntimeDriver,
+use crate::{HostRuntimeService, RuntimeDriver};
+
+mod fixture;
+
+use fixture::{
+    agent_create_request, session_token, AgentCreateDriver, DriverMetrics, FailOnceTransportFault,
+    JournaledCreateGuest,
 };
 
-#[derive(Debug, Default)]
-struct CreateJournal {
-    entry: Option<(AgentCreateRequest, AgentState)>,
-    requests: usize,
-    effects: usize,
-}
-
-#[derive(Debug)]
-struct JournaledCreateGuest {
-    capabilities: AgentCapabilities,
-    journal: Mutex<CreateJournal>,
-}
-
-impl JournaledCreateGuest {
-    fn new() -> Self {
-        Self {
-            capabilities: AgentCapabilities::core(
-                "host-service-reopen-test",
-                std::env::consts::ARCH,
-            )
-            .expect("test guest capabilities"),
-            journal: Mutex::new(CreateJournal::default()),
-        }
-    }
-
-    fn request_count(&self) -> usize {
-        self.journal.lock().expect("guest journal lock").requests
-    }
-
-    fn effect_count(&self) -> usize {
-        self.journal.lock().expect("guest journal lock").effects
-    }
-}
-
-#[async_trait]
-impl GuestAgentService for JournaledCreateGuest {
-    fn capabilities(&self) -> AgentCapabilities {
-        self.capabilities.clone()
-    }
-
-    async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
-        let mut journal = self.journal.lock().expect("guest journal lock");
-        journal.requests += 1;
-        if let Some((recorded, response)) = journal.entry.as_ref() {
-            if recorded.context.operation_id == request.context.operation_id {
-                if recorded != &request {
-                    return Err(Error::new(
-                        ErrorCode::Conflict,
-                        "create operation ID was reused with a different guest request",
-                    )
-                    .for_operation("agent-create"));
-                }
-                return Ok(response.clone());
-            }
-            return Err(Error::new(
-                ErrorCode::AlreadyExists,
-                "the exact guest container generation already exists",
-            )
-            .for_operation("agent-create"));
-        }
-
-        let response = AgentState::new(
-            request.target.clone(),
-            ContainerState::Created,
-            Some(6_101),
-            request.bundle.config_digest(),
-        )?;
-        journal.effects += 1;
-        journal.entry = Some((request, response.clone()));
-        Ok(response)
-    }
-
-    async fn state(&self, request: AgentStateRequest) -> Result<AgentState> {
-        let journal = self.journal.lock().expect("guest journal lock");
-        let (_, response) = journal.entry.as_ref().ok_or_else(|| {
-            Error::new(
-                ErrorCode::NotFound,
-                "guest container generation is unavailable",
-            )
-            .for_operation("agent-state")
-        })?;
-        if response.target() != &request.target {
-            return Err(Error::new(
-                ErrorCode::NotFound,
-                "guest container generation is unavailable",
-            )
-            .for_operation("agent-state"));
-        }
-        Ok(response.clone())
-    }
-
-    async fn start(&self, _request: AgentStartRequest) -> Result<AgentState> {
-        Err(Error::unsupported("agent-start"))
-    }
-
-    async fn kill(&self, _request: AgentKillRequest) -> Result<AgentState> {
-        Err(Error::unsupported("agent-kill"))
-    }
-
-    async fn delete(&self, _request: AgentDeleteRequest) -> Result<()> {
-        Err(Error::unsupported("agent-delete"))
-    }
-}
-
-#[derive(Debug)]
-struct FailOnceTransportFault {
-    target: AgentTransportFaultPoint,
-    fired: AtomicBool,
-}
-
-impl FailOnceTransportFault {
-    fn new(target: AgentTransportFaultPoint) -> Self {
-        Self {
-            target,
-            fired: AtomicBool::new(false),
-        }
-    }
-
-    fn fired(&self) -> bool {
-        self.fired.load(Ordering::SeqCst)
-    }
-}
-
-impl AgentTransportFaultInjector for FailOnceTransportFault {
-    fn check(&self, point: AgentTransportFaultPoint) -> Result<()> {
-        if point == self.target && !self.fired.swap(true, Ordering::SeqCst) {
-            return Err(Error::new(
-                ErrorCode::Unavailable,
-                format!("injected agent transport fault at {point}"),
-            )
-            .for_operation("agent-transport-fault")
-            .retryable(true));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct AgentCreateDriver {
-    client: AgentClient<DuplexStream>,
-    create_dispatches: Arc<AtomicUsize>,
-    recoveries: Arc<AtomicUsize>,
-}
-
-impl AgentCreateDriver {
-    fn new(
-        client: AgentClient<DuplexStream>,
-        create_dispatches: Arc<AtomicUsize>,
-        recoveries: Arc<AtomicUsize>,
-    ) -> Self {
-        Self {
-            client,
-            create_dispatches,
-            recoveries,
-        }
-    }
-}
-
-#[async_trait]
-impl RuntimeDriver for AgentCreateDriver {
-    fn capability(&self) -> DriverCapability {
-        DriverCapability {
-            driver: DriverKind::LibkrunWhpx,
-            status: CapabilityStatus::Available,
-            readiness: DriverReadiness::Experimental,
-            isolation_classes: vec![IsolationClass::DedicatedVm],
-            reason: None,
-            evidence: BTreeMap::from([(
-                "test-driver".to_string(),
-                "authenticated-in-memory-agent".to_string(),
-            )]),
-        }
-    }
-
-    async fn recover(&self, _record: &ContainerRecord) -> Result<DriverRecovery> {
-        self.recoveries.fetch_add(1, Ordering::SeqCst);
-        Ok(DriverRecovery::none())
-    }
-
-    async fn create(&self, request: DriverCreateRequest) -> Result<DriverState> {
-        self.create_dispatches.fetch_add(1, Ordering::SeqCst);
-        let expected_target = request.target.clone();
-        let expected_digest = request.bundle.config_digest().to_string();
-        let state = self
-            .client
-            .create(agent_create_request(
-                request.context,
-                request.target,
-                &request.bundle,
-                request.io,
-            )?)
-            .await?;
-        map_agent_state(&expected_target, Some(&expected_digest), state)
-    }
-
-    async fn state(&self, target: ContainerTarget) -> Result<DriverState> {
-        let state = self
-            .client
-            .state(AgentStateRequest {
-                target: target.clone(),
-            })
-            .await?;
-        map_agent_state(&target, None, state)
-    }
-
-    async fn start(&self, request: DriverStartRequest) -> Result<DriverState> {
-        let expected_target = request.target.clone();
-        let expected_digest = request.bundle.config_digest().to_string();
-        let state = self
-            .client
-            .start(AgentStartRequest {
-                context: request.context,
-                target: request.target,
-                expected_config_digest: expected_digest.clone(),
-            })
-            .await?;
-        map_agent_state(&expected_target, Some(&expected_digest), state)
-    }
-
-    async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
-        let expected_target = request.target.clone();
-        let state = self
-            .client
-            .kill(AgentKillRequest {
-                context: request.context,
-                target: request.target,
-                signal: request.signal,
-                all: request.all,
-            })
-            .await?;
-        map_agent_state(&expected_target, None, state)
-    }
-
-    async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
-        self.client
-            .delete(AgentDeleteRequest {
-                context: request.context,
-                target: request.target,
-                mode: request.mode,
-            })
-            .await
-    }
-}
-
-fn agent_create_request(
-    context: OperationContext,
-    target: ContainerTarget,
-    bundle: &OciBundle,
-    io: ProcessIo,
-) -> Result<AgentCreateRequest> {
-    Ok(AgentCreateRequest {
-        context,
-        target,
-        bundle: AgentBundle::new(bundle, GuestPath::new("/run/a3s/reopen-test-bundle")?),
-        io,
-    })
-}
-
-fn map_agent_state(
-    expected_target: &ContainerTarget,
-    expected_digest: Option<&str>,
-    state: AgentState,
-) -> Result<DriverState> {
-    if state.target() != expected_target {
-        return Err(Error::new(
-            ErrorCode::Conflict,
-            "guest returned a different container generation",
-        )
-        .for_operation("map-agent-state"));
-    }
-    if expected_digest.is_some_and(|digest| state.config_digest() != digest) {
-        return Err(Error::new(
-            ErrorCode::Conflict,
-            "guest returned a different configuration digest",
-        )
-        .for_operation("map-agent-state"));
-    }
-    let mapped = match state.status() {
-        ContainerState::Created => DriverState::created(required_pid(&state)?)?,
-        ContainerState::Running => DriverState::running(required_pid(&state)?)?,
-        ContainerState::Stopped => DriverState::stopped(),
-        status => {
-            return Err(Error::new(
-                ErrorCode::Internal,
-                format!("guest returned invalid lifecycle state {status}"),
-            )
-            .for_operation("map-agent-state"));
-        }
-    };
-    mapped.with_paused(state.paused())
-}
-
-fn required_pid(state: &AgentState) -> Result<i32> {
-    state.pid().ok_or_else(|| {
-        Error::new(
-            ErrorCode::Internal,
-            format!("guest returned {} without an init PID", state.status()),
-        )
-        .for_operation("map-agent-state")
-    })
-}
-
-fn session_token() -> SessionToken {
-    SessionToken::from_bytes([0x6d; 32]).expect("test session token")
-}
+type AgentServer = JoinHandle<a3s_oci_sdk::Result<()>>;
 
 #[tokio::test]
-async fn create_response_loss_resumes_after_host_service_reopen_with_one_guest_effect() {
+async fn every_create_transport_stage_recovers_after_host_service_reopen() {
+    assert_eq!(AgentTransportOperationStage::ALL.len(), 9);
+    for (index, stage) in AgentTransportOperationStage::ALL.into_iter().enumerate() {
+        exercise_create_reopen(index, stage).await;
+    }
+}
+
+async fn exercise_create_reopen(index: usize, stage: AgentTransportOperationStage) {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let bundle_directory = temporary.path().join("bundle");
     std::fs::create_dir(&bundle_directory).expect("bundle directory");
     let state_root = temporary.path().join("state");
-    let request = create_request(&bundle_directory, "agent-reopen-create");
+    let request = create_request(&bundle_directory, &format!("agent-reopen-create-{index}"));
     let guest = Arc::new(JournaledCreateGuest::new());
-    let create_dispatches = Arc::new(AtomicUsize::new(0));
-    let recoveries = Arc::new(AtomicUsize::new(0));
+    let metrics = Arc::new(DriverMetrics::default());
     let fault_point = AgentTransportFaultPoint::Operation {
-        protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+        protocol_version: a3s_oci_agent_protocol::AGENT_PROTOCOL_VERSION_MAX,
         operation: AgentOperation::Create,
-        stage: AgentTransportOperationStage::GuestBeforeResponseWrite,
+        stage,
     };
     let faults = Arc::new(FailOnceTransportFault::new(fault_point));
 
-    let (first_host_stream, first_guest_stream) = tokio::io::duplex(1024 * 1024);
-    let first_guest_service: Arc<dyn GuestAgentService> = guest.clone();
-    let first_faults: Arc<dyn AgentTransportFaultInjector> = faults.clone();
-    let first_server = tokio::spawn(serve_agent_connection_with_fault_injector(
-        first_guest_stream,
-        session_token(),
-        first_guest_service,
-        first_faults,
-    ));
-    let first_client = AgentClient::connect(first_host_stream, session_token())
-        .await
-        .expect("connect first authenticated agent session");
-    let first_driver = Arc::new(AgentCreateDriver::new(
-        first_client,
-        Arc::clone(&create_dispatches),
-        Arc::clone(&recoveries),
-    ));
+    let (first_client, first_server) =
+        connect_faulted(stage, Arc::clone(&guest), Arc::clone(&faults)).await;
+    let first_driver = Arc::new(AgentCreateDriver::new(first_client, Arc::clone(&metrics)));
     let first_service = HostRuntimeService::open(
         &state_root,
         Arc::clone(&first_driver) as Arc<dyn RuntimeDriver>,
     )
     .await
-    .expect("open first host runtime service");
+    .unwrap_or_else(|error| panic!("open first host runtime for {stage:?}: {error}"));
 
-    let first_error = first_service
-        .create(request.clone())
-        .await
-        .expect_err("lost create response must remain visible to the caller");
-    assert_eq!(first_error.code, ErrorCode::Unavailable);
-    assert!(first_error.retryable);
-    assert!(faults.fired());
-    assert_eq!(guest.effect_count(), 1);
-    assert_eq!(guest.request_count(), 1);
-    assert_eq!(create_dispatches.load(Ordering::SeqCst), 1);
+    let first_result = first_service.create(request.clone()).await;
+    if response_reached_host(stage) {
+        let created = first_result
+            .unwrap_or_else(|error| panic!("written response must complete {stage:?}: {error}"));
+        assert_eq!(
+            *created.state.status(),
+            ContainerState::Created,
+            "{stage:?}"
+        );
+    } else {
+        let error = first_result.expect_err("fault must remain visible before response delivery");
+        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+        assert!(error.retryable, "{stage:?}");
+    }
+    assert_eq!(metrics.create_dispatches(), 1, "{stage:?}");
 
     let active = first_service
         .list(ListRequest::default())
         .await
-        .expect("list resumable create");
-    assert_eq!(active.len(), 1);
-    assert_eq!(*active[0].state.status(), ContainerState::Creating);
+        .unwrap_or_else(|error| panic!("list first durable record for {stage:?}: {error}"));
+    assert_eq!(active.len(), 1, "{stage:?}");
+    let expected_first_status = if response_reached_host(stage) {
+        ContainerState::Created
+    } else {
+        ContainerState::Creating
+    };
+    assert_eq!(
+        *active[0].state.status(),
+        expected_first_status,
+        "{stage:?}"
+    );
     let generation = active[0].generation;
     drop(first_service);
     drop(first_driver);
 
-    let server_error = first_server
+    let server_result = first_server
         .await
-        .expect("first agent server task")
-        .expect_err("injected response loss must end the first connection");
-    assert_eq!(
-        server_error.operation.as_deref(),
-        Some("agent-transport-fault")
-    );
+        .unwrap_or_else(|error| panic!("first agent server task for {stage:?}: {error}"));
+    if is_guest_stage(stage) {
+        let error = server_result.expect_err("guest fault must end the first server");
+        assert_eq!(
+            error.operation.as_deref(),
+            Some("agent-transport-fault"),
+            "{stage:?}"
+        );
+    }
+    assert_eq!(faults.crossing_count(), 1, "{stage:?}");
+    let first_guest_dispatches = usize::from(guest_dispatch_reached(stage));
+    assert_eq!(guest.request_count(), first_guest_dispatches, "{stage:?}");
+    assert_eq!(guest.effect_count(), first_guest_dispatches, "{stage:?}");
 
-    let (second_host_stream, second_guest_stream) = tokio::io::duplex(1024 * 1024);
-    let second_guest_service: Arc<dyn GuestAgentService> = guest.clone();
-    let second_server = tokio::spawn(serve_agent_connection(
-        second_guest_stream,
-        session_token(),
-        second_guest_service,
-    ));
-    let second_client = AgentClient::connect(second_host_stream, session_token())
-        .await
-        .expect("connect replacement authenticated agent session");
+    let (second_client, second_server) = connect_normal(Arc::clone(&guest)).await;
     let second_driver = Arc::new(AgentCreateDriver::new(
         second_client.clone(),
-        Arc::clone(&create_dispatches),
-        Arc::clone(&recoveries),
+        Arc::clone(&metrics),
     ));
     let reopened = HostRuntimeService::open(
         &state_root,
         Arc::clone(&second_driver) as Arc<dyn RuntimeDriver>,
     )
     .await
-    .expect("reopen host runtime service");
-    assert_eq!(recoveries.load(Ordering::SeqCst), 1);
+    .unwrap_or_else(|error| panic!("reopen host runtime for {stage:?}: {error}"));
+    assert_eq!(metrics.recoveries(), 1, "{stage:?}");
 
     let created = reopened
         .create(request.clone())
         .await
-        .expect("resume create through replacement agent session");
-    assert_eq!(created.generation, generation);
-    assert_eq!(*created.state.status(), ContainerState::Created);
-    assert_eq!(*created.state.pid(), Some(6_101));
-    assert_eq!(create_dispatches.load(Ordering::SeqCst), 2);
-    assert_eq!(guest.request_count(), 2);
-    assert_eq!(guest.effect_count(), 1, "replay must not repeat create");
+        .unwrap_or_else(|error| panic!("resume create after {stage:?}: {error}"));
+    assert_eq!(created.generation, generation, "{stage:?}");
+    assert_eq!(
+        *created.state.status(),
+        ContainerState::Created,
+        "{stage:?}"
+    );
+    assert_eq!(*created.state.pid(), Some(6_101), "{stage:?}");
 
+    let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
+    let expected_guest_requests = if response_reached_host(stage) {
+        1
+    } else {
+        first_guest_dispatches + 1
+    };
+    assert_eq!(
+        metrics.create_dispatches(),
+        expected_driver_dispatches,
+        "{stage:?}"
+    );
+    assert_eq!(guest.request_count(), expected_guest_requests, "{stage:?}");
+    assert_eq!(
+        guest.effect_count(),
+        1,
+        "reopen after {stage:?} must produce exactly one create effect"
+    );
+
+    if stage == AgentTransportOperationStage::GuestBeforeResponseWrite {
+        verify_changed_replays_fail_closed(
+            &second_client,
+            &reopened,
+            &request,
+            generation,
+            guest.as_ref(),
+            metrics.as_ref(),
+        )
+        .await;
+    }
+
+    drop(reopened);
+    drop(second_driver);
+    second_client
+        .close()
+        .await
+        .unwrap_or_else(|error| panic!("close replacement session for {stage:?}: {error}"));
+    second_server
+        .await
+        .unwrap_or_else(|error| panic!("replacement server task for {stage:?}: {error}"))
+        .unwrap_or_else(|error| panic!("replacement server close for {stage:?}: {error}"));
+}
+
+async fn connect_faulted(
+    stage: AgentTransportOperationStage,
+    guest: Arc<JournaledCreateGuest>,
+    faults: Arc<FailOnceTransportFault>,
+) -> (AgentClient<DuplexStream>, AgentServer) {
+    let (host_stream, guest_stream) = tokio::io::duplex(1024 * 1024);
+    let guest_service: Arc<dyn GuestAgentService> = guest;
+    if is_host_stage(stage) {
+        let server = tokio::spawn(serve_agent_connection(
+            guest_stream,
+            session_token(),
+            guest_service,
+        ));
+        let client_faults: Arc<dyn AgentTransportFaultInjector> = faults;
+        let client =
+            AgentClient::connect_with_fault_injector(host_stream, session_token(), client_faults)
+                .await
+                .unwrap_or_else(|error| panic!("connect faulted host stage {stage:?}: {error}"));
+        (client, server)
+    } else {
+        let server_faults: Arc<dyn AgentTransportFaultInjector> = faults;
+        let server = tokio::spawn(serve_agent_connection_with_fault_injector(
+            guest_stream,
+            session_token(),
+            guest_service,
+            server_faults,
+        ));
+        let client = AgentClient::connect(host_stream, session_token())
+            .await
+            .unwrap_or_else(|error| panic!("connect faulted guest stage {stage:?}: {error}"));
+        (client, server)
+    }
+}
+
+async fn connect_normal(
+    guest: Arc<JournaledCreateGuest>,
+) -> (AgentClient<DuplexStream>, AgentServer) {
+    let (host_stream, guest_stream) = tokio::io::duplex(1024 * 1024);
+    let guest_service: Arc<dyn GuestAgentService> = guest;
+    let server = tokio::spawn(serve_agent_connection(
+        guest_stream,
+        session_token(),
+        guest_service,
+    ));
+    let client = AgentClient::connect(host_stream, session_token())
+        .await
+        .expect("connect replacement authenticated agent session");
+    (client, server)
+}
+
+async fn verify_changed_replays_fail_closed(
+    client: &AgentClient<DuplexStream>,
+    service: &HostRuntimeService,
+    request: &a3s_oci_sdk::CreateRequest,
+    generation: a3s_oci_sdk::Generation,
+    guest: &JournaledCreateGuest,
+    metrics: &DriverMetrics,
+) {
+    let request_count = guest.request_count();
+    let driver_dispatches = metrics.create_dispatches();
     let target = ContainerTarget::exact(request.id.clone(), generation);
     let mut changed_guest_request = agent_create_request(
         request.context.clone(),
@@ -445,36 +244,56 @@ async fn create_response_loss_resumes_after_host_service_reopen_with_one_guest_e
     )
     .expect("changed guest request");
     changed_guest_request.io.stdout = IoMode::Null;
-    let guest_conflict = second_client
+    let guest_conflict = client
         .create(changed_guest_request)
         .await
         .expect_err("changed guest request must fail closed");
     assert_eq!(guest_conflict.code, ErrorCode::Conflict);
-    assert_eq!(guest.request_count(), 3);
+    assert_eq!(guest.request_count(), request_count + 1);
     assert_eq!(guest.effect_count(), 1);
 
-    let mut changed_host_request = request;
+    let mut changed_host_request = request.clone();
     let mut changed_io = changed_host_request.attachments.process_io().clone();
     changed_io.stdout = IoMode::Null;
     changed_host_request.attachments =
         CreateAttachments::from_bundle(&changed_host_request.bundle, changed_io)
             .expect("changed host attachment contract");
-    let host_conflict = reopened
+    let host_conflict = service
         .create(changed_host_request)
         .await
         .expect_err("changed durable create retry must fail closed");
     assert_eq!(host_conflict.code, ErrorCode::FailedPrecondition);
-    assert_eq!(create_dispatches.load(Ordering::SeqCst), 2);
+    assert_eq!(metrics.create_dispatches(), driver_dispatches);
+    assert_eq!(guest.request_count(), request_count + 1);
     assert_eq!(guest.effect_count(), 1);
+}
 
-    drop(reopened);
-    drop(second_driver);
-    second_client
-        .close()
-        .await
-        .expect("close replacement agent session");
-    second_server
-        .await
-        .expect("replacement agent server task")
-        .expect("replacement agent server observed clean close");
+const fn is_host_stage(stage: AgentTransportOperationStage) -> bool {
+    matches!(
+        stage,
+        AgentTransportOperationStage::HostBeforeRequestWrite
+            | AgentTransportOperationStage::HostAfterRequestWrite
+            | AgentTransportOperationStage::HostBeforeResponseRead
+            | AgentTransportOperationStage::HostAfterResponseRead
+    )
+}
+
+const fn is_guest_stage(stage: AgentTransportOperationStage) -> bool {
+    !is_host_stage(stage)
+}
+
+const fn guest_dispatch_reached(stage: AgentTransportOperationStage) -> bool {
+    matches!(
+        stage,
+        AgentTransportOperationStage::HostAfterRequestWrite
+            | AgentTransportOperationStage::HostBeforeResponseRead
+            | AgentTransportOperationStage::HostAfterResponseRead
+            | AgentTransportOperationStage::GuestAfterDispatch
+            | AgentTransportOperationStage::GuestBeforeResponseWrite
+            | AgentTransportOperationStage::GuestAfterResponseWrite
+    )
+}
+
+const fn response_reached_host(stage: AgentTransportOperationStage) -> bool {
+    matches!(stage, AgentTransportOperationStage::GuestAfterResponseWrite)
 }
