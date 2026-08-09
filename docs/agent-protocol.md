@@ -30,6 +30,9 @@ After negotiation:
   monotonically allocated request ID;
 - a correlation, framing, version, target, digest, or lifecycle-barrier
   violation permanently poisons the client connection;
+- a terminal request-write, response EOF/read, correlation, or response-shape
+  failure releases the shared transport before returning, so retained client
+  clones cannot keep the failed guest connection alive;
 - guest service errors retain the stable Rust SDK error code and retryability;
 - cloned clients serialize requests on one connection.
 
@@ -197,7 +200,9 @@ In-memory duplex tests cover:
 - wrong-token and incompatible-version rejection;
 - oversized-frame rejection from the header alone;
 - configuration-digest tampering;
-- response correlation failure and permanent connection poisoning;
+- request-write failure, response disconnect, response correlation failure,
+  and response-shape mismatch, with permanent connection poisoning and
+  immediate transport release while client clones remain;
 - clone-wide explicit close, idempotent repeat close, and rejection of every
   later request through any retained client clone;
 - secret redaction and guest-path normalization.
@@ -240,7 +245,10 @@ twenty operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 Before the utility-VM owner waits for the shim, it explicitly closes the
 shared client transport. This waits for an in-flight request and invalidates
 all retained clones, so a forgotten client handle cannot keep the guest or
-hypervisor process alive. The host wraps that owner in one shareable session:
+hypervisor process alive. Terminal protocol failures take the same ownership
+boundary immediately: the client drops the shared stream before returning the
+error and every retained clone observes the permanently poisoned connection.
+The host wraps that owner in one shareable session:
 operations receive cloned clients, while concurrent shutdown callers observe
 the same cached cleanup report and can never reap the VM more than once.
 The WHPX driver converts a successfully reaped live session, or a durable

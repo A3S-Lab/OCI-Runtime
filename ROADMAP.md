@@ -483,6 +483,10 @@ enforce it. No property is silently ignored.
 - [ ] Fault-inject every versioned utility-VM host/agent request, response,
   disconnect, replay, and shutdown transition, then prove exact-generation
   recovery or complete cleanup after host-service reopen.
+  - [x] Release the clone-shared host transport immediately after terminal
+    request-write, response EOF/read, correlation, or response-shape failure;
+    prove retained clones cannot dispatch or keep the failed guest connection
+    alive.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

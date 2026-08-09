@@ -47,6 +47,13 @@ struct ClientConnection<T> {
     closed: bool,
 }
 
+impl<T> ClientConnection<T> {
+    fn poison_and_release(&mut self) {
+        self.poisoned = true;
+        drop(self.stream.take());
+    }
+}
+
 impl<T> Clone for AgentClient<T> {
     fn clone(&self) -> Self {
         Self {
@@ -401,7 +408,7 @@ where
         connection.next_request_id = match request_id.checked_add(1) {
             Some(next) => next,
             None => {
-                connection.poisoned = true;
+                connection.poison_and_release();
                 return Err(protocol_error(
                     ErrorCode::ResourceExhausted,
                     "guest-agent request ID space is exhausted",
@@ -415,18 +422,18 @@ where
         };
         let selected_version = connection.selected_version;
         let Some(stream) = connection.stream.as_mut() else {
-            connection.poisoned = true;
+            connection.poison_and_release();
             return Err(protocol_error(
                 ErrorCode::Unavailable,
                 "guest-agent connection lost its transport",
             ));
         };
         if let Err(error) = write_frame(stream, &envelope).await {
-            connection.poisoned = true;
+            connection.poison_and_release();
             return Err(error);
         }
         let Some(stream) = connection.stream.as_mut() else {
-            connection.poisoned = true;
+            connection.poison_and_release();
             return Err(protocol_error(
                 ErrorCode::Unavailable,
                 "guest-agent connection lost its transport",
@@ -435,7 +442,7 @@ where
         let response: ResponseEnvelope = match read_frame(stream).await {
             Ok(Some(response)) => response,
             Ok(None) => {
-                connection.poisoned = true;
+                connection.poison_and_release();
                 return Err(protocol_error(
                     ErrorCode::Unavailable,
                     "guest closed the stream before returning a response",
@@ -443,19 +450,19 @@ where
                 .retryable(true));
             }
             Err(error) => {
-                connection.poisoned = true;
+                connection.poison_and_release();
                 return Err(error);
             }
         };
         if let Err(error) = response.validate(selected_version, request_id) {
-            connection.poisoned = true;
+            connection.poison_and_release();
             return Err(error);
         }
         match response.outcome {
             ResponseOutcome::Succeeded { response } => {
                 let response = *response;
                 if let Err(error) = validate_response_for_request(&request, &response) {
-                    connection.poisoned = true;
+                    connection.poison_and_release();
                     return Err(error);
                 }
                 Ok(response)

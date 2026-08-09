@@ -776,6 +776,8 @@ async fn protocol_v2_filters_and_rejects_forged_v3_process_operations() {
 #[tokio::test]
 async fn mismatched_exec_process_response_permanently_poisons_the_connection() {
     let (host, mut guest) = tokio::io::duplex(1024 * 1024);
+    let dropped = Arc::new(AtomicBool::new(false));
+    let host = DropObservedStream::new(host, Arc::clone(&dropped));
     let malicious = tokio::spawn(async move {
         let _: HostHello = read_frame(&mut guest)
             .await?
@@ -823,6 +825,7 @@ async fn mismatched_exec_process_response_permanently_poisons_the_connection() {
     let client = AgentClient::connect(host, token(22))
         .await
         .expect("connect malicious protocol-v3 peer");
+    let clone = client.clone();
     let request = exec_request(
         ContainerTarget::exact(container_id("correlation-container"), Generation(1)),
         "expected-command",
@@ -833,11 +836,16 @@ async fn mismatched_exec_process_response_permanently_poisons_the_connection() {
         .await
         .expect_err("mismatched process target must fail");
     assert_eq!(error.code, ErrorCode::Conflict);
-    let error = client
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "response-shape failure must release the transport even while clones remain"
+    );
+    let error = clone
         .exec(request)
         .await
         .expect_err("connection must stay poisoned");
     assert_eq!(error.code, ErrorCode::Unavailable);
+    clone.close().await.expect("close poisoned client");
     malicious
         .await
         .expect("malicious task")

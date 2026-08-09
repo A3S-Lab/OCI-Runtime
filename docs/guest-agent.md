@@ -339,10 +339,13 @@ Exact request retries are fingerprinted by `OperationId`, and reused IDs with
 different requests fail. This includes pause, resume, and resource update.
 Generation fences remain in memory after delete.
 
-All guest registry, generation, and idempotency state is session-local. A
-closed host connection force-stops remaining configured processes, exec
-process groups and helpers, and namespace supervisors, then removes the
-agent-owned runtime root. Agent restart recovery is not implemented yet.
+All guest registry, generation, and idempotency state is session-local. The
+host releases the shared transport immediately after a terminal request-write,
+response-read, correlation, or response-shape failure, even when other client
+clones remain. The resulting closed host connection force-stops remaining
+configured processes, exec process groups and helpers, and namespace
+supervisors, then removes the agent-owned runtime root. Agent restart recovery
+is not implemented yet.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
