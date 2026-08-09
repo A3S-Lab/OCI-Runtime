@@ -252,7 +252,7 @@ impl AgentBundle {
 }
 
 /// Guest operations available in the negotiated protocol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentOperation {
     Create,
@@ -296,7 +296,32 @@ pub enum AgentOperation {
 }
 
 impl AgentOperation {
-    pub(crate) const fn minimum_protocol_version(self) -> u16 {
+    /// Complete current operation registry in protocol order.
+    pub const ALL: [Self; 20] = [
+        Self::Create,
+        Self::State,
+        Self::Start,
+        Self::Kill,
+        Self::Delete,
+        Self::Wait,
+        Self::Exec,
+        Self::SignalProcess,
+        Self::WaitProcess,
+        Self::Pause,
+        Self::Resume,
+        Self::Processes,
+        Self::Update,
+        Self::Stats,
+        Self::ReadOutput,
+        Self::WriteStdin,
+        Self::CloseStdin,
+        Self::Resize,
+        Self::File,
+        Self::Filesystem,
+    ];
+
+    /// First protocol version that carries this operation.
+    pub const fn minimum_protocol_version(self) -> u16 {
         match self {
             Self::Create | Self::State | Self::Start | Self::Kill | Self::Delete => 1,
             Self::Wait => 2,
@@ -307,6 +332,38 @@ impl AgentOperation {
             Self::Resize => 7,
             Self::File | Self::Filesystem => 9,
         }
+    }
+
+    /// Stable wire name used in qualification diagnostics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::State => "state",
+            Self::Start => "start",
+            Self::Kill => "kill",
+            Self::Delete => "delete",
+            Self::Wait => "wait",
+            Self::Exec => "exec",
+            Self::SignalProcess => "signal-process",
+            Self::WaitProcess => "wait-process",
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Processes => "processes",
+            Self::Update => "update",
+            Self::Stats => "stats",
+            Self::ReadOutput => "read-output",
+            Self::WriteStdin => "write-stdin",
+            Self::CloseStdin => "close-stdin",
+            Self::Resize => "resize",
+            Self::File => "file",
+            Self::Filesystem => "filesystem",
+        }
+    }
+}
+
+impl fmt::Display for AgentOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -352,32 +409,7 @@ impl AgentCapabilities {
         agent_version: impl Into<String>,
         architecture: impl Into<String>,
     ) -> Result<Self> {
-        Self::new(
-            agent_version,
-            architecture,
-            vec![
-                AgentOperation::Create,
-                AgentOperation::State,
-                AgentOperation::Start,
-                AgentOperation::Kill,
-                AgentOperation::Delete,
-                AgentOperation::Wait,
-                AgentOperation::Exec,
-                AgentOperation::SignalProcess,
-                AgentOperation::WaitProcess,
-                AgentOperation::Pause,
-                AgentOperation::Resume,
-                AgentOperation::Processes,
-                AgentOperation::Update,
-                AgentOperation::Stats,
-                AgentOperation::ReadOutput,
-                AgentOperation::WriteStdin,
-                AgentOperation::CloseStdin,
-                AgentOperation::Resize,
-                AgentOperation::File,
-                AgentOperation::Filesystem,
-            ],
-        )
+        Self::new(agent_version, architecture, AgentOperation::ALL.to_vec())
     }
 
     /// Construct an exact capability report.
@@ -722,6 +754,35 @@ pub enum AgentRequest {
     Resize(AgentResizeRequest),
     File(FileRequest),
     Filesystem(FilesystemRequest),
+}
+
+impl AgentRequest {
+    /// Operation identity used for capability and fault-boundary routing.
+    #[must_use]
+    pub const fn operation(&self) -> AgentOperation {
+        match self {
+            Self::Create(_) => AgentOperation::Create,
+            Self::State(_) => AgentOperation::State,
+            Self::Start(_) => AgentOperation::Start,
+            Self::Kill(_) => AgentOperation::Kill,
+            Self::Delete(_) => AgentOperation::Delete,
+            Self::Wait(_) => AgentOperation::Wait,
+            Self::Exec(_) => AgentOperation::Exec,
+            Self::SignalProcess(_) => AgentOperation::SignalProcess,
+            Self::WaitProcess(_) => AgentOperation::WaitProcess,
+            Self::Pause(_) => AgentOperation::Pause,
+            Self::Resume(_) => AgentOperation::Resume,
+            Self::Processes(_) => AgentOperation::Processes,
+            Self::Update(_) => AgentOperation::Update,
+            Self::Stats(_) => AgentOperation::Stats,
+            Self::ReadOutput(_) => AgentOperation::ReadOutput,
+            Self::WriteStdin(_) => AgentOperation::WriteStdin,
+            Self::CloseStdin(_) => AgentOperation::CloseStdin,
+            Self::Resize(_) => AgentOperation::Resize,
+            Self::File(_) => AgentOperation::File,
+            Self::Filesystem(_) => AgentOperation::Filesystem,
+        }
+    }
 }
 
 /// Guest-observed init-process state for one exact generation.

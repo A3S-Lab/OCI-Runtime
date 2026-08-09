@@ -5,6 +5,7 @@
 //! negotiation, framing, validation, correlation, and typed dispatch.
 
 mod client;
+mod fault;
 mod inherited_descriptor;
 mod model;
 mod recovery;
@@ -14,6 +15,10 @@ mod validation;
 mod wire;
 
 pub use client::AgentClient;
+pub use fault::{
+    AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportOperationStage,
+    AgentTransportShutdownStage, NoAgentTransportFaultInjector,
+};
 pub use inherited_descriptor::{
     AgentInheritedDescriptorRole, AgentInheritedDescriptorSchema, AgentInheritedDescriptorSlot,
     AgentInheritedDescriptorType,
@@ -37,7 +42,9 @@ pub use recovery::{
     AGENT_RECOVERY_REPORT_MAX_RECORDS, AGENT_RECOVERY_REPORT_PENDING_SUFFIX,
     AGENT_RECOVERY_REPORT_SCHEMA_VERSION,
 };
-pub use server::{serve_agent_connection, GuestAgentService};
+pub use server::{
+    serve_agent_connection, serve_agent_connection_with_fault_injector, GuestAgentService,
+};
 pub use transport::{
     AgentVsockEndpoint, AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_GUEST_ROOT,
     AGENT_RUNTIME_SHARE_TAG, AGENT_VSOCK_PORT,

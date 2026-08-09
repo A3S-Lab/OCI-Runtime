@@ -6,6 +6,10 @@ use a3s_oci_sdk::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::fault::{
+    AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportOperationStage,
+    NoAgentTransportFaultInjector,
+};
 use crate::model::{
     protocol_error, AgentCapabilities, AgentCloseStdinRequest, AgentContainerOperationRequest,
     AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
@@ -121,9 +125,28 @@ pub trait GuestAgentService: Send + Sync {
 
 /// Authenticate, negotiate, and serve one host connection until clean EOF.
 pub async fn serve_agent_connection<T>(
+    stream: T,
+    expected_token: SessionToken,
+    service: Arc<dyn GuestAgentService>,
+) -> Result<()>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    serve_agent_connection_with_fault_injector(
+        stream,
+        expected_token,
+        service,
+        Arc::new(NoAgentTransportFaultInjector),
+    )
+    .await
+}
+
+/// Serve one authenticated connection with explicit qualification faults.
+pub async fn serve_agent_connection_with_fault_injector<T>(
     mut stream: T,
     expected_token: SessionToken,
     service: Arc<dyn GuestAgentService>,
+    faults: Arc<dyn AgentTransportFaultInjector>,
 ) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
@@ -164,15 +187,18 @@ where
     write_frame(&mut stream, &HelloOutcome::Accepted { hello }).await?;
 
     while let Some(envelope) = read_frame::<RequestEnvelope, _>(&mut stream).await? {
+        let operation = envelope.request.operation();
         if let Err(error) = envelope.validate(selected_version) {
             let terminal = envelope.version != selected_version || envelope.request_id == 0;
-            write_response(
+            write_response_with_fault_injector(
                 &mut stream,
                 selected_version,
                 envelope.request_id,
                 ResponseOutcome::Failed {
                     error: error.clone(),
                 },
+                operation,
+                faults.as_ref(),
             )
             .await?;
             if terminal {
@@ -181,7 +207,23 @@ where
             continue;
         }
 
-        let outcome = match dispatch(service.as_ref(), envelope.request).await {
+        faults.check(operation_fault_point(
+            selected_version,
+            operation,
+            AgentTransportOperationStage::GuestAfterRequestRead,
+        ))?;
+        faults.check(operation_fault_point(
+            selected_version,
+            operation,
+            AgentTransportOperationStage::GuestBeforeDispatch,
+        ))?;
+        let dispatched = dispatch(service.as_ref(), envelope.request).await;
+        faults.check(operation_fault_point(
+            selected_version,
+            operation,
+            AgentTransportOperationStage::GuestAfterDispatch,
+        ))?;
+        let outcome = match dispatched {
             Ok(response) => match response.validate() {
                 Ok(()) => ResponseOutcome::Succeeded {
                     response: Box::new(response),
@@ -192,7 +234,15 @@ where
             },
             Err(error) => ResponseOutcome::Failed { error },
         };
-        write_response(&mut stream, selected_version, envelope.request_id, outcome).await?;
+        write_response_with_fault_injector(
+            &mut stream,
+            selected_version,
+            envelope.request_id,
+            outcome,
+            operation,
+            faults.as_ref(),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -301,6 +351,42 @@ where
         },
     )
     .await
+}
+
+async fn write_response_with_fault_injector<T>(
+    stream: &mut T,
+    version: u16,
+    request_id: u64,
+    outcome: ResponseOutcome,
+    operation: crate::AgentOperation,
+    faults: &dyn AgentTransportFaultInjector,
+) -> Result<()>
+where
+    T: AsyncWrite + Unpin,
+{
+    faults.check(operation_fault_point(
+        version,
+        operation,
+        AgentTransportOperationStage::GuestBeforeResponseWrite,
+    ))?;
+    write_response(stream, version, request_id, outcome).await?;
+    faults.check(operation_fault_point(
+        version,
+        operation,
+        AgentTransportOperationStage::GuestAfterResponseWrite,
+    ))
+}
+
+const fn operation_fault_point(
+    protocol_version: u16,
+    operation: crate::AgentOperation,
+    stage: AgentTransportOperationStage,
+) -> AgentTransportFaultPoint {
+    AgentTransportFaultPoint::Operation {
+        protocol_version,
+        operation,
+        stage,
+    }
 }
 
 fn invalid_service_response(error: Error) -> Error {

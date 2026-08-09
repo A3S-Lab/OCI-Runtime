@@ -347,6 +347,16 @@ configured processes, exec process groups and helpers, and namespace
 supervisors, then removes the agent-owned runtime root. Agent restart recovery
 is not implemented yet.
 
+Qualification can now interrupt an exact negotiated-version boundary for any
+of the twenty guest operations: four host request/response stages, five guest
+read/dispatch/write stages, and two explicit host shutdown stages. Production
+uses a no-op injector. In-memory evidence completes one create dispatch, drops
+the response before it is written, authenticates a new connection, and replays
+the identical `OperationId` and request without a second effect; changed
+content under the same ID fails with `Conflict`. This is session-local protocol
+evidence, not yet the required utility-VM replacement and host-service reopen
+matrix.
+
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,

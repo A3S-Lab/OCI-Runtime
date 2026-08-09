@@ -151,6 +151,32 @@ Mutating guest operations must be idempotent by `OperationId`. Production
 promotion also requires recovery after an agent or host restart; the current
 bootstrap executor keeps only session-local replay state.
 
+## Qualification Fault Boundaries
+
+Production connections install a no-op fault injector. Qualification can use
+`AgentClient::connect_with_fault_injector` and
+`serve_agent_connection_with_fault_injector` to interrupt one explicit point
+without changing framing or service behavior. Every operation point carries
+the negotiated protocol version and one of the complete twenty-operation
+registry entries.
+
+The host exposes four ordered stages: before and after request write, then
+before and after response read. The guest exposes five: after a validated
+request read, before and after service dispatch, then before and after response
+write. Invalid envelopes do not cross either dispatch stage, but their typed
+error response still crosses both response-write stages. Explicit host close
+has separate before-shutdown and after-shutdown points. An injected host error
+poisons the clone-shared client and releases its stream before returning.
+
+In-memory qualification drops a create response at the guest's
+after-dispatch/before-response-write boundary. The first client receives a
+retryable transport failure after the service has recorded one effect. A newly
+authenticated connection then sends the identical `OperationId` and request,
+receives the original exact-generation response, and leaves the effect count at
+one. Reusing the ID with changed request content returns `Conflict`. This proves
+the protocol and session-local replay boundary; it does not yet prove agent
+restart, utility-VM replacement, or host-service reopen recovery.
+
 ## Bundle Preservation
 
 Create carries:
@@ -203,6 +229,10 @@ In-memory duplex tests cover:
 - request-write failure, response disconnect, response correlation failure,
   and response-shape mismatch, with permanent connection poisoning and
   immediate transport release while client clones remain;
+- the complete versioned fault-point registry, all four ordered host operation
+  stages, both host shutdown stages, guest validation-error response stages,
+  and post-dispatch create-response loss followed by authenticated exact replay
+  with one service effect;
 - clone-wide explicit close, idempotent repeat close, and rejection of every
   later request through any retained client clone;
 - secret redaction and guest-path normalization.

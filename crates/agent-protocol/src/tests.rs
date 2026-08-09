@@ -30,6 +30,7 @@ use crate::{
 
 mod process;
 mod protocol;
+mod response_replay;
 mod transport_failures;
 
 const TEST_CONFIG: &str = concat!(

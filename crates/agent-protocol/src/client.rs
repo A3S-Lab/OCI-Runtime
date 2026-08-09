@@ -10,6 +10,10 @@ use a3s_oci_sdk::{
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 
+use crate::fault::{
+    AgentTransportFaultInjector, AgentTransportFaultPoint, AgentTransportOperationStage,
+    AgentTransportShutdownStage, NoAgentTransportFaultInjector,
+};
 use crate::model::{
     protocol_error, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
     AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation,
@@ -28,6 +32,7 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 pub struct AgentClient<T> {
     connection: Arc<Mutex<ClientConnection<T>>>,
     hello: Arc<AgentHello>,
+    faults: Arc<dyn AgentTransportFaultInjector>,
 }
 
 impl<T> fmt::Debug for AgentClient<T> {
@@ -59,6 +64,7 @@ impl<T> Clone for AgentClient<T> {
         Self {
             connection: Arc::clone(&self.connection),
             hello: Arc::clone(&self.hello),
+            faults: Arc::clone(&self.faults),
         }
     }
 }
@@ -69,13 +75,30 @@ where
 {
     /// Authenticate and negotiate the highest common protocol version.
     pub async fn connect(stream: T, token: SessionToken) -> Result<Self> {
-        Self::connect_with_range(stream, token, ProtocolRange::CURRENT).await
+        Self::connect_with_range_and_fault_injector(
+            stream,
+            token,
+            ProtocolRange::CURRENT,
+            Arc::new(NoAgentTransportFaultInjector),
+        )
+        .await
     }
 
-    async fn connect_with_range(
+    /// Authenticate with an explicit qualification fault injector.
+    pub async fn connect_with_fault_injector(
+        stream: T,
+        token: SessionToken,
+        faults: Arc<dyn AgentTransportFaultInjector>,
+    ) -> Result<Self> {
+        Self::connect_with_range_and_fault_injector(stream, token, ProtocolRange::CURRENT, faults)
+            .await
+    }
+
+    async fn connect_with_range_and_fault_injector(
         mut stream: T,
         token: SessionToken,
         protocols: ProtocolRange,
+        faults: Arc<dyn AgentTransportFaultInjector>,
     ) -> Result<Self> {
         protocols.validate()?;
         write_frame(&mut stream, &HostHello { protocols, token }).await?;
@@ -102,6 +125,7 @@ where
                 closed: false,
             })),
             hello: Arc::new(hello),
+            faults,
         })
     }
 
@@ -123,10 +147,19 @@ where
         }
         connection.closed = true;
         connection.poisoned = true;
+        let selected_version = connection.selected_version;
         let Some(mut stream) = connection.stream.take() else {
             return Ok(());
         };
-        let result = match stream.shutdown().await {
+        let before = AgentTransportFaultPoint::Shutdown {
+            protocol_version: selected_version,
+            stage: AgentTransportShutdownStage::HostBeforeShutdown,
+        };
+        if let Err(error) = self.faults.check(before) {
+            drop(stream);
+            return Err(error);
+        }
+        let shutdown_result = match stream.shutdown().await {
             Ok(()) => Ok(()),
             Err(error)
                 if matches!(
@@ -144,8 +177,12 @@ where
                 format!("failed to close the guest-agent transport: {error}"),
             )),
         };
+        let after_result = self.faults.check(AgentTransportFaultPoint::Shutdown {
+            protocol_version: selected_version,
+            stage: AgentTransportShutdownStage::HostAfterShutdown,
+        });
         drop(stream);
-        result
+        shutdown_result.and(after_result)
     }
 
     /// Perform OCI create without releasing the configured user process.
@@ -389,6 +426,7 @@ where
     async fn call(&self, request: AgentRequest) -> Result<AgentResponse> {
         request.validate()?;
         ensure_advertised(self.hello.capabilities().operations(), &request)?;
+        let operation = request.operation();
 
         let mut connection = self.connection.lock().await;
         if connection.closed {
@@ -421,6 +459,14 @@ where
             request: request.clone(),
         };
         let selected_version = connection.selected_version;
+        if let Err(error) = self.faults.check(AgentTransportFaultPoint::Operation {
+            protocol_version: selected_version,
+            operation,
+            stage: AgentTransportOperationStage::HostBeforeRequestWrite,
+        }) {
+            connection.poison_and_release();
+            return Err(error);
+        }
         let Some(stream) = connection.stream.as_mut() else {
             connection.poison_and_release();
             return Err(protocol_error(
@@ -429,6 +475,22 @@ where
             ));
         };
         if let Err(error) = write_frame(stream, &envelope).await {
+            connection.poison_and_release();
+            return Err(error);
+        }
+        if let Err(error) = self.faults.check(AgentTransportFaultPoint::Operation {
+            protocol_version: selected_version,
+            operation,
+            stage: AgentTransportOperationStage::HostAfterRequestWrite,
+        }) {
+            connection.poison_and_release();
+            return Err(error);
+        }
+        if let Err(error) = self.faults.check(AgentTransportFaultPoint::Operation {
+            protocol_version: selected_version,
+            operation,
+            stage: AgentTransportOperationStage::HostBeforeResponseRead,
+        }) {
             connection.poison_and_release();
             return Err(error);
         }
@@ -454,6 +516,14 @@ where
                 return Err(error);
             }
         };
+        if let Err(error) = self.faults.check(AgentTransportFaultPoint::Operation {
+            protocol_version: selected_version,
+            operation,
+            stage: AgentTransportOperationStage::HostAfterResponseRead,
+        }) {
+            connection.poison_and_release();
+            return Err(error);
+        }
         if let Err(error) = response.validate(selected_version, request_id) {
             connection.poison_and_release();
             return Err(error);
@@ -572,28 +642,7 @@ fn duration_millis(duration: Duration) -> u64 {
 }
 
 fn ensure_advertised(operations: &[AgentOperation], request: &AgentRequest) -> Result<()> {
-    let required = match request {
-        AgentRequest::Create(_) => AgentOperation::Create,
-        AgentRequest::State(_) => AgentOperation::State,
-        AgentRequest::Start(_) => AgentOperation::Start,
-        AgentRequest::Kill(_) => AgentOperation::Kill,
-        AgentRequest::Delete(_) => AgentOperation::Delete,
-        AgentRequest::Wait(_) => AgentOperation::Wait,
-        AgentRequest::Exec(_) => AgentOperation::Exec,
-        AgentRequest::SignalProcess(_) => AgentOperation::SignalProcess,
-        AgentRequest::WaitProcess(_) => AgentOperation::WaitProcess,
-        AgentRequest::Pause(_) => AgentOperation::Pause,
-        AgentRequest::Resume(_) => AgentOperation::Resume,
-        AgentRequest::Processes(_) => AgentOperation::Processes,
-        AgentRequest::Update(_) => AgentOperation::Update,
-        AgentRequest::Stats(_) => AgentOperation::Stats,
-        AgentRequest::ReadOutput(_) => AgentOperation::ReadOutput,
-        AgentRequest::WriteStdin(_) => AgentOperation::WriteStdin,
-        AgentRequest::CloseStdin(_) => AgentOperation::CloseStdin,
-        AgentRequest::Resize(_) => AgentOperation::Resize,
-        AgentRequest::File(_) => AgentOperation::File,
-        AgentRequest::Filesystem(_) => AgentOperation::Filesystem,
-    };
+    let required = request.operation();
     if operations.contains(&required) {
         Ok(())
     } else {
@@ -852,28 +901,7 @@ fn state_mismatch(operation: &'static str, status: ContainerState) -> Error {
 }
 
 const fn request_name(request: &AgentRequest) -> &'static str {
-    match request {
-        AgentRequest::Create(_) => "create",
-        AgentRequest::State(_) => "state",
-        AgentRequest::Start(_) => "start",
-        AgentRequest::Kill(_) => "kill",
-        AgentRequest::Delete(_) => "delete",
-        AgentRequest::Wait(_) => "wait",
-        AgentRequest::Exec(_) => "exec",
-        AgentRequest::SignalProcess(_) => "signal-process",
-        AgentRequest::WaitProcess(_) => "wait-process",
-        AgentRequest::Pause(_) => "pause",
-        AgentRequest::Resume(_) => "resume",
-        AgentRequest::Processes(_) => "processes",
-        AgentRequest::Update(_) => "update",
-        AgentRequest::Stats(_) => "stats",
-        AgentRequest::ReadOutput(_) => "read-output",
-        AgentRequest::WriteStdin(_) => "write-stdin",
-        AgentRequest::CloseStdin(_) => "close-stdin",
-        AgentRequest::Resize(_) => "resize",
-        AgentRequest::File(_) => "file",
-        AgentRequest::Filesystem(_) => "filesystem",
-    }
+    request.operation().as_str()
 }
 
 #[cfg(test)]
@@ -887,13 +915,14 @@ where
         minimum: u16,
         maximum: u16,
     ) -> Result<Self> {
-        Self::connect_with_range(
+        Self::connect_with_range_and_fault_injector(
             stream,
             token,
             ProtocolRange {
                 min: minimum,
                 max: maximum,
             },
+            Arc::new(NoAgentTransportFaultInjector),
         )
         .await
     }
