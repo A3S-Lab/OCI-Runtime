@@ -348,17 +348,16 @@ Completed:
   in-memory matrix injects every one of the 180 operation-stage pairs, proves
   one crossing and terminal disconnect per point. A portable agent-backed
   `RuntimeDriver` matrix also arms each of the nine create, state, start, kill,
-  delete, wait, exec, and signal-process stages exactly once across durable
-  `HostRuntimeService` reopen. Pre-dispatch faults defer the guest request until
-  the replacement connection; post-dispatch mutation faults replay the guest
-  journal while read-only state and uncached wait observations are safely
-  reissued. A fully written mutation response replays the completed durable
-  record, while a fully written wait response replays its durable terminal
-  cache. Every path
-  preserves the exact generation; mutations retain one effect and reject
-  changed retries, state resolves a current target to that exact generation,
-  wait returns one stable exact exit result while stale targets fail closed,
-  exec preserves the exact process ID, PID, and terminal mode, and
+  delete, wait, exec, signal-process, and wait-process stages exactly once
+  across durable `HostRuntimeService` reopen. Pre-dispatch faults defer the
+  guest request until the replacement connection; post-dispatch mutation faults
+  replay the guest journal while read-only state and uncached wait observations
+  are safely reissued. A fully written mutation response replays the completed
+  durable record, while a fully written wait response replays its durable terminal
+  cache. Every path preserves the exact generation; mutations retain one effect
+  and reject changed retries, state resolves a current target to that exact
+  generation, wait and wait-process return stable exact exit results while
+  stale targets fail closed, exec preserves the exact process ID, PID, and terminal mode, and
   signal-process preserves the exact target and signal;
 - existing `features` CLI path routed through the Rust SDK;
 - reconnectable local SDK endpoints that expose the first broken-stream result
@@ -575,6 +574,12 @@ enforce it. No property is silently ignored.
     and replay a fully written response from the durable host journal. Require
     one signal effect and reject a changed signal under the same operation ID at
     both boundaries.
+  - [x] Carry `wait-process` through all nine portable reopen stages after an
+    exact durable create, start, exec, and signal. Reissue an uncached process
+    observation after retryable first-call failures, then durably cache one
+    exact exit result. A fully written response and every later retry must avoid
+    another driver or guest dispatch; current targets resolve to the exact
+    generation and process ID, and stale targets fail closed at both boundaries.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

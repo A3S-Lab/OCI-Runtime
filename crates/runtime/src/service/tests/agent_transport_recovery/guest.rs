@@ -3,12 +3,14 @@ use std::sync::Mutex;
 use a3s_oci_agent_protocol::{
     AgentCapabilities, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentKillRequest,
     AgentOperation, AgentProcess, AgentSignalProcessRequest, AgentStartRequest, AgentState,
-    AgentStateRequest, AgentWaitRequest, GuestAgentService,
+    AgentStateRequest, AgentWaitProcessRequest, AgentWaitRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{async_trait, DeleteMode, Error, ErrorCode, ExitStatus, Result};
 
 use super::guest_journal::{already_exists, changed_request, OperationJournal};
+
+mod metrics;
 
 #[derive(Debug, Default)]
 struct LifecycleJournal {
@@ -20,7 +22,9 @@ struct LifecycleJournal {
     wait_requests: usize,
     exec: OperationJournal<AgentExecRequest, AgentProcess>,
     signal_process: OperationJournal<AgentSignalProcessRequest, ()>,
+    wait_process_requests: usize,
     init_exit_status: Option<ExitStatus>,
+    exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
 }
 
@@ -45,121 +49,12 @@ impl JournaledLifecycleGuest {
                     AgentOperation::Wait,
                     AgentOperation::Exec,
                     AgentOperation::SignalProcess,
+                    AgentOperation::WaitProcess,
                 ],
             )
             .expect("test guest capabilities"),
             journal: Mutex::new(LifecycleJournal::default()),
         }
-    }
-
-    pub(super) fn create_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .create
-            .requests
-    }
-
-    pub(super) fn create_effect_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .create
-            .effects
-    }
-
-    pub(super) fn state_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .state_requests
-    }
-
-    pub(super) fn start_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .start
-            .requests
-    }
-
-    pub(super) fn start_effect_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .start
-            .effects
-    }
-
-    pub(super) fn kill_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .kill
-            .requests
-    }
-
-    pub(super) fn kill_effect_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .kill
-            .effects
-    }
-
-    pub(super) fn delete_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .delete
-            .requests
-    }
-
-    pub(super) fn delete_effect_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .delete
-            .effects
-    }
-
-    pub(super) fn wait_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .wait_requests
-    }
-
-    pub(super) fn exec_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .exec
-            .requests
-    }
-
-    pub(super) fn exec_effect_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .exec
-            .effects
-    }
-
-    pub(super) fn signal_process_request_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .signal_process
-            .requests
-    }
-
-    pub(super) fn signal_process_effect_count(&self) -> usize {
-        self.journal
-            .lock()
-            .expect("guest journal lock")
-            .signal_process
-            .effects
     }
 }
 
@@ -448,6 +343,7 @@ impl GuestAgentService for JournaledLifecycleGuest {
         let response = AgentProcess::new(request.target.clone(), 6_202, terminal)?;
         journal.exec.effects += 1;
         journal.exec.entry = Some((request, response.clone()));
+        journal.exec_exit_status = None;
         Ok(response)
     }
 
@@ -480,8 +376,38 @@ impl GuestAgentService for JournaledLifecycleGuest {
             );
         }
 
+        let exit_status = ExitStatus::signaled(request.signal.get(), false)?;
         journal.signal_process.effects += 1;
         journal.signal_process.entry = Some((request, ()));
+        journal.exec_exit_status = Some(exit_status);
         Ok(())
+    }
+
+    async fn wait_process(&self, request: AgentWaitProcessRequest) -> Result<ExitStatus> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.wait_process_requests += 1;
+        let process = journal
+            .exec
+            .entry
+            .as_ref()
+            .map(|(_, process)| process)
+            .ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "guest exec process is unavailable")
+                    .for_operation("agent-wait-process")
+            })?;
+        if process.target() != &request.target {
+            return Err(
+                Error::new(ErrorCode::NotFound, "guest exec process is unavailable")
+                    .for_operation("agent-wait-process"),
+            );
+        }
+        journal.exec_exit_status.clone().ok_or_else(|| {
+            Error::new(
+                ErrorCode::DeadlineExceeded,
+                "guest exec process is still running",
+            )
+            .for_operation("agent-wait-process")
+            .retryable(true)
+        })
     }
 }
