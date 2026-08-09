@@ -7,7 +7,7 @@ use a3s_oci_agent_protocol::{
     AgentDeleteRequest, AgentExecRequest, AgentKillRequest, AgentProcessesRequest,
     AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
     AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
-    AgentWaitRequest, GuestPath,
+    AgentWaitRequest, AgentWriteStdinRequest, GuestPath,
 };
 use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
@@ -23,10 +23,10 @@ use crate::{
     DriverContainerOperationRequest, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
     DriverKillRequest, DriverProcess, DriverReadOutputRequest, DriverRecovery,
     DriverSignalProcessRequest, DriverStartRequest, DriverState, DriverUpdateRequest,
-    DriverWaitProcessRequest, DriverWaitRequest, RuntimeDriver,
+    DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest, RuntimeDriver,
 };
 
-const DRIVER_OPERATIONS: [RuntimeOperation; 15] = [
+const DRIVER_OPERATIONS: [RuntimeOperation; 16] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -42,6 +42,7 @@ const DRIVER_OPERATIONS: [RuntimeOperation; 15] = [
     RuntimeOperation::Update,
     RuntimeOperation::Stats,
     RuntimeOperation::ReadOutput,
+    RuntimeOperation::WriteStdin,
 ];
 
 #[derive(Debug, Default)]
@@ -61,6 +62,7 @@ pub(super) struct DriverMetrics {
     update_dispatches: AtomicUsize,
     stats_dispatches: AtomicUsize,
     read_output_dispatches: AtomicUsize,
+    write_stdin_dispatches: AtomicUsize,
     recoveries: AtomicUsize,
 }
 
@@ -123,6 +125,10 @@ impl DriverMetrics {
 
     pub(super) fn read_output_dispatches(&self) -> usize {
         self.read_output_dispatches.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn write_stdin_dispatches(&self) -> usize {
+        self.write_stdin_dispatches.load(Ordering::SeqCst)
     }
 
     pub(super) fn recoveries(&self) -> usize {
@@ -372,6 +378,19 @@ impl RuntimeDriver for AgentLifecycleDriver {
                 after_sequence: request.after_sequence,
                 max_bytes: request.max_bytes,
                 wait_timeout_ms: request.wait_timeout_ms,
+            })
+            .await
+    }
+
+    async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        self.metrics
+            .write_stdin_dispatches
+            .fetch_add(1, Ordering::SeqCst);
+        self.client
+            .write_stdin(AgentWriteStdinRequest {
+                context: Some(request.context),
+                process: request.target,
+                data: request.data,
             })
             .await
     }

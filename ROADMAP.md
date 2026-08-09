@@ -622,6 +622,13 @@ enforce it. No property is silently ignored.
     the poll after every retryable first-call failure, including a fully written
     first response, and reject stale process generations before host driver
     dispatch and at the guest boundary.
+  - [x] Carry replay-safe `write-stdin` through all nine portable reopen stages
+    for a running init process. Resolve the current host target to the exact
+    generation, retain the original operation context and input bytes, and keep
+    the durable claim resumable after each retryable first-call failure. Replay
+    a post-dispatch guest request without a second input effect, replay a fully
+    written response from the completed host journal without another dispatch,
+    and reject changed bytes under the same operation ID at both boundaries.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

@@ -1,6 +1,8 @@
-use a3s_oci_agent_protocol::AgentReadOutputRequest;
+use a3s_oci_agent_protocol::{AgentReadOutputRequest, AgentWriteStdinRequest};
+use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{Error, ErrorCode, OutputChunk, OutputStream, Result};
 
+use super::super::guest_journal::{already_exists, changed_request};
 use super::JournaledLifecycleGuest;
 
 impl JournaledLifecycleGuest {
@@ -65,5 +67,84 @@ impl JournaledLifecycleGuest {
             });
         }
         Ok(chunks)
+    }
+
+    pub(super) fn write_to_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
+        let mut journal = self.journal.lock().expect("guest journal lock");
+        journal.write_stdin.requests += 1;
+        let operation_id = request
+            .context
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::InvalidArgument,
+                    "guest stdin write requires an operation context",
+                )
+                .for_operation("agent-write-stdin")
+            })?
+            .operation_id
+            .clone();
+        if let Some((recorded, ())) = journal.write_stdin.entry.as_ref() {
+            let recorded_operation_id = &recorded
+                .context
+                .as_ref()
+                .expect("recorded stdin write context")
+                .operation_id;
+            if recorded_operation_id == &operation_id {
+                if recorded != &request {
+                    return Err(changed_request("write-stdin"));
+                }
+                return Ok(());
+            }
+            return Err(already_exists("write-stdin"));
+        }
+
+        let current = journal.current.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-write-stdin")
+        })?;
+        if current.target() != &request.process.container {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "guest container generation is unavailable",
+            )
+            .for_operation("agent-write-stdin"));
+        }
+        if current.status() != ContainerState::Running {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "guest stdin write requires a running container",
+            )
+            .for_operation("agent-write-stdin"));
+        }
+        if !request.process.process_id.is_init()
+            && journal
+                .exec
+                .entry
+                .as_ref()
+                .is_none_or(|(_, process)| process.target() != &request.process)
+        {
+            return Err(
+                Error::new(ErrorCode::NotFound, "guest process is unavailable")
+                    .for_operation("agent-write-stdin"),
+            );
+        }
+
+        journal.write_stdin.effects += 1;
+        journal.write_stdin.entry = Some((request, ()));
+        Ok(())
+    }
+
+    pub(in super::super) fn recorded_write_stdin_request(&self) -> Option<AgentWriteStdinRequest> {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .write_stdin
+            .entry
+            .as_ref()
+            .map(|(request, ())| request.clone())
     }
 }

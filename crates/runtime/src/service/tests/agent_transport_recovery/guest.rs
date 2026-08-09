@@ -5,12 +5,12 @@ use a3s_oci_agent_protocol::{
     AgentExecRequest, AgentKillRequest, AgentOperation, AgentProcess, AgentProcessesRequest,
     AgentReadOutputRequest, AgentSignalProcessRequest, AgentStartRequest, AgentState,
     AgentStateRequest, AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest,
-    AgentWaitRequest, GuestAgentService,
+    AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, OutputChunk, ProcessId,
-    ProcessRecord, ProcessTarget, Result,
+    async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, OutputChunk,
+    ProcessRecord, Result,
 };
 
 use super::guest_journal::{already_exists, changed_request, OperationJournal};
@@ -18,6 +18,7 @@ use super::guest_journal::{already_exists, changed_request, OperationJournal};
 mod freezer;
 mod io;
 mod metrics;
+mod process;
 mod resource;
 mod stats;
 
@@ -38,6 +39,7 @@ struct LifecycleJournal {
     update: OperationJournal<AgentUpdateRequest, AgentState>,
     stats_requests: usize,
     read_output_requests: usize,
+    write_stdin: OperationJournal<AgentWriteStdinRequest, ()>,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -71,6 +73,7 @@ impl JournaledLifecycleGuest {
                     AgentOperation::Update,
                     AgentOperation::Stats,
                     AgentOperation::ReadOutput,
+                    AgentOperation::WriteStdin,
                 ],
             )
             .expect("test guest capabilities"),
@@ -441,44 +444,7 @@ impl GuestAgentService for JournaledLifecycleGuest {
     }
 
     async fn processes(&self, request: AgentProcessesRequest) -> Result<Vec<ProcessRecord>> {
-        let mut journal = self.journal.lock().expect("guest journal lock");
-        journal.processes_requests += 1;
-        let current = journal.current.as_ref().ok_or_else(|| {
-            Error::new(
-                ErrorCode::NotFound,
-                "guest container generation is unavailable",
-            )
-            .for_operation("agent-processes")
-        })?;
-        if current.target() != &request.target {
-            return Err(Error::new(
-                ErrorCode::NotFound,
-                "guest container generation is unavailable",
-            )
-            .for_operation("agent-processes"));
-        }
-
-        let mut processes = Vec::new();
-        if current.status() != ContainerState::Stopped {
-            processes.push(ProcessRecord {
-                target: ProcessTarget {
-                    container: request.target,
-                    process_id: ProcessId::init(),
-                },
-                pid: current.pid().and_then(|pid| u32::try_from(pid).ok()),
-                terminal: false,
-            });
-        }
-        if journal.exec_exit_status.is_none() {
-            if let Some((_, process)) = journal.exec.entry.as_ref() {
-                processes.push(ProcessRecord {
-                    target: process.target().clone(),
-                    pid: u32::try_from(process.pid()).ok(),
-                    terminal: process.terminal(),
-                });
-            }
-        }
-        Ok(processes)
+        self.list_processes(request)
     }
 
     async fn update(&self, request: AgentUpdateRequest) -> Result<AgentState> {
@@ -491,5 +457,9 @@ impl GuestAgentService for JournaledLifecycleGuest {
 
     async fn read_output(&self, request: AgentReadOutputRequest) -> Result<Vec<OutputChunk>> {
         self.read_captured_output(request)
+    }
+
+    async fn write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
+        self.write_to_stdin(request)
     }
 }

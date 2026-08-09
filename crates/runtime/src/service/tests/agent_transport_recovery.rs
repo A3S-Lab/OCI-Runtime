@@ -17,3 +17,4 @@ mod transport;
 mod update;
 mod wait;
 mod wait_process;
+mod write_stdin;
