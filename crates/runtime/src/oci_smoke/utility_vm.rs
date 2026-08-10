@@ -89,6 +89,18 @@ pub(super) async fn run_kill_reopen_replacement(
     reopen_replacement::run_kill(shim, vm_rootfs, bundle_directory, console_directory, stage).await
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(super) async fn run_delete_reopen_replacement(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_directory: &Path,
+    console_directory: &Path,
+    stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
+) -> crate::OciVmOperationReopenReplacementReport {
+    reopen_replacement::run_delete(shim, vm_rootfs, bundle_directory, console_directory, stage)
+        .await
+}
+
 pub(super) async fn run_multi_container(
     shim: &Path,
     vm_rootfs: &Path,

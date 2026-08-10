@@ -42,6 +42,9 @@ const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const REPLACEMENT_MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 const MARKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+mod delete;
+pub(super) use delete::run as run_delete;
+mod delete_support;
 mod kill;
 pub(super) use kill::run as run_kill;
 mod state;
@@ -692,8 +695,10 @@ struct QualificationHvfDriver {
     create_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     start_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     kill_identity: StdMutex<Option<(OperationId, ContainerTarget, a3s_oci_sdk::Signal, bool)>>,
+    delete_identity: StdMutex<Option<(OperationId, ContainerTarget, DeleteMode)>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
+    delete_calls: AtomicU32,
 }
 
 impl QualificationHvfDriver {
@@ -722,6 +727,24 @@ impl QualificationHvfDriver {
     }
 
     fn with_kill_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_kill: KillRequest,
+        recovery_marker: PathBuf,
+    ) -> Self {
+        Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            Some(recovery_kill),
+            Some(recovery_marker),
+        )
+    }
+
+    fn with_delete_recovery(
         session: Arc<UtilityVmSession>,
         vm_rootfs: PathBuf,
         recovery_create: CreateRequest,
@@ -768,8 +791,10 @@ impl QualificationHvfDriver {
             create_identity: StdMutex::new(None),
             start_identity: StdMutex::new(None),
             kill_identity: StdMutex::new(None),
+            delete_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
+            delete_calls: AtomicU32::new(0),
         }
     }
 
@@ -804,6 +829,10 @@ impl QualificationHvfDriver {
         self.kill_calls.load(Ordering::SeqCst)
     }
 
+    fn delete_calls(&self) -> u32 {
+        self.delete_calls.load(Ordering::SeqCst)
+    }
+
     async fn shutdown(&self) -> AgentVmSmokeReport {
         self.session.shutdown().await
     }
@@ -833,6 +862,16 @@ impl QualificationHvfDriver {
             .map_err(|_| "qualification HVF kill-identity lock was poisoned".to_string())?
             .clone()
             .ok_or_else(|| "qualification HVF driver recorded no kill dispatch".to_string())
+    }
+
+    fn delete_identity(
+        &self,
+    ) -> std::result::Result<(OperationId, ContainerTarget, DeleteMode), String> {
+        self.delete_identity
+            .lock()
+            .map_err(|_| "qualification HVF delete-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no delete dispatch".to_string())
     }
 
     fn guest_bundle(&self, bundle: &OciBundle) -> Result<a3s_oci_agent_protocol::GuestPath> {
@@ -996,6 +1035,36 @@ impl QualificationHvfDriver {
         self.kill_calls.fetch_add(1, Ordering::SeqCst);
         self.client.kill(request).await
     }
+
+    async fn dispatch_delete(&self, request: DriverDeleteRequest) -> Result<()> {
+        let identity = (
+            request.context.operation_id.clone(),
+            request.target.clone(),
+            request.mode,
+        );
+        {
+            let mut retained = self.delete_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF delete-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-delete")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed delete identity",
+                    )
+                    .for_operation("qualification-hvf-delete"));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.delete_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.delete(request).await
+    }
 }
 
 #[async_trait]
@@ -1032,7 +1101,7 @@ impl RuntimeDriver for QualificationHvfDriver {
         {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
-                "qualification HVF replacement accepts only its interrupted Create, Start, or Kill record",
+                "qualification HVF replacement accepts only its interrupted Create, Start, Kill, or Delete record",
             )
             .for_operation("recover-qualification-hvf"));
         }
@@ -1143,7 +1212,7 @@ impl RuntimeDriver for QualificationHvfDriver {
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
-        self.client.delete(request).await
+        self.dispatch_delete(request).await
     }
 }
 

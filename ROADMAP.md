@@ -755,12 +755,23 @@ enforce it. No property is silently ignored.
     path verifies the replacement workload before Kill, uses stopped-only
     Delete, and restores Host and Guest inventories. The August 10, 2026 matrix
     passed all nine stages in 18 fresh VMs.
+  - [x] Carry all nine Host/Guest `delete` stages through durable service reopen
+    and an actual HVF owner replacement. The first eight paths retain the exact
+    stopped live record and a Prepared Delete journal. Replacement recovery
+    recreates, starts, and kills the workload with the original setup
+    identities, rebuilds the Guest stopped tombstone, and dispatches the
+    unchanged stopped-only Delete once. A fully written response instead leaves
+    no live record and a SucceededEmpty journal; the fresh owner performs no
+    workload recovery or driver Delete and replays that exact journal. Every
+    path reuses the original Delete identity and generation, uses two distinct
+    endpoint/shim/VM-worker owners, and restores Host and Guest inventories.
+    The August 10, 2026 matrix passed all nine stages in 18 fresh VMs.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 36 real Create/State/Start/Kill replacement paths do not
-    satisfy the complete 20-operation matrix gate. Delete, Wait, Exec,
-    SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats,
-    ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem remain.
+    stages, and all 45 real Create/State/Start/Kill/Delete replacement paths do
+    not satisfy the complete 20-operation matrix gate. Wait, Exec, SignalProcess,
+    WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin,
+    CloseStdin, Resize, File, and Filesystem remain.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

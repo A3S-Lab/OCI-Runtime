@@ -325,3 +325,30 @@ pub async fn oci_vm_kill_reopen_replacement_at(
         OciVmOperationReopenReplacementReport::unsupported_kill(HostPlatform::current(), stage)
     }
 }
+
+/// Reissue one interrupted stopped-only Delete through a replacement macOS HVF owner.
+///
+/// Before a Delete response is committed, recovery rebuilds the exact stopped
+/// Guest tombstone and resumes the original journaled operation. After a
+/// response is committed, the fresh owner must replay the completed journal
+/// without rebuilding the workload or dispatching Delete again.
+#[must_use]
+pub async fn oci_vm_delete_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_delete_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_delete(HostPlatform::current(), stage)
+    }
+}
