@@ -763,7 +763,7 @@ jobs:
         name: Real macOS lifecycle and transport fault cleanup
         run: bash .github/scripts/macos-fault-cleanup.sh
       - if: runner.os == 'macOS'
-        name: Real macOS Create, State, Start, Kill, and Delete reopen with HVF owner replacement
+        name: Real macOS Create, State, Start, Kill, Delete, and Wait reopen with HVF owner replacement
         run: bash .github/scripts/macos-reopen-replacement.sh
       - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM

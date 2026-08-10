@@ -15,9 +15,9 @@ use a3s_oci_core::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle,
-    OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, StartRequest,
-    StateRequest,
+    DeleteRequest, Error, ErrorCode, ExitStatus, IoMode, IsolationRequest, KillRequest,
+    ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId, ProcessIo, Result,
+    RuntimeOperation, StartRequest, StateRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -30,7 +30,7 @@ use crate::agent_driver::AgentDriverClient;
 use crate::agent_session::UtilityVmSession;
 use crate::driver::{
     DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverKillRequest,
-    DriverStartRequest, DriverState, RuntimeDriver,
+    DriverStartRequest, DriverState, DriverWaitRequest, RuntimeDriver,
 };
 use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::marker::{exact_marker_state, ExactMarkerState};
@@ -41,6 +41,14 @@ const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
 const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const REPLACEMENT_MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 const MARKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 6] = [
+    RuntimeOperation::Create,
+    RuntimeOperation::State,
+    RuntimeOperation::Start,
+    RuntimeOperation::Kill,
+    RuntimeOperation::Delete,
+    RuntimeOperation::Wait,
+];
 
 mod delete;
 pub(super) use delete::run as run_delete;
@@ -51,6 +59,8 @@ mod state;
 pub(super) use state::run as run_state;
 mod start;
 pub(super) use start::run as run_start;
+mod wait;
+pub(super) use wait::run as run_wait;
 
 pub(super) async fn run(
     shim: &Path,
@@ -696,9 +706,11 @@ struct QualificationHvfDriver {
     start_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     kill_identity: StdMutex<Option<(OperationId, ContainerTarget, a3s_oci_sdk::Signal, bool)>>,
     delete_identity: StdMutex<Option<(OperationId, ContainerTarget, DeleteMode)>>,
+    wait_identity: StdMutex<Option<(ContainerTarget, Option<u64>)>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
+    wait_calls: AtomicU32,
 }
 
 impl QualificationHvfDriver {
@@ -792,9 +804,11 @@ impl QualificationHvfDriver {
             start_identity: StdMutex::new(None),
             kill_identity: StdMutex::new(None),
             delete_identity: StdMutex::new(None),
+            wait_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
+            wait_calls: AtomicU32::new(0),
         }
     }
 
@@ -831,6 +845,10 @@ impl QualificationHvfDriver {
 
     fn delete_calls(&self) -> u32 {
         self.delete_calls.load(Ordering::SeqCst)
+    }
+
+    fn wait_calls(&self) -> u32 {
+        self.wait_calls.load(Ordering::SeqCst)
     }
 
     async fn shutdown(&self) -> AgentVmSmokeReport {
@@ -872,6 +890,14 @@ impl QualificationHvfDriver {
             .map_err(|_| "qualification HVF delete-identity lock was poisoned".to_string())?
             .clone()
             .ok_or_else(|| "qualification HVF driver recorded no delete dispatch".to_string())
+    }
+
+    fn wait_identity(&self) -> std::result::Result<(ContainerTarget, Option<u64>), String> {
+        self.wait_identity
+            .lock()
+            .map_err(|_| "qualification HVF wait-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no wait dispatch".to_string())
     }
 
     fn guest_bundle(&self, bundle: &OciBundle) -> Result<a3s_oci_agent_protocol::GuestPath> {
@@ -1065,6 +1091,32 @@ impl QualificationHvfDriver {
         self.delete_calls.fetch_add(1, Ordering::SeqCst);
         self.client.delete(request).await
     }
+
+    async fn dispatch_wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        let identity = (request.target.clone(), request.timeout_ms);
+        {
+            let mut retained = self.wait_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF wait-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-wait")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed wait identity",
+                    )
+                    .for_operation("qualification-hvf-wait"));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.wait_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.wait(request).await
+    }
 }
 
 #[async_trait]
@@ -1086,6 +1138,10 @@ impl RuntimeDriver for QualificationHvfDriver {
         }
     }
 
+    fn operations(&self) -> &[RuntimeOperation] {
+        &QUALIFICATION_HVF_OPERATIONS
+    }
+
     async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
         let recovery_state_supported = matches!(
             record.state.status(),
@@ -1101,7 +1157,7 @@ impl RuntimeDriver for QualificationHvfDriver {
         {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
-                "qualification HVF replacement accepts only its interrupted Create, Start, Kill, or Delete record",
+                "qualification HVF replacement accepts only its interrupted Create, Start, Kill, Delete, or Wait record",
             )
             .for_operation("recover-qualification-hvf"));
         }
@@ -1213,6 +1269,10 @@ impl RuntimeDriver for QualificationHvfDriver {
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
         self.dispatch_delete(request).await
+    }
+
+    async fn wait(&self, request: DriverWaitRequest) -> Result<ExitStatus> {
+        self.dispatch_wait(request).await
     }
 }
 

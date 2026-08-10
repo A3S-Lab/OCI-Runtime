@@ -766,12 +766,25 @@ enforce it. No property is silently ignored.
     path reuses the original Delete identity and generation, uses two distinct
     endpoint/shim/VM-worker owners, and restores Host and Guest inventories.
     The August 10, 2026 matrix passed all nine stages in 18 fresh VMs.
+  - [x] Carry all nine Host/Guest init `wait` stages through durable service
+    reopen and an actual HVF owner replacement after exact Create, Start, and
+    signal-9 Kill setup. The first eight paths retain the stopped generation
+    without an init-exit cache; replacement recovery recreates, starts, and
+    kills the workload with the original setup identities, then dispatches the
+    exact resolved Wait target and timeout once and durably caches
+    `signal=9, oom_killed=false`. A fully written first response already leaves
+    that cache committed, so the replacement Host and every later Wait return
+    without another driver or Guest dispatch. Every path rejects a stale Guest
+    generation with NotFound and a stale Host generation with Conflict before
+    driver dispatch, uses two distinct endpoint/shim/VM-worker owners, performs
+    stopped-only Delete, and restores Host and Guest inventories. The August
+    10, 2026 matrix passed all nine stages in 18 fresh VMs.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 45 real Create/State/Start/Kill/Delete replacement paths do
-    not satisfy the complete 20-operation matrix gate. Wait, Exec, SignalProcess,
-    WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin,
-    CloseStdin, Resize, File, and Filesystem remain.
+    stages, and all 54 real Create/State/Start/Kill/Delete/Wait replacement
+    paths do not satisfy the complete 20-operation matrix gate. Exec,
+    SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats,
+    ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem remain.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

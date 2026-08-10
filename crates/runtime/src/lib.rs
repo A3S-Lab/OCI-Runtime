@@ -119,7 +119,7 @@ pub use oci_smoke::{
     oci_vm_kill_reopen_replacement_at, oci_vm_multi_container_smoke, oci_vm_reopen_replacement,
     oci_vm_reopen_replacement_at, oci_vm_smoke, oci_vm_start_reopen_replacement_at,
     oci_vm_state_reopen_replacement_at, oci_vm_transport_fault_cleanup,
-    windows_oci_vm_multi_container_smoke,
+    oci_vm_wait_reopen_replacement_at, windows_oci_vm_multi_container_smoke,
 };
 pub use operation_reopen_replacement_report::{
     OciVmOperationReopenReplacementReport,
@@ -127,6 +127,7 @@ pub use operation_reopen_replacement_report::{
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_START_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_STATE_SCHEMA_VERSION,
+    OCI_VM_OPERATION_REOPEN_REPLACEMENT_WAIT_SCHEMA_VERSION,
 };
 pub use reopen_replacement_report::{
     OciVmReopenReplacementReport, OCI_VM_REOPEN_REPLACEMENT_SCHEMA_VERSION,

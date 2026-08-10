@@ -352,3 +352,30 @@ pub async fn oci_vm_delete_reopen_replacement_at(
         OciVmOperationReopenReplacementReport::unsupported_delete(HostPlatform::current(), stage)
     }
 }
+
+/// Reissue one interrupted init Wait through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact stopped Guest tombstone. An uncommitted Wait is
+/// reissued once and durably caches its signal result; a committed response and
+/// every later Wait replay directly from the Host cache without another Wait
+/// dispatch.
+#[must_use]
+pub async fn oci_vm_wait_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_wait_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_wait(HostPlatform::current(), stage)
+    }
+}
