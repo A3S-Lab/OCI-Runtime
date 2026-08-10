@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use a3s_oci_sdk::ProcessRecord;
+
 use crate::state::model::StoredProcess;
 
 use super::*;
@@ -117,6 +119,77 @@ pub(super) async fn exercise_exec_reconcile(point: FaultPoint) {
         .await
         .unwrap_or_else(|error| panic!("recover exec reconciliation after {point}: {error}"));
     assert_eq!(process.pid, Some(5_000), "{point}");
+    assert_consistent_layout(recovered.root());
+}
+
+pub(super) async fn exercise_recreated_exec_recovery(point: FaultPoint) {
+    let fixture = Fixture::new();
+    let create = fixture.create("recreated-exec-fault-create");
+    let target = prepare_running_for_process(&fixture.root, &create).await;
+    let exec = process_exec_request(&target, "recreated-exec-fault", "worker");
+    let setup = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("open recreated exec setup");
+    let original = drive_exec(&setup, &exec)
+        .await
+        .expect("complete original exec");
+    assert_eq!(original.pid, Some(5_000));
+    let replacement = ProcessRecord {
+        target: original.target.clone(),
+        pid: Some(6_262),
+        terminal: original.terminal,
+    };
+    let mutation = match point {
+        FaultPoint::DurableFile { mutation, .. } => mutation,
+        _ => unreachable!("recreated exec test uses only selected file faults"),
+    };
+    if mutation == DurableMutation::ReconcileExecOperation {
+        setup
+            .observe_recreated_exec_processes(&target, std::slice::from_ref(&replacement))
+            .await
+            .expect("store replacement exec PID before journal fault");
+    }
+    drop(setup);
+
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let injected = open_injected(&fixture.root, injector.clone())
+        .await
+        .expect("open recreated exec fault store");
+    let result = match mutation {
+        DurableMutation::ReconcileExecProcess => injected
+            .observe_recreated_exec_processes(&target, std::slice::from_ref(&replacement))
+            .await
+            .map(|_| ()),
+        DurableMutation::ReconcileExecOperation => injected.prepare_exec(&exec).await.map(|_| ()),
+        _ => unreachable!("recreated exec test uses only selected mutations"),
+    };
+    let error = result.expect_err("recreated exec checkpoint must inject");
+    assert_injected(&error, point, &injector);
+    drop(injected);
+
+    let recovered = DurableStateStore::open(&fixture.root)
+        .await
+        .expect("reopen recreated exec state");
+    recovered
+        .observe_recreated_exec_processes(&target, std::slice::from_ref(&replacement))
+        .await
+        .unwrap_or_else(|error| panic!("recover replacement exec PID after {point}: {error}"));
+    let ProcessOperationPreparation::Replayed(replayed) = recovered
+        .prepare_exec(&exec)
+        .await
+        .unwrap_or_else(|error| panic!("repair Exec journal after {point}: {error}"))
+    else {
+        panic!("Exec journal did not replay after {point}");
+    };
+    assert_eq!(replayed, replacement, "{point}");
+    assert_eq!(
+        recovered
+            .prepare_exec(&exec)
+            .await
+            .unwrap_or_else(|error| panic!("replay repaired Exec after {point}: {error}")),
+        ProcessOperationPreparation::Replayed(replacement),
+        "{point}"
+    );
     assert_consistent_layout(recovered.root());
 }
 

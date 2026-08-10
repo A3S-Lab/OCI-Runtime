@@ -779,12 +779,31 @@ enforce it. No property is silently ignored.
     driver dispatch, uses two distinct endpoint/shim/VM-worker owners, performs
     stopped-only Delete, and restores Host and Guest inventories. The August
     10, 2026 matrix passed all nine stages in 18 fresh VMs.
+  - [x] Carry all nine Host/Guest terminal `exec` stages through durable service
+    reopen and an actual HVF owner replacement after exact Create and Start.
+    The Linux executor now waits for close-on-exec proof before reporting a
+    successful Exec, so pre-exec failures return through the typed start
+    barrier instead of becoming false process records. The first eight paths
+    retain a Prepared Exec journal and a prepared process record with no live
+    PID; replacement recovery recreates and starts the init process, then the
+    unchanged Exec identity dispatches once. A fully written first response
+    instead retains the exact live `ProcessRecord` and Succeeded journal;
+    replacement recovery recreates both init and Exec, rebinds their Guest
+    PIDs, repairs the completed journals, and the Host replay returns without
+    another API-driven dispatch. Every path preserves the generation, process
+    ID, terminal mode, and complete request identity; rejects stale and changed
+    Host and Guest requests; accepts a first-owner marker only when it exactly
+    matches the nonce; requires the replacement long-running terminal process
+    to write that marker; force-deletes the generation; and restores Host and
+    Guest inventories. The August 10, 2026 matrix passed all nine stages in 18
+    fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v6`.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 54 real Create/State/Start/Kill/Delete/Wait replacement
-    paths do not satisfy the complete 20-operation matrix gate. Exec,
-    SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats,
-    ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem remain.
+    stages, and all 63 real Create/State/Start/Kill/Delete/Wait/Exec replacement
+    paths do not satisfy the complete 20-operation matrix gate. SignalProcess,
+    WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput,
+    WriteStdin, CloseStdin, Resize, File, and Filesystem remain.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

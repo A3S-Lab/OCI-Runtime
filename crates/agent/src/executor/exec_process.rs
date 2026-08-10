@@ -9,7 +9,7 @@ use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 use super::cgroup;
-use super::control::{read_outcome, InitOutcome, START_BYTE};
+use super::control::{read_outcome, read_start_result, InitOutcome, START_BYTE};
 use super::io::ProcessIoHandle;
 use super::namespace::RetainedNamespaceArgument;
 use super::pid;
@@ -245,8 +245,19 @@ impl ExecProcess {
                 format!("failed to release prepared exec process: {error}"),
             ));
         }
+        let started = match timeout(EXEC_READY_TIMEOUT, read_start_result(&mut control)).await {
+            Ok(result) => result,
+            Err(_) => Err(exec_error(
+                ErrorCode::DeadlineExceeded,
+                "timed out waiting for the exec process to cross exec",
+            )),
+        };
         drop(control);
         drop(listener);
+        if let Err(error) = started {
+            terminate(&mut child).await;
+            return Err(error);
+        }
 
         Ok(Self {
             child,

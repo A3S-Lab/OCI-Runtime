@@ -243,8 +243,21 @@ process, and receives the unchanged signal-9 Kill identity once. At
 recreates, starts, and kills the replacement process to rebuild its Guest
 tombstone, while the completed Host Kill journal answers the retry without an
 API-driven driver dispatch. Every path verifies the replacement workload before
-Kill and uses stopped-only Delete. Replacement coverage for the other 16
-operations remains open.
+Kill and uses stopped-only Delete.
+
+Schema `a3s.oci.oci-vm-operation-reopen-replacement.v4` adds stopped-only
+`delete`. The first eight points retain a Prepared journal and stopped record;
+the completed-response point retains only SucceededEmpty replay evidence, so
+the replacement performs no workload recovery or driver Delete. Version 5 adds
+init `wait`: recovery dispatches only until one exact terminal result is cached,
+then every retry is driver-free. Version 6 adds terminal `exec`. The Guest
+executor does not return success until the process crosses `execve`. Before the
+completed-response point, replacement dispatches the unchanged Exec once; after
+it, recovery recreates the durable live process, rebinds its PID, repairs the
+journal, and Host replay avoids another API-driven dispatch. The exact process
+ID, terminal mode, generation, request identity, stale/changed fencing, and
+nonce-bound replacement marker are required. Replacement coverage for the
+other 13 operations remains open.
 
 ## Bundle Preservation
 

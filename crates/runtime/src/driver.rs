@@ -174,6 +174,7 @@ pub struct DriverRecovery {
     observation: Option<DriverState>,
     init_exit_status: Option<ExitStatus>,
     recreated_process: RecreatedProcess,
+    recreated_exec_processes: Vec<ProcessRecord>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -192,6 +193,7 @@ impl DriverRecovery {
             observation: None,
             init_exit_status: None,
             recreated_process: RecreatedProcess::None,
+            recreated_exec_processes: Vec::new(),
         }
     }
 
@@ -202,6 +204,7 @@ impl DriverRecovery {
             observation: Some(observation),
             init_exit_status: None,
             recreated_process: RecreatedProcess::None,
+            recreated_exec_processes: Vec::new(),
         }
     }
 
@@ -222,6 +225,7 @@ impl DriverRecovery {
             observation: Some(observation),
             init_exit_status: None,
             recreated_process: RecreatedProcess::Created,
+            recreated_exec_processes: Vec::new(),
         })
     }
 
@@ -231,6 +235,21 @@ impl DriverRecovery {
     /// responses to be rebound to the fresh owner's exact process identity.
     /// Paused and stopped workloads require their own stronger recovery proof.
     pub fn recreated_running(observation: DriverState) -> Result<Self> {
+        Self::recreated_running_with_processes(observation, Vec::new())
+    }
+
+    /// Report a running init process and every live exec process rebuilt by a
+    /// replacement driver owner.
+    ///
+    /// The host requires this list to match its completed, non-terminal exec
+    /// records exactly before it accepts requests. It then rebinds only the
+    /// driver-visible PIDs; container generation, process ID, and terminal mode
+    /// remain fenced by durable state. Drivers must not report prepared execs
+    /// that have no committed Host response or processes with terminal evidence.
+    pub fn recreated_running_with_processes(
+        observation: DriverState,
+        mut processes: Vec<ProcessRecord>,
+    ) -> Result<Self> {
         if observation.status() != ContainerState::Running || observation.paused() {
             return Err(Error::new(
                 ErrorCode::InvalidArgument,
@@ -238,10 +257,81 @@ impl DriverRecovery {
             )
             .for_operation("construct-driver-recovery"));
         }
+        let init_pid = observation
+            .pid()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::InvalidArgument,
+                    "recreated running recovery requires a positive init PID",
+                )
+                .for_operation("construct-driver-recovery")
+            })?;
+        for process in &processes {
+            if process.target.process_id.is_init()
+                || process.target.container.generation.is_none()
+                || process.pid.is_none()
+                || process.pid == Some(0)
+                || process.pid == Some(init_pid)
+            {
+                return Err(Error::new(
+                    ErrorCode::InvalidArgument,
+                    "recreated exec recovery requires an exact non-init target and a positive PID distinct from init",
+                )
+                .for_operation("construct-driver-recovery"));
+            }
+        }
+        processes.sort_by(|left, right| {
+            left.target
+                .container
+                .id
+                .cmp(&right.target.container.id)
+                .then_with(|| {
+                    left.target
+                        .container
+                        .generation
+                        .cmp(&right.target.container.generation)
+                })
+                .then_with(|| left.target.process_id.cmp(&right.target.process_id))
+        });
+        if processes
+            .windows(2)
+            .any(|pair| pair[0].target == pair[1].target)
+        {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "recreated exec recovery contains a duplicate process target",
+            )
+            .for_operation("construct-driver-recovery"));
+        }
+        if processes.first().is_some_and(|first| {
+            processes
+                .iter()
+                .any(|process| process.target.container != first.target.container)
+        }) {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "recreated exec recovery spans more than one container generation",
+            )
+            .for_operation("construct-driver-recovery"));
+        }
+        let mut pids = processes
+            .iter()
+            .filter_map(|process| process.pid)
+            .collect::<Vec<_>>();
+        pids.sort_unstable();
+        if pids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "recreated exec recovery contains a duplicate PID",
+            )
+            .for_operation("construct-driver-recovery"));
+        }
         Ok(Self {
             observation: Some(observation),
             init_exit_status: None,
             recreated_process: RecreatedProcess::Running,
+            recreated_exec_processes: processes,
         })
     }
 
@@ -252,11 +342,16 @@ impl DriverRecovery {
             observation: Some(DriverState::stopped()),
             init_exit_status: Some(init_exit_status),
             recreated_process: RecreatedProcess::None,
+            recreated_exec_processes: Vec::new(),
         })
     }
 
     pub(crate) const fn recreated_process(&self) -> RecreatedProcess {
         self.recreated_process
+    }
+
+    pub(crate) fn recreated_exec_processes(&self) -> &[ProcessRecord] {
+        &self.recreated_exec_processes
     }
 
     /// Consume the recovery result into its durable components.

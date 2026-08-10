@@ -106,7 +106,7 @@ impl DurableStateStore {
                 &digest,
                 "prepare-exec",
             )?;
-            return match &operation.outcome {
+            return match operation.outcome.clone() {
                 StoredOperationStatus::Prepared => {
                     let mut process = self.reconcile_prepared_exec(request, &operation).await?;
                     if process.record.pid.is_some() {
@@ -148,10 +148,10 @@ impl DurableStateStore {
                     }
                 }
                 StoredOperationStatus::SucceededProcess { response } => {
-                    validate_process_response(response, &operation, "prepare-exec")?;
-                    Ok(ProcessOperationPreparation::Replayed(response.clone()))
+                    self.reconcile_succeeded_exec(&mut operation, response)
+                        .await
                 }
-                StoredOperationStatus::Failed { error } => Err(error.clone()),
+                StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::Succeeded { .. } | StoredOperationStatus::SucceededEmpty => {
                     Err(state_error(
                         ErrorCode::FailedPrecondition,
@@ -1027,7 +1027,7 @@ pub(super) fn required_operation_process_id<'a>(
     })
 }
 
-fn validate_process_response(
+pub(super) fn validate_process_response(
     response: &ProcessRecord,
     operation: &StoredOperation,
     operation_name: &'static str,

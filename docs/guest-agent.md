@@ -259,7 +259,10 @@ its own process group, enters the retained root with `chroot`, applies cwd,
 groups, GID, UID, umask, and `PR_SET_NO_NEW_PRIVS`, and blocks before `execve`.
 The parent verifies the helper's kernel peer PID, the payload parent and
 host-visible PID, an exact pidfd, root identity, every namespace identity, and
-the continued liveness of init before releasing that barrier.
+the continued liveness of init before releasing that barrier. The payload's
+control descriptor is close-on-exec. After release, the parent waits for EOF
+before returning the process record; credential, seccomp, or `execve` failure
+instead returns the bounded typed rejection over that same channel.
 
 Every exec process has a retained pidfd and stable cached terminal result.
 Per-process signal and wait are bound to the exact target; bounded wait returns
@@ -456,6 +459,25 @@ tombstone before the Host replays the completed Kill journal without an
 API-driven driver dispatch. Every run verifies the replacement marker before
 Kill, uses stopped-only Delete, and restores Host and Guest resource inventories.
 All 18 fresh VMs in the August 10, 2026 matrix passed.
+
+Delete and init Wait now carry the same nine points through fresh owners. For
+Delete, the first eight paths retain a stopped record plus Prepared journal and
+the fully written response retains only SucceededEmpty replay evidence. For
+Wait, the first eight paths rebuild the Guest tombstone before caching the
+exact signal result, while the fully written response and every later retry
+return from the durable terminal cache. Neither completed post-response path
+dispatches the API operation again. Each matrix passed in 18 fresh VMs.
+
+Terminal Exec now has the same real-owner matrix. The first eight paths retain
+a Prepared journal and a prepared process record with no live PID; the
+replacement rebuilds init and dispatches the unchanged Exec once. The fully
+written response retains the live process and Succeeded journal; recovery
+recreates init and Exec, rebinds their PIDs, repairs the completed responses,
+and the Host retry replays
+without another API-driven dispatch. Every replacement process must be
+long-running, terminal-backed, and write the exact nonce-bound marker. Stale or
+changed Host and Guest requests fail closed. All nine stages passed in 18 fresh
+VMs on August 10, 2026.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount

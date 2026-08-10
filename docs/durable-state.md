@@ -355,5 +355,41 @@ starts, and kills the replacement workload to reconstruct the Guest tombstone,
 then replays the completed durable Kill journal without another API-driven
 driver dispatch. Every path verifies the replacement marker before Kill, uses
 stopped-only Delete, and restores both Host and Guest inventories. The August
-10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs. The other
-16 operations still belong to the replacement matrix above.
+10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs.
+
+Real Delete recovery crosses the same nine points under
+`a3s.oci.oci-vm-operation-reopen-replacement.v4`. The first eight interruptions
+retain the stopped record and a Prepared Delete journal. Replacement recovery
+recreates, starts, and kills the workload with the original setup identities,
+rebuilds the Guest tombstone, and dispatches the unchanged stopped-only Delete
+once. A fully written response instead retains no live record and a
+SucceededEmpty journal, so the replacement owner performs no workload recovery
+or driver Delete. Every path restores both Host and Guest inventories. The
+August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs.
+
+Real init Wait recovery crosses the same nine points under
+`a3s.oci.oci-vm-operation-reopen-replacement.v5`. The first eight interruptions
+retain the stopped record without cached terminal evidence. Replacement
+recovery rebuilds the Guest tombstone and dispatches the exact Wait target once,
+then durably caches `signal=9, oom_killed=false`. A fully written response
+already has that cache, so Host reopen and later Wait calls replay it without a
+driver or Guest dispatch. Stale generations fail at both Host and Guest
+boundaries. The August 10, 2026 Apple Silicon matrix passed all nine stages in
+18 fresh VMs.
+
+Real terminal Exec recovery now crosses the same nine points under
+`a3s.oci.oci-vm-operation-reopen-replacement.v6`. Before returning success, the
+Linux executor waits for the target process to cross `execve`; typed pre-exec
+failures return through the control barrier. The first eight interruptions
+retain a Prepared Exec journal and a prepared process record with no live PID.
+Replacement recovery recreates and starts init, then the unchanged Exec request
+completes once. A fully written response instead retains the exact live
+`ProcessRecord` and Succeeded journal. Replacement recovery recreates both processes, rebinds
+their Guest PIDs, repairs the completed journals, and lets the Host replay
+return without another API-driven dispatch. The process ID, terminal mode, and
+complete request identity remain fenced; stale or changed Host and Guest
+requests fail closed. A first-owner marker is validated when scheduling reaches
+it, while every replacement must run the long-lived terminal process and write
+the exact nonce-bound marker before force delete. The August 10, 2026 Apple
+Silicon matrix passed all nine stages in 18 fresh VMs. The remaining 13
+operations still belong to the real replacement matrix above.

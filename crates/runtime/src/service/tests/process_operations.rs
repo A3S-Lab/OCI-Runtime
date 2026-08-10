@@ -1,5 +1,153 @@
 use super::*;
 
+#[test]
+fn recreated_running_recovery_rejects_an_exec_pid_that_aliases_init() {
+    let container = ContainerTarget::exact(container_id("pid-alias"), Generation(1));
+    let error = DriverRecovery::recreated_running_with_processes(
+        DriverState::running(42).expect("running init"),
+        vec![ProcessRecord {
+            target: ProcessTarget {
+                container,
+                process_id: ProcessId::new("worker").expect("process ID"),
+            },
+            pid: Some(42),
+            terminal: true,
+        }],
+    )
+    .expect_err("recovery must keep init and Exec PIDs distinct");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("distinct from init"));
+}
+
+#[tokio::test]
+async fn recreated_running_recovery_rebinds_live_exec_and_repairs_its_replay() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("recreated-running-exec-state");
+    let first_driver = Arc::new(RecordingDriver::with_process_operations());
+    let service = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&first_driver) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("open first exec owner");
+    let create = create_request(&bundle_directory, "recreated-running-exec-create");
+    let created = service.create(create.clone()).await.expect("first create");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("recreated-running-exec-start")),
+        target: target.clone(),
+    };
+    service.start(start.clone()).await.expect("first start");
+    let exec = exec_request(
+        target.clone(),
+        "recreated-running-exec",
+        "replacement-worker",
+    );
+    let original_process = service.exec(exec.clone()).await.expect("first exec");
+    assert_eq!(original_process.pid, Some(5_000));
+    drop(service);
+
+    let replacement_process = ProcessRecord {
+        target: original_process.target.clone(),
+        pid: Some(6_262),
+        terminal: original_process.terminal,
+    };
+    let replacement = Arc::new(RecordingDriver::with_process_operations());
+    replacement.set_recreated_running_recovery_with_processes(
+        DriverState::running(5_252).expect("replacement running state"),
+        vec![replacement_process.clone()],
+    );
+    let reopened = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&replacement) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("reopen around replacement exec owner");
+    assert_eq!(
+        reopened
+            .exec(exec.clone())
+            .await
+            .expect("repair completed Exec response"),
+        replacement_process
+    );
+    assert!(replacement
+        .calls()
+        .iter()
+        .all(|call| !matches!(call, DriverCall::Exec(_))));
+    drop(reopened);
+
+    let journal_reader = Arc::new(RecordingDriver::with_process_operations());
+    journal_reader.set_recovery_observation(
+        DriverState::running(5_252).expect("stable replacement running state"),
+    );
+    let reopened_again = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&journal_reader) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("reopen after Exec journal repair");
+    assert_eq!(
+        reopened_again
+            .exec(exec)
+            .await
+            .expect("replay rebound Exec response"),
+        replacement_process
+    );
+    assert!(journal_reader
+        .calls()
+        .iter()
+        .all(|call| !matches!(call, DriverCall::Exec(_))));
+}
+
+#[tokio::test]
+async fn recreated_running_recovery_rejects_missing_live_exec_evidence() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("missing-recreated-exec-state");
+    let first_driver = Arc::new(RecordingDriver::with_process_operations());
+    let service = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&first_driver) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("open first missing-evidence owner");
+    let create = create_request(&bundle_directory, "missing-recreated-exec-create");
+    let created = service.create(create.clone()).await.expect("first create");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    service
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("missing-recreated-exec-start")),
+            target: target.clone(),
+        })
+        .await
+        .expect("first start");
+    service
+        .exec(exec_request(
+            target,
+            "missing-recreated-exec",
+            "missing-worker",
+        ))
+        .await
+        .expect("first exec");
+    drop(service);
+
+    let replacement = Arc::new(RecordingDriver::with_process_operations());
+    replacement.set_recreated_running_recovery(
+        DriverState::running(5_252).expect("replacement running state"),
+    );
+    let error = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&replacement) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect_err("replacement owner must prove every live exec process");
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(error.message.contains("missing [missing-worker]"));
+}
+
 #[tokio::test]
 async fn process_operations_are_generation_fenced_durable_and_exactly_replayed() {
     let temporary = tempfile::tempdir().expect("temporary directory");

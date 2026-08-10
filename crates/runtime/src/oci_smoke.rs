@@ -379,3 +379,30 @@ pub async fn oci_vm_wait_reopen_replacement_at(
         OciVmOperationReopenReplacementReport::unsupported_wait(HostPlatform::current(), stage)
     }
 }
+
+/// Reissue one interrupted terminal Exec through a replacement macOS HVF owner.
+///
+/// The first eight transport stages retain a prepared Host journal and dispatch
+/// Exec exactly once after reopen. A committed response causes recovery to
+/// rebuild the live Exec in the fresh Guest, rebind only its PID, and replay the
+/// repaired response without another API-triggered driver dispatch.
+#[must_use]
+pub async fn oci_vm_exec_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_exec_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_exec(HostPlatform::current(), stage)
+    }
+}

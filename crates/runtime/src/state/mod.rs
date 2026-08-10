@@ -12,6 +12,7 @@ mod oci_state;
 mod operation;
 mod process;
 mod process_io;
+mod process_recovery;
 mod start;
 mod update;
 

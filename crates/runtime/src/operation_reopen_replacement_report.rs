@@ -3,7 +3,9 @@ use a3s_oci_agent_protocol::{
     AGENT_PROTOCOL_VERSION_MAX,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
-use a3s_oci_sdk::{ContainerId, DeleteMode, ErrorCode, ExitStatus, Generation, OperationId};
+use a3s_oci_sdk::{
+    ContainerId, DeleteMode, ErrorCode, ExitStatus, Generation, OperationId, ProcessId,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::report::AgentVmSmokeReport;
@@ -20,6 +22,10 @@ pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_DELETE_SCHEMA_VERSION: &str =
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_WAIT_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v5";
 
+/// Exec schema with exact live-process rehydration and journal-rebind evidence.
+pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_EXEC_SCHEMA_VERSION: &str =
+    "a3s.oci.oci-vm-operation-reopen-replacement.v6";
+
 /// Start schema retained for compatibility with existing evidence.
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_START_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v2";
@@ -33,9 +39,9 @@ const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-faul
 /// Retained evidence for one operation reissued through a replacement HVF owner.
 ///
 /// Version 1 qualifies `state`, version 2 adds `start`, version 3 adds `kill`,
-/// version 4 adds stopped-only `delete`, and version 5 adds init `wait` with
-/// durable terminal-cache evidence. Earlier operations continue to emit their
-/// compatible schema.
+/// version 4 adds stopped-only `delete`, version 5 adds init `wait` with
+/// durable terminal-cache evidence, and version 6 adds live terminal `exec`
+/// recovery. Earlier operations continue to emit their compatible schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmOperationReopenReplacementReport {
     /// Version of this JSON-compatible schema.
@@ -72,6 +78,12 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Exit result returned by a later durable-cache replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_wait_exit_status: Option<ExitStatus>,
+    /// Caller-selected non-init process ID used by an Exec qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_process_id: Option<ProcessId>,
+    /// Terminal mode bound to the complete Exec request and recovered process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_terminal: Option<bool>,
     /// Exact Host or Guest transport point used to force the owner handoff.
     pub requested_stage: AgentTransportOperationStage,
     /// Nonce bound to the armed qualification and retained Guest evidence.
@@ -134,9 +146,18 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether the exact init exit result was durably cached before Host reopen.
     #[serde(default)]
     pub init_exit_cached_before_reopen: bool,
+    /// Whether the Exec journal remained prepared before Host reopen.
+    #[serde(default)]
+    pub exec_journal_prepared_before_reopen: bool,
+    /// Whether the Exec journal already held a completed process response.
+    #[serde(default)]
+    pub exec_journal_succeeded_before_reopen: bool,
     /// Positive init PID retained from the first owner.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_created_pid: Option<i32>,
+    /// Positive Exec PID committed by the first owner, when its response arrived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_exec_pid: Option<u32>,
     /// Generation retained before the first host service closed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_before_reopen: Option<Generation>,
@@ -157,6 +178,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether recovery killed the replacement process before reopening a stopped record.
     #[serde(default)]
     pub replacement_rehydrated_stopped_record: bool,
+    /// Whether recovery rebuilt the completed live Exec in the fresh Guest.
+    #[serde(default)]
+    pub replacement_rehydrated_exec_record: bool,
     /// Whether the selected operation completed through the replacement owner.
     pub operation_completed_after_reopen: bool,
     /// Generation returned by the replacement operation.
@@ -165,6 +189,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Positive init PID observed through the replacement Guest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replacement_created_pid: Option<i32>,
+    /// Positive Exec PID returned by the replacement Guest and durable replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_exec_pid: Option<u32>,
     /// Whether the replacement response exactly matched the recovered durable record.
     pub replacement_response_matches_durable_record: bool,
     /// Whether the replacement Wait response matched the required exit result.
@@ -195,6 +222,12 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether Start replay was rebound to the replacement process PID.
     #[serde(default)]
     pub setup_start_response_rebound: bool,
+    /// Whether the completed Exec response was rebound to the replacement PID.
+    #[serde(default)]
+    pub exec_response_rebound: bool,
+    /// Whether replacement dispatch reused the complete first-owner Exec request.
+    #[serde(default)]
+    pub exec_request_identity_reused: bool,
     /// Whether the post-recovery operation replay avoided another driver dispatch.
     #[serde(default)]
     pub operation_replayed_without_driver_dispatch: bool,
@@ -213,12 +246,27 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether a stale exact generation was rejected by the replacement Guest.
     #[serde(default)]
     pub guest_stale_generation_rejected: bool,
+    /// Whether a changed Host retry was rejected before another Exec dispatch.
+    #[serde(default)]
+    pub host_changed_request_rejected: bool,
+    /// Whether the replacement Guest rejected a changed request with the same operation ID.
+    #[serde(default)]
+    pub guest_changed_request_rejected: bool,
     /// Whether any first-owner workload marker was removed before replacement launch.
     #[serde(default)]
     pub marker_reset_before_replacement: bool,
     /// Whether the replacement workload produced the exact configured marker.
     #[serde(default)]
     pub replacement_workload_verified: bool,
+    /// Whether a first Exec marker was absent when allowed or exactly nonce-bound when observed.
+    #[serde(default)]
+    pub first_exec_marker_verified: bool,
+    /// Whether the first Exec marker was removed before replacement launch.
+    #[serde(default)]
+    pub exec_marker_reset_before_replacement: bool,
+    /// Whether the replacement Exec wrote the exact nonce-bound marker.
+    #[serde(default)]
+    pub replacement_exec_marker_verified: bool,
     /// Whether force delete completed through the replacement VM owner.
     pub force_delete_completed: bool,
     /// Whether stopped-only delete completed through the replacement VM owner.
@@ -231,6 +279,9 @@ pub struct OciVmOperationReopenReplacementReport {
     pub delete_journal_succeeded_empty_after_reopen: bool,
     /// Whether the workload marker remained absent after complete cleanup.
     pub marker_absent_after_cleanup: bool,
+    /// Whether the independent Exec marker remained absent after complete cleanup.
+    #[serde(default)]
+    pub exec_marker_absent_after_cleanup: bool,
     /// Whether the first guest executor returned to its original runtime inventory.
     pub first_guest_runtime_clean: bool,
     /// Whether the replacement guest executor returned to the same inventory.
@@ -267,6 +318,8 @@ impl OciVmOperationReopenReplacementReport {
             first_wait_exit_status: None,
             replacement_wait_exit_status: None,
             cached_wait_exit_status: None,
+            exec_process_id: None,
+            exec_terminal: None,
             requested_stage,
             qualification_operation_id: None,
             setup_create_operation_id: None,
@@ -290,7 +343,10 @@ impl OciVmOperationReopenReplacementReport {
             delete_journal_prepared_before_reopen: false,
             delete_journal_succeeded_empty_before_reopen: false,
             init_exit_cached_before_reopen: false,
+            exec_journal_prepared_before_reopen: false,
+            exec_journal_succeeded_before_reopen: false,
             first_created_pid: None,
+            first_exec_pid: None,
             generation_before_reopen: None,
             guest_evidence_verified: false,
             guest_evidence_operation_id: None,
@@ -299,9 +355,11 @@ impl OciVmOperationReopenReplacementReport {
             replacement_rehydrated_created_record: false,
             replacement_rehydrated_running_record: false,
             replacement_rehydrated_stopped_record: false,
+            replacement_rehydrated_exec_record: false,
             operation_completed_after_reopen: false,
             generation_after_reopen: None,
             replacement_created_pid: None,
+            replacement_exec_pid: None,
             replacement_response_matches_durable_record: false,
             replacement_response_matches_expected_exit: false,
             cached_response_matches_expected_exit: false,
@@ -313,19 +371,27 @@ impl OciVmOperationReopenReplacementReport {
             same_operation_id_reused: false,
             setup_create_response_rebound: false,
             setup_start_response_rebound: false,
+            exec_response_rebound: false,
+            exec_request_identity_reused: false,
             operation_replayed_without_driver_dispatch: false,
             cached_wait_replayed_without_driver_dispatch: false,
             first_operation_dispatches: 0,
             replacement_operation_dispatches: 0,
             host_stale_generation_rejected: false,
             guest_stale_generation_rejected: false,
+            host_changed_request_rejected: false,
+            guest_changed_request_rejected: false,
             marker_reset_before_replacement: false,
             replacement_workload_verified: false,
+            first_exec_marker_verified: false,
+            exec_marker_reset_before_replacement: false,
+            replacement_exec_marker_verified: false,
             force_delete_completed: false,
             stopped_only_delete_completed: false,
             durable_records_empty: false,
             delete_journal_succeeded_empty_after_reopen: false,
             marker_absent_after_cleanup: false,
+            exec_marker_absent_after_cleanup: false,
             first_guest_runtime_clean: false,
             replacement_guest_runtime_clean: false,
             owners_distinct: false,
@@ -364,6 +430,7 @@ impl OciVmOperationReopenReplacementReport {
     pub(crate) fn evidence_succeeded(&self) -> bool {
         match self.requested_operation {
             AgentOperation::Delete => self.delete_evidence_succeeded(),
+            AgentOperation::Exec => self.exec_evidence_succeeded(),
             AgentOperation::Kill => self.kill_evidence_succeeded(),
             AgentOperation::State => self.state_evidence_succeeded(),
             AgentOperation::Start => self.start_evidence_succeeded(),
@@ -463,6 +530,7 @@ impl OciVmOperationReopenReplacementReport {
 }
 
 mod delete;
+mod exec;
 mod kill;
 mod start;
 mod wait;

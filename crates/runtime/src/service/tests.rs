@@ -278,6 +278,16 @@ impl RecordingDriver {
                 .expect("valid recreated running recovery");
     }
 
+    fn set_recreated_running_recovery_with_processes(
+        &self,
+        observation: DriverState,
+        processes: Vec<ProcessRecord>,
+    ) {
+        *self.recovery.lock().expect("driver recovery lock") =
+            DriverRecovery::recreated_running_with_processes(observation, processes)
+                .expect("valid recreated running process recovery");
+    }
+
     fn set_recovery_exit(&self, status: ExitStatus) {
         *self.recovery.lock().expect("driver recovery lock") =
             DriverRecovery::stopped_with_exit(status).expect("valid recovery exit status");

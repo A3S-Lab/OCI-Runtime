@@ -166,6 +166,7 @@ fn run_container_exec(arguments: HelperArguments) -> Result<()> {
             format!("failed to connect container exec control socket: {error}"),
         )
     })?;
+    ensure_control_close_on_exec(&control)?;
     let process_group = match ProcessGroupLease::open_for_snapshot_sync(&snapshot) {
         Ok(process_group) => process_group,
         Err(error) => return reject_exec(&mut control, error),
@@ -286,20 +287,28 @@ fn run_exec_payload(
     }
     write_ready(control, runtime_pid, None)?;
     let mut start = [0_u8; 1];
-    control.read_exact(&mut start).map_err(|error| {
-        exec_error(
-            ErrorCode::Unavailable,
-            format!("prepared exec start barrier closed: {error}"),
-        )
-    })?;
-    if start[0] != START_BYTE {
-        return Err(exec_error(
-            ErrorCode::FailedPrecondition,
-            "prepared exec received an invalid start byte",
-        ));
+    if let Err(error) = control.read_exact(&mut start) {
+        return reject_exec(
+            control,
+            exec_error(
+                ErrorCode::Unavailable,
+                format!("prepared exec start barrier closed: {error}"),
+            ),
+        );
     }
-    apply_exec_credentials(plan)?;
-    execute_process(plan)
+    if start[0] != START_BYTE {
+        return reject_exec(
+            control,
+            exec_error(
+                ErrorCode::FailedPrecondition,
+                "prepared exec received an invalid start byte",
+            ),
+        );
+    }
+    match apply_exec_credentials(plan).and_then(|()| execute_process(plan)) {
+        Ok(()) => Ok(()),
+        Err(error) => reject_exec(control, error),
+    }
 }
 
 fn prepare_exec_root(plan: &ProcessPlan, rootfs: &File) -> Result<()> {
@@ -401,6 +410,21 @@ fn restore_close_on_exec(
         }
     }
     Ok(())
+}
+
+fn ensure_control_close_on_exec(control: &StdUnixStream) -> Result<()> {
+    let descriptor = control.as_raw_fd();
+    // SAFETY: `descriptor` is owned by the live control stream. These calls
+    // only inspect and update its close-on-exec flag in this helper process.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+    if flags < 0 || unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
+    {
+        Err(last_exec_os_error(
+            "mark exec control descriptor close-on-exec",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn read_process_plan(path: &Path) -> Result<ProcessPlan> {

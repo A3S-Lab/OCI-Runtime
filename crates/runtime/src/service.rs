@@ -171,6 +171,7 @@ impl HostRuntimeService {
                 stage: DriverBoundaryStage::AfterCall,
             })?;
             let recreated_process = recovery.recreated_process();
+            let recreated_exec_processes = recovery.recreated_exec_processes().to_vec();
             let target =
                 ContainerTarget::exact(ContainerId::new(record.state.id())?, record.generation);
             let (observation, init_exit_status) = recovery.into_parts();
@@ -184,6 +185,9 @@ impl HostRuntimeService {
                     RecreatedProcess::Running => {
                         store
                             .observe_recreated_running_process(&target, observation)
+                            .await?;
+                        store
+                            .observe_recreated_exec_processes(&target, &recreated_exec_processes)
                             .await?;
                     }
                     RecreatedProcess::None => {

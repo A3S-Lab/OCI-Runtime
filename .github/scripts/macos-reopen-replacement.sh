@@ -5,11 +5,13 @@ rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
 signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
 bundle_dir="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
 marker="$bundle_dir/rootfs/.a3s-oci-create-start-smoke"
+exec_marker="$bundle_dir/rootfs/.a3s-oci-exec-reopen-smoke"
 console_root="$RUNNER_TEMP/a3s-oci-reopen-replacement"
 support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
 mkdir -p \
   "$console_root/create" \
   "$console_root/delete" \
+  "$console_root/exec" \
   "$console_root/state" \
   "$console_root/start" \
   "$console_root/kill" \
@@ -50,8 +52,11 @@ assert_cleanup_baseline() {
   test "$endpoint_after" = "$endpoint_baseline"
   test "$runtime_after" = "$runtime_baseline"
   test ! -e "$marker"
+  test ! -e "$exec_marker"
   test -z "$(find "$stage_console_dir" -maxdepth 1 -name '*-state' -print)"
 }
+
+source "$(dirname "$0")/macos-reopen-replacement-exec.sh"
 
 run_create_stage() {
   local fault_stage="$1"
@@ -897,4 +902,7 @@ for fault_stage in "${stages[@]}"; do
 done
 for fault_stage in "${stages[@]}"; do
   run_wait_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_exec_stage "$fault_stage"
 done

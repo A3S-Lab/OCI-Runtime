@@ -17,7 +17,7 @@ use crate::state::oci_state::{rebuild_paused_state, rebuild_state};
 use crate::state::DeletePreparation;
 use process::{
     exercise_exec_claim_recovery, exercise_exec_failure, exercise_exec_reconcile,
-    exercise_process_success, exercise_signal_process_failure,
+    exercise_process_success, exercise_recreated_exec_recovery, exercise_signal_process_failure,
 };
 use process_io::{exercise_process_io_failure, exercise_process_io_success};
 
@@ -265,6 +265,18 @@ async fn recreated_running_rebind_and_journal_repairs_preserve_kill_across_commi
         for stage in FileCommitStage::ALL {
             exercise_recreated_running_recovery(FaultPoint::DurableFile { mutation, stage }, true)
                 .await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn recreated_exec_pid_and_journal_repair_survive_commit_faults() {
+    for mutation in [
+        DurableMutation::ReconcileExecProcess,
+        DurableMutation::ReconcileExecOperation,
+    ] {
+        for stage in FileCommitStage::ALL {
+            exercise_recreated_exec_recovery(FaultPoint::DurableFile { mutation, stage }).await;
         }
     }
 }
