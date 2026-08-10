@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -15,16 +15,16 @@ use a3s_oci_core::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, IoMode, IsolationRequest, ListRequest, OciBundle,
+    DeleteRequest, Error, ErrorCode, IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle,
     OciRuntimeService, OperationContext, OperationId, ProcessIo, Result, StartRequest,
     StateRequest,
 };
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout, Instant};
 
 use super::transport_fault_cleanup::{read_guest_qualification_evidence, HostTransportFault};
 use super::{
-    canonical_directory, fixed_rootfs, guest_path, path_exists, remove_marker, runtime_entries,
-    target, unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
+    canonical_directory, fixed_rootfs, guest_path, path_exists, read_marker, remove_marker,
+    runtime_entries, target, unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
 };
 use crate::agent_driver::AgentDriverClient;
 use crate::agent_session::UtilityVmSession;
@@ -33,12 +33,17 @@ use crate::driver::{
     DriverStartRequest, DriverState, RuntimeDriver,
 };
 use crate::host_cleanup::MacosHostCleanupTracker;
+use crate::marker::{exact_marker_state, ExactMarkerState};
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::{AgentVmSmokeReport, DriverRecovery, OciVmReopenReplacementReport};
 
 const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
 const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
+const REPLACEMENT_MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
+const MARKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+mod kill;
+pub(super) use kill::run as run_kill;
 mod state;
 pub(super) use state::run as run_state;
 mod start;
@@ -677,12 +682,18 @@ struct QualificationHvfDriver {
     vm_rootfs: PathBuf,
     recovery_create: CreateRequest,
     recovery_start: Option<StartRequest>,
+    recovery_kill: Option<KillRequest>,
+    recovery_marker: Option<PathBuf>,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
+    rehydrated_stopped_record: AtomicBool,
+    rehydrated_running_pid: AtomicI32,
     create_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     start_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
+    kill_identity: StdMutex<Option<(OperationId, ContainerTarget, a3s_oci_sdk::Signal, bool)>>,
     start_calls: AtomicU32,
+    kill_calls: AtomicU32,
 }
 
 impl QualificationHvfDriver {
@@ -691,7 +702,7 @@ impl QualificationHvfDriver {
         vm_rootfs: PathBuf,
         recovery_create: CreateRequest,
     ) -> Self {
-        Self::with_optional_start(session, vm_rootfs, recovery_create, None)
+        Self::with_recovery_operations(session, vm_rootfs, recovery_create, None, None, None)
     }
 
     fn with_start_recovery(
@@ -700,14 +711,41 @@ impl QualificationHvfDriver {
         recovery_create: CreateRequest,
         recovery_start: StartRequest,
     ) -> Self {
-        Self::with_optional_start(session, vm_rootfs, recovery_create, Some(recovery_start))
+        Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+        )
     }
 
-    fn with_optional_start(
+    fn with_kill_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_kill: KillRequest,
+        recovery_marker: PathBuf,
+    ) -> Self {
+        Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            Some(recovery_kill),
+            Some(recovery_marker),
+        )
+    }
+
+    fn with_recovery_operations(
         session: Arc<UtilityVmSession>,
         vm_rootfs: PathBuf,
         recovery_create: CreateRequest,
         recovery_start: Option<StartRequest>,
+        recovery_kill: Option<KillRequest>,
+        recovery_marker: Option<PathBuf>,
     ) -> Self {
         let service: Arc<dyn GuestAgentService> = Arc::new(session.client());
         Self {
@@ -720,12 +758,18 @@ impl QualificationHvfDriver {
             vm_rootfs,
             recovery_create,
             recovery_start,
+            recovery_kill,
+            recovery_marker,
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
+            rehydrated_stopped_record: AtomicBool::new(false),
+            rehydrated_running_pid: AtomicI32::new(0),
             create_identity: StdMutex::new(None),
             start_identity: StdMutex::new(None),
+            kill_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
+            kill_calls: AtomicU32::new(0),
         }
     }
 
@@ -741,8 +785,23 @@ impl QualificationHvfDriver {
         self.rehydrated_running_record.load(Ordering::SeqCst)
     }
 
+    fn rehydrated_stopped_record(&self) -> bool {
+        self.rehydrated_stopped_record.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_running_pid(&self) -> Option<i32> {
+        match self.rehydrated_running_pid.load(Ordering::SeqCst) {
+            pid if pid > 0 => Some(pid),
+            _ => None,
+        }
+    }
+
     fn start_calls(&self) -> u32 {
         self.start_calls.load(Ordering::SeqCst)
+    }
+
+    fn kill_calls(&self) -> u32 {
+        self.kill_calls.load(Ordering::SeqCst)
     }
 
     async fn shutdown(&self) -> AgentVmSmokeReport {
@@ -763,6 +822,17 @@ impl QualificationHvfDriver {
             .map_err(|_| "qualification HVF start-identity lock was poisoned".to_string())?
             .clone()
             .ok_or_else(|| "qualification HVF driver recorded no start dispatch".to_string())
+    }
+
+    fn kill_identity(
+        &self,
+    ) -> std::result::Result<(OperationId, ContainerTarget, a3s_oci_sdk::Signal, bool), String>
+    {
+        self.kill_identity
+            .lock()
+            .map_err(|_| "qualification HVF kill-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no kill dispatch".to_string())
     }
 
     fn guest_bundle(&self, bundle: &OciBundle) -> Result<a3s_oci_agent_protocol::GuestPath> {
@@ -820,6 +890,30 @@ impl QualificationHvfDriver {
         })
     }
 
+    fn recovery_kill_request(&self, record: &ContainerRecord) -> Result<DriverKillRequest> {
+        let request = self.recovery_kill.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained Kill request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.recovery_create.id {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery Kill target differs from the durable record",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverKillRequest {
+            context: request.context.clone(),
+            target: exact_target,
+            signal: request.signal,
+            all: request.all,
+        })
+    }
+
     async fn dispatch_create(&self, request: DriverCreateRequest) -> Result<DriverState> {
         let identity = (request.context.operation_id.clone(), request.target.clone());
         {
@@ -871,6 +965,37 @@ impl QualificationHvfDriver {
         self.start_calls.fetch_add(1, Ordering::SeqCst);
         self.client.start(request).await
     }
+
+    async fn dispatch_kill(&self, request: DriverKillRequest) -> Result<DriverState> {
+        let identity = (
+            request.context.operation_id.clone(),
+            request.target.clone(),
+            request.signal,
+            request.all,
+        );
+        {
+            let mut retained = self.kill_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF kill-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-kill")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed kill identity",
+                    )
+                    .for_operation("qualification-hvf-kill"));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.kill_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.kill(request).await
+    }
 }
 
 #[async_trait]
@@ -897,14 +1022,17 @@ impl RuntimeDriver for QualificationHvfDriver {
             record.state.status(),
             ContainerState::Creating | ContainerState::Created
         ) || (*record.state.status() == ContainerState::Running
-            && self.recovery_start.is_some());
+            && self.recovery_start.is_some())
+            || (*record.state.status() == ContainerState::Stopped
+                && self.recovery_start.is_some()
+                && self.recovery_kill.is_some());
         if record.driver != DriverKind::LibkrunHvf
             || record.isolation != IsolationClass::DedicatedVm
             || !recovery_state_supported
         {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
-                "qualification HVF replacement accepts only its interrupted Create or Start record",
+                "qualification HVF replacement accepts only its interrupted Create, Start, or Kill record",
             )
             .for_operation("recover-qualification-hvf"));
         }
@@ -918,7 +1046,7 @@ impl RuntimeDriver for QualificationHvfDriver {
         }
         if matches!(
             record.state.status(),
-            ContainerState::Created | ContainerState::Running
+            ContainerState::Created | ContainerState::Running | ContainerState::Stopped
         ) {
             let observed = self
                 .dispatch_create(self.recovery_driver_request(record)?)
@@ -952,8 +1080,48 @@ impl RuntimeDriver for QualificationHvfDriver {
                 )
                 .for_operation("recover-qualification-hvf"));
             }
+            let running_pid = running.pid().filter(|pid| *pid > 0).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::Conflict,
+                    "replacement Guest rebuilt running state without a positive PID",
+                )
+                .for_operation("recover-qualification-hvf")
+            })?;
+            self.rehydrated_running_pid
+                .store(running_pid, Ordering::SeqCst);
             self.rehydrated_running_record.store(true, Ordering::SeqCst);
-            return DriverRecovery::recreated_running(running);
+            if *record.state.status() == ContainerState::Running {
+                return DriverRecovery::recreated_running(running);
+            }
+            let marker = self.recovery_marker.as_ref().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "qualification HVF stopped recovery has no workload marker",
+                )
+                .for_operation("recover-qualification-hvf")
+            })?;
+            wait_for_replacement_marker(marker)
+                .await
+                .map_err(|reason| {
+                    Error::new(ErrorCode::FailedPrecondition, reason)
+                        .for_operation("recover-qualification-hvf")
+                })?;
+            let stopped = self
+                .dispatch_kill(self.recovery_kill_request(record)?)
+                .await?;
+            if stopped.status() != ContainerState::Stopped || stopped.pid().is_some() {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    format!(
+                        "replacement Guest rebuilt {} with PID {:?}; durable state requires stopped",
+                        stopped.status(),
+                        stopped.pid()
+                    ),
+                )
+                .for_operation("recover-qualification-hvf"));
+            }
+            self.rehydrated_stopped_record.store(true, Ordering::SeqCst);
+            return Ok(DriverRecovery::observed(stopped));
         }
         Ok(DriverRecovery::none())
     }
@@ -971,11 +1139,36 @@ impl RuntimeDriver for QualificationHvfDriver {
     }
 
     async fn kill(&self, request: DriverKillRequest) -> Result<DriverState> {
-        self.client.kill(request).await
+        self.dispatch_kill(request).await
     }
 
     async fn delete(&self, request: DriverDeleteRequest) -> Result<()> {
         self.client.delete(request).await
+    }
+}
+
+async fn wait_for_replacement_marker(marker: &Path) -> std::result::Result<(), String> {
+    let deadline = Instant::now() + QUALIFICATION_TIMEOUT;
+    loop {
+        if path_exists(marker).await? {
+            let contents = read_marker(marker).await?;
+            match exact_marker_state(&contents, REPLACEMENT_MARKER_CONTENTS) {
+                ExactMarkerState::Complete => return Ok(()),
+                ExactMarkerState::InProgress => {}
+                ExactMarkerState::Mismatch => {
+                    return Err(
+                        "replacement workload produced unexpected marker contents".to_string()
+                    );
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "replacement workload did not produce its marker within {} seconds",
+                QUALIFICATION_TIMEOUT.as_secs()
+            ));
+        }
+        sleep(MARKER_POLL_INTERVAL).await;
     }
 }
 

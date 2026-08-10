@@ -343,5 +343,17 @@ responses. Replaying Start returns that repaired durable response without a
 second API-driven dispatch. Every path removes any first-owner marker before
 replacement, verifies the replacement workload's exact marker, force-deletes
 the generation, and restores both Host and Guest inventories. The August 10,
-2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs. The other 17
-operations still belong to the replacement matrix above.
+2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs.
+
+Real Kill recovery now crosses all nine points under
+`a3s.oci.oci-vm-operation-reopen-replacement.v3`. The first eight interruptions
+leave the durable record in `running`. Recovery recreates and starts the
+workload with the original Create and Start identities, rebinds the new PID,
+repairs both completed setup responses, and sends the unchanged signal-9 Kill
+once. A fully written Kill response leaves `stopped`; recovery recreates,
+starts, and kills the replacement workload to reconstruct the Guest tombstone,
+then replays the completed durable Kill journal without another API-driven
+driver dispatch. Every path verifies the replacement marker before Kill, uses
+stopped-only Delete, and restores both Host and Guest inventories. The August
+10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs. The other
+16 operations still belong to the replacement matrix above.

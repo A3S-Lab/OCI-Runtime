@@ -446,6 +446,17 @@ removes any first-owner marker before replacement and requires the new Guest to
 produce the exact marker. All 18 fresh VMs in the August 10, 2026 matrix returned
 Host and Guest resource inventories to baseline.
 
+Kill now has the same nine-stage real-owner gate. The first eight interruptions
+leave Host state in `running`; replacement recovery reuses the original Create
+and Start identities, rebuilds the running process, repairs their completed
+responses with the new Guest PID, and sends the unchanged signal-9 Kill once.
+The fully written-response point leaves Host state in `stopped`; replacement
+recovery recreates, starts, and kills the workload to rebuild the Guest
+tombstone before the Host replays the completed Kill journal without an
+API-driven driver dispatch. Every run verifies the replacement marker before
+Kill, uses stopped-only Delete, and restores Host and Guest resource inventories.
+All 18 fresh VMs in the August 10, 2026 matrix passed.
+
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,

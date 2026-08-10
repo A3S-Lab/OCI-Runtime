@@ -10,6 +10,10 @@ use crate::report::AgentVmSmokeReport;
 
 /// Schema emitted by the real HVF non-Create reopen and owner-replacement diagnostic.
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_SCHEMA_VERSION: &str =
+    "a3s.oci.oci-vm-operation-reopen-replacement.v3";
+
+/// Start schema retained for compatibility with existing evidence.
+pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_START_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v2";
 
 /// Original State-only schema retained for compatibility with existing evidence.
@@ -20,9 +24,8 @@ const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-faul
 
 /// Retained evidence for one operation reissued through a replacement HVF owner.
 ///
-/// Version 1 qualifies the context-free `state` operation. Version 2 adds
-/// `start` recovery evidence while State continues to emit the compatible v1
-/// schema.
+/// Version 1 qualifies `state`, version 2 adds `start`, and version 3 adds
+/// `kill`. Earlier operations continue to emit their compatible schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmOperationReopenReplacementReport {
     /// Version of this JSON-compatible schema.
@@ -35,6 +38,12 @@ pub struct OciVmOperationReopenReplacementReport {
     pub bundle_loaded: bool,
     /// Operation interrupted at the selected point in the first VM session.
     pub requested_operation: AgentOperation,
+    /// Exact signal selected by a Kill qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_signal: Option<i32>,
+    /// Whether a Kill qualification targets every process in the container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_all: Option<bool>,
     /// Exact Host or Guest transport point used to force the owner handoff.
     pub requested_stage: AgentTransportOperationStage,
     /// Nonce bound to the armed qualification and retained Guest evidence.
@@ -73,6 +82,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether a delivered mutating response left the exact durable record in `running`.
     #[serde(default)]
     pub durable_running_retained: bool,
+    /// Whether a delivered Kill response left the exact durable record in `stopped`.
+    #[serde(default)]
+    pub durable_stopped_retained: bool,
     /// Positive init PID retained from the first owner.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_created_pid: Option<i32>,
@@ -93,6 +105,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether recovery also restarted that process before reopening a running record.
     #[serde(default)]
     pub replacement_rehydrated_running_record: bool,
+    /// Whether recovery killed the replacement process before reopening a stopped record.
+    #[serde(default)]
+    pub replacement_rehydrated_stopped_record: bool,
     /// Whether the selected operation completed through the replacement owner.
     pub operation_completed_after_reopen: bool,
     /// Generation returned by the replacement operation.
@@ -107,12 +122,18 @@ pub struct OciVmOperationReopenReplacementReport {
     pub same_generation_reused: bool,
     /// Whether replacement recovery reused the original setup Create identity.
     pub setup_create_identity_reused: bool,
+    /// Whether replacement recovery reused the original setup Start identity.
+    #[serde(default)]
+    pub setup_start_identity_reused: bool,
     /// Whether the interrupted operation reused its original identity in the fresh Guest.
     #[serde(default)]
     pub same_operation_id_reused: bool,
     /// Whether Create replay was rebound to the replacement process PID.
     #[serde(default)]
     pub setup_create_response_rebound: bool,
+    /// Whether Start replay was rebound to the replacement process PID.
+    #[serde(default)]
+    pub setup_start_response_rebound: bool,
     /// Whether the post-recovery operation replay avoided another driver dispatch.
     #[serde(default)]
     pub operation_replayed_without_driver_dispatch: bool,
@@ -130,6 +151,9 @@ pub struct OciVmOperationReopenReplacementReport {
     pub replacement_workload_verified: bool,
     /// Whether force delete completed through the replacement VM owner.
     pub force_delete_completed: bool,
+    /// Whether stopped-only delete completed through the replacement VM owner.
+    #[serde(default)]
+    pub stopped_only_delete_completed: bool,
     /// Whether no durable container record remained after delete.
     pub durable_records_empty: bool,
     /// Whether the workload marker remained absent after complete cleanup.
@@ -162,6 +186,8 @@ impl OciVmOperationReopenReplacementReport {
             status: CapabilityStatus::Unavailable,
             bundle_loaded: false,
             requested_operation: AgentOperation::State,
+            kill_signal: None,
+            kill_all: None,
             requested_stage,
             qualification_operation_id: None,
             setup_create_operation_id: None,
@@ -177,6 +203,7 @@ impl OciVmOperationReopenReplacementReport {
             first_response_matches_durable_record: false,
             durable_created_retained: false,
             durable_running_retained: false,
+            durable_stopped_retained: false,
             first_created_pid: None,
             generation_before_reopen: None,
             guest_evidence_verified: false,
@@ -185,20 +212,24 @@ impl OciVmOperationReopenReplacementReport {
             replacement_recovery_calls: 0,
             replacement_rehydrated_created_record: false,
             replacement_rehydrated_running_record: false,
+            replacement_rehydrated_stopped_record: false,
             operation_completed_after_reopen: false,
             generation_after_reopen: None,
             replacement_created_pid: None,
             replacement_response_matches_durable_record: false,
             same_generation_reused: false,
             setup_create_identity_reused: false,
+            setup_start_identity_reused: false,
             same_operation_id_reused: false,
             setup_create_response_rebound: false,
+            setup_start_response_rebound: false,
             operation_replayed_without_driver_dispatch: false,
             first_operation_dispatches: 0,
             replacement_operation_dispatches: 0,
             marker_reset_before_replacement: false,
             replacement_workload_verified: false,
             force_delete_completed: false,
+            stopped_only_delete_completed: false,
             durable_records_empty: false,
             marker_absent_after_cleanup: false,
             first_guest_runtime_clean: false,
@@ -238,6 +269,7 @@ impl OciVmOperationReopenReplacementReport {
 
     pub(crate) fn evidence_succeeded(&self) -> bool {
         match self.requested_operation {
+            AgentOperation::Kill => self.kill_evidence_succeeded(),
             AgentOperation::State => self.state_evidence_succeeded(),
             AgentOperation::Start => self.start_evidence_succeeded(),
             _ => false,
@@ -334,6 +366,7 @@ impl OciVmOperationReopenReplacementReport {
     }
 }
 
+mod kill;
 mod start;
 
 #[cfg(test)]

@@ -370,11 +370,13 @@ impl DurableStateStore {
         let active_allows_rebind = match stored.active_operation.as_ref() {
             Some(operation_id) => {
                 let active = self.load_operation(operation_id).await?;
-                active.kind == StoredOperationKind::Start
-                    && active.container_id == stored.id
+                matches!(
+                    (durable_status, active.kind),
+                    (ContainerState::Created, StoredOperationKind::Start)
+                        | (ContainerState::Running, StoredOperationKind::Kill)
+                ) && active.container_id == stored.id
                     && active.generation == stored.record.generation
                     && matches!(active.outcome, StoredOperationStatus::Prepared)
-                    && durable_status == ContainerState::Created
             }
             None => true,
         };

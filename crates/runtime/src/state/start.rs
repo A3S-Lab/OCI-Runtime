@@ -209,10 +209,17 @@ impl DurableStateStore {
         if stored.record.state.pid() == response.state.pid() {
             return Ok(RecordOperationPreparation::Replayed(response));
         }
-        if stored.active_operation.is_some()
-            || is_paused(&stored.record.state)
-            || is_paused(&response.state)
-        {
+        let active_allows_rebind = match stored.active_operation.as_ref() {
+            Some(operation_id) => {
+                let active = self.load_operation(operation_id).await?;
+                active.kind == StoredOperationKind::Kill
+                    && active.container_id == stored.id
+                    && active.generation == stored.record.generation
+                    && matches!(active.outcome, StoredOperationStatus::Prepared)
+            }
+            None => true,
+        };
+        if !active_allows_rebind || is_paused(&stored.record.state) || is_paused(&response.state) {
             return Err(state_error(
                 ErrorCode::Conflict,
                 "reconcile-succeeded-start",

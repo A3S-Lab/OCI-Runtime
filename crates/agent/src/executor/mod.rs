@@ -77,6 +77,7 @@ pub(crate) use pidfd::verify_support as verify_pidfd_support;
 pub use recovery::LinuxExecutorTombstone;
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
+const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_OPERATION_RECORDS: usize = 4_096;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -673,7 +674,7 @@ impl LinuxExecutor {
         record.stats().await
     }
 
-    fn kill_new(state: &mut ExecutorState, request: &AgentKillRequest) -> Result<AgentState> {
+    async fn kill_new(state: &mut ExecutorState, request: &AgentKillRequest) -> Result<AgentState> {
         validate_deadline(&request.context)?;
         let key = ContainerKey::from_target(&request.target)?;
         let record = state.containers.get_mut(&key).ok_or_else(|| {
@@ -698,6 +699,16 @@ impl LinuxExecutor {
             record.process.signal(request.signal.get())?
         };
         match outcome {
+            SignalOutcome::Delivered if confirms_terminal_kill(request.signal) => {
+                let deadline = Instant::now() + KILL_CONFIRM_TIMEOUT;
+                loop {
+                    record.refresh()?;
+                    if record.status == ContainerState::Stopped || Instant::now() >= deadline {
+                        break;
+                    }
+                    sleep(WAIT_POLL_INTERVAL).await;
+                }
+            }
             SignalOutcome::Delivered => record.refresh()?,
             SignalOutcome::Exited => record.status = ContainerState::Stopped,
         }
@@ -834,7 +845,7 @@ impl GuestAgentService for LinuxExecutor {
             return result;
         }
         state.reserve_operation(&operation_id)?;
-        let result = Self::kill_new(&mut state, &request);
+        let result = Self::kill_new(&mut state, &request).await;
         state.record(
             operation_id,
             operation,
@@ -962,6 +973,10 @@ impl GuestAgentService for LinuxExecutor {
     }
 }
 
+fn confirms_terminal_kill(signal: a3s_oci_sdk::Signal) -> bool {
+    signal.get() == libc::SIGKILL
+}
+
 fn executor_runtime_layout(
     runtime_parent: &Path,
     recovery_mode: RecoveryMode,
@@ -1085,4 +1100,21 @@ fn validate_deadline(context: &OperationContext) -> Result<()> {
 
 fn executor_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("linux-guest-executor")
+}
+
+#[cfg(test)]
+mod kill_tests {
+    use a3s_oci_sdk::Signal;
+
+    use super::confirms_terminal_kill;
+
+    #[test]
+    fn only_sigkill_requires_bounded_terminal_confirmation() {
+        assert!(confirms_terminal_kill(
+            Signal::new(libc::SIGKILL).expect("SIGKILL")
+        ));
+        assert!(!confirms_terminal_kill(
+            Signal::new(libc::SIGTERM).expect("SIGTERM")
+        ));
+    }
 }

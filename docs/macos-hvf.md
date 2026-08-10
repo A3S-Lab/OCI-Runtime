@@ -704,12 +704,12 @@ reopen or a replacement VM owner.
 ## Durable service reopen and VM owner replacement
 
 `oci-vm-reopen-replacement` carries all nine Host/Guest transitions for Create,
-State, and Start through the durable Host service instead of calling the
+State, Start, and Kill through the durable Host service instead of calling the
 diagnostic Agent client directly:
 
 ```sh
 reopen_dir="$(mktemp -d)"
-for operation in create state start; do
+for operation in create state start kill; do
   for fault_stage in \
     host-before-request-write \
     host-after-request-write \
@@ -787,8 +787,26 @@ replacement and then requires the exact replacement marker.
 `a3s.oci.oci-vm-operation-reopen-replacement.v2` retains this Start evidence.
 The August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs,
 including the completed-running replay path, distinct owners, and complete
-cleanup after force delete. The other 17 operations still need the same
-replacement treatment.
+cleanup after force delete.
+
+For Kill, the first owner completes Create and Start, verifies the running
+workload marker, and injects the selected point into an exact-generation
+signal-9 request. The first eight points leave the durable record in `running`.
+Replacement recovery recreates and starts that workload with the original
+Create and Start identities, rebinds the replacement PID, repairs both setup
+journal responses, and sends the unchanged Kill identity once. At
+`guest-after-response-write`, the durable record is already `stopped`;
+replacement recovery recreates, starts, and kills the workload to rebuild the
+Guest tombstone, and the subsequent Kill replay returns from the completed
+durable journal without an API-driven driver dispatch. Every path resets the
+first-owner marker, verifies the replacement workload before Kill, and uses
+stopped-only Delete.
+
+`a3s.oci.oci-vm-operation-reopen-replacement.v3` retains this Kill evidence.
+The August 10, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs,
+including the completed-stopped replay path, distinct owners, and complete
+Host/Guest cleanup. The other 16 operations still need the same replacement
+treatment.
 
 ## Remaining workload gates
 

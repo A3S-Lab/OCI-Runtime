@@ -353,9 +353,9 @@ Completed:
   read/dispatch/write stages, and two host shutdown stages. An authenticated
   in-memory matrix injects every one of the 180 operation-stage pairs, proves
   one crossing and terminal disconnect per point. A portable agent-backed
-  `RuntimeDriver` matrix also arms each of the nine create, state, start, kill,
-  delete, wait, exec, signal-process, and wait-process stages exactly once
-  across durable `HostRuntimeService` reopen. Pre-dispatch faults defer the
+  `RuntimeDriver` matrix also arms each of the nine transport stages exactly
+  once for all twenty operations across durable `HostRuntimeService` reopen.
+  Pre-dispatch faults defer the
   guest request until the replacement connection; post-dispatch mutation faults
   replay the guest journal while read-only state and uncached wait observations
   are safely reissued. A fully written mutation response replays the completed
@@ -402,7 +402,7 @@ Completed:
   terminal failure replay, active-operation claims, and stable init/exec
   exit-status caching across host-service reopen;
 - typed, exhaustive recovery injection at all 657 registered durable commit
-  stages and all 40 before/after `RuntimeDriver` boundaries, including startup
+  stages and all 44 before/after `RuntimeDriver` boundaries, including startup
   recovery;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
@@ -744,10 +744,23 @@ enforce it. No property is silently ignored.
     first-owner marker, verifies the replacement workload, force-deletes the
     generation, and restores Host and Guest inventories. The August 10, 2026
     matrix passed all nine stages in 18 fresh VMs.
+  - [x] Carry all nine Host/Guest `kill` stages through durable service reopen
+    and an actual HVF owner replacement. The first eight paths keep the durable
+    record in `running`; replacement recovery recreates and starts the workload,
+    rebinds its PID, repairs the completed Create and Start journal responses,
+    and completes the unchanged signal-9 Kill identity once. A fully written
+    response instead keeps `stopped`; recovery recreates, starts, and kills the
+    replacement workload to rebuild the Guest tombstone, then the completed
+    durable Kill journal replays without an API-driven driver dispatch. Every
+    path verifies the replacement workload before Kill, uses stopped-only
+    Delete, and restores Host and Guest inventories. The August 10, 2026 matrix
+    passed all nine stages in 18 fresh VMs.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 27 real Create/State/Start replacement paths do not satisfy
-    the complete 20-operation matrix gate.
+    stages, and all 36 real Create/State/Start/Kill replacement paths do not
+    satisfy the complete 20-operation matrix gate. Delete, Wait, Exec,
+    SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats,
+    ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem remain.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

@@ -234,7 +234,17 @@ state is already `running`. Recovery recreates and starts that workload, the
 Host rebinds its PID in both completed Create and Start journal responses, and
 the later Start replay does not dispatch again. The gate removes any first-owner
 marker before replacement and requires the exact marker from the new workload.
-Replacement coverage for the other 17 operations remains open.
+
+Schema `a3s.oci.oci-vm-operation-reopen-replacement.v3` adds `kill`. Before the
+completed-response point, durable state remains `running`; the replacement
+Guest receives the original Create and Start identities, rebuilds the running
+process, and receives the unchanged signal-9 Kill identity once. At
+`guest-after-response-write`, durable state is already `stopped`. Recovery
+recreates, starts, and kills the replacement process to rebuild its Guest
+tombstone, while the completed Host Kill journal answers the retry without an
+API-driven driver dispatch. Every path verifies the replacement workload before
+Kill and uses stopped-only Delete. Replacement coverage for the other 16
+operations remains open.
 
 ## Bundle Preservation
 

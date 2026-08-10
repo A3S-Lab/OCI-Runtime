@@ -140,9 +140,18 @@ impl DurableStateStore {
                         || matches!(
                             (
                                 recreated_process,
+                                current,
                                 active.as_ref().map(|operation| operation.kind)
                             ),
-                            (RecreatedProcess::Created, Some(StoredOperationKind::Start))
+                            (
+                                RecreatedProcess::Created,
+                                ContainerState::Created,
+                                Some(StoredOperationKind::Start)
+                            ) | (
+                                RecreatedProcess::Running,
+                                ContainerState::Running,
+                                Some(StoredOperationKind::Kill)
+                            )
                         );
                     if replacement_matches
                         && active_allows_replacement

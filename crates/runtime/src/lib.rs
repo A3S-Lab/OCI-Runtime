@@ -115,13 +115,14 @@ pub use native_smoke::{
     native_linux_service_smoke, native_linux_smoke, native_linux_soak,
 };
 pub use oci_smoke::{
-    macos_hvf_soak, oci_vm_fault_cleanup, oci_vm_multi_container_smoke, oci_vm_reopen_replacement,
-    oci_vm_reopen_replacement_at, oci_vm_smoke, oci_vm_start_reopen_replacement_at,
-    oci_vm_state_reopen_replacement_at, oci_vm_transport_fault_cleanup,
-    windows_oci_vm_multi_container_smoke,
+    macos_hvf_soak, oci_vm_fault_cleanup, oci_vm_kill_reopen_replacement_at,
+    oci_vm_multi_container_smoke, oci_vm_reopen_replacement, oci_vm_reopen_replacement_at,
+    oci_vm_smoke, oci_vm_start_reopen_replacement_at, oci_vm_state_reopen_replacement_at,
+    oci_vm_transport_fault_cleanup, windows_oci_vm_multi_container_smoke,
 };
 pub use operation_reopen_replacement_report::{
     OciVmOperationReopenReplacementReport, OCI_VM_OPERATION_REOPEN_REPLACEMENT_SCHEMA_VERSION,
+    OCI_VM_OPERATION_REOPEN_REPLACEMENT_START_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_STATE_SCHEMA_VERSION,
 };
 pub use reopen_replacement_report::{

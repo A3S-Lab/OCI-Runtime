@@ -249,12 +249,27 @@ async fn recreated_running_pid_and_create_start_journal_repairs_survive_commit_f
         DurableMutation::CompleteStartOperation,
     ] {
         for stage in FileCommitStage::ALL {
-            exercise_recreated_running_recovery(FaultPoint::DurableFile { mutation, stage }).await;
+            exercise_recreated_running_recovery(FaultPoint::DurableFile { mutation, stage }, false)
+                .await;
         }
     }
 }
 
-async fn exercise_recreated_running_recovery(point: FaultPoint) {
+#[tokio::test]
+async fn recreated_running_rebind_and_journal_repairs_preserve_kill_across_commit_faults() {
+    for mutation in [
+        DurableMutation::ObserveContainer,
+        DurableMutation::CompleteCreateOperation,
+        DurableMutation::CompleteStartOperation,
+    ] {
+        for stage in FileCommitStage::ALL {
+            exercise_recreated_running_recovery(FaultPoint::DurableFile { mutation, stage }, true)
+                .await;
+        }
+    }
+}
+
+async fn exercise_recreated_running_recovery(point: FaultPoint, active_kill: bool) {
     let fixture = Fixture::new();
     let create = fixture.create("recreated-running-fault");
     let setup = DurableStateStore::open(&fixture.root)
@@ -271,6 +286,21 @@ async fn exercise_recreated_running_recovery(point: FaultPoint) {
     drive_start(&setup, &start)
         .await
         .expect("complete original start");
+    let kill = active_kill.then(|| KillRequest {
+        context: OperationContext::new(operation_id("recreated-running-kill")),
+        target: target.clone(),
+        signal: Signal::new(9).expect("kill signal"),
+        all: true,
+    });
+    if let Some(kill) = &kill {
+        assert!(matches!(
+            setup
+                .prepare_kill(kill)
+                .await
+                .expect("prepare active Kill before running-process recovery"),
+            RecordOperationPreparation::Prepared(_)
+        ));
+    }
     let mutation = match point {
         FaultPoint::DurableFile { mutation, .. } => mutation,
         _ => unreachable!("running-process test uses only selected file faults"),
@@ -347,6 +377,20 @@ async fn exercise_recreated_running_recovery(point: FaultPoint) {
     };
     assert_eq!(*replayed_start.state.status(), ContainerState::Running);
     assert_eq!(*replayed_start.state.pid(), Some(5_252), "{point}");
+    if let Some(kill) = &kill {
+        assert!(matches!(
+            recovered
+                .prepare_kill(kill)
+                .await
+                .unwrap_or_else(|error| panic!("resume Kill after {point}: {error}")),
+            RecordOperationPreparation::Resume(_)
+        ));
+        let stopped = recovered
+            .complete_kill(&kill.context.operation_id, ContainerState::Stopped, None)
+            .await
+            .unwrap_or_else(|error| panic!("complete Kill after {point}: {error}"));
+        assert_eq!(*stopped.state.status(), ContainerState::Stopped);
+    }
     assert_consistent_layout(recovered.root());
 }
 

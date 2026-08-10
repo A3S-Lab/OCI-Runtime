@@ -299,3 +299,29 @@ pub async fn oci_vm_start_reopen_replacement_at(
         OciVmOperationReopenReplacementReport::unsupported_start(HostPlatform::current(), stage)
     }
 }
+
+/// Reissue one interrupted Kill through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact running process for every stage. When the
+/// first response was already delivered, it also reconstructs the stopped
+/// Guest tombstone before replaying the completed durable Kill journal.
+#[must_use]
+pub async fn oci_vm_kill_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_kill_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_kill(HostPlatform::current(), stage)
+    }
+}

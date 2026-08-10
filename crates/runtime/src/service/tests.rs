@@ -2951,6 +2951,93 @@ async fn recreated_running_recovery_rebinds_pid_and_repairs_create_and_start_rep
 }
 
 #[tokio::test]
+async fn recreated_running_recovery_preserves_an_interrupted_kill() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("recreated-running-kill-state");
+    let first_driver = Arc::new(RecordingDriver::supported());
+    let service = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&first_driver) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("open first kill owner");
+    let create = create_request(&bundle_directory, "recreated-running-kill-create");
+    let created = service.create(create.clone()).await.expect("first create");
+    let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("recreated-running-kill-start")),
+        target: target.clone(),
+    };
+    service.start(start.clone()).await.expect("first start");
+    let kill = KillRequest {
+        context: OperationContext::new(operation_id("recreated-running-kill")),
+        target: target.clone(),
+        signal: Signal::new(9).expect("kill signal"),
+        all: true,
+    };
+    first_driver.fail_next(
+        "kill",
+        Error::new(ErrorCode::Unavailable, "first owner disconnected")
+            .for_operation("kill")
+            .retryable(true),
+    );
+    let error = service
+        .kill(kill.clone())
+        .await
+        .expect_err("first kill must remain resumable");
+    assert!(error.retryable);
+    drop(service);
+
+    let replacement = Arc::new(RecordingDriver::supported());
+    replacement.set_recreated_running_recovery(
+        DriverState::running(5_252).expect("replacement running state"),
+    );
+    let reopened = HostRuntimeService::open(
+        &state_root,
+        Arc::clone(&replacement) as Arc<dyn RuntimeDriver>,
+    )
+    .await
+    .expect("reopen around replacement kill owner");
+    let replayed_create = reopened
+        .create(create)
+        .await
+        .expect("repair Create response while Kill remains active");
+    assert_eq!(*replayed_create.state.status(), ContainerState::Created);
+    assert_eq!(*replayed_create.state.pid(), Some(5_252));
+    let replayed_start = reopened
+        .start(start)
+        .await
+        .expect("repair Start response while Kill remains active");
+    assert_eq!(*replayed_start.state.status(), ContainerState::Running);
+    assert_eq!(*replayed_start.state.pid(), Some(5_252));
+    let stopped = reopened
+        .kill(kill)
+        .await
+        .expect("resume Kill through replacement owner");
+    assert_eq!(*stopped.state.status(), ContainerState::Stopped);
+    assert_eq!(*stopped.state.pid(), None);
+    assert_eq!(stopped.generation, created.generation);
+    assert_eq!(
+        replacement
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Recover(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        replacement
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, DriverCall::Kill(_)))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn service_open_reconciles_each_record_with_its_recorded_driver() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let bundle_directory = temporary.path().join("bundle");

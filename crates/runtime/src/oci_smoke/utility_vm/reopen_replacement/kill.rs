@@ -9,8 +9,8 @@ use a3s_oci_core::{CapabilityStatus, DriverKind, HostPlatform, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    IoMode, IsolationRequest, ListRequest, OciBundle, OciRuntimeService, OperationContext,
-    OperationId, ProcessIo, StartRequest, StateRequest,
+    IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle, OciRuntimeService,
+    OperationContext, OperationId, ProcessIo, Signal, StartRequest, StateRequest,
 };
 use tokio::time::timeout;
 
@@ -30,6 +30,8 @@ use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::{OciVmOperationReopenReplacementReport, RuntimeDriver};
 
+const KILL_SIGNAL: i32 = 9;
+
 pub(in crate::oci_smoke::utility_vm) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
@@ -38,7 +40,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     let mut report =
-        OciVmOperationReopenReplacementReport::initial_start(HostPlatform::current(), stage);
+        OciVmOperationReopenReplacementReport::initial_kill(HostPlatform::current(), stage);
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
@@ -81,7 +83,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
             return failed(
                 report,
                 format!(
-                    "refusing to overwrite an existing Start reopen qualification marker: {}",
+                    "refusing to overwrite an existing Kill reopen qualification marker: {}",
                     marker.display()
                 ),
             );
@@ -96,19 +98,23 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
         Ok(nonce) => nonce,
         Err(reason) => return failed(report, reason),
     };
-    let exact_target = match target(&format!("start-reopen-{nonce}")) {
+    let exact_target = match target(&format!("kill-reopen-{nonce}")) {
         Ok(target) => target,
         Err(reason) => return failed(report, reason),
     };
-    let create_operation_id = match operation_id(&format!("start-reopen-{nonce}-create")) {
+    let create_operation_id = match operation_id(&format!("kill-reopen-{nonce}-create")) {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
-    let start_operation_id = match operation_id(&format!("start-reopen-{nonce}-start")) {
+    let start_operation_id = match operation_id(&format!("kill-reopen-{nonce}-start")) {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
-    let delete_operation_id = match operation_id(&format!("start-reopen-{nonce}-delete")) {
+    let kill_operation_id = match operation_id(&format!("kill-reopen-{nonce}-kill")) {
+        Ok(operation_id) => operation_id,
+        Err(reason) => return failed(report, reason),
+    };
+    let delete_operation_id = match operation_id(&format!("kill-reopen-{nonce}-delete")) {
         Ok(operation_id) => operation_id,
         Err(reason) => return failed(report, reason),
     };
@@ -123,7 +129,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
         Err(error) => {
             return failed(
                 report,
-                format!("failed to construct Start reopen Create attachments: {error}"),
+                format!("failed to construct Kill reopen Create attachments: {error}"),
             );
         }
     };
@@ -136,32 +142,32 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
     };
     let guest_qualification = if stage.is_guest() {
         match AgentTransportQualificationRequest::new(
-            start_operation_id.clone(),
-            AgentOperation::Start,
+            kill_operation_id.clone(),
+            AgentOperation::Kill,
             stage,
         ) {
             Ok(request) => Some(request),
             Err(error) => {
                 return failed(
                     report,
-                    format!("failed to construct Guest Start qualification: {error}"),
+                    format!("failed to construct Guest Kill qualification: {error}"),
                 );
             }
         }
     } else {
         None
     };
-    report.qualification_operation_id = Some(start_operation_id.clone());
+    report.qualification_operation_id = Some(kill_operation_id.clone());
     report.setup_create_operation_id = Some(create_operation_id);
     report.container_id = Some(exact_target.id.clone());
 
-    let state_root = console_directory.join(format!("a3s-oci-start-reopen-{nonce}-state"));
+    let state_root = console_directory.join(format!("a3s-oci-kill-reopen-{nonce}-state"));
     if let Err(reason) = create_qualification_state_root(&state_root).await {
         return failed(report, reason);
     }
-    let first_console = console_directory.join(format!("a3s-oci-start-reopen-{nonce}-first.log"));
+    let first_console = console_directory.join(format!("a3s-oci-kill-reopen-{nonce}-first.log"));
     let replacement_console =
-        console_directory.join(format!("a3s-oci-start-reopen-{nonce}-replacement.log"));
+        console_directory.join(format!("a3s-oci-kill-reopen-{nonce}-replacement.log"));
 
     let exercise = exercise(
         shim,
@@ -172,6 +178,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
         &marker,
         &create,
         &start_operation_id,
+        &kill_operation_id,
         &delete_operation_id,
         &baseline_runtime_entries,
         stage,
@@ -185,7 +192,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
             Ok(false) => report.marker_absent_after_cleanup = true,
             Ok(true) => append_reason(
                 &mut report,
-                format!("Start qualification marker remained: {}", marker.display()),
+                format!("Kill qualification marker remained: {}", marker.display()),
             ),
             Err(reason) => append_reason(&mut report, reason),
         },
@@ -231,6 +238,7 @@ async fn exercise(
     marker: &Path,
     create: &CreateRequest,
     start_operation_id: &OperationId,
+    kill_operation_id: &OperationId,
     delete_operation_id: &OperationId,
     baseline_runtime_entries: &std::collections::BTreeSet<String>,
     stage: AgentTransportOperationStage,
@@ -238,7 +246,7 @@ async fn exercise(
     report: &mut OciVmOperationReopenReplacementReport,
 ) -> std::result::Result<(), String> {
     let faults = Arc::new(HostTransportFault::for_operation(
-        AgentOperation::Start,
+        AgentOperation::Kill,
         AgentTransportFaultStage::from(stage),
     ));
     let first_cleanup = MacosHostCleanupTracker::capture();
@@ -269,7 +277,7 @@ async fn exercise(
             let reason = bridge
                 .reason
                 .clone()
-                .unwrap_or_else(|| "failed to launch the first Start qualification VM".to_string());
+                .unwrap_or_else(|| "failed to launch the first Kill qualification VM".to_string());
             report.first_vm = bridge;
             return Err(reason);
         }
@@ -290,7 +298,7 @@ async fn exercise(
             report.first_vm = first_driver.shutdown().await;
             first_cleanup.apply(&mut report.first_vm).await;
             return Err(format!(
-                "failed to open the first durable Host service for Start: {error}"
+                "failed to open the first durable Host service for Kill: {error}"
             ));
         }
     };
@@ -308,7 +316,7 @@ async fn exercise(
             report.first_vm = first_driver.shutdown().await;
             first_cleanup.apply(&mut report.first_vm).await;
             return Err(format!(
-                "Start qualification setup returned invalid {} record with PID {:?}",
+                "Kill qualification setup Create returned invalid {} record with PID {:?}",
                 record.state.status(),
                 record.state.pid()
             ));
@@ -317,14 +325,14 @@ async fn exercise(
             drop(first_service);
             report.first_vm = first_driver.shutdown().await;
             first_cleanup.apply(&mut report.first_vm).await;
-            return Err(format!("Start qualification setup Create failed: {error}"));
+            return Err(format!("Kill qualification setup Create failed: {error}"));
         }
         Err(_) => {
             drop(first_service);
             report.first_vm = first_driver.shutdown().await;
             first_cleanup.apply(&mut report.first_vm).await;
             return Err(format!(
-                "Start qualification setup Create exceeded the {} second timeout",
+                "Kill qualification setup Create exceeded the {} second timeout",
                 QUALIFICATION_TIMEOUT.as_secs()
             ));
         }
@@ -334,10 +342,71 @@ async fn exercise(
         context: OperationContext::new(start_operation_id.clone()),
         target: ContainerTarget::exact(create.id.clone(), created.generation),
     };
+    let started = match timeout(QUALIFICATION_TIMEOUT, first_service.start(start.clone())).await {
+        Ok(Ok(record))
+            if *record.state.status() == ContainerState::Running
+                && record.state.id() == create.id.as_str()
+                && record.state.pid().is_some_and(|pid| pid > 0) =>
+        {
+            record
+        }
+        Ok(Ok(record)) => {
+            drop(first_service);
+            report.first_vm = first_driver.shutdown().await;
+            first_cleanup.apply(&mut report.first_vm).await;
+            return Err(format!(
+                "Kill qualification setup Start returned invalid {} record with PID {:?}",
+                record.state.status(),
+                record.state.pid()
+            ));
+        }
+        Ok(Err(error)) => {
+            drop(first_service);
+            report.first_vm = first_driver.shutdown().await;
+            first_cleanup.apply(&mut report.first_vm).await;
+            return Err(format!("Kill qualification setup Start failed: {error}"));
+        }
+        Err(_) => {
+            drop(first_service);
+            report.first_vm = first_driver.shutdown().await;
+            first_cleanup.apply(&mut report.first_vm).await;
+            return Err(format!(
+                "Kill qualification setup Start exceeded the {} second timeout",
+                QUALIFICATION_TIMEOUT.as_secs()
+            ));
+        }
+    };
+    if let Err(reason) = wait_for_replacement_marker(marker).await {
+        drop(first_service);
+        report.first_vm = first_driver.shutdown().await;
+        first_cleanup.apply(&mut report.first_vm).await;
+        return Err(format!(
+            "Kill qualification setup workload failed: {reason}"
+        ));
+    }
+    report.first_created_pid = *started.state.pid();
+    let first_start_identity = first_driver.start_identity();
+    let signal = match Signal::new(KILL_SIGNAL) {
+        Ok(signal) => signal,
+        Err(error) => {
+            drop(first_service);
+            report.first_vm = first_driver.shutdown().await;
+            first_cleanup.apply(&mut report.first_vm).await;
+            return Err(format!(
+                "failed to construct Kill qualification signal: {error}"
+            ));
+        }
+    };
+    let kill = KillRequest {
+        context: OperationContext::new(kill_operation_id.clone()),
+        target: start.target.clone(),
+        signal,
+        all: true,
+    };
     let response_delivered = stage == AgentTransportOperationStage::GuestAfterResponseWrite;
     let mut first_response = None;
     let mut first_failure = None;
-    match timeout(QUALIFICATION_TIMEOUT, first_service.start(start.clone())).await {
+    match timeout(QUALIFICATION_TIMEOUT, first_service.kill(kill.clone())).await {
         Ok(Err(error)) if !response_delivered => {
             if let Err(reason) = record_interruption(report, error, stage) {
                 append_failure(&mut first_failure, reason);
@@ -346,19 +415,20 @@ async fn exercise(
         Ok(Err(error)) => append_failure(
             &mut first_failure,
             format!(
-                "{} did not deliver its completed Start response: {error}",
+                "{} did not deliver its completed Kill response: {error}",
                 stage.as_str()
             ),
         ),
         Ok(Ok(record)) if response_delivered => {
             report.first_operation_response_received = true;
-            if *record.state.status() != ContainerState::Running {
+            if *record.state.status() != ContainerState::Stopped || record.state.pid().is_some() {
                 append_failure(
                     &mut first_failure,
                     format!(
-                        "{} returned {} instead of running",
+                        "{} returned {} with PID {:?} instead of stopped",
                         stage.as_str(),
-                        record.state.status()
+                        record.state.status(),
+                        record.state.pid()
                     ),
                 );
             }
@@ -367,7 +437,7 @@ async fn exercise(
             match timeout(
                 QUALIFICATION_TIMEOUT,
                 first_service.state(StateRequest {
-                    target: start.target.clone(),
+                    target: kill.target.clone(),
                 }),
             )
             .await
@@ -393,17 +463,17 @@ async fn exercise(
         }
         Ok(Ok(_)) => append_failure(
             &mut first_failure,
-            "first Start unexpectedly completed before owner replacement",
+            "first Kill unexpectedly completed before owner replacement",
         ),
         Err(_) => append_failure(
             &mut first_failure,
             format!(
-                "first Start exceeded the {} second timeout",
+                "first Kill exceeded the {} second timeout",
                 QUALIFICATION_TIMEOUT.as_secs()
             ),
         ),
     }
-    report.first_operation_dispatches = first_driver.start_calls();
+    report.first_operation_dispatches = first_driver.kill_calls();
     if stage.is_host() {
         report.negotiated_protocol = faults.protocol_version();
         report.injected_point = faults.injected_point();
@@ -414,7 +484,6 @@ async fn exercise(
         Ok(records) if records.len() == 1 => {
             let record = &records[0];
             report.generation_before_reopen = Some(record.generation);
-            report.first_created_pid = *record.state.pid();
             let exact_record = record.state.id() == create.id.as_str()
                 && record.driver == DriverKind::LibkrunHvf
                 && record.isolation == IsolationClass::DedicatedVm
@@ -422,26 +491,30 @@ async fn exercise(
                 && record.config_digest == created.config_digest;
             report.durable_created_retained =
                 exact_record && *record.state.status() == ContainerState::Created;
-            report.durable_running_retained =
-                exact_record && *record.state.status() == ContainerState::Running;
+            report.durable_running_retained = exact_record
+                && *record.state.status() == ContainerState::Running
+                && record.state.pid() == started.state.pid();
+            report.durable_stopped_retained = exact_record
+                && *record.state.status() == ContainerState::Stopped
+                && record.state.pid().is_none();
             report.first_response_matches_durable_record = first_response
                 .as_ref()
                 .is_some_and(|response| response == record);
             let expected_retained = if response_delivered {
-                report.durable_running_retained && report.first_response_matches_durable_record
+                report.durable_stopped_retained && report.first_response_matches_durable_record
             } else {
-                report.durable_created_retained
+                report.durable_running_retained
             };
             if !expected_retained {
                 append_failure(
                     &mut first_failure,
                     format!(
-                        "interrupted Start retained {} instead of the exact durable {} record",
+                        "interrupted Kill retained {} instead of the exact durable {} record",
                         record.state.status(),
                         if response_delivered {
-                            "running"
+                            "stopped"
                         } else {
-                            "created"
+                            "running"
                         }
                     ),
                 );
@@ -450,16 +523,16 @@ async fn exercise(
         Ok(records) => append_failure(
             &mut first_failure,
             format!(
-                "interrupted Start retained {} durable records instead of one",
+                "interrupted Kill retained {} durable records instead of one",
                 records.len()
             ),
         ),
         Err(error) => append_failure(
             &mut first_failure,
-            format!("failed to inspect durable state after interrupted Start: {error}"),
+            format!("failed to inspect durable state after interrupted Kill: {error}"),
         ),
     }
-    let first_start_identity = first_driver.start_identity();
+    let first_kill_identity = first_driver.kill_identity();
     drop(first_service);
     report.first_vm = first_driver.shutdown().await;
     first_cleanup.apply(&mut report.first_vm).await;
@@ -479,7 +552,7 @@ async fn exercise(
                 if !report.guest_evidence_verified {
                     append_failure(
                         &mut first_failure,
-                        "Guest Start evidence did not match the exact qualification",
+                        "Guest Kill evidence did not match the exact qualification",
                     );
                 }
             }
@@ -506,11 +579,20 @@ async fn exercise(
             format!("first VM left {GUEST_RUNTIME_PREFIX} guest runtime state"),
         );
     }
+    if first_driver.start_calls() != 1 {
+        append_failure(
+            &mut first_failure,
+            format!(
+                "first driver recorded {} setup Start dispatches instead of one",
+                first_driver.start_calls()
+            ),
+        );
+    }
     if report.first_operation_dispatches != 1 {
         append_failure(
             &mut first_failure,
             format!(
-                "first driver recorded {} Start dispatches instead of one",
+                "first driver recorded {} Kill dispatches instead of one",
                 report.first_operation_dispatches
             ),
         );
@@ -519,7 +601,7 @@ async fn exercise(
         append_failure(
             &mut first_failure,
             format!(
-                "selected Start transport point crossed {} times instead of once",
+                "selected Kill transport point crossed {} times instead of once",
                 report.fault_crossings
             ),
         );
@@ -529,6 +611,18 @@ async fn exercise(
         Err(reason) => {
             append_failure(&mut first_failure, reason);
             (start.context.operation_id.clone(), start.target.clone())
+        }
+    };
+    let first_kill_identity = match first_kill_identity {
+        Ok(identity) => identity,
+        Err(reason) => {
+            append_failure(&mut first_failure, reason);
+            (
+                kill.context.operation_id.clone(),
+                kill.target.clone(),
+                kill.signal,
+                kill.all,
+            )
         }
     };
     if let Some(reason) = first_failure {
@@ -544,17 +638,19 @@ async fn exercise(
             Err(mut bridge) => {
                 replacement_cleanup.apply(&mut bridge).await;
                 let reason = bridge.reason.clone().unwrap_or_else(|| {
-                    "failed to launch the replacement Start qualification VM".to_string()
+                    "failed to launch the replacement Kill qualification VM".to_string()
                 });
                 report.replacement_vm = bridge;
                 return Err(reason);
             }
         };
-    let replacement_driver = Arc::new(QualificationHvfDriver::with_start_recovery(
+    let replacement_driver = Arc::new(QualificationHvfDriver::with_kill_recovery(
         Arc::clone(&replacement_session),
         vm_rootfs.to_path_buf(),
         create.clone(),
         start.clone(),
+        kill.clone(),
+        marker.to_path_buf(),
     ));
     let replacement_service = match crate::HostRuntimeService::open(
         state_root,
@@ -569,6 +665,9 @@ async fn exercise(
                 replacement_driver.rehydrated_created_record();
             report.replacement_rehydrated_running_record =
                 replacement_driver.rehydrated_running_record();
+            report.replacement_rehydrated_stopped_record =
+                replacement_driver.rehydrated_stopped_record();
+            report.replacement_created_pid = replacement_driver.rehydrated_running_pid();
             service
         }
         Err(error) => {
@@ -577,6 +676,9 @@ async fn exercise(
                 replacement_driver.rehydrated_created_record();
             report.replacement_rehydrated_running_record =
                 replacement_driver.rehydrated_running_record();
+            report.replacement_rehydrated_stopped_record =
+                replacement_driver.rehydrated_stopped_record();
+            report.replacement_created_pid = replacement_driver.rehydrated_running_pid();
             report.replacement_vm = replacement_driver.shutdown().await;
             replacement_cleanup.apply(&mut report.replacement_vm).await;
             return Err(format!(
@@ -601,14 +703,55 @@ async fn exercise(
             "replacement driver did not rebuild the durable pre-start process",
         );
     }
-    if report.replacement_rehydrated_running_record != response_delivered {
+    if !report.replacement_rehydrated_running_record {
         append_failure(
             &mut replacement_failure,
-            "replacement running rehydration did not match the durable Start outcome",
+            "replacement driver did not restart the durable Kill process",
+        );
+    }
+    if report.replacement_rehydrated_stopped_record != response_delivered {
+        append_failure(
+            &mut replacement_failure,
+            "replacement stopped rehydration did not match the durable Kill outcome",
+        );
+    }
+    if report.replacement_created_pid.is_none() {
+        append_failure(
+            &mut replacement_failure,
+            "replacement recovery did not retain its positive running PID",
         );
     }
     let recovered = match replacement_service.list(ListRequest::default()).await {
-        Ok(records) if records.len() == 1 => Some(records[0].clone()),
+        Ok(records) if records.len() == 1 => {
+            let record = records[0].clone();
+            let expected_status = if response_delivered {
+                ContainerState::Stopped
+            } else {
+                ContainerState::Running
+            };
+            let expected_pid = if response_delivered {
+                record.state.pid().is_none()
+            } else {
+                *record.state.pid() == report.replacement_created_pid
+            };
+            if record.state.id() != create.id.as_str()
+                || record.generation != created.generation
+                || record.driver != DriverKind::LibkrunHvf
+                || record.isolation != IsolationClass::DedicatedVm
+                || *record.state.status() != expected_status
+                || !expected_pid
+            {
+                append_failure(
+                    &mut replacement_failure,
+                    format!(
+                        "replacement recovery retained invalid {} record with PID {:?}",
+                        record.state.status(),
+                        record.state.pid()
+                    ),
+                );
+            }
+            Some(record)
+        }
         Ok(records) => {
             append_failure(
                 &mut replacement_failure,
@@ -622,61 +765,99 @@ async fn exercise(
         Err(error) => {
             append_failure(
                 &mut replacement_failure,
-                format!("failed to inspect recovered durable Start record: {error}"),
+                format!("failed to inspect recovered durable Kill record: {error}"),
             );
             None
         }
     };
-    let replacement_create = match timeout(
-        QUALIFICATION_TIMEOUT,
-        replacement_service.create(create.clone()),
-    )
-    .await
-    {
-        Ok(Ok(record)) => Some(record),
-        Ok(Err(error)) => {
-            append_failure(
-                &mut replacement_failure,
-                format!("replacement Create journal replay failed: {error}"),
-            );
-            None
+
+    if !response_delivered {
+        let replacement_create = match timeout(
+            QUALIFICATION_TIMEOUT,
+            replacement_service.create(create.clone()),
+        )
+        .await
+        {
+            Ok(Ok(record)) => Some(record),
+            Ok(Err(error)) => {
+                append_failure(
+                    &mut replacement_failure,
+                    format!("replacement Create journal replay failed: {error}"),
+                );
+                None
+            }
+            Err(_) => {
+                append_failure(
+                    &mut replacement_failure,
+                    format!(
+                        "replacement Create journal replay exceeded the {} second timeout",
+                        QUALIFICATION_TIMEOUT.as_secs()
+                    ),
+                );
+                None
+            }
+        };
+        if let (Some(recovered), Some(replayed_create)) = (&recovered, &replacement_create) {
+            report.setup_create_response_rebound = *replayed_create.state.status()
+                == ContainerState::Created
+                && replayed_create.generation == recovered.generation
+                && *replayed_create.state.pid() == report.replacement_created_pid;
+            if !report.setup_create_response_rebound {
+                append_failure(
+                    &mut replacement_failure,
+                    "replacement Create replay did not bind to the fresh process identity",
+                );
+            }
         }
-        Err(_) => {
-            append_failure(
+
+        match timeout(
+            QUALIFICATION_TIMEOUT,
+            replacement_service.start(start.clone()),
+        )
+        .await
+        {
+            Ok(Ok(record)) => {
+                report.setup_start_response_rebound = *record.state.status()
+                    == ContainerState::Running
+                    && record.generation == created.generation
+                    && *record.state.pid() == report.replacement_created_pid;
+                if !report.setup_start_response_rebound {
+                    append_failure(
+                        &mut replacement_failure,
+                        "replacement Start replay did not bind to the fresh process identity",
+                    );
+                }
+            }
+            Ok(Err(error)) => append_failure(
+                &mut replacement_failure,
+                format!("replacement Start journal replay failed: {error}"),
+            ),
+            Err(_) => append_failure(
                 &mut replacement_failure,
                 format!(
-                    "replacement Create journal replay exceeded the {} second timeout",
+                    "replacement Start journal replay exceeded the {} second timeout",
                     QUALIFICATION_TIMEOUT.as_secs()
                 ),
-            );
-            None
-        }
-    };
-    if let (Some(recovered), Some(replayed_create)) = (&recovered, &replacement_create) {
-        report.setup_create_response_rebound = *replayed_create.state.status()
-            == ContainerState::Created
-            && replayed_create.generation == recovered.generation
-            && replayed_create.state.pid() == recovered.state.pid();
-        if !report.setup_create_response_rebound {
-            append_failure(
-                &mut replacement_failure,
-                "replacement Create replay did not bind to the fresh process identity",
-            );
+            ),
         }
     }
 
-    let start_calls_before = replacement_driver.start_calls();
+    match wait_for_replacement_marker(marker).await {
+        Ok(()) => report.replacement_workload_verified = true,
+        Err(reason) => append_failure(&mut replacement_failure, reason),
+    }
+
+    let kill_calls_before = replacement_driver.kill_calls();
     match timeout(
         QUALIFICATION_TIMEOUT,
-        replacement_service.start(start.clone()),
+        replacement_service.kill(kill.clone()),
     )
     .await
     {
         Ok(Ok(record)) => {
             report.generation_after_reopen = Some(record.generation);
-            report.replacement_created_pid = *record.state.pid();
             report.operation_completed_after_reopen =
-                *record.state.status() == ContainerState::Running;
+                *record.state.status() == ContainerState::Stopped && record.state.pid().is_none();
             report.replacement_response_matches_durable_record = replacement_service
                 .list(ListRequest::default())
                 .await
@@ -686,42 +867,42 @@ async fn exercise(
             if !report.operation_completed_after_reopen {
                 append_failure(
                     &mut replacement_failure,
-                    "replacement Start did not reach the OCI running state",
+                    "replacement Kill did not reach the OCI stopped state",
                 );
             }
             if !report.replacement_response_matches_durable_record {
                 append_failure(
                     &mut replacement_failure,
-                    "replacement Start response differed from the durable record",
+                    "replacement Kill response differed from the durable record",
                 );
             }
             if !report.same_generation_reused {
                 append_failure(
                     &mut replacement_failure,
-                    "replacement Start did not reuse the original durable generation",
+                    "replacement Kill did not reuse the original durable generation",
                 );
             }
         }
         Ok(Err(error)) => append_failure(
             &mut replacement_failure,
-            format!("replacement Start failed: {error}"),
+            format!("replacement Kill failed: {error}"),
         ),
         Err(_) => append_failure(
             &mut replacement_failure,
             format!(
-                "replacement Start exceeded the {} second timeout",
+                "replacement Kill exceeded the {} second timeout",
                 QUALIFICATION_TIMEOUT.as_secs()
             ),
         ),
     }
-    report.replacement_operation_dispatches = replacement_driver.start_calls();
+    report.replacement_operation_dispatches = replacement_driver.kill_calls();
     report.operation_replayed_without_driver_dispatch =
-        report.replacement_operation_dispatches == start_calls_before;
+        report.replacement_operation_dispatches == kill_calls_before;
     if report.replacement_operation_dispatches != 1 {
         append_failure(
             &mut replacement_failure,
             format!(
-                "replacement driver recorded {} Start dispatches instead of one",
+                "replacement driver recorded {} Kill dispatches instead of one",
                 report.replacement_operation_dispatches
             ),
         );
@@ -729,7 +910,16 @@ async fn exercise(
     if report.operation_replayed_without_driver_dispatch != response_delivered {
         append_failure(
             &mut replacement_failure,
-            "replacement Start dispatch did not match the completed durable journal",
+            "replacement Kill dispatch did not match the completed durable journal",
+        );
+    }
+    if replacement_driver.start_calls() != 1 {
+        append_failure(
+            &mut replacement_failure,
+            format!(
+                "replacement driver recorded {} setup Start dispatches instead of one",
+                replacement_driver.start_calls()
+            ),
         );
     }
     match replacement_driver.create_identity() {
@@ -749,20 +939,32 @@ async fn exercise(
     }
     match replacement_driver.start_identity() {
         Ok(replacement_start_identity) => {
-            report.same_operation_id_reused = replacement_start_identity == first_start_identity
+            report.setup_start_identity_reused = replacement_start_identity == first_start_identity
                 && replacement_start_identity.0 == start.context.operation_id
                 && replacement_start_identity.1 == start.target;
-            if !report.same_operation_id_reused {
+            if !report.setup_start_identity_reused {
                 append_failure(
                     &mut replacement_failure,
-                    "replacement recovery did not reuse the original Start identity and target",
+                    "replacement recovery did not reuse the setup Start identity and target",
                 );
             }
         }
         Err(reason) => append_failure(&mut replacement_failure, reason),
     }
-    match wait_for_replacement_marker(marker).await {
-        Ok(()) => report.replacement_workload_verified = true,
+    match replacement_driver.kill_identity() {
+        Ok(replacement_kill_identity) => {
+            report.same_operation_id_reused = replacement_kill_identity == first_kill_identity
+                && replacement_kill_identity.0 == kill.context.operation_id
+                && replacement_kill_identity.1 == kill.target
+                && replacement_kill_identity.2 == kill.signal
+                && replacement_kill_identity.3 == kill.all;
+            if !report.same_operation_id_reused {
+                append_failure(
+                    &mut replacement_failure,
+                    "replacement recovery did not reuse the original Kill identity and target",
+                );
+            }
+        }
         Err(reason) => append_failure(&mut replacement_failure, reason),
     }
 
@@ -770,18 +972,18 @@ async fn exercise(
         let delete = DeleteRequest {
             context: OperationContext::new(delete_operation_id.clone()),
             target: ContainerTarget::exact(create.id.clone(), generation),
-            mode: DeleteMode::Force,
+            mode: DeleteMode::StoppedOnly,
         };
         match timeout(QUALIFICATION_TIMEOUT, replacement_service.delete(delete)).await {
-            Ok(Ok(())) => report.force_delete_completed = true,
+            Ok(Ok(())) => report.stopped_only_delete_completed = true,
             Ok(Err(error)) => append_failure(
                 &mut replacement_failure,
-                format!("replacement force delete failed: {error}"),
+                format!("replacement stopped-only delete failed: {error}"),
             ),
             Err(_) => append_failure(
                 &mut replacement_failure,
                 format!(
-                    "replacement force delete exceeded the {} second timeout",
+                    "replacement stopped-only delete exceeded the {} second timeout",
                     QUALIFICATION_TIMEOUT.as_secs()
                 ),
             ),
@@ -845,7 +1047,7 @@ async fn exercise(
 
 fn operation_id(value: &str) -> std::result::Result<OperationId, String> {
     OperationId::new(value)
-        .map_err(|error| format!("failed to construct Start qualification operation ID: {error}"))
+        .map_err(|error| format!("failed to construct Kill qualification operation ID: {error}"))
 }
 
 fn record_interruption(
@@ -868,7 +1070,7 @@ fn record_interruption(
         Ok(())
     } else {
         Err(format!(
-            "first owner returned an unexpected Start transport error at {}: {error}",
+            "first owner returned an unexpected Kill transport error at {}: {error}",
             stage.as_str()
         ))
     }
