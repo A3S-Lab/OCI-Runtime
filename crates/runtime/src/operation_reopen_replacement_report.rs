@@ -5,8 +5,8 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{
-    ContainerId, ContainerStats, DeleteMode, ErrorCode, ExitStatus, FileOp, Generation,
-    OperationId, OutputChunk, ProcessId, ProcessRecord, TerminalSize,
+    ContainerId, ContainerStats, DeleteMode, ErrorCode, ExitStatus, FileOp, FilesystemOp,
+    Generation, OperationId, OutputChunk, ProcessId, ProcessRecord, TerminalSize,
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +76,10 @@ pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_RESIZE_SCHEMA_VERSION: &str =
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_FILE_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v18";
 
+/// Filesystem schema with a session-scoped mkdir rebuilt in the replacement Guest.
+pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_FILESYSTEM_SCHEMA_VERSION: &str =
+    "a3s.oci.oci-vm-operation-reopen-replacement.v19";
+
 /// Start schema retained for compatibility with existing evidence.
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_START_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v2";
@@ -101,8 +105,8 @@ const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-faul
 /// adds rebuilt captured-output evidence, version 15 adds committed stdin-write
 /// replay, version 16 adds committed stdin-close replay, and version 17 adds
 /// committed terminal-resize replay, and version 18 adds session-scoped file
-/// upload reconstruction. Earlier operations continue to emit their compatible
-/// schema.
+/// upload reconstruction, and version 19 adds session-scoped directory
+/// reconstruction. Earlier operations continue to emit their compatible schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmOperationReopenReplacementReport {
     /// Version of this JSON-compatible schema.
@@ -169,6 +173,21 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Optional container account selected by a File qualification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_user: Option<String>,
+    /// Filesystem operation selected by a Filesystem qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_op: Option<FilesystemOp>,
+    /// Exact primary path selected by a Filesystem qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_path: Option<String>,
+    /// Optional destination path selected by a Filesystem qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_destination: Option<String>,
+    /// Directory traversal depth selected by a Filesystem qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_depth: Option<u32>,
+    /// Optional container account selected by a Filesystem qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_user: Option<String>,
     /// Inclusive captured-output cursor used by a ReadOutput qualification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_output_after_sequence: Option<u64>,
@@ -365,6 +384,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether recovery rebuilt a delivered upload and its Guest journal.
     #[serde(default)]
     pub replacement_rehydrated_file: bool,
+    /// Whether recovery rebuilt a delivered mkdir and its Guest journal.
+    #[serde(default)]
+    pub replacement_rehydrated_filesystem: bool,
     /// Whether recovery reapplied an already-committed Pause to the rebuilt init.
     #[serde(default)]
     pub replacement_rehydrated_paused_record: bool,
@@ -453,6 +475,18 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether a replacement download observed the exact uploaded bytes.
     #[serde(default)]
     pub replacement_file_effect_verified: bool,
+    /// Whether a delivered first Filesystem response matched the exact mkdir.
+    #[serde(default)]
+    pub first_filesystem_response_verified: bool,
+    /// Whether the replacement Filesystem response matched the exact mkdir.
+    #[serde(default)]
+    pub replacement_filesystem_response_verified: bool,
+    /// Whether a repeated replacement mkdir returned the same Guest-journal response.
+    #[serde(default)]
+    pub filesystem_response_replayed: bool,
+    /// Whether replacement Stat observed the exact created directory.
+    #[serde(default)]
+    pub replacement_filesystem_effect_verified: bool,
     /// Whether the exact durable generation was observed across the owner handoff.
     pub same_generation_reused: bool,
     /// Whether replacement recovery reused the original setup Create identity.
@@ -502,6 +536,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether replacement dispatch reused the complete first-owner File request.
     #[serde(default)]
     pub file_request_identity_reused: bool,
+    /// Whether replacement dispatch reused the complete first-owner Filesystem request.
+    #[serde(default)]
+    pub filesystem_request_identity_reused: bool,
     /// Whether replacement dispatch reused the exact first-owner Pause request.
     #[serde(default)]
     pub pause_request_identity_reused: bool,
@@ -628,6 +665,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether the uploaded qualification file was absent after explicit cleanup.
     #[serde(default)]
     pub file_effect_absent_after_cleanup: bool,
+    /// Whether the qualification directory was absent after explicit cleanup.
+    #[serde(default)]
+    pub filesystem_effect_absent_after_cleanup: bool,
     /// Whether the first guest executor returned to its original runtime inventory.
     pub first_guest_runtime_clean: bool,
     /// Whether the replacement guest executor returned to the same inventory.
@@ -674,6 +714,11 @@ impl OciVmOperationReopenReplacementReport {
             file_path: None,
             file_data: None,
             file_user: None,
+            filesystem_op: None,
+            filesystem_path: None,
+            filesystem_destination: None,
+            filesystem_depth: None,
+            filesystem_user: None,
             read_output_after_sequence: None,
             read_output_max_bytes: None,
             read_output_wait_timeout_ms: None,
@@ -743,6 +788,7 @@ impl OciVmOperationReopenReplacementReport {
             replacement_rehydrated_close_stdin: false,
             replacement_rehydrated_resize: false,
             replacement_rehydrated_file: false,
+            replacement_rehydrated_filesystem: false,
             replacement_rehydrated_paused_record: false,
             replacement_rehydrated_resumed_record: false,
             replacement_rehydrated_update: false,
@@ -773,6 +819,10 @@ impl OciVmOperationReopenReplacementReport {
             replacement_file_response_verified: false,
             file_response_replayed: false,
             replacement_file_effect_verified: false,
+            first_filesystem_response_verified: false,
+            replacement_filesystem_response_verified: false,
+            filesystem_response_replayed: false,
+            replacement_filesystem_effect_verified: false,
             same_generation_reused: false,
             setup_create_identity_reused: false,
             setup_start_identity_reused: false,
@@ -790,6 +840,7 @@ impl OciVmOperationReopenReplacementReport {
             close_stdin_request_identity_reused: false,
             resize_request_identity_reused: false,
             file_request_identity_reused: false,
+            filesystem_request_identity_reused: false,
             pause_request_identity_reused: false,
             resume_request_identity_reused: false,
             update_request_identity_reused: false,
@@ -833,6 +884,7 @@ impl OciVmOperationReopenReplacementReport {
             close_marker_absent_after_cleanup: false,
             resize_marker_absent_after_cleanup: false,
             file_effect_absent_after_cleanup: false,
+            filesystem_effect_absent_after_cleanup: false,
             first_guest_runtime_clean: false,
             replacement_guest_runtime_clean: false,
             owners_distinct: false,
@@ -874,6 +926,7 @@ impl OciVmOperationReopenReplacementReport {
             AgentOperation::Delete => self.delete_evidence_succeeded(),
             AgentOperation::Exec => self.exec_evidence_succeeded(),
             AgentOperation::File => self.file_evidence_succeeded(),
+            AgentOperation::Filesystem => self.filesystem_evidence_succeeded(),
             AgentOperation::Kill => self.kill_evidence_succeeded(),
             AgentOperation::Pause => self.pause_evidence_succeeded(),
             AgentOperation::Processes => self.processes_evidence_succeeded(),
@@ -986,6 +1039,7 @@ mod close_stdin;
 mod delete;
 mod exec;
 mod file;
+mod filesystem;
 mod kill;
 mod pause;
 mod processes;

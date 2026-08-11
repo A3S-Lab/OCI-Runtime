@@ -24,6 +24,7 @@ mkdir -p \
   "$console_root/close-stdin" \
   "$console_root/resize" \
   "$console_root/file" \
+  "$console_root/filesystem" \
   "$console_root/resume" \
   "$console_root/stats" \
   "$console_root/update" \
@@ -86,6 +87,7 @@ source "$(dirname "$0")/macos-reopen-replacement-write-stdin.sh"
 source "$(dirname "$0")/macos-reopen-replacement-close-stdin.sh"
 source "$(dirname "$0")/macos-reopen-replacement-resize.sh"
 source "$(dirname "$0")/macos-reopen-replacement-file.sh"
+source "$(dirname "$0")/macos-reopen-replacement-filesystem.sh"
 source "$(dirname "$0")/macos-reopen-replacement-resume.sh"
 source "$(dirname "$0")/macos-reopen-replacement-update.sh"
 source "$(dirname "$0")/macos-reopen-replacement-stats.sh"
@@ -975,4 +977,7 @@ for fault_stage in "${stages[@]}"; do
 done
 for fault_stage in "${stages[@]}"; do
   run_file_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_filesystem_stage "$fault_stage"
 done

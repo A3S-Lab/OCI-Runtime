@@ -982,8 +982,17 @@ owner delivered its response, recovery rebuilds the exact binary upload and
 Guest journal in a fresh tmpfs before Host open; the API retry then receives
 the cached Guest response without another upload effect. Changed-content and
 stale-generation rejection, byte-for-byte download, explicit removal, and
-cleanup passed all nine stages on Apple Silicon. Filesystem is the final
-operation matrix.
+cleanup passed all nine stages on Apple Silicon.
+
+Filesystem now uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v19`. MakeDir remains
+session-scoped and every retry reaches the replacement driver. If the first
+owner delivered its response, recovery rebuilds the exact directory and Guest
+journal in a fresh tmpfs before Host open; the API retry then receives the
+cached Guest response without another mkdir effect. Changed-path and
+stale-generation rejection, replacement Stat, explicit Remove, and cleanup
+passed all nine stages on Apple Silicon. The real-HVF replacement matrix now
+covers all 180 operation-stage paths across all 20 protocol-v9 operations.
 
 ## Remaining workload gates
 
@@ -996,7 +1005,8 @@ The current gates do not:
 The next macOS increments must add, in order:
 
 1. the production A3S immutable system root;
-2. negative tests for isolation weakening and exhaustive recovery injection.
+2. negative tests for isolation weakening and recovery injection beyond the
+   complete operation-stage matrix.
 
 Only after those gates and the shared Linux executor requirements pass may
 the HVF driver move from `probe-only` to `experimental`.

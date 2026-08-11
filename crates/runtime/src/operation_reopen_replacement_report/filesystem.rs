@@ -1,0 +1,311 @@
+use a3s_oci_agent_protocol::{
+    AgentOperation, AgentTransportFaultPoint, AgentTransportOperationStage,
+    AGENT_PROTOCOL_VERSION_MAX,
+};
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+use a3s_oci_core::CapabilityStatus;
+use a3s_oci_core::HostPlatform;
+use a3s_oci_sdk::FilesystemOp;
+
+use super::{
+    OciVmOperationReopenReplacementReport,
+    OCI_VM_OPERATION_REOPEN_REPLACEMENT_FILESYSTEM_SCHEMA_VERSION, QUALIFICATION_FAULT_OPERATION,
+};
+
+impl OciVmOperationReopenReplacementReport {
+    pub(crate) fn initial_filesystem(
+        platform: HostPlatform,
+        requested_stage: AgentTransportOperationStage,
+    ) -> Self {
+        let mut report = Self::initial_state(platform, requested_stage);
+        report.schema_version =
+            OCI_VM_OPERATION_REOPEN_REPLACEMENT_FILESYSTEM_SCHEMA_VERSION.to_string();
+        report.requested_operation = AgentOperation::Filesystem;
+        report.filesystem_op = Some(FilesystemOp::MakeDir);
+        report.filesystem_depth = Some(0);
+        report
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    pub(crate) fn unsupported_filesystem(
+        platform: HostPlatform,
+        requested_stage: AgentTransportOperationStage,
+    ) -> Self {
+        let mut report = Self::initial_filesystem(platform, requested_stage);
+        report.status = CapabilityStatus::Unsupported;
+        report.first_vm.status = CapabilityStatus::Unsupported;
+        report.first_vm.reason = Some("the first HVF owner was not started".to_string());
+        report.replacement_vm.status = CapabilityStatus::Unsupported;
+        report.replacement_vm.reason =
+            Some("the replacement HVF owner was not started".to_string());
+        report.reason = Some(
+            "real utility-VM Filesystem reopen and owner replacement is implemented only for macOS aarch64/HVF"
+                .to_string(),
+        );
+        report
+    }
+
+    pub(super) fn filesystem_evidence_succeeded(&self) -> bool {
+        let expected_point = AgentTransportFaultPoint::Operation {
+            protocol_version: AGENT_PROTOCOL_VERSION_MAX,
+            operation: AgentOperation::Filesystem,
+            stage: self.requested_stage,
+        }
+        .to_string();
+        let guest_stage = self.requested_stage.is_guest();
+        let response_delivered =
+            self.requested_stage == AgentTransportOperationStage::GuestAfterResponseWrite;
+        let expected_error_operation = if guest_stage {
+            self.first_operation_error_operation
+                .as_deref()
+                .is_some_and(crate::transport_cleanup_report::is_retryable_disconnect_operation)
+        } else {
+            self.first_operation_error_operation.as_deref() == Some(QUALIFICATION_FAULT_OPERATION)
+        };
+        let expected_guest_evidence = if guest_stage {
+            self.guest_evidence_verified
+                && self.guest_evidence_operation_id == self.qualification_operation_id
+        } else {
+            !self.guest_evidence_verified && self.guest_evidence_operation_id.is_none()
+        };
+        let setup_ids_are_distinct = self
+            .qualification_operation_id
+            .as_ref()
+            .zip(self.setup_create_operation_id.as_ref())
+            .zip(self.setup_start_operation_id.as_ref())
+            .is_some_and(|((filesystem, create), start)| {
+                filesystem != create && filesystem != start && create != start
+            });
+        let expected_replacement_dispatches = if response_delivered { 3 } else { 2 };
+
+        matches!(self.platform, HostPlatform::Macos)
+            && self.first_vm.platform == self.platform
+            && self.replacement_vm.platform == self.platform
+            && self.bundle_loaded
+            && self.requested_operation == AgentOperation::Filesystem
+            && self.kill_signal.is_none()
+            && self.kill_all.is_none()
+            && self.delete_mode.is_none()
+            && self.wait_timeout_ms.is_none()
+            && self.exec_process_id.is_none()
+            && self.exec_terminal.is_none()
+            && self.signal_process_signal.is_none()
+            && self.write_stdin_data.is_none()
+            && self.resize_size.is_none()
+            && self.file_op.is_none()
+            && self.file_path.is_none()
+            && self.file_data.is_none()
+            && self.file_user.is_none()
+            && self.filesystem_op == Some(FilesystemOp::MakeDir)
+            && self
+                .filesystem_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with("/tmp/.a3s-oci-filesystem-reopen-"))
+            && self.filesystem_destination.is_none()
+            && self.filesystem_depth == Some(0)
+            && self.filesystem_user.is_none()
+            && (self.requested_stage.is_host() || guest_stage)
+            && setup_ids_are_distinct
+            && self.setup_kill_operation_id.is_none()
+            && self.setup_exec_operation_id.is_none()
+            && self.container_id.is_some()
+            && self.negotiated_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
+            && self.injected_point.as_deref() == Some(expected_point.as_str())
+            && self.fault_crossings == 1
+            && self.first_operation_error_code == Some(a3s_oci_sdk::ErrorCode::Unavailable)
+            && expected_error_operation
+            && self.first_operation_error_retryable
+            && self.first_operation_response_received == response_delivered
+            && self.disconnect_probe_attempted == response_delivered
+            && !self.first_response_matches_durable_record
+            && self.first_filesystem_response_verified == response_delivered
+            && self.durable_running_retained
+            && !self.durable_created_retained
+            && !self.durable_stopped_retained
+            && !self.first_durable_records_empty
+            && !self.exec_journal_prepared_before_reopen
+            && !self.exec_journal_succeeded_before_reopen
+            && !self.resize_journal_prepared_before_reopen
+            && !self.resize_journal_succeeded_before_reopen
+            && self.first_created_pid.is_some_and(|pid| pid > 0)
+            && self.first_exec_pid.is_none()
+            && self.generation_before_reopen.is_some()
+            && expected_guest_evidence
+            && self.host_service_reopened
+            && self.replacement_recovery_calls == 1
+            && self.replacement_rehydrated_created_record
+            && self.replacement_rehydrated_running_record
+            && !self.replacement_rehydrated_stopped_record
+            && !self.replacement_rehydrated_exec_record
+            && self.replacement_rehydrated_filesystem == response_delivered
+            && self.operation_completed_after_reopen
+            && self.generation_before_reopen == self.generation_after_reopen
+            && self.replacement_created_pid.is_some_and(|pid| pid > 0)
+            && self.replacement_exec_pid.is_none()
+            && !self.replacement_response_matches_durable_record
+            && self.replacement_filesystem_response_verified
+            && self.filesystem_response_replayed
+            && self.replacement_filesystem_effect_verified
+            && self.same_generation_reused
+            && self.setup_create_identity_reused
+            && self.setup_start_identity_reused
+            && !self.setup_kill_identity_reused
+            && self.same_operation_id_reused
+            && self.setup_create_response_rebound
+            && self.setup_start_response_rebound
+            && !self.exec_response_rebound
+            && self.filesystem_request_identity_reused
+            && !self.operation_replayed_without_driver_dispatch
+            && self.first_operation_dispatches == 1
+            && self.replacement_operation_dispatches == expected_replacement_dispatches
+            && self.host_stale_generation_rejected
+            && self.guest_stale_generation_rejected
+            && self.host_changed_request_rejected
+            && self.guest_changed_request_rejected
+            && self.marker_reset_before_replacement
+            && self.replacement_workload_verified
+            && self.force_delete_completed
+            && !self.stopped_only_delete_completed
+            && self.durable_records_empty
+            && self.marker_absent_after_cleanup
+            && self.filesystem_effect_absent_after_cleanup
+            && self.first_guest_runtime_clean
+            && self.replacement_guest_runtime_clean
+            && self.owners_distinct
+            && self.owner_identities_are_distinct()
+            && self.state_root_removed
+            && self.first_vm.is_success()
+            && self.replacement_vm.is_success()
+            && self.reason.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use a3s_oci_agent_protocol::{
+        AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
+    };
+    use a3s_oci_core::{CapabilityStatus, HostPlatform};
+    use a3s_oci_sdk::{ContainerId, ErrorCode, Generation, OperationId};
+    use serde_json::json;
+
+    use super::OciVmOperationReopenReplacementReport;
+    use crate::report::{AgentVmSmokeReport, MacosHostCleanupEvidence};
+
+    #[test]
+    fn filesystem_report_requires_session_replay_identity_effect_and_cleanup() {
+        let mut report = OciVmOperationReopenReplacementReport::initial_filesystem(
+            HostPlatform::Macos,
+            AgentTransportOperationStage::HostBeforeRequestWrite,
+        );
+        report.status = CapabilityStatus::Available;
+        report.bundle_loaded = true;
+        report.filesystem_path = Some("/tmp/.a3s-oci-filesystem-reopen-test".to_string());
+        report.qualification_operation_id =
+            Some(OperationId::new("filesystem").expect("Filesystem ID"));
+        report.setup_create_operation_id =
+            Some(OperationId::new("filesystem-create").expect("Create ID"));
+        report.setup_start_operation_id =
+            Some(OperationId::new("filesystem-start").expect("Start ID"));
+        report.container_id = Some(ContainerId::new("filesystem").expect("container ID"));
+        report.negotiated_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.injected_point = Some(format!(
+            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.filesystem-host-before-request-write"
+        ));
+        report.fault_crossings = 1;
+        report.first_operation_error_code = Some(ErrorCode::Unavailable);
+        report.first_operation_error_operation =
+            Some("oci-vm-transport-qualification-fault".to_string());
+        report.first_operation_error_retryable = true;
+        report.durable_running_retained = true;
+        report.first_created_pid = Some(41);
+        report.generation_before_reopen = Some(Generation(1));
+        report.host_service_reopened = true;
+        report.replacement_recovery_calls = 1;
+        report.replacement_rehydrated_created_record = true;
+        report.replacement_rehydrated_running_record = true;
+        report.operation_completed_after_reopen = true;
+        report.generation_after_reopen = Some(Generation(1));
+        report.replacement_created_pid = Some(42);
+        report.replacement_filesystem_response_verified = true;
+        report.filesystem_response_replayed = true;
+        report.replacement_filesystem_effect_verified = true;
+        report.same_generation_reused = true;
+        report.setup_create_identity_reused = true;
+        report.setup_start_identity_reused = true;
+        report.same_operation_id_reused = true;
+        report.setup_create_response_rebound = true;
+        report.setup_start_response_rebound = true;
+        report.filesystem_request_identity_reused = true;
+        report.first_operation_dispatches = 1;
+        report.replacement_operation_dispatches = 2;
+        report.host_stale_generation_rejected = true;
+        report.guest_stale_generation_rejected = true;
+        report.host_changed_request_rejected = true;
+        report.guest_changed_request_rejected = true;
+        report.marker_reset_before_replacement = true;
+        report.replacement_workload_verified = true;
+        report.force_delete_completed = true;
+        report.durable_records_empty = true;
+        report.marker_absent_after_cleanup = true;
+        report.filesystem_effect_absent_after_cleanup = true;
+        report.first_guest_runtime_clean = true;
+        report.replacement_guest_runtime_clean = true;
+        report.owners_distinct = true;
+        report.state_root_removed = true;
+        report.first_vm = complete_macos_bridge("first", 11, 12);
+        report.replacement_vm = complete_macos_bridge("replacement", 21, 22);
+        assert!(report.is_success());
+
+        let mut delivered = report.clone();
+        delivered.requested_stage = AgentTransportOperationStage::GuestAfterResponseWrite;
+        delivered.injected_point = Some(format!(
+            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.filesystem-guest-after-response-write"
+        ));
+        delivered.first_operation_error_operation = Some("read-agent-frame-header".to_string());
+        delivered.guest_evidence_verified = true;
+        delivered.guest_evidence_operation_id = delivered.qualification_operation_id.clone();
+        delivered.first_operation_response_received = true;
+        delivered.disconnect_probe_attempted = true;
+        delivered.first_filesystem_response_verified = true;
+        delivered.replacement_rehydrated_filesystem = true;
+        delivered.replacement_operation_dispatches = 3;
+        assert!(delivered.is_success());
+
+        let incomplete = OciVmOperationReopenReplacementReport {
+            filesystem_effect_absent_after_cleanup: false,
+            ..report
+        };
+        assert!(!incomplete.is_success());
+    }
+
+    fn complete_macos_bridge(name: &str, shim: u32, bridge: u32) -> AgentVmSmokeReport {
+        let mut report = AgentVmSmokeReport::initial(HostPlatform::Macos);
+        report.status = CapabilityStatus::Available;
+        report.endpoint_bound = true;
+        report.endpoint_name = Some(format!("a3s-oci-agent-{name}"));
+        report.shim_spawned = true;
+        report.shim_process_id = Some(shim);
+        report.bridge_process_id = Some(bridge);
+        report.shim_client_verified = true;
+        report.protocol_negotiated = true;
+        report.selected_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.agent_version = Some(env!("CARGO_PKG_VERSION").into());
+        report.guest_architecture = Some("aarch64".into());
+        report.advertised_operations = AgentOperation::ALL.to_vec();
+        report.shim_report_verified = true;
+        report.shim_exit_code = Some(0);
+        report.console_created = true;
+        report.shim_report = Some(json!({}));
+        report.macos_cleanup = Some(MacosHostCleanupEvidence {
+            endpoint_removed: true,
+            shim_reaped: true,
+            bridge_reaped: true,
+            open_descriptors_before: Some(7),
+            open_descriptors_after: Some(7),
+            descriptor_inventory_restored: true,
+            reason: None,
+        });
+        report
+    }
+}

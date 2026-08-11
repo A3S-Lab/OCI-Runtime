@@ -693,6 +693,41 @@ pub async fn oci_vm_file_reopen_replacement_at(
     }
 }
 
+/// Reissue one interrupted Filesystem mkdir through a replacement macOS HVF owner.
+///
+/// The request remains session-scoped and is dispatched after every reopen.
+/// If the first owner delivered its response, recovery first rebuilds the
+/// directory and Guest journal in the fresh VM so the API retry is one-effect.
+#[must_use]
+pub async fn oci_vm_filesystem_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_filesystem_reopen_replacement(
+            shim,
+            vm_rootfs,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_filesystem(
+            HostPlatform::current(),
+            stage,
+        )
+    }
+}
+
 /// Reissue one interrupted Resume through a replacement macOS HVF owner.
 ///
 /// Recovery always rebuilds Create, Start, and the setup Pause after the exact

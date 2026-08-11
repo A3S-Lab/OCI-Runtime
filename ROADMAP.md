@@ -955,19 +955,26 @@ enforce it. No property is silently ignored.
     required. The August 11, 2026 Apple Silicon matrix passed all nine stages
     in 18 fresh VMs under
     `a3s.oci.oci-vm-operation-reopen-replacement.v18`.
-  - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
-    actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 171 real Create/State/Start/Kill/Delete/Wait/Exec/
-    SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/
-    WriteStdin/CloseStdin/Resize/File replacement paths do not satisfy the
-    complete 20-operation matrix gate. Filesystem remains.
+  - [x] Carry all nine Host/Guest `filesystem` stages through service reopen
+    and actual HVF owner replacement. MakeDir remains session-scoped, so every
+    API retry reaches the replacement driver. After a delivered first
+    response, driver recovery rebuilds the directory and Guest journal in the
+    fresh `/tmp` filesystem before Host open; the retry then receives the
+    cached Guest response without a second mkdir effect. Exact directory
+    metadata, request identity, changed-path rejection, stale generations,
+    replacement Stat, explicit Remove, force delete, and both owner cleanup
+    inventories are required. The August 11, 2026 Apple Silicon matrix passed
+    all nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v19`, completing all 180 real
+    operation-stage paths across all 20 protocol-v9 operations.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.
 
 Exit gate: lifecycle tests pass under fault injection at every durable write
 and host/agent transition. The durable-write and `RuntimeDriver` portions pass;
-the utility-VM host/agent transport portion remains open.
+the real HVF host/agent operation-stage matrix passes, while equivalent
+real-driver coverage remains open for the other utility-VM backends.
 
 ### R2 — Windows WHPX Utility VM
 

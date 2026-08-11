@@ -16,10 +16,11 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, CloseStdinRequest, ContainerOperationRequest, ContainerRecord, ContainerStats,
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    ExecRequest, ExitStatus, FileRequest, FileResponse, IoMode, IsolationRequest, KillRequest,
-    ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId, OutputChunk,
-    ProcessIo, ProcessRecord, ProcessTarget, ResizeRequest, Result, RuntimeOperation,
-    SignalProcessRequest, StartRequest, StateRequest, UpdateRequest, WriteStdinRequest,
+    ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
+    IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle, OciRuntimeService,
+    OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget,
+    ResizeRequest, Result, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest,
+    UpdateRequest, WriteStdinRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -46,7 +47,7 @@ const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
 const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const REPLACEMENT_MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 const MARKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 19] = [
+const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 20] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -66,6 +67,7 @@ const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 19] = [
     RuntimeOperation::CloseStdin,
     RuntimeOperation::Resize,
     RuntimeOperation::File,
+    RuntimeOperation::Filesystem,
 ];
 
 mod close_stdin;
@@ -77,6 +79,8 @@ mod exec;
 pub(super) use exec::run as run_exec;
 mod file;
 pub(super) use file::run as run_file;
+mod filesystem;
+pub(super) use filesystem::run as run_filesystem;
 mod kill;
 pub(super) use kill::run as run_kill;
 mod pause;
@@ -751,6 +755,8 @@ struct QualificationHvfDriver {
     recovery_resize_ready_marker: Option<(PathBuf, Vec<u8>)>,
     recovery_file: Option<FileRequest>,
     recovery_file_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_filesystem: Option<FilesystemRequest>,
+    recovery_filesystem_ready_marker: Option<(PathBuf, Vec<u8>)>,
     recovery_pause: Option<ContainerOperationRequest>,
     recovery_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
     recovery_resume: Option<ContainerOperationRequest>,
@@ -768,6 +774,7 @@ struct QualificationHvfDriver {
     rehydrated_close_stdin: AtomicBool,
     rehydrated_resize: AtomicBool,
     rehydrated_file: AtomicBool,
+    rehydrated_filesystem: AtomicBool,
     rehydrated_paused_record: AtomicBool,
     rehydrated_resumed_record: AtomicBool,
     rehydrated_update: AtomicBool,
@@ -785,6 +792,7 @@ struct QualificationHvfDriver {
     close_stdin_identity: StdMutex<Option<DriverCloseStdinRequest>>,
     resize_identity: StdMutex<Option<DriverResizeRequest>>,
     file_identity: StdMutex<Option<FileRequest>>,
+    filesystem_identity: StdMutex<Option<FilesystemRequest>>,
     pause_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     resume_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     processes_identity: StdMutex<Option<ContainerTarget>>,
@@ -802,6 +810,7 @@ struct QualificationHvfDriver {
     close_stdin_calls: AtomicU32,
     resize_calls: AtomicU32,
     file_calls: AtomicU32,
+    filesystem_calls: AtomicU32,
     pause_calls: AtomicU32,
     resume_calls: AtomicU32,
     processes_calls: AtomicU32,
@@ -1012,6 +1021,28 @@ impl QualificationHvfDriver {
         driver
     }
 
+    fn with_filesystem_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_filesystem: Option<FilesystemRequest>,
+        recovery_filesystem_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            None,
+        );
+        driver.recovery_filesystem = recovery_filesystem;
+        driver.recovery_filesystem_ready_marker = recovery_filesystem_ready_marker;
+        driver
+    }
+
     fn with_pause_recovery(
         session: Arc<UtilityVmSession>,
         vm_rootfs: PathBuf,
@@ -1136,6 +1167,8 @@ impl QualificationHvfDriver {
             recovery_resize_ready_marker: None,
             recovery_file: None,
             recovery_file_ready_marker: None,
+            recovery_filesystem: None,
+            recovery_filesystem_ready_marker: None,
             recovery_pause: None,
             recovery_pause_ready_marker: None,
             recovery_resume: None,
@@ -1152,6 +1185,7 @@ impl QualificationHvfDriver {
             rehydrated_close_stdin: AtomicBool::new(false),
             rehydrated_resize: AtomicBool::new(false),
             rehydrated_file: AtomicBool::new(false),
+            rehydrated_filesystem: AtomicBool::new(false),
             rehydrated_paused_record: AtomicBool::new(false),
             rehydrated_resumed_record: AtomicBool::new(false),
             rehydrated_update: AtomicBool::new(false),
@@ -1169,6 +1203,7 @@ impl QualificationHvfDriver {
             close_stdin_identity: StdMutex::new(None),
             resize_identity: StdMutex::new(None),
             file_identity: StdMutex::new(None),
+            filesystem_identity: StdMutex::new(None),
             pause_identity: StdMutex::new(None),
             resume_identity: StdMutex::new(None),
             processes_identity: StdMutex::new(None),
@@ -1186,6 +1221,7 @@ impl QualificationHvfDriver {
             close_stdin_calls: AtomicU32::new(0),
             resize_calls: AtomicU32::new(0),
             file_calls: AtomicU32::new(0),
+            filesystem_calls: AtomicU32::new(0),
             pause_calls: AtomicU32::new(0),
             resume_calls: AtomicU32::new(0),
             processes_calls: AtomicU32::new(0),
@@ -1233,6 +1269,10 @@ impl QualificationHvfDriver {
 
     fn rehydrated_file(&self) -> bool {
         self.rehydrated_file.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_filesystem(&self) -> bool {
+        self.rehydrated_filesystem.load(Ordering::SeqCst)
     }
 
     fn rehydrated_paused_record(&self) -> bool {
@@ -1303,6 +1343,10 @@ impl QualificationHvfDriver {
 
     fn file_calls(&self) -> u32 {
         self.file_calls.load(Ordering::SeqCst)
+    }
+
+    fn filesystem_calls(&self) -> u32 {
+        self.filesystem_calls.load(Ordering::SeqCst)
     }
 
     fn pause_calls(&self) -> u32 {
@@ -1434,6 +1478,14 @@ impl QualificationHvfDriver {
             .map_err(|_| "qualification HVF file-identity lock was poisoned".to_string())?
             .clone()
             .ok_or_else(|| "qualification HVF driver recorded no File dispatch".to_string())
+    }
+
+    fn filesystem_identity(&self) -> std::result::Result<FilesystemRequest, String> {
+        self.filesystem_identity
+            .lock()
+            .map_err(|_| "qualification HVF filesystem-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no Filesystem dispatch".to_string())
     }
 
     fn pause_identity(&self) -> std::result::Result<(OperationId, ContainerTarget), String> {
@@ -1779,6 +1831,27 @@ impl QualificationHvfDriver {
             .for_operation("recover-qualification-hvf"));
         }
         Ok(FileRequest {
+            target: ContainerTarget::exact(request.target.id.clone(), record.generation),
+            ..request.clone()
+        })
+    }
+
+    fn recovery_filesystem_request(&self, record: &ContainerRecord) -> Result<FilesystemRequest> {
+        let request = self.recovery_filesystem.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained Filesystem request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        if request.target.id != self.recovery_create.id || request.context.is_none() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery Filesystem request differs from the durable container",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(FilesystemRequest {
             target: ContainerTarget::exact(request.target.id.clone(), record.generation),
             ..request.clone()
         })
@@ -2138,6 +2211,23 @@ impl QualificationHvfDriver {
         self.client.file(request).await
     }
 
+    async fn dispatch_filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        {
+            let mut retained = self.filesystem_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF filesystem-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-filesystem")
+            })?;
+            if retained.is_none() {
+                *retained = Some(request.clone());
+            }
+        }
+        self.filesystem_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.filesystem(request).await
+    }
+
     async fn dispatch_pause(
         &self,
         request: DriverContainerOperationRequest,
@@ -2474,6 +2564,43 @@ impl RuntimeDriver for QualificationHvfDriver {
                     self.rehydrated_file.store(true, Ordering::SeqCst);
                     return DriverRecovery::recreated_running(running);
                 }
+                if self.recovery_filesystem.is_some() {
+                    let (marker, expected) = self
+                        .recovery_filesystem_ready_marker
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorCode::FailedPrecondition,
+                                "qualification HVF Filesystem recovery has no init readiness marker",
+                            )
+                            .for_operation("recover-qualification-hvf")
+                        })?;
+                    exec::support::wait_for_exact_marker(
+                        marker,
+                        expected,
+                        "replacement Filesystem init readiness",
+                    )
+                    .await
+                    .map_err(|reason| {
+                        Error::new(ErrorCode::FailedPrecondition, reason)
+                            .for_operation("recover-qualification-hvf")
+                    })?;
+                    let request = self.recovery_filesystem_request(record)?;
+                    let expected_target = request.target.clone();
+                    let response = self.dispatch_filesystem(request).await?;
+                    if response.target != expected_target
+                        || response.entry.is_none()
+                        || !response.entries.is_empty()
+                    {
+                        return Err(Error::new(
+                            ErrorCode::Conflict,
+                            "replacement Guest rebuilt Filesystem with an invalid mkdir response",
+                        )
+                        .for_operation("recover-qualification-hvf"));
+                    }
+                    self.rehydrated_filesystem.store(true, Ordering::SeqCst);
+                    return DriverRecovery::recreated_running(running);
+                }
                 if self.recovery_update.is_some() {
                     let (marker, expected) =
                         self.recovery_update_ready_marker.as_ref().ok_or_else(|| {
@@ -2775,6 +2902,10 @@ impl RuntimeDriver for QualificationHvfDriver {
 
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
         self.dispatch_file(request).await
+    }
+
+    async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse> {
+        self.dispatch_filesystem(request).await
     }
 
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {

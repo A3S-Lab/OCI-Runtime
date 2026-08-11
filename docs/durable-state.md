@@ -259,13 +259,12 @@ without fabricated exit evidence.
 The remaining persistence gates are startup-wide orphan scanning,
 descriptor-relative path operations, real-host qualification of restart-stable
 WHPX exit evidence (or qualified reattachment where another driver promises
-it), and carrying all 180 host/agent fault pairs through a real utility VM and
-host-service reopen below the `RuntimeDriver` boundary. The portable matrix
-already reopens the durable host around a new authenticated connection and
-driver at all nine request/response stages for create, state, start, kill,
-delete, wait, exec, signal-process, wait-process, pause, resume, processes,
-update, stats, read-output, write-stdin, close-stdin, resize, file, and
-filesystem, retaining all 180 operation-stage pairs. Durably journaled host
+it), and equivalent real-driver replacement evidence outside HVF. The
+portable matrix already reopens the durable host around a new authenticated
+connection and driver at all nine request/response stages for create, state,
+start, kill, delete, wait, exec, signal-process, wait-process, pause, resume,
+processes, update, stats, read-output, write-stdin, close-stdin, resize, file,
+and filesystem, retaining all 180 operation-stage pairs. Durably journaled host
 mutations distinguish pre-dispatch execution, post-dispatch guest replay, and
 completed durable-host replay while preserving the same generation and one
 effect. Exec additionally preserves its exact process ID, guest PID, and
@@ -532,4 +531,15 @@ rebuild the upload and its Guest journal in the fresh session filesystem before
 Host open. The API retry then receives the cached Guest response without a
 second upload effect. Exact binary bytes, changed content, stale generations,
 explicit removal, and owner cleanup passed all nine Apple Silicon stages in 18
-fresh VMs on August 11, 2026. Filesystem is the final real replacement matrix.
+fresh VMs on August 11, 2026.
+
+Real Filesystem recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v19`. MakeDir remains outside the
+Host journal, so both the first retry and later replay dispatch through the
+replacement driver. A delivered first response causes driver recovery to
+rebuild the directory and its Guest journal in the fresh session filesystem
+before Host open. The API retry then receives the cached Guest response without
+a second mkdir effect. Exact directory metadata, replacement Stat, changed
+paths, stale generations, explicit Remove, and owner cleanup passed all nine
+Apple Silicon stages in 18 fresh VMs on August 11, 2026. This completes all 180
+real-HVF operation-stage paths across the 20 protocol-v9 operations.
