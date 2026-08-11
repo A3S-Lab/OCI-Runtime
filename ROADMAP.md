@@ -1235,7 +1235,7 @@ leak. Only then may KVM become `experimental`.
   - [x] Enforce or explicitly reject supplementary credentials, scheduler,
     I/O priority, CPU affinity, and unsupported rootless ID-mapping shapes
     before executor mutation.
-  - [ ] Advertise and enforce the exact supported LSM set, with fail-closed
+  - [x] Advertise and enforce the exact supported LSM set, with fail-closed
     behavior and positive and negative evidence for every reported module.
   - [x] Extend seccomp classification and enforcement to every advertised
     architecture and notification mode; reject every other requested action,

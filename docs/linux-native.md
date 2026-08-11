@@ -557,8 +557,8 @@ following pass:
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
 - remaining mount and credential controls, broader cgroup v2 policies and
-  device-access BPF, multi-architecture/notification seccomp, and LSM
-  enforcement;
+  device-access BPF, multi-architecture/notification seccomp, and broader
+  sysctl enforcement;
 - live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
 - broader Hook rollback/recovery/security-negative and adversarial soak beyond

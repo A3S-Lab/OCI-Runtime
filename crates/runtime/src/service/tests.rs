@@ -1474,6 +1474,10 @@ async fn reports_only_operations_that_are_currently_implemented() {
     let cgroup = linux.cgroup().as_ref().expect("cgroup feature report");
     assert_eq!(*cgroup.v1(), Some(false));
     assert_eq!(*cgroup.v2(), Some(true));
+    let apparmor = linux.apparmor().as_ref().expect("apparmor feature report");
+    assert_eq!(*apparmor.enabled(), Some(false));
+    let selinux = linux.selinux().as_ref().expect("selinux feature report");
+    assert_eq!(*selinux.enabled(), Some(false));
     let seccomp = linux.seccomp().as_ref().expect("seccomp feature report");
     assert_eq!(*seccomp.enabled(), Some(true));
     assert_eq!(
