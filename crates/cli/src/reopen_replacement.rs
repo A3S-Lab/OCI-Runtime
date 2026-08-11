@@ -35,6 +35,7 @@ enum OperationArg {
     Pause,
     Processes,
     ReadOutput,
+    Resize,
     Resume,
     SignalProcess,
     State,
@@ -180,6 +181,19 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
         }
         OperationArg::ReadOutput => {
             let report = a3s_oci_runtime::oci_vm_read_output_reopen_replacement_at(
+                &arguments.shim,
+                &arguments.vm_rootfs,
+                &arguments.bundle,
+                &arguments.console_dir,
+                stage,
+            )
+            .await;
+            let succeeded = report.is_success();
+            super::write_json(&report)?;
+            succeeded
+        }
+        OperationArg::Resize => {
+            let report = a3s_oci_runtime::oci_vm_resize_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
                 &arguments.bundle,

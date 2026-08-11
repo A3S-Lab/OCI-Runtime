@@ -10,6 +10,7 @@ signal_process_marker="$bundle_dir/rootfs/.a3s-oci-signal-process-reopen-smoke"
 read_output_marker="$bundle_dir/rootfs/.a3s-oci-read-output-reopen-smoke"
 write_stdin_marker="$bundle_dir/rootfs/.a3s-oci-write-stdin-reopen-smoke"
 close_stdin_marker="$bundle_dir/rootfs/.a3s-oci-close-stdin-reopen-smoke"
+resize_marker="$bundle_dir/rootfs/.a3s-oci-resize-reopen-smoke"
 console_root="$RUNNER_TEMP/a3s-oci-reopen-replacement"
 support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
 mkdir -p \
@@ -21,6 +22,7 @@ mkdir -p \
   "$console_root/read-output" \
   "$console_root/write-stdin" \
   "$console_root/close-stdin" \
+  "$console_root/resize" \
   "$console_root/resume" \
   "$console_root/stats" \
   "$console_root/update" \
@@ -71,6 +73,7 @@ assert_cleanup_baseline() {
   test ! -e "$read_output_marker"
   test ! -e "$write_stdin_marker"
   test ! -e "$close_stdin_marker"
+  test ! -e "$resize_marker"
   test -z "$(find "$stage_console_dir" -maxdepth 1 -name '*-state' -print)"
 }
 
@@ -80,6 +83,7 @@ source "$(dirname "$0")/macos-reopen-replacement-processes.sh"
 source "$(dirname "$0")/macos-reopen-replacement-read-output.sh"
 source "$(dirname "$0")/macos-reopen-replacement-write-stdin.sh"
 source "$(dirname "$0")/macos-reopen-replacement-close-stdin.sh"
+source "$(dirname "$0")/macos-reopen-replacement-resize.sh"
 source "$(dirname "$0")/macos-reopen-replacement-resume.sh"
 source "$(dirname "$0")/macos-reopen-replacement-update.sh"
 source "$(dirname "$0")/macos-reopen-replacement-stats.sh"
@@ -963,4 +967,7 @@ for fault_stage in "${stages[@]}"; do
 done
 for fault_stage in "${stages[@]}"; do
   run_close_stdin_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_resize_stage "$fault_stage"
 done

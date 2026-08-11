@@ -6,7 +6,7 @@ use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{
     ContainerId, ContainerStats, DeleteMode, ErrorCode, ExitStatus, Generation, OperationId,
-    OutputChunk, ProcessId, ProcessRecord,
+    OutputChunk, ProcessId, ProcessRecord, TerminalSize,
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +68,10 @@ pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_WRITE_STDIN_SCHEMA_VERSION: &str =
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_CLOSE_STDIN_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v16";
 
+/// Resize schema with committed terminal dimensions replayed in the replacement Exec.
+pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_RESIZE_SCHEMA_VERSION: &str =
+    "a3s.oci.oci-vm-operation-reopen-replacement.v17";
+
 /// Start schema retained for compatibility with existing evidence.
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_START_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v2";
@@ -91,8 +95,9 @@ const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-faul
 /// resource replay with replacement Stats evidence, and version 13 adds a
 /// fresh-owner `stats` query after committed Update reconstruction, version 14
 /// adds rebuilt captured-output evidence, version 15 adds committed stdin-write
-/// replay, and version 16 adds committed stdin-close replay. Earlier operations
-/// continue to emit their compatible schema.
+/// replay, version 16 adds committed stdin-close replay, and version 17 adds
+/// committed terminal-resize replay. Earlier operations continue to emit their
+/// compatible schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmOperationReopenReplacementReport {
     /// Version of this JSON-compatible schema.
@@ -144,6 +149,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Exact bytes bound to a WriteStdin qualification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub write_stdin_data: Option<Vec<u8>>,
+    /// Exact positive terminal dimensions bound to a Resize qualification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resize_size: Option<TerminalSize>,
     /// Inclusive captured-output cursor used by a ReadOutput qualification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_output_after_sequence: Option<u64>,
@@ -260,6 +268,12 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether the CloseStdin journal had reached SucceededEmpty before reopen.
     #[serde(default)]
     pub close_stdin_journal_succeeded_before_reopen: bool,
+    /// Whether the Resize journal remained prepared before Host reopen.
+    #[serde(default)]
+    pub resize_journal_prepared_before_reopen: bool,
+    /// Whether the Resize journal had reached SucceededEmpty before reopen.
+    #[serde(default)]
+    pub resize_journal_succeeded_before_reopen: bool,
     /// Whether the Pause journal remained prepared before Host reopen.
     #[serde(default)]
     pub pause_journal_prepared_before_reopen: bool,
@@ -328,6 +342,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether recovery replayed a committed stdin close into the rebuilt Exec.
     #[serde(default)]
     pub replacement_rehydrated_close_stdin: bool,
+    /// Whether recovery replayed committed terminal dimensions into the rebuilt Exec.
+    #[serde(default)]
+    pub replacement_rehydrated_resize: bool,
     /// Whether recovery reapplied an already-committed Pause to the rebuilt init.
     #[serde(default)]
     pub replacement_rehydrated_paused_record: bool,
@@ -447,6 +464,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether replacement dispatch reused the complete first-owner CloseStdin request.
     #[serde(default)]
     pub close_stdin_request_identity_reused: bool,
+    /// Whether replacement dispatch reused the complete first-owner Resize request.
+    #[serde(default)]
+    pub resize_request_identity_reused: bool,
     /// Whether replacement dispatch reused the exact first-owner Pause request.
     #[serde(default)]
     pub pause_request_identity_reused: bool,
@@ -534,6 +554,15 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether the replacement Exec observed EOF and wrote the exact marker.
     #[serde(default)]
     pub replacement_close_marker_verified: bool,
+    /// Whether first-owner terminal-size marker state matched the transport stage.
+    #[serde(default)]
+    pub first_resize_marker_verified: bool,
+    /// Whether the first terminal-size marker was removed before replacement launch.
+    #[serde(default)]
+    pub resize_marker_reset_before_replacement: bool,
+    /// Whether the replacement Exec observed and recorded the exact dimensions.
+    #[serde(default)]
+    pub replacement_resize_marker_verified: bool,
     /// Whether force delete completed through the replacement VM owner.
     pub force_delete_completed: bool,
     /// Whether stopped-only delete completed through the replacement VM owner.
@@ -558,6 +587,9 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether the independent CloseStdin effect marker remained absent after cleanup.
     #[serde(default)]
     pub close_marker_absent_after_cleanup: bool,
+    /// Whether the independent Resize effect marker remained absent after cleanup.
+    #[serde(default)]
+    pub resize_marker_absent_after_cleanup: bool,
     /// Whether the first guest executor returned to its original runtime inventory.
     pub first_guest_runtime_clean: bool,
     /// Whether the replacement guest executor returned to the same inventory.
@@ -599,6 +631,7 @@ impl OciVmOperationReopenReplacementReport {
             exec_terminal: None,
             signal_process_signal: None,
             write_stdin_data: None,
+            resize_size: None,
             read_output_after_sequence: None,
             read_output_max_bytes: None,
             read_output_wait_timeout_ms: None,
@@ -640,6 +673,8 @@ impl OciVmOperationReopenReplacementReport {
             write_stdin_journal_succeeded_before_reopen: false,
             close_stdin_journal_prepared_before_reopen: false,
             close_stdin_journal_succeeded_before_reopen: false,
+            resize_journal_prepared_before_reopen: false,
+            resize_journal_succeeded_before_reopen: false,
             pause_journal_prepared_before_reopen: false,
             pause_journal_succeeded_before_reopen: false,
             resume_journal_prepared_before_reopen: false,
@@ -664,6 +699,7 @@ impl OciVmOperationReopenReplacementReport {
             replacement_rehydrated_signal_process: false,
             replacement_rehydrated_write_stdin: false,
             replacement_rehydrated_close_stdin: false,
+            replacement_rehydrated_resize: false,
             replacement_rehydrated_paused_record: false,
             replacement_rehydrated_resumed_record: false,
             replacement_rehydrated_update: false,
@@ -705,6 +741,7 @@ impl OciVmOperationReopenReplacementReport {
             signal_process_request_identity_reused: false,
             write_stdin_request_identity_reused: false,
             close_stdin_request_identity_reused: false,
+            resize_request_identity_reused: false,
             pause_request_identity_reused: false,
             resume_request_identity_reused: false,
             update_request_identity_reused: false,
@@ -734,6 +771,9 @@ impl OciVmOperationReopenReplacementReport {
             first_close_marker_verified: false,
             close_marker_reset_before_replacement: false,
             replacement_close_marker_verified: false,
+            first_resize_marker_verified: false,
+            resize_marker_reset_before_replacement: false,
+            replacement_resize_marker_verified: false,
             force_delete_completed: false,
             stopped_only_delete_completed: false,
             durable_records_empty: false,
@@ -743,6 +783,7 @@ impl OciVmOperationReopenReplacementReport {
             signal_marker_absent_after_cleanup: false,
             write_marker_absent_after_cleanup: false,
             close_marker_absent_after_cleanup: false,
+            resize_marker_absent_after_cleanup: false,
             first_guest_runtime_clean: false,
             replacement_guest_runtime_clean: false,
             owners_distinct: false,
@@ -787,6 +828,7 @@ impl OciVmOperationReopenReplacementReport {
             AgentOperation::Pause => self.pause_evidence_succeeded(),
             AgentOperation::Processes => self.processes_evidence_succeeded(),
             AgentOperation::ReadOutput => self.read_output_evidence_succeeded(),
+            AgentOperation::Resize => self.resize_evidence_succeeded(),
             AgentOperation::Resume => self.resume_evidence_succeeded(),
             AgentOperation::Stats => self.stats_evidence_succeeded(),
             AgentOperation::SignalProcess => self.signal_process_evidence_succeeded(),
@@ -897,6 +939,7 @@ mod kill;
 mod pause;
 mod processes;
 mod read_output;
+mod resize;
 mod resume;
 mod signal_process;
 mod start;

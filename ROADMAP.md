@@ -922,12 +922,34 @@ enforce it. No property is silently ignored.
     force delete, and both owner cleanup inventories are required. The
     August 11, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs
     under `a3s.oci.oci-vm-operation-reopen-replacement.v15`.
+  - [x] Carry all nine Host/Guest `close-stdin` stages through durable
+    service reopen and actual HVF owner replacement. Recovery always rebuilds
+    the exact pipe-backed Exec. The first eight stages leave the Host journal
+    resumable and dispatch the close once after reopen; when the first owner
+    committed the response, recovery closes the fresh Exec input before Host
+    open completes and the API retry returns from the durable journal without
+    another driver call. Exact EOF markers, request identity, changed-target
+    rejection, stale generations, PID rebinding, force delete, and both owner
+    cleanup inventories are required. The August 11, 2026 Apple Silicon matrix
+    passed all nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v16`.
+  - [x] Carry all nine Host/Guest `resize` stages through durable service
+    reopen and actual HVF owner replacement. Recovery always rebuilds the
+    exact terminal-backed Exec. The first eight stages leave the Host journal
+    resumable and dispatch the resize once after reopen; when the first owner
+    committed the response, recovery restores `120x40` in the fresh terminal
+    before Host open completes and the API retry returns without another
+    driver call. Exact SIGWINCH effect markers, request identity,
+    changed-dimension rejection, stale generations, PID rebinding, force
+    delete, and both owner cleanup inventories are required. The August 11,
+    2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v17`.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 144 real Create/State/Start/Kill/Delete/Wait/Exec/
+    stages, and all 162 real Create/State/Start/Kill/Delete/Wait/Exec/
     SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/
-    WriteStdin replacement paths do not satisfy the complete 20-operation
-    matrix gate. CloseStdin, Resize, File, and Filesystem remain.
+    WriteStdin/CloseStdin/Resize replacement paths do not satisfy the complete
+    20-operation matrix gate. File and Filesystem remain.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

@@ -956,7 +956,25 @@ recovery replays those exact bytes into the fresh Exec before Host open
 completes, and the API retry is served without a second driver call. Exact
 effect-marker bytes, request identity, changed-payload rejection, stale
 generation fencing, PID rebinding, and cleanup all passed on Apple Silicon.
-The remaining 4 operations still need the same replacement treatment.
+
+CloseStdin now uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v16`. Recovery rebuilds the
+pipe-backed Exec for every stage. Prepared Host journals dispatch the close
+once after reopen. If the first owner already committed the close response,
+recovery closes the replacement Exec input before Host open completes and the
+API retry is served without a second driver call. Exact EOF-marker bytes,
+request identity, changed-target rejection, stale generation fencing, PID
+rebinding, and cleanup passed all nine stages on Apple Silicon.
+
+Resize now uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v17`. Recovery rebuilds the
+terminal-backed Exec for every stage. Prepared Host journals dispatch one
+`120x40` resize after reopen. If the first owner committed its response,
+recovery restores the dimensions before Host open completes and the API retry
+does not call the driver again. Exact SIGWINCH marker bytes, changed-size
+rejection, stale generation fencing, fresh-owner PID rebinding, and cleanup
+passed all nine stages on Apple Silicon. File and Filesystem are the two
+remaining operation matrices.
 
 ## Remaining workload gates
 

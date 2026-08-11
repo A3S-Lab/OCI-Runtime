@@ -504,5 +504,23 @@ the dead VM, driver recovery writes the committed bytes into the rebuilt Exec
 before Host service open completes. The API retry then returns from the
 durable journal without another driver dispatch. Changed Host and Guest
 payloads and stale generations fail closed. All nine Apple Silicon stages
-passed in 18 fresh VMs on August 11, 2026. The remaining 4 operations belong to
-the real replacement matrix.
+passed in 18 fresh VMs on August 11, 2026.
+
+Real CloseStdin recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v16`. Recovery rebuilds the same
+pipe-backed Exec. Prepared Host journals close the replacement input once on
+API retry. A fully delivered first response leaves `SucceededEmpty`, so driver
+recovery closes the fresh Exec input before Host service open completes and
+the retry returns without another driver dispatch. Changed process targets and
+stale generations fail closed. All nine Apple Silicon stages passed in 18
+fresh VMs on August 11, 2026.
+
+Real Resize recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v17`. Recovery rebuilds the same
+terminal-backed Exec. Prepared Host journals resize it once on API retry. A
+fully delivered first response leaves `SucceededEmpty`, so driver recovery
+restores `120x40` before Host service open completes and the retry returns
+without another driver dispatch. Exact SIGWINCH effect bytes, changed sizes,
+stale generations, and fresh-owner PID rebinding fail or pass as required. All
+nine Apple Silicon stages passed in 18 fresh VMs on August 11, 2026. File and
+Filesystem are the two remaining real replacement matrices.

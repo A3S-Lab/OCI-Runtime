@@ -18,8 +18,8 @@ use a3s_oci_sdk::{
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
     ExecRequest, ExitStatus, IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle,
     OciRuntimeService, OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord,
-    ProcessTarget, Result, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest,
-    UpdateRequest, WriteStdinRequest,
+    ProcessTarget, ResizeRequest, Result, RuntimeOperation, SignalProcessRequest, StartRequest,
+    StateRequest, UpdateRequest, WriteStdinRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -33,9 +33,9 @@ use crate::agent_session::UtilityVmSession;
 use crate::driver::{
     DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
     DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
-    DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
-    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
-    RuntimeDriver,
+    DriverReadOutputRequest, DriverResizeRequest, DriverSignalProcessRequest, DriverStartRequest,
+    DriverState, DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest,
+    DriverWriteStdinRequest, RuntimeDriver,
 };
 use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::marker::{exact_marker_state, ExactMarkerState};
@@ -46,7 +46,7 @@ const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
 const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const REPLACEMENT_MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 const MARKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 17] = [
+const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 18] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -64,6 +64,7 @@ const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 17] = [
     RuntimeOperation::ReadOutput,
     RuntimeOperation::WriteStdin,
     RuntimeOperation::CloseStdin,
+    RuntimeOperation::Resize,
 ];
 
 mod close_stdin;
@@ -81,6 +82,8 @@ mod processes;
 pub(super) use processes::run as run_processes;
 mod read_output;
 pub(super) use read_output::run as run_read_output;
+mod resize;
+pub(super) use resize::run as run_resize;
 mod resume;
 pub(super) use resume::run as run_resume;
 mod signal_process;
@@ -741,6 +744,8 @@ struct QualificationHvfDriver {
     recovery_write_ready_marker: Option<(PathBuf, Vec<u8>)>,
     recovery_close_stdin: Option<CloseStdinRequest>,
     recovery_close_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_resize: Option<ResizeRequest>,
+    recovery_resize_ready_marker: Option<(PathBuf, Vec<u8>)>,
     recovery_pause: Option<ContainerOperationRequest>,
     recovery_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
     recovery_resume: Option<ContainerOperationRequest>,
@@ -756,6 +761,7 @@ struct QualificationHvfDriver {
     rehydrated_signal_process: AtomicBool,
     rehydrated_write_stdin: AtomicBool,
     rehydrated_close_stdin: AtomicBool,
+    rehydrated_resize: AtomicBool,
     rehydrated_paused_record: AtomicBool,
     rehydrated_resumed_record: AtomicBool,
     rehydrated_update: AtomicBool,
@@ -771,6 +777,7 @@ struct QualificationHvfDriver {
     signal_process_identity: StdMutex<Option<DriverSignalProcessRequest>>,
     write_stdin_identity: StdMutex<Option<DriverWriteStdinRequest>>,
     close_stdin_identity: StdMutex<Option<DriverCloseStdinRequest>>,
+    resize_identity: StdMutex<Option<DriverResizeRequest>>,
     pause_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     resume_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
     processes_identity: StdMutex<Option<ContainerTarget>>,
@@ -786,6 +793,7 @@ struct QualificationHvfDriver {
     signal_process_calls: AtomicU32,
     write_stdin_calls: AtomicU32,
     close_stdin_calls: AtomicU32,
+    resize_calls: AtomicU32,
     pause_calls: AtomicU32,
     resume_calls: AtomicU32,
     processes_calls: AtomicU32,
@@ -951,6 +959,29 @@ impl QualificationHvfDriver {
         driver
     }
 
+    fn with_resize_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_exec: ExecRequest,
+        recovery_resize: Option<ResizeRequest>,
+        recovery_resize_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            Some(recovery_exec),
+        );
+        driver.recovery_resize = recovery_resize;
+        driver.recovery_resize_ready_marker = recovery_resize_ready_marker;
+        driver
+    }
+
     fn with_pause_recovery(
         session: Arc<UtilityVmSession>,
         vm_rootfs: PathBuf,
@@ -1071,6 +1102,8 @@ impl QualificationHvfDriver {
             recovery_write_ready_marker: None,
             recovery_close_stdin: None,
             recovery_close_ready_marker: None,
+            recovery_resize: None,
+            recovery_resize_ready_marker: None,
             recovery_pause: None,
             recovery_pause_ready_marker: None,
             recovery_resume: None,
@@ -1085,6 +1118,7 @@ impl QualificationHvfDriver {
             rehydrated_signal_process: AtomicBool::new(false),
             rehydrated_write_stdin: AtomicBool::new(false),
             rehydrated_close_stdin: AtomicBool::new(false),
+            rehydrated_resize: AtomicBool::new(false),
             rehydrated_paused_record: AtomicBool::new(false),
             rehydrated_resumed_record: AtomicBool::new(false),
             rehydrated_update: AtomicBool::new(false),
@@ -1100,6 +1134,7 @@ impl QualificationHvfDriver {
             signal_process_identity: StdMutex::new(None),
             write_stdin_identity: StdMutex::new(None),
             close_stdin_identity: StdMutex::new(None),
+            resize_identity: StdMutex::new(None),
             pause_identity: StdMutex::new(None),
             resume_identity: StdMutex::new(None),
             processes_identity: StdMutex::new(None),
@@ -1115,6 +1150,7 @@ impl QualificationHvfDriver {
             signal_process_calls: AtomicU32::new(0),
             write_stdin_calls: AtomicU32::new(0),
             close_stdin_calls: AtomicU32::new(0),
+            resize_calls: AtomicU32::new(0),
             pause_calls: AtomicU32::new(0),
             resume_calls: AtomicU32::new(0),
             processes_calls: AtomicU32::new(0),
@@ -1154,6 +1190,10 @@ impl QualificationHvfDriver {
 
     fn rehydrated_close_stdin(&self) -> bool {
         self.rehydrated_close_stdin.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_resize(&self) -> bool {
+        self.rehydrated_resize.load(Ordering::SeqCst)
     }
 
     fn rehydrated_paused_record(&self) -> bool {
@@ -1216,6 +1256,10 @@ impl QualificationHvfDriver {
 
     fn close_stdin_calls(&self) -> u32 {
         self.close_stdin_calls.load(Ordering::SeqCst)
+    }
+
+    fn resize_calls(&self) -> u32 {
+        self.resize_calls.load(Ordering::SeqCst)
     }
 
     fn pause_calls(&self) -> u32 {
@@ -1331,6 +1375,14 @@ impl QualificationHvfDriver {
             .map_err(|_| "qualification HVF close-stdin-identity lock was poisoned".to_string())?
             .clone()
             .ok_or_else(|| "qualification HVF driver recorded no CloseStdin dispatch".to_string())
+    }
+
+    fn resize_identity(&self) -> std::result::Result<DriverResizeRequest, String> {
+        self.resize_identity
+            .lock()
+            .map_err(|_| "qualification HVF resize-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no Resize dispatch".to_string())
     }
 
     fn pause_identity(&self) -> std::result::Result<(OperationId, ContainerTarget), String> {
@@ -1616,6 +1668,47 @@ impl QualificationHvfDriver {
                 container: exact_container,
                 process_id: request.process.process_id.clone(),
             },
+        })
+    }
+
+    fn recovery_resize_request(&self, record: &ContainerRecord) -> Result<DriverResizeRequest> {
+        let request = self.recovery_resize.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained Resize request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .recovery_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "qualification HVF Resize recovery has no retained Exec request",
+                )
+                .for_operation("recover-qualification-hvf")
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.recovery_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery Resize target differs from the durable Exec process",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverResizeRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
+            size: request.size,
         })
     }
 
@@ -1929,6 +2022,31 @@ impl QualificationHvfDriver {
         }
         self.close_stdin_calls.fetch_add(1, Ordering::SeqCst);
         self.client.close_stdin(request).await
+    }
+
+    async fn dispatch_resize(&self, request: DriverResizeRequest) -> Result<()> {
+        {
+            let mut retained = self.resize_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF resize-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-resize")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed Resize request",
+                    )
+                    .for_operation("qualification-hvf-resize"));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.resize_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.resize(request).await
     }
 
     async fn dispatch_pause(
@@ -2417,6 +2535,29 @@ impl RuntimeDriver for QualificationHvfDriver {
                         self.dispatch_close_stdin(request).await?;
                         self.rehydrated_close_stdin.store(true, Ordering::SeqCst);
                     }
+                    if self.recovery_resize.is_some() {
+                        let (marker, expected) =
+                            self.recovery_resize_ready_marker.as_ref().ok_or_else(|| {
+                                Error::new(
+                                    ErrorCode::FailedPrecondition,
+                                    "qualification HVF Resize recovery has no Exec readiness marker",
+                                )
+                                .for_operation("recover-qualification-hvf")
+                            })?;
+                        exec::support::wait_for_exact_marker(
+                            marker,
+                            expected,
+                            "replacement resizable terminal Exec readiness",
+                        )
+                        .await
+                        .map_err(|reason| {
+                            Error::new(ErrorCode::FailedPrecondition, reason)
+                                .for_operation("recover-qualification-hvf")
+                        })?;
+                        let request = self.recovery_resize_request(record)?;
+                        self.dispatch_resize(request).await?;
+                        self.rehydrated_resize.store(true, Ordering::SeqCst);
+                    }
                     if self.recovery_exec_is_live {
                         return DriverRecovery::recreated_running_with_processes(
                             running,
@@ -2502,6 +2643,10 @@ impl RuntimeDriver for QualificationHvfDriver {
 
     async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
         self.dispatch_close_stdin(request).await
+    }
+
+    async fn resize(&self, request: DriverResizeRequest) -> Result<()> {
+        self.dispatch_resize(request).await
     }
 
     async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {

@@ -641,6 +641,32 @@ pub async fn oci_vm_close_stdin_reopen_replacement_at(
     }
 }
 
+/// Reissue one interrupted Resize through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact terminal-backed Exec. A resize that committed
+/// in the first owner is replayed during recovery before the durable Host
+/// journal serves the API retry; other stages dispatch once after reopen.
+#[must_use]
+pub async fn oci_vm_resize_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_resize_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_resize(HostPlatform::current(), stage)
+    }
+}
+
 /// Reissue one interrupted Resume through a replacement macOS HVF owner.
 ///
 /// Recovery always rebuilds Create, Start, and the setup Pause after the exact
