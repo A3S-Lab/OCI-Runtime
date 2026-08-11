@@ -1230,4 +1230,85 @@ mod rootless_device_tests {
             .message
             .contains("linux.devices or linux.resources.devices"));
     }
+
+    #[tokio::test]
+    async fn rejects_cgroup_delegation_while_rootless() {
+        let tempdir = TempDir::new().expect("temp dir");
+        let bundle_directory = tempdir.path().join("bundle");
+        fs::create_dir_all(&bundle_directory).expect("bundle dir");
+        let runtime_parent = tempdir.path().join("runtime-parent");
+        let runtime_root = runtime_parent.join("runtime-root");
+        fs::create_dir_all(&runtime_root).expect("runtime root");
+
+        let config = json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs", "readonly": false},
+            "process": {
+                "terminal": false,
+                "user": {"uid": 0, "gid": 0},
+                "args": ["/bin/sh", "-c", "printf ready"],
+                "env": ["PATH=/bin:/usr/bin"],
+                "cwd": "/",
+                "noNewPrivileges": true
+            },
+            "linux": {
+                "namespaces": [
+                    {"type": "user"},
+                    {"type": "mount"}
+                ],
+                "uidMappings": [
+                    {"containerID": 0, "hostID": 1000, "size": 1}
+                ],
+                "gidMappings": [
+                    {"containerID": 0, "hostID": 1001, "size": 1}
+                ],
+                "cgroupsPath": "a3s/rootless-cgroup"
+            }
+        });
+        let config = serde_json::to_string(&config).expect("encode rootless cgroup config");
+        let bundle = OciBundle::from_json(bundle_directory.clone(), config).expect("OCI bundle");
+        let request = AgentCreateRequest {
+            context: OperationContext::new(
+                OperationId::new("rootless-cgroup-create").expect("operation id"),
+            ),
+            target: ContainerTarget::exact(
+                ContainerId::new("rootless-cgroup").expect("container id"),
+                Generation(1),
+            ),
+            bundle: AgentBundle::new(
+                &bundle,
+                GuestPath::new(bundle_directory.to_string_lossy().into_owned())
+                    .expect("guest bundle directory"),
+            ),
+            io: ProcessIo {
+                stdin: IoMode::Null,
+                stdout: IoMode::Null,
+                stderr: IoMode::Null,
+                terminal_size: None,
+            },
+        };
+        let executor = LinuxExecutor {
+            capabilities: AgentCapabilities::handshake_only("test", "x86_64")
+                .expect("capabilities"),
+            init_executable: std::env::current_exe().expect("test executable"),
+            runtime_parent,
+            runtime_root,
+            owner_identity: None,
+            rootfs_scope: super::RootfsScope::BundleOnly,
+            user_mapping_runtime: namespace::UserMappingRuntime::Rootless {
+                effective_uid: 1000,
+                effective_gid: 1001,
+                newuidmap: PathBuf::from("/usr/bin/newuidmap"),
+                newgidmap: PathBuf::from("/usr/bin/newgidmap"),
+            },
+            state: Mutex::new(ExecutorState::default()),
+        };
+
+        let error = executor
+            .create_with_inherited_descriptors(request, InheritedDescriptorPlan::empty())
+            .await
+            .expect_err("rootless cgroup delegation must fail closed");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains("rootless cgroup-v2 delegation"));
+    }
 }
