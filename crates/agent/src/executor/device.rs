@@ -729,6 +729,7 @@ fn device_error(code: ErrorCode, message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::oci_spec::runtime::Linux;
+    use a3s_oci_sdk::ErrorCode;
 
     use super::DevicePlan;
     use crate::executor::mount;
@@ -768,5 +769,34 @@ mod tests {
         let plan = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
         assert!(plan.requires_setup());
         assert_eq!(plan.len(), 0);
+    }
+
+    #[test]
+    fn rejects_device_allowlist_rules_that_do_not_match_the_created_nodes() {
+        let mut config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../fixtures/a3s-box/config.json"))
+                .expect("decode fixture");
+        let linux: Linux =
+            serde_json::from_value(config["linux"].clone()).expect("decode Linux config");
+        let namespaces =
+            NamespacePlan::from_linux(Some(&linux), 0, 0, &[]).expect("namespace plan");
+        let mounts = mount::plan_all(
+            serde_json::from_value::<Vec<a3s_oci_sdk::oci_spec::runtime::Mount>>(
+                config["mounts"].clone(),
+            )
+            .expect("decode mounts")
+            .as_slice()
+            .into(),
+            &namespaces,
+        )
+        .expect("mount plan");
+
+        config["linux"]["resources"]["devices"][2]["minor"] = serde_json::json!(6);
+        let mutated_linux: Linux =
+            serde_json::from_value(config["linux"].clone()).expect("decode mutated Linux config");
+        let error = DevicePlan::from_linux(Some(&mutated_linux), &mounts)
+            .expect_err("mismatched allowlist must fail");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains("matching created device"));
     }
 }
