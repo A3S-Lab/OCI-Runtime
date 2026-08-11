@@ -405,6 +405,12 @@ impl LinuxExecutor {
                     "rootless cgroup-v2 delegation is not implemented; omit linux.cgroupsPath",
                 ));
             }
+            if plan.devices.requires_setup() {
+                return Err(executor_error(
+                    ErrorCode::Unsupported,
+                    "rootless native execution does not yet support linux.devices or linux.resources.devices; omit the OCI device profile",
+                ));
+            }
         }
         let hook_state = HookStateTemplate::new(
             plan.oci_version.clone(),
@@ -1116,5 +1122,112 @@ mod kill_tests {
         assert!(!confirms_terminal_kill(
             Signal::new(libc::SIGTERM).expect("SIGTERM")
         ));
+    }
+}
+
+#[cfg(test)]
+mod rootless_device_tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestPath};
+    use a3s_oci_sdk::OciBundle;
+    use a3s_oci_sdk::{
+        ContainerId, ContainerTarget, ErrorCode, Generation, IoMode, OperationContext, OperationId,
+        ProcessIo,
+    };
+    use serde_json::json;
+    use tempfile::TempDir;
+    use tokio::sync::Mutex;
+
+    use super::{
+        namespace, AgentCapabilities, ExecutorState, InheritedDescriptorPlan, LinuxExecutor,
+    };
+
+    #[tokio::test]
+    async fn rejects_device_setup_while_rootless() {
+        let tempdir = TempDir::new().expect("temp dir");
+        let bundle_directory = tempdir.path().join("bundle");
+        fs::create_dir_all(&bundle_directory).expect("bundle dir");
+        let runtime_parent = tempdir.path().join("runtime-parent");
+        let runtime_root = runtime_parent.join("runtime-root");
+        fs::create_dir_all(&runtime_root).expect("runtime root");
+
+        let config = json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs", "readonly": false},
+            "process": {
+                "terminal": false,
+                "user": {"uid": 0, "gid": 0},
+                "args": ["/bin/sh", "-c", "printf ready"],
+                "env": ["PATH=/bin:/usr/bin"],
+                "cwd": "/",
+                "noNewPrivileges": true
+            },
+            "linux": {
+                "namespaces": [
+                    {"type": "user"},
+                    {"type": "mount"}
+                ],
+                "uidMappings": [
+                    {"containerID": 0, "hostID": 1000, "size": 1}
+                ],
+                "gidMappings": [
+                    {"containerID": 0, "hostID": 1001, "size": 1}
+                ],
+                "resources": {
+                    "devices": [
+                        {"allow": false, "access": "rwm"}
+                    ]
+                }
+            }
+        });
+        let config = serde_json::to_string(&config).expect("encode rootless device config");
+        let bundle = OciBundle::from_json(bundle_directory.clone(), config).expect("OCI bundle");
+        let request = AgentCreateRequest {
+            context: OperationContext::new(
+                OperationId::new("rootless-device-create").expect("operation id"),
+            ),
+            target: ContainerTarget::exact(
+                ContainerId::new("rootless-device").expect("container id"),
+                Generation(1),
+            ),
+            bundle: AgentBundle::new(
+                &bundle,
+                GuestPath::new(bundle_directory.to_string_lossy().into_owned())
+                    .expect("guest bundle directory"),
+            ),
+            io: ProcessIo {
+                stdin: IoMode::Null,
+                stdout: IoMode::Null,
+                stderr: IoMode::Null,
+                terminal_size: None,
+            },
+        };
+        let executor = LinuxExecutor {
+            capabilities: AgentCapabilities::handshake_only("test", "x86_64")
+                .expect("capabilities"),
+            init_executable: std::env::current_exe().expect("test executable"),
+            runtime_parent,
+            runtime_root,
+            owner_identity: None,
+            rootfs_scope: super::RootfsScope::BundleOnly,
+            user_mapping_runtime: namespace::UserMappingRuntime::Rootless {
+                effective_uid: 1000,
+                effective_gid: 1001,
+                newuidmap: PathBuf::from("/usr/bin/newuidmap"),
+                newgidmap: PathBuf::from("/usr/bin/newgidmap"),
+            },
+            state: Mutex::new(ExecutorState::default()),
+        };
+
+        let error = executor
+            .create_with_inherited_descriptors(request, InheritedDescriptorPlan::empty())
+            .await
+            .expect_err("rootless device setup must fail closed");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error
+            .message
+            .contains("linux.devices or linux.resources.devices"));
     }
 }
