@@ -74,12 +74,18 @@ impl OciVmOperationReopenReplacementReport {
                 update != create && update != start && create != start
             });
         let update_resources_are_exact = {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            #[cfg(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(target_os = "macos", target_arch = "aarch64")
+            ))]
             {
                 crate::oci_smoke::utility_vm::lifecycle::resource_profile(HostPlatform::Macos)
                     .is_ok_and(|expected| self.update_resources.as_ref() == Some(&expected))
             }
-            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            #[cfg(not(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(target_os = "macos", target_arch = "aarch64")
+            )))]
             {
                 false
             }
@@ -88,12 +94,18 @@ impl OciVmOperationReopenReplacementReport {
             self.container_id.as_ref() == Some(&stats.target.id)
                 && stats.target.generation == self.generation_after_reopen
                 && {
-                    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                    #[cfg(any(
+                        all(target_os = "windows", target_arch = "x86_64"),
+                        all(target_os = "macos", target_arch = "aarch64")
+                    ))]
                     {
                         stats.memory.limit_bytes
                             == Some(crate::oci_smoke::utility_vm::lifecycle::UPDATED_MEMORY_LIMIT)
                     }
-                    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                    #[cfg(not(any(
+                        all(target_os = "windows", target_arch = "x86_64"),
+                        all(target_os = "macos", target_arch = "aarch64")
+                    )))]
                     {
                         false
                     }
