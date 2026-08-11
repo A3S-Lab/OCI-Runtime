@@ -738,13 +738,17 @@ fn stats_error(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
+    use a3s_oci_sdk::ErrorCode;
+
     use super::{
-        cgroup2_mountpoint, cgroup_event_value, install_control_workload_descriptors_from_pre_exec,
-        open_cgroup_procs, open_control_workload_membership,
+        cgroup2_mountpoint, cgroup_event_value, enable_controllers,
+        install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
+        open_control_workload_membership,
     };
 
     #[test]
@@ -837,5 +841,30 @@ mod tests {
         assert_eq!(cgroup_event_value(events, "missing"), None);
         assert_eq!(cgroup_event_value("frozen invalid\n", "frozen"), None);
         assert_eq!(cgroup_event_value("frozen\n", "frozen"), None);
+    }
+
+    #[test]
+    fn delegated_controllers_must_be_available_before_enablement() {
+        let directory = tempfile::tempdir().expect("temporary cgroup root");
+        std::fs::write(directory.path().join("cgroup.controllers"), "cpu memory")
+            .expect("controllers");
+        std::fs::write(directory.path().join("cgroup.subtree_control"), "")
+            .expect("subtree control");
+
+        let required = BTreeSet::from(["cpu", "memory"]);
+        enable_controllers(directory.path(), &required).expect("enable delegated controllers");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("cgroup.subtree_control"))
+                .expect("read subtree control"),
+            "+cpu +memory"
+        );
+
+        let missing = BTreeSet::from(["cpu", "pids"]);
+        let error = enable_controllers(directory.path(), &missing)
+            .expect_err("missing delegated controller must fail");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error
+            .message
+            .contains("delegated cgroup v2 controller `pids` is unavailable"));
     }
 }
