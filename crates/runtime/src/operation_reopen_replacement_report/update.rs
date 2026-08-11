@@ -73,14 +73,31 @@ impl OciVmOperationReopenReplacementReport {
             .is_some_and(|((update, create), start)| {
                 update != create && update != start && create != start
             });
-        let update_resources_are_exact =
-            crate::oci_smoke::utility_vm::lifecycle::resource_profile(HostPlatform::Macos)
-                .is_ok_and(|expected| self.update_resources.as_ref() == Some(&expected));
+        let update_resources_are_exact = {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                crate::oci_smoke::utility_vm::lifecycle::resource_profile(HostPlatform::Macos)
+                    .is_ok_and(|expected| self.update_resources.as_ref() == Some(&expected))
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            {
+                false
+            }
+        };
         let update_stats_are_bound = self.replacement_update_stats.as_ref().is_some_and(|stats| {
             self.container_id.as_ref() == Some(&stats.target.id)
                 && stats.target.generation == self.generation_after_reopen
-                && stats.memory.limit_bytes
-                    == Some(crate::oci_smoke::utility_vm::lifecycle::UPDATED_MEMORY_LIMIT)
+                && {
+                    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                    {
+                        stats.memory.limit_bytes
+                            == Some(crate::oci_smoke::utility_vm::lifecycle::UPDATED_MEMORY_LIMIT)
+                    }
+                    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                    {
+                        false
+                    }
+                }
                 && stats.timestamp_unix_ns > 0
                 && stats.cpu.usage_ns > 0
                 && stats.process_count >= 2
@@ -222,7 +239,13 @@ impl OciVmOperationReopenReplacementReport {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )
+))]
 mod tests {
     use a3s_oci_agent_protocol::{
         AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,

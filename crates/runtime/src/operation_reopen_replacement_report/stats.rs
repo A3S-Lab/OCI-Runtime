@@ -79,25 +79,51 @@ impl OciVmOperationReopenReplacementReport {
                     && create != update
                     && start != update
             });
-        let update_resources_are_exact =
-            crate::oci_smoke::utility_vm::lifecycle::resource_profile(HostPlatform::Macos)
-                .is_ok_and(|expected| self.update_resources.as_ref() == Some(&expected));
+        let update_resources_are_exact = {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                crate::oci_smoke::utility_vm::lifecycle::resource_profile(HostPlatform::Macos)
+                    .is_ok_and(|expected| self.update_resources.as_ref() == Some(&expected))
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            {
+                false
+            }
+        };
         let first_stats_are_bound = self.first_stats_snapshot.as_ref().is_some_and(|stats| {
             self.container_id.as_ref() == Some(&stats.target.id)
                 && stats.target.generation == self.generation_before_reopen
-                && crate::oci_smoke::utility_vm::lifecycle::resource_stats_snapshot_is_exact(
-                    stats,
-                    &stats.target,
-                )
+                && {
+                    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                    {
+                        crate::oci_smoke::utility_vm::lifecycle::resource_stats_snapshot_is_exact(
+                            stats,
+                            &stats.target,
+                        )
+                    }
+                    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                    {
+                        false
+                    }
+                }
         });
         let replacement_stats_are_bound = self.replacement_stats_snapshot.as_ref().is_some_and(
             |stats| {
                 self.container_id.as_ref() == Some(&stats.target.id)
                     && stats.target.generation == self.generation_after_reopen
-                    && crate::oci_smoke::utility_vm::lifecycle::resource_stats_snapshot_is_exact(
-                        stats,
-                        &stats.target,
-                    )
+                    && {
+                        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                        {
+                            crate::oci_smoke::utility_vm::lifecycle::resource_stats_snapshot_is_exact(
+                                stats,
+                                &stats.target,
+                            )
+                        }
+                        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                        {
+                            false
+                        }
+                    }
             },
         );
         let snapshot_freshness_matches = match (
@@ -257,7 +283,13 @@ impl OciVmOperationReopenReplacementReport {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )
+))]
 mod tests {
     use a3s_oci_agent_protocol::{
         AgentOperation, AgentTransportOperationStage, AGENT_PROTOCOL_VERSION_MAX,
