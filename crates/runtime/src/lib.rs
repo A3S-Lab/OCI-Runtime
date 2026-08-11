@@ -116,10 +116,11 @@ pub use native_smoke::{
 };
 pub use oci_smoke::{
     macos_hvf_soak, oci_vm_close_stdin_reopen_replacement_at, oci_vm_delete_reopen_replacement_at,
-    oci_vm_exec_reopen_replacement_at, oci_vm_fault_cleanup, oci_vm_kill_reopen_replacement_at,
-    oci_vm_multi_container_smoke, oci_vm_pause_reopen_replacement_at,
-    oci_vm_processes_reopen_replacement_at, oci_vm_read_output_reopen_replacement_at,
-    oci_vm_reopen_replacement, oci_vm_reopen_replacement_at, oci_vm_resize_reopen_replacement_at,
+    oci_vm_exec_reopen_replacement_at, oci_vm_fault_cleanup, oci_vm_file_reopen_replacement_at,
+    oci_vm_kill_reopen_replacement_at, oci_vm_multi_container_smoke,
+    oci_vm_pause_reopen_replacement_at, oci_vm_processes_reopen_replacement_at,
+    oci_vm_read_output_reopen_replacement_at, oci_vm_reopen_replacement,
+    oci_vm_reopen_replacement_at, oci_vm_resize_reopen_replacement_at,
     oci_vm_resume_reopen_replacement_at, oci_vm_signal_process_reopen_replacement_at, oci_vm_smoke,
     oci_vm_start_reopen_replacement_at, oci_vm_state_reopen_replacement_at,
     oci_vm_stats_reopen_replacement_at, oci_vm_transport_fault_cleanup,
@@ -132,6 +133,7 @@ pub use operation_reopen_replacement_report::{
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_CLOSE_STDIN_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_DELETE_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_EXEC_SCHEMA_VERSION,
+    OCI_VM_OPERATION_REOPEN_REPLACEMENT_FILE_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_PAUSE_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_PROCESSES_SCHEMA_VERSION,
     OCI_VM_OPERATION_REOPEN_REPLACEMENT_READ_OUTPUT_SCHEMA_VERSION,

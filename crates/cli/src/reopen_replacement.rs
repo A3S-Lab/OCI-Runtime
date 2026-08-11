@@ -31,6 +31,7 @@ enum OperationArg {
     CloseStdin,
     Delete,
     Exec,
+    File,
     Kill,
     Pause,
     Processes,
@@ -129,6 +130,19 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
         }
         OperationArg::Exec => {
             let report = a3s_oci_runtime::oci_vm_exec_reopen_replacement_at(
+                &arguments.shim,
+                &arguments.vm_rootfs,
+                &arguments.bundle,
+                &arguments.console_dir,
+                stage,
+            )
+            .await;
+            let succeeded = report.is_success();
+            super::write_json(&report)?;
+            succeeded
+        }
+        OperationArg::File => {
+            let report = a3s_oci_runtime::oci_vm_file_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
                 &arguments.bundle,

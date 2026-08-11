@@ -522,5 +522,14 @@ fully delivered first response leaves `SucceededEmpty`, so driver recovery
 restores `120x40` before Host service open completes and the retry returns
 without another driver dispatch. Exact SIGWINCH effect bytes, changed sizes,
 stale generations, and fresh-owner PID rebinding fail or pass as required. All
-nine Apple Silicon stages passed in 18 fresh VMs on August 11, 2026. File and
-Filesystem are the two remaining real replacement matrices.
+nine Apple Silicon stages passed in 18 fresh VMs on August 11, 2026.
+
+Real File recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v18`. Uploads remain outside the
+Host journal, so both the first retry and later replay dispatch through the
+replacement driver. A delivered first response causes driver recovery to
+rebuild the upload and its Guest journal in the fresh session filesystem before
+Host open. The API retry then receives the cached Guest response without a
+second upload effect. Exact binary bytes, changed content, stale generations,
+explicit removal, and owner cleanup passed all nine Apple Silicon stages in 18
+fresh VMs on August 11, 2026. Filesystem is the final real replacement matrix.

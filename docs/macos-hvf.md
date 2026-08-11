@@ -973,8 +973,17 @@ terminal-backed Exec for every stage. Prepared Host journals dispatch one
 recovery restores the dimensions before Host open completes and the API retry
 does not call the driver again. Exact SIGWINCH marker bytes, changed-size
 rejection, stale generation fencing, fresh-owner PID rebinding, and cleanup
-passed all nine stages on Apple Silicon. File and Filesystem are the two
-remaining operation matrices.
+passed all nine stages on Apple Silicon.
+
+File now uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v18`. Upload remains
+session-scoped and every retry reaches the replacement driver. If the first
+owner delivered its response, recovery rebuilds the exact binary upload and
+Guest journal in a fresh tmpfs before Host open; the API retry then receives
+the cached Guest response without another upload effect. Changed-content and
+stale-generation rejection, byte-for-byte download, explicit removal, and
+cleanup passed all nine stages on Apple Silicon. Filesystem is the final
+operation matrix.
 
 ## Remaining workload gates
 

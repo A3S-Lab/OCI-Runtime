@@ -944,12 +944,23 @@ enforce it. No property is silently ignored.
     delete, and both owner cleanup inventories are required. The August 11,
     2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs under
     `a3s.oci.oci-vm-operation-reopen-replacement.v17`.
+  - [x] Carry all nine Host/Guest `file` stages through service reopen and
+    actual HVF owner replacement. Upload remains session-scoped, so every API
+    retry reaches the replacement driver. After a delivered first response,
+    driver recovery rebuilds the upload and Guest journal in the fresh `/tmp`
+    filesystem before Host open; the retry then receives the cached Guest
+    response without a second upload effect. Exact binary bytes, response
+    shape, request identity, changed-content rejection, stale generations,
+    explicit removal, force delete, and both owner cleanup inventories are
+    required. The August 11, 2026 Apple Silicon matrix passed all nine stages
+    in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v18`.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 162 real Create/State/Start/Kill/Delete/Wait/Exec/
+    stages, and all 171 real Create/State/Start/Kill/Delete/Wait/Exec/
     SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/
-    WriteStdin/CloseStdin/Resize replacement paths do not satisfy the complete
-    20-operation matrix gate. File and Filesystem remain.
+    WriteStdin/CloseStdin/Resize/File replacement paths do not satisfy the
+    complete 20-operation matrix gate. Filesystem remains.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

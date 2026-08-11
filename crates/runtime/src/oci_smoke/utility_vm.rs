@@ -219,6 +219,17 @@ pub(super) async fn run_resize_reopen_replacement(
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(super) async fn run_file_reopen_replacement(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle_directory: &Path,
+    console_directory: &Path,
+    stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
+) -> crate::OciVmOperationReopenReplacementReport {
+    reopen_replacement::run_file(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_write_stdin_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
