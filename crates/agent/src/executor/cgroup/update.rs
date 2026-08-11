@@ -452,6 +452,7 @@ fn update_error(code: ErrorCode, message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
+    use a3s_oci_sdk::ErrorCode;
 
     use super::{apply_update_settings, CgroupUpdatePlan};
     use crate::executor::cgroup::{CgroupHandle, ControlHeadroom, ControlWorkloadCgroup};
@@ -608,5 +609,22 @@ mod tests {
             std::fs::read_to_string(directory.path().join("pids.max")).expect("read pids max"),
             "32"
         );
+    }
+
+    #[test]
+    fn rejects_live_device_updates_before_mutating_any_setting() {
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "devices": [
+                {"allow": false, "access": "rwm"}
+            ]
+        }))
+        .expect("live device update resource");
+
+        let error = CgroupUpdatePlan::from_resources(&resources)
+            .expect_err("live linux.resources.devices updates must fail");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error
+            .message
+            .contains("live linux.resources.devices updates"));
     }
 }
