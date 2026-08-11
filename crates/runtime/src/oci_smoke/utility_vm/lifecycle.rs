@@ -31,7 +31,7 @@ const LINUX_SIGTERM: i32 = 15;
 const LINUX_SIGKILL: i32 = 9;
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 const PROGRESS_PATH: &str = "/.a3s-oci-create-start-smoke";
-const UPDATED_MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
+pub(crate) const UPDATED_MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
 
 pub(super) trait AgentStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -687,7 +687,7 @@ async fn exercise_control_plane<T: AgentStream>(
     Ok(())
 }
 
-fn resource_profile(platform: HostPlatform) -> Result<LinuxResources, String> {
+pub(crate) fn resource_profile(platform: HostPlatform) -> Result<LinuxResources, String> {
     let mut profile = serde_json::json!({
         "memory": {
             "limit": UPDATED_MEMORY_LIMIT,
@@ -712,27 +712,29 @@ fn resource_profile(platform: HostPlatform) -> Result<LinuxResources, String> {
         .map_err(|error| format!("failed to construct guest resource profile: {error}"))
 }
 
-fn resource_stats_are_exact(
+pub(crate) fn resource_stats_are_exact(
     first: &a3s_oci_sdk::ContainerStats,
     second: &a3s_oci_sdk::ContainerStats,
     target: &ContainerTarget,
 ) -> bool {
-    first.target == *target
-        && second.target == *target
-        && first.timestamp_unix_ns > 0
+    resource_stats_snapshot_is_exact(first, target)
+        && resource_stats_snapshot_is_exact(second, target)
         && second.timestamp_unix_ns >= first.timestamp_unix_ns
-        && first.cpu.usage_ns > 0
         && second.cpu.usage_ns >= first.cpu.usage_ns
-        && first.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
-        && second.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
-        && first.memory.usage_bytes <= UPDATED_MEMORY_LIMIT
-        && second.memory.usage_bytes <= UPDATED_MEMORY_LIMIT
-        && first.process_count >= 2
-        && second.process_count >= 2
-        && first.metrics.contains_key("memory.events.oom_kill")
-        && first.metrics.contains_key("pids.events.max")
-        && second.metrics.contains_key("memory.events.oom_kill")
-        && second.metrics.contains_key("pids.events.max")
+}
+
+pub(crate) fn resource_stats_snapshot_is_exact(
+    stats: &a3s_oci_sdk::ContainerStats,
+    target: &ContainerTarget,
+) -> bool {
+    stats.target == *target
+        && stats.timestamp_unix_ns > 0
+        && stats.cpu.usage_ns > 0
+        && stats.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
+        && stats.memory.usage_bytes <= UPDATED_MEMORY_LIMIT
+        && stats.process_count >= 2
+        && stats.metrics.contains_key("memory.events.oom_kill")
+        && stats.metrics.contains_key("pids.events.max")
 }
 
 fn process_inventory_is_exact(

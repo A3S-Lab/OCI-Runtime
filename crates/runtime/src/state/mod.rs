@@ -374,17 +374,20 @@ impl DurableStateStore {
                 matches!(
                     (durable_status, active.kind),
                     (ContainerState::Created, StoredOperationKind::Start)
-                        | (ContainerState::Running, StoredOperationKind::Kill)
+                        | (
+                            ContainerState::Running,
+                            StoredOperationKind::Kill
+                                | StoredOperationKind::Pause
+                                | StoredOperationKind::Resume
+                                | StoredOperationKind::Update
+                        )
                 ) && active.container_id == stored.id
                     && active.generation == stored.record.generation
                     && matches!(active.outcome, StoredOperationStatus::Prepared)
             }
             None => true,
         };
-        if !active_allows_rebind
-            || *response.state.status() != ContainerState::Created
-            || is_paused(&stored.record.state)
-        {
+        if !active_allows_rebind || *response.state.status() != ContainerState::Created {
             return Err(state_error(
                 ErrorCode::Conflict,
                 "reconcile-succeeded-create",
@@ -394,8 +397,13 @@ impl DurableStateStore {
                 ),
             ));
         }
+        let mut expected_state =
+            rebuild_state(&response.state, durable_status, *stored.record.state.pid())?;
+        if is_paused(&stored.record.state) {
+            expected_state = oci_state::rebuild_paused_state(&expected_state, true)?;
+        }
         let expected_durable = ContainerRecord {
-            state: rebuild_state(&response.state, durable_status, *stored.record.state.pid())?,
+            state: expected_state,
             ..response.clone()
         };
         if expected_durable != stored.record {

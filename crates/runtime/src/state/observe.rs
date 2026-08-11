@@ -80,6 +80,28 @@ impl DurableStateStore {
         .await
     }
 
+    pub(crate) async fn observe_recreated_paused_running_process(
+        &self,
+        target: &ContainerTarget,
+        observation: DriverState,
+    ) -> Result<ContainerRecord> {
+        if observation.status() != ContainerState::Running || !observation.paused() {
+            return Err(state_error(
+                ErrorCode::InvalidArgument,
+                "observe-recreated-paused-running-process",
+                "replacement-owner paused recovery requires a paused running state",
+            ));
+        }
+        self.observe_state_inner(
+            target,
+            observation.status(),
+            observation.pid(),
+            observation.paused(),
+            RecreatedProcess::RunningPaused,
+        )
+        .await
+    }
+
     async fn observe_state_inner(
         &self,
         target: &ContainerTarget,
@@ -123,6 +145,18 @@ impl DurableStateStore {
                 ),
             ));
         }
+        if recreated_process == RecreatedProcess::RunningPaused
+            && (current != ContainerState::Running || !is_paused(&stored.record.state))
+        {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "observe-recreated-paused-running-process",
+                format!(
+                    "container {} is not durably paused and cannot use paused running-process recovery",
+                    target.id
+                ),
+            ));
+        }
         let completes_active = active
             .as_ref()
             .is_some_and(|operation| observation_completes(operation.kind, status, paused));
@@ -135,6 +169,7 @@ impl DurableStateStore {
                         (recreated_process, current),
                         (RecreatedProcess::Created, ContainerState::Created)
                             | (RecreatedProcess::Running, ContainerState::Running)
+                            | (RecreatedProcess::RunningPaused, ContainerState::Running)
                     );
                     let active_allows_replacement = active.is_none()
                         || matches!(
@@ -150,13 +185,26 @@ impl DurableStateStore {
                             ) | (
                                 RecreatedProcess::Running,
                                 ContainerState::Running,
-                                Some(StoredOperationKind::Kill)
+                                Some(
+                                    StoredOperationKind::Kill
+                                        | StoredOperationKind::Pause
+                                        | StoredOperationKind::Resume
+                                        | StoredOperationKind::Update
+                                )
+                            ) | (
+                                RecreatedProcess::RunningPaused,
+                                ContainerState::Running,
+                                Some(StoredOperationKind::Pause | StoredOperationKind::Resume)
                             )
                         );
-                    if replacement_matches
-                        && active_allows_replacement
-                        && !is_paused(&stored.record.state)
-                    {
+                    let freezer_matches = match recreated_process {
+                        RecreatedProcess::RunningPaused => is_paused(&stored.record.state),
+                        RecreatedProcess::Created | RecreatedProcess::Running => {
+                            !is_paused(&stored.record.state)
+                        }
+                        RecreatedProcess::None => false,
+                    };
+                    if replacement_matches && active_allows_replacement && freezer_matches {
                         stored.record.state = rebuild_state(&stored.record.state, current, pid)?;
                         OciSchemaValidator::new()?.validate_state(&stored.record.state)?;
                         state_changed = true;

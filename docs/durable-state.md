@@ -391,5 +391,118 @@ complete request identity remain fenced; stale or changed Host and Guest
 requests fail closed. A first-owner marker is validated when scheduling reaches
 it, while every replacement must run the long-lived terminal process and write
 the exact nonce-bound marker before force delete. The August 10, 2026 Apple
-Silicon matrix passed all nine stages in 18 fresh VMs. The remaining 13
-operations still belong to the real replacement matrix above.
+Silicon matrix passed all nine stages in 18 fresh VMs.
+
+Real SignalProcess recovery crosses the same nine points under
+`a3s.oci.oci-vm-operation-reopen-replacement.v7`. Setup first commits one
+long-running terminal Exec whose SIGUSR1 trap writes a nonce-bound marker. The
+first eight interruptions retain a Prepared SignalProcess journal; replacement
+recovery recreates init and Exec, and the unchanged signal-10 request dispatches
+once after reopen. A fully written response retains SucceededEmpty instead.
+Recovery waits for the replacement Exec readiness marker, reapplies the
+committed signal, and the API retry replays without driver dispatch. Every path
+fences the complete Exec and signal identities plus stale generations, rejects
+changed Host and Guest retries, requires the replacement signal marker, and
+restores all inventories. The August 11, 2026 Apple Silicon matrix passed all
+nine stages in 18 fresh VMs.
+
+Real non-init WaitProcess recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v8`. Setup commits Create, Start,
+a terminal Exec, and signal 10. Replacement recovery recreates init and Exec,
+waits for the Exec readiness marker, and reapplies the committed signal. For
+the first eight transport interruptions the Host has no process-exit cache, so
+the exact resolved target and 15-second timeout dispatch once after reopen and
+cache `signal=10, oom_killed=false`. At `guest-after-response-write` that cache
+already exists: recovery does not register the rebuilt exited Exec as live,
+and both replacement and later WaitProcess calls return without driver
+dispatch. All nine Apple Silicon stages passed in 18 fresh VMs on August 11,
+2026.
+
+Real Pause recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v9`. Setup commits Create and
+Start, then waits for the exact nonce-bound init marker before injecting Pause.
+The first eight interruptions retain an unpaused running record and Prepared
+Pause journal. Recovery recreates and starts init, rebinds its PID, repairs the
+completed Create and Start responses, and dispatches the unchanged Pause once.
+At `guest-after-response-write`, durable state is already paused and the Pause
+journal is Succeeded. Recovery recreates and starts init, waits for readiness,
+reapplies the freezer state, and uses the restricted paused-process recovery
+mode to rebind the durable record. Create, Start, and Pause replays then repair
+their cached PIDs; the Pause API retry does not dispatch again. Every path
+rejects changed and stale Host and Guest requests, force-deletes the paused
+generation, and restores both owner inventories. All nine Apple Silicon stages
+passed in 18 fresh VMs on August 11, 2026.
+
+Real Resume recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v10`. Setup commits Create,
+Start, and Pause before injecting Resume. Every fresh owner recreates and
+starts init, waits for its nonce-bound readiness marker, and replays the setup
+Pause. The first eight interruptions retain paused durable state and a Prepared
+Resume journal, so the unchanged Resume dispatches once after reopen. At
+`guest-after-response-write`, durable state is already unpaused and the Resume
+journal is Succeeded; recovery therefore replays the committed Resume too and
+returns recreated-running evidence. Reconciliation preserves each historical
+freezer response while rebinding Create, Start, Pause, and Resume to the new
+PID. Every path rejects changed and stale requests, force-deletes the resumed
+generation, and restores both owner inventories. All nine Apple Silicon stages
+passed in 18 fresh VMs on August 11, 2026.
+
+Real Processes recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v11`. Setup commits Create,
+Start, and one live terminal Exec. The replacement owner recreates both live
+processes, rebinds the durable init and Exec PIDs, and repairs all completed
+setup responses before the query runs. Processes has no durable response
+journal: all nine replacement paths therefore dispatch the read-only query
+once, including `guest-after-response-write`. The returned inventory must
+contain exactly the original init and Exec targets at the retained generation
+with the replacement PIDs. Stale Host and Guest generations fail closed, then
+force delete and owner shutdown restore all inventories. All nine Apple
+Silicon stages passed in 18 fresh VMs on August 11, 2026.
+
+Real Update recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v12`. Setup commits Create and
+Start, then waits for the nonce-bound init marker before injecting the exact
+resource request. The first eight interruptions keep the Update journal
+Prepared. Recreated-running recovery preserves that active claim, rebinds the
+container plus completed Create and Start response PIDs, and the unchanged
+Update dispatches once. At `guest-after-response-write`, the Update journal is
+already Succeeded, but its cgroup effect belonged to the dead VM. Recovery
+therefore reapplies the original complete `LinuxResources` request before
+opening the Host service. The retry reconciles the completed Update response to
+the replacement PID without dispatching again. Two fresh Stats responses prove
+the 512 MiB limit and monotonic counters; changed resources and stale
+generations fail closed at both boundaries. All nine Apple Silicon stages
+passed in 18 fresh VMs on August 11, 2026.
+
+Real Stats recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v13`. Setup commits Create,
+Start, and the exact complete Update before the read-only query. Every
+replacement owner recreates the running init, waits for its readiness marker,
+reapplies that Update to the fresh cgroup, and rebinds all three completed
+setup responses. Stats has no durable response journal, so all nine replacement
+paths dispatch one new query even when the first owner wrote a complete
+response. Both delivered snapshots must prove the 512 MiB limit and required
+live counters; the completed-response path also requires the replacement
+timestamp and snapshot to be newer and distinct. Stale Host and Guest
+generations fail closed. All nine Apple Silicon stages passed in 18 fresh VMs
+on August 11, 2026.
+
+Real ReadOutput recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v14`. The durable Create, Start,
+and Exec journals remain complete while recovery reconstructs their exact
+requests and rebinds the response PIDs. ReadOutput itself is read-only and is
+therefore dispatched once to every fresh owner with the same cursor, byte
+limit, timeout, target, and generation. The replacement chunk must be the
+nonce-bound stdout produced by the rebuilt Exec.
+
+Real WriteStdin recovery uses
+`a3s.oci.oci-vm-operation-reopen-replacement.v15`. The first eight fault
+stages retain a prepared Host journal, so the API retry dispatches the exact
+bytes once after recovery rebuilds the pipe-backed Exec. A fully delivered
+first response leaves `SucceededEmpty`; because that input effect belonged to
+the dead VM, driver recovery writes the committed bytes into the rebuilt Exec
+before Host service open completes. The API retry then returns from the
+durable journal without another driver dispatch. Changed Host and Guest
+payloads and stale generations fail closed. All nine Apple Silicon stages
+passed in 18 fresh VMs on August 11, 2026. The remaining 4 operations belong to
+the real replacement matrix.

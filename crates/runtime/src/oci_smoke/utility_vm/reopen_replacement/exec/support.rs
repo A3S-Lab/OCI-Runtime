@@ -24,17 +24,19 @@ const ORIGINAL_INIT_MARKER_WRITE: &str =
     "printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke;";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ExecJournalStatus {
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) enum ExecJournalStatus {
     Prepared,
     Succeeded(ProcessRecord),
 }
 
-pub(super) fn operation_id(value: &str) -> std::result::Result<OperationId, String> {
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn operation_id(
+    value: &str,
+) -> std::result::Result<OperationId, String> {
     OperationId::new(value)
         .map_err(|error| format!("failed to construct Exec qualification operation ID: {error}"))
 }
 
-pub(super) fn nonce_bound_bundle(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn nonce_bound_bundle(
     bundle: OciBundle,
     nonce: &str,
 ) -> std::result::Result<OciBundle, String> {
@@ -69,7 +71,7 @@ pub(super) fn nonce_bound_bundle(
         .map_err(|error| format!("failed to validate nonce-bound Exec bundle: {error}"))
 }
 
-pub(super) fn exec_process(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn exec_process(
     nonce: &str,
 ) -> std::result::Result<(ProcessId, Process, ProcessIo), String> {
     let process_id = ProcessId::new(format!("worker-{nonce}"))
@@ -99,7 +101,7 @@ pub(super) fn exec_process(
     Ok((process_id, process, io))
 }
 
-pub(super) async fn wait_for_exact_marker(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn wait_for_exact_marker(
     marker: &Path,
     expected: &[u8],
     label: &str,
@@ -126,7 +128,7 @@ pub(super) async fn wait_for_exact_marker(
     }
 }
 
-pub(super) async fn verify_first_exec_marker(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn verify_first_exec_marker(
     marker: &Path,
     expected: &[u8],
     stage: AgentTransportOperationStage,
@@ -148,7 +150,9 @@ pub(super) async fn verify_first_exec_marker(
     }
 }
 
-pub(super) const fn dispatch_may_have_reached(stage: AgentTransportOperationStage) -> bool {
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) const fn dispatch_may_have_reached(
+    stage: AgentTransportOperationStage,
+) -> bool {
     matches!(
         stage,
         AgentTransportOperationStage::HostAfterRequestWrite
@@ -160,7 +164,9 @@ pub(super) const fn dispatch_may_have_reached(stage: AgentTransportOperationStag
     )
 }
 
-pub(super) async fn reset_marker(marker: &Path) -> std::result::Result<(), String> {
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn reset_marker(
+    marker: &Path,
+) -> std::result::Result<(), String> {
     remove_marker_if_present(marker).await?;
     if path_exists(marker).await? {
         return Err(format!(
@@ -171,7 +177,7 @@ pub(super) async fn reset_marker(marker: &Path) -> std::result::Result<(), Strin
     Ok(())
 }
 
-pub(super) fn record_interruption(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn record_interruption(
     report: &mut OciVmOperationReopenReplacementReport,
     error: Error,
     stage: AgentTransportOperationStage,
@@ -197,7 +203,7 @@ pub(super) fn record_interruption(
     }
 }
 
-pub(super) async fn shutdown_setup_failure<T>(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn shutdown_setup_failure<T>(
     service: crate::HostRuntimeService,
     driver: Arc<QualificationHvfDriver>,
     cleanup: MacosHostCleanupTracker,
@@ -210,7 +216,7 @@ pub(super) async fn shutdown_setup_failure<T>(
     Err(reason)
 }
 
-pub(super) fn record_recovery_evidence(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn record_recovery_evidence(
     report: &mut OciVmOperationReopenReplacementReport,
     driver: &QualificationHvfDriver,
 ) {
@@ -225,7 +231,7 @@ pub(super) fn record_recovery_evidence(
         .and_then(|pid| u32::try_from(pid).ok());
 }
 
-pub(super) async fn exec_journal_status(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn exec_journal_status(
     state_root: &Path,
     operation_id: &OperationId,
     target: &ProcessTarget,
@@ -303,7 +309,7 @@ pub(super) async fn exec_journal_status(
     }
 }
 
-pub(super) async fn durable_exec_process(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn durable_exec_process(
     state_root: &Path,
     target: &ProcessTarget,
 ) -> std::result::Result<ProcessRecord, String> {
@@ -357,7 +363,7 @@ pub(super) async fn durable_exec_process(
     Ok(record)
 }
 
-pub(super) fn identity_or_expected<T: Clone>(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn identity_or_expected<T: Clone>(
     identity: std::result::Result<T, String>,
     failure: &mut Option<String>,
     expected: T,
@@ -371,14 +377,16 @@ pub(super) fn identity_or_expected<T: Clone>(
     }
 }
 
-pub(super) fn exact_process_target(exec: &a3s_oci_sdk::ExecRequest) -> ProcessTarget {
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn exact_process_target(
+    exec: &a3s_oci_sdk::ExecRequest,
+) -> ProcessTarget {
     ProcessTarget {
         container: exec.container.clone(),
         process_id: exec.process_id.clone(),
     }
 }
 
-pub(super) fn stale_target(
+pub(in crate::oci_smoke::utility_vm::reopen_replacement) fn stale_target(
     container: &ContainerTarget,
 ) -> std::result::Result<ContainerTarget, String> {
     let generation = container

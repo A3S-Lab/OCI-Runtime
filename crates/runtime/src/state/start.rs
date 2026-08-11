@@ -14,7 +14,7 @@ use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
-use super::oci_state::{container_state, is_paused, rebuild_state};
+use super::oci_state::{container_state, is_paused, rebuild_paused_state, rebuild_state};
 use super::operation::{request_digest, validate_deadline, validate_retry};
 use super::{
     claim_active_operation, ensure_active_operation, generation_conflict, DurableStateStore,
@@ -212,14 +212,19 @@ impl DurableStateStore {
         let active_allows_rebind = match stored.active_operation.as_ref() {
             Some(operation_id) => {
                 let active = self.load_operation(operation_id).await?;
-                active.kind == StoredOperationKind::Kill
-                    && active.container_id == stored.id
+                matches!(
+                    active.kind,
+                    StoredOperationKind::Kill
+                        | StoredOperationKind::Pause
+                        | StoredOperationKind::Resume
+                        | StoredOperationKind::Update
+                ) && active.container_id == stored.id
                     && active.generation == stored.record.generation
                     && matches!(active.outcome, StoredOperationStatus::Prepared)
             }
             None => true,
         };
-        if !active_allows_rebind || is_paused(&stored.record.state) || is_paused(&response.state) {
+        if !active_allows_rebind || is_paused(&response.state) {
             return Err(state_error(
                 ErrorCode::Conflict,
                 "reconcile-succeeded-start",
@@ -229,13 +234,21 @@ impl DurableStateStore {
                 ),
             ));
         }
-        let expected = a3s_oci_sdk::ContainerRecord {
-            state: rebuild_state(
-                &response.state,
-                ContainerState::Running,
-                *stored.record.state.pid(),
-            )?,
+        let mut rebound_state = rebuild_state(
+            &response.state,
+            ContainerState::Running,
+            *stored.record.state.pid(),
+        )?;
+        let rebound_response = a3s_oci_sdk::ContainerRecord {
+            state: rebound_state.clone(),
             ..response
+        };
+        if is_paused(&stored.record.state) {
+            rebound_state = rebuild_paused_state(&rebound_state, true)?;
+        }
+        let expected = a3s_oci_sdk::ContainerRecord {
+            state: rebound_state,
+            ..rebound_response.clone()
         };
         if expected != stored.record {
             return Err(state_error(
@@ -248,7 +261,7 @@ impl DurableStateStore {
             ));
         }
         operation.outcome = StoredOperationStatus::Succeeded {
-            response: stored.record.clone(),
+            response: rebound_response.clone(),
         };
         self.write_json(
             DurableMutation::CompleteStartOperation,
@@ -256,7 +269,7 @@ impl DurableStateStore {
             &operation,
         )
         .await?;
-        Ok(RecordOperationPreparation::Replayed(stored.record))
+        Ok(RecordOperationPreparation::Replayed(rebound_response))
     }
 
     pub(crate) async fn complete_start(

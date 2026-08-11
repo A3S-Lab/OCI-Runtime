@@ -43,7 +43,7 @@ mod entry;
 pub(in crate::oci_smoke::utility_vm) use entry::run;
 mod first_owner;
 mod replacement;
-mod support;
+pub(super) mod support;
 
 async fn exercise(
     qualification: &Qualification,

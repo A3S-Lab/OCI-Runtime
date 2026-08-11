@@ -256,8 +256,59 @@ completed-response point, replacement dispatches the unchanged Exec once; after
 it, recovery recreates the durable live process, rebinds its PID, repairs the
 journal, and Host replay avoids another API-driven dispatch. The exact process
 ID, terminal mode, generation, request identity, stale/changed fencing, and
-nonce-bound replacement marker are required. Replacement coverage for the
-other 13 operations remains open.
+nonce-bound replacement marker are required. Version 7 adds `signal-process`.
+The first eight points resume one exact signal-10 dispatch after rebuilding the
+live Exec. A completed response is already SucceededEmpty, so recovery waits
+until the replacement Exec has installed its nonce-bound SIGUSR1 trap, reapplies
+the committed signal, and lets Host replay return without another API-driven
+dispatch. Exact Exec and signal request identities, stale/changed fencing, and
+the replacement signal marker are required. Version 8 adds non-init
+`wait-process`: recovery rebuilds and terminates the exact Exec, an uncached
+wait dispatches once and stores the signal exit result, and a result committed
+before owner loss replays without another driver dispatch. The recovered live
+inventory must omit that exited process. Version 9 adds `pause`. Before the
+completed-response point, recovery rebuilds an unpaused init and sends the
+unchanged Pause once. After a committed response, recovery waits for the fresh
+init readiness marker, reapplies the freezer state, and repairs the Create,
+Start, and Pause journal PIDs before the Host retry replays without dispatch.
+Both Host and Guest reject changed retries and stale generations. Version 10
+adds `resume`. Recovery always reconstructs Create, Start, and the
+setup Pause after the fresh init writes its exact readiness marker. The first
+eight points retain paused durable state and dispatch the unchanged Resume
+once. At the completed-response point, recovery also replays the committed
+Resume, returns an unpaused recreated process, and repairs Create, Start,
+Pause, and Resume response PIDs before the Host retry replays without dispatch.
+Both request identities and changed/stale fencing are required. Version 11
+adds read-only `processes`. Recovery rebuilds the exact live init and terminal
+Exec records before querying the fresh Guest. The replacement inventory must
+contain both logical process targets at the original generation with their
+rebound PIDs. Read-only responses are not journaled, so the query is reissued
+once after every owner loss, including after a completely written first
+response. Stale Host and Guest generations fail closed. Version 12 adds
+`update`. The exact
+OperationId, resolved target, and complete `LinuxResources` request are retained
+as one identity. The first eight paths dispatch that request once after the
+fresh owner rebuilds init. At the completed-response point, recovery reapplies
+the committed resources to the fresh Guest before the Host retry repairs the
+cached response PID and returns without another API-driven dispatch. Two
+replacement Stats reads must prove the updated memory limit and live monotonic
+counters. Changed resources under the same identity and stale Host or Guest
+generations fail closed. Version 13 adds read-only `stats` owner replacement.
+Recovery first reapplies the already committed setup Update to the fresh
+cgroup and repairs its response PID. Stats remains unjournaled, so a new query
+must reach every replacement Guest, including after a fully written first-owner
+response. Both snapshots must match the exact resource profile, and a delivered
+first snapshot must be replaced by newer, distinct evidence. Stale Host and
+Guest generations fail closed. Version 14 adds `read-output` replacement.
+Recovery rebuilds the exact non-terminal captured-output Exec, repairs the
+completed Create, Start, and Exec responses, and sends one fresh cursor request
+to every replacement Guest. Version 15 adds `write-stdin` replacement. The
+first eight paths resume the prepared Host journal after rebuilding that Exec.
+At `guest-after-response-write`, recovery replays the committed bytes into the
+fresh process before Host open completes, so the API retry returns from the
+durable journal without another driver dispatch. Complete request identity,
+exact effect bytes, changed-request conflicts, stale generations, and cleanup
+are retained. Replacement coverage for the other 4 operations remains open.
 
 ## Bundle Preservation
 

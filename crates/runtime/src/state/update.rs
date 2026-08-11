@@ -13,7 +13,7 @@ use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
-use super::oci_state::is_paused;
+use super::oci_state::{is_paused, rebuild_paused_state, rebuild_state};
 use super::operation::{request_digest, validate_deadline, validate_retry};
 use super::{
     claim_active_operation, ensure_active_operation, generation_conflict, DurableStateStore,
@@ -53,7 +53,7 @@ impl DurableStateStore {
                 &digest,
                 "update",
             )?;
-            return match &operation.outcome {
+            return match operation.outcome.clone() {
                 StoredOperationStatus::Prepared => {
                     let mut stored = self
                         .load_stored_exact(&operation.container_id, operation.generation)
@@ -69,9 +69,9 @@ impl DurableStateStore {
                     Ok(RecordOperationPreparation::Resume(stored.record))
                 }
                 StoredOperationStatus::Succeeded { response } => {
-                    Ok(RecordOperationPreparation::Replayed(response.clone()))
+                    self.reconcile_succeeded_update(operation, response).await
                 }
-                StoredOperationStatus::Failed { error } => Err(error.clone()),
+                StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -137,6 +137,78 @@ impl DurableStateStore {
         )
         .await?;
         Ok(RecordOperationPreparation::Prepared(stored.record))
+    }
+
+    async fn reconcile_succeeded_update(
+        &self,
+        mut operation: StoredOperation,
+        response: ContainerRecord,
+    ) -> Result<RecordOperationPreparation> {
+        let stored = match self.load_stored_container(&operation.container_id).await {
+            Ok(stored) => stored,
+            Err(error) if error.code == ErrorCode::NotFound => {
+                return Ok(RecordOperationPreparation::Replayed(response));
+            }
+            Err(error) => return Err(error),
+        };
+        if stored.record.generation != operation.generation || stored.record == response {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        let durable_status = *stored.record.state.status();
+        let response_status = *response.state.status();
+        if !matches!(
+            durable_status,
+            ContainerState::Created | ContainerState::Running
+        ) || !matches!(
+            response_status,
+            ContainerState::Created | ContainerState::Running
+        ) || stored.record.state.pid() == response.state.pid()
+        {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+
+        let mut rebound_state =
+            rebuild_state(&response.state, response_status, *stored.record.state.pid())?;
+        if is_paused(&response.state) {
+            rebound_state = rebuild_paused_state(&rebound_state, true)?;
+        }
+        let rebound_response = ContainerRecord {
+            state: rebound_state,
+            ..response
+        };
+        let mut expected_state = rebuild_state(
+            &rebound_response.state,
+            durable_status,
+            *stored.record.state.pid(),
+        )?;
+        if is_paused(&stored.record.state) {
+            expected_state = rebuild_paused_state(&expected_state, true)?;
+        }
+        let expected_durable = ContainerRecord {
+            state: expected_state,
+            ..rebound_response.clone()
+        };
+        if expected_durable != stored.record {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                "update",
+                format!(
+                    "completed update operation {} changed beyond its recovered process identity",
+                    operation.operation_id
+                ),
+            ));
+        }
+
+        operation.outcome = StoredOperationStatus::Succeeded {
+            response: rebound_response.clone(),
+        };
+        self.write_json(
+            DurableMutation::CompleteUpdateOperation,
+            &self.operation_path(&operation.operation_id),
+            &operation,
+        )
+        .await?;
+        Ok(RecordOperationPreparation::Replayed(rebound_response))
     }
 
     pub(crate) async fn complete_update(

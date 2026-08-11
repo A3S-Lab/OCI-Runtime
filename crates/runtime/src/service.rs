@@ -190,6 +190,11 @@ impl HostRuntimeService {
                             .observe_recreated_exec_processes(&target, &recreated_exec_processes)
                             .await?;
                     }
+                    RecreatedProcess::RunningPaused => {
+                        store
+                            .observe_recreated_paused_running_process(&target, observation)
+                            .await?;
+                    }
                     RecreatedProcess::None => {
                         store
                             .observe_state_with_pause(

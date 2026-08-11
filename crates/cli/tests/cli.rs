@@ -756,6 +756,348 @@ fn oci_vm_exec_reopen_replacement_fails_closed_with_versioned_output() {
 }
 
 #[test]
+fn oci_vm_signal_process_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "signal-process",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM SignalProcess reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("SignalProcess reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v7"
+    );
+    assert_eq!(report["requested_operation"], "signal-process");
+    assert_eq!(report["signal_process_signal"], 10);
+    assert_eq!(report["exec_terminal"], true);
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_wait_process_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "wait-process",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM WaitProcess reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("WaitProcess reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v8"
+    );
+    assert_eq!(report["requested_operation"], "wait-process");
+    assert_eq!(report["wait_process_timeout_ms"], 15_000);
+    assert_eq!(
+        report["expected_exit_status"],
+        serde_json::json!({"signal": 10, "oom_killed": false})
+    );
+    assert_eq!(report["exec_terminal"], true);
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_pause_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "pause",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM Pause reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("Pause reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v9"
+    );
+    assert_eq!(report["requested_operation"], "pause");
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_resume_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "resume",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM Resume reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("Resume reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v10"
+    );
+    assert_eq!(report["requested_operation"], "resume");
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_processes_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "processes",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM Processes reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("Processes reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v11"
+    );
+    assert_eq!(report["requested_operation"], "processes");
+    assert_eq!(report["exec_terminal"], true);
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_read_output_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "read-output",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM ReadOutput reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("ReadOutput reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v14"
+    );
+    assert_eq!(report["requested_operation"], "read-output");
+    assert_eq!(report["exec_terminal"], false);
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_write_stdin_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "write-stdin",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM WriteStdin reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("WriteStdin reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v15"
+    );
+    assert_eq!(report["requested_operation"], "write-stdin");
+    assert_eq!(report["exec_terminal"], false);
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_close_stdin_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "close-stdin",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM CloseStdin reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("CloseStdin reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v16"
+    );
+    assert_eq!(report["requested_operation"], "close-stdin");
+    assert_eq!(report["exec_terminal"], false);
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_update_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "update",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM Update reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("Update reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v12"
+    );
+    assert_eq!(report["requested_operation"], "update");
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn oci_vm_stats_reopen_replacement_fails_closed_with_versioned_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "oci-vm-reopen-replacement",
+            "--shim",
+            "missing-a3s-oci-krun-shim",
+            "--vm-rootfs",
+            "missing-a3s-oci-vm-rootfs",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--console-dir",
+            "missing-a3s-oci-console-directory",
+            "--operation",
+            "stats",
+            "--fault-at",
+            "guest-after-response-write",
+        ])
+        .output()
+        .expect("OCI VM Stats reopen-replacement command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("Stats reopen-replacement diagnostic output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.oci-vm-operation-reopen-replacement.v13"
+    );
+    assert_eq!(report["requested_operation"], "stats");
+    assert_eq!(report["requested_stage"], "guest-after-response-write");
+    assert_ne!(report["status"], "available");
+}
+
+#[test]
 fn oci_vm_reopen_replacement_accepts_each_create_transport_stage() {
     for stage in [
         "host-before-request-write",

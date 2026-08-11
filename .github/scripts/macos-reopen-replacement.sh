@@ -6,12 +6,26 @@ signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
 bundle_dir="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
 marker="$bundle_dir/rootfs/.a3s-oci-create-start-smoke"
 exec_marker="$bundle_dir/rootfs/.a3s-oci-exec-reopen-smoke"
+signal_process_marker="$bundle_dir/rootfs/.a3s-oci-signal-process-reopen-smoke"
+read_output_marker="$bundle_dir/rootfs/.a3s-oci-read-output-reopen-smoke"
+write_stdin_marker="$bundle_dir/rootfs/.a3s-oci-write-stdin-reopen-smoke"
+close_stdin_marker="$bundle_dir/rootfs/.a3s-oci-close-stdin-reopen-smoke"
 console_root="$RUNNER_TEMP/a3s-oci-reopen-replacement"
 support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
 mkdir -p \
   "$console_root/create" \
   "$console_root/delete" \
   "$console_root/exec" \
+  "$console_root/pause" \
+  "$console_root/processes" \
+  "$console_root/read-output" \
+  "$console_root/write-stdin" \
+  "$console_root/close-stdin" \
+  "$console_root/resume" \
+  "$console_root/stats" \
+  "$console_root/update" \
+  "$console_root/signal-process" \
+  "$console_root/wait-process" \
   "$console_root/state" \
   "$console_root/start" \
   "$console_root/kill" \
@@ -53,10 +67,24 @@ assert_cleanup_baseline() {
   test "$runtime_after" = "$runtime_baseline"
   test ! -e "$marker"
   test ! -e "$exec_marker"
+  test ! -e "$signal_process_marker"
+  test ! -e "$read_output_marker"
+  test ! -e "$write_stdin_marker"
+  test ! -e "$close_stdin_marker"
   test -z "$(find "$stage_console_dir" -maxdepth 1 -name '*-state' -print)"
 }
 
 source "$(dirname "$0")/macos-reopen-replacement-exec.sh"
+source "$(dirname "$0")/macos-reopen-replacement-pause.sh"
+source "$(dirname "$0")/macos-reopen-replacement-processes.sh"
+source "$(dirname "$0")/macos-reopen-replacement-read-output.sh"
+source "$(dirname "$0")/macos-reopen-replacement-write-stdin.sh"
+source "$(dirname "$0")/macos-reopen-replacement-close-stdin.sh"
+source "$(dirname "$0")/macos-reopen-replacement-resume.sh"
+source "$(dirname "$0")/macos-reopen-replacement-update.sh"
+source "$(dirname "$0")/macos-reopen-replacement-stats.sh"
+source "$(dirname "$0")/macos-reopen-replacement-signal-process.sh"
+source "$(dirname "$0")/macos-reopen-replacement-wait-process.sh"
 
 run_create_stage() {
   local fault_stage="$1"
@@ -905,4 +933,34 @@ for fault_stage in "${stages[@]}"; do
 done
 for fault_stage in "${stages[@]}"; do
   run_exec_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_signal_process_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_wait_process_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_pause_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_processes_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_resume_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_update_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_stats_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_read_output_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_write_stdin_stage "$fault_stage"
+done
+for fault_stage in "${stages[@]}"; do
+  run_close_stdin_stage "$fault_stage"
 done

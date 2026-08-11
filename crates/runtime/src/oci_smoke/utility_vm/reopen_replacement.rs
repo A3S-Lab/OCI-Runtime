@@ -14,10 +14,12 @@ use a3s_oci_core::{
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    async_trait, ContainerRecord, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, IoMode, IsolationRequest,
-    KillRequest, ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
-    ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, StartRequest, StateRequest,
+    async_trait, CloseStdinRequest, ContainerOperationRequest, ContainerRecord, ContainerStats,
+    ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
+    ExecRequest, ExitStatus, IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle,
+    OciRuntimeService, OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord,
+    ProcessTarget, Result, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest,
+    UpdateRequest, WriteStdinRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -29,8 +31,10 @@ use super::{
 use crate::agent_driver::AgentDriverClient;
 use crate::agent_session::UtilityVmSession;
 use crate::driver::{
-    DriverCreateAttachments, DriverCreateRequest, DriverDeleteRequest, DriverExecRequest,
-    DriverKillRequest, DriverProcess, DriverStartRequest, DriverState, DriverWaitRequest,
+    DriverCloseStdinRequest, DriverContainerOperationRequest, DriverCreateAttachments,
+    DriverCreateRequest, DriverDeleteRequest, DriverExecRequest, DriverKillRequest, DriverProcess,
+    DriverReadOutputRequest, DriverSignalProcessRequest, DriverStartRequest, DriverState,
+    DriverUpdateRequest, DriverWaitProcessRequest, DriverWaitRequest, DriverWriteStdinRequest,
     RuntimeDriver,
 };
 use crate::host_cleanup::MacosHostCleanupTracker;
@@ -42,7 +46,7 @@ const QUALIFICATION_TIMEOUT: Duration = Duration::from_secs(15);
 const FAULT_OPERATION: &str = "oci-vm-transport-qualification-fault";
 const REPLACEMENT_MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
 const MARKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 7] = [
+const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 17] = [
     RuntimeOperation::Create,
     RuntimeOperation::State,
     RuntimeOperation::Start,
@@ -50,8 +54,20 @@ const QUALIFICATION_HVF_OPERATIONS: [RuntimeOperation; 7] = [
     RuntimeOperation::Delete,
     RuntimeOperation::Wait,
     RuntimeOperation::Exec,
+    RuntimeOperation::SignalProcess,
+    RuntimeOperation::WaitProcess,
+    RuntimeOperation::Pause,
+    RuntimeOperation::Resume,
+    RuntimeOperation::Processes,
+    RuntimeOperation::Update,
+    RuntimeOperation::Stats,
+    RuntimeOperation::ReadOutput,
+    RuntimeOperation::WriteStdin,
+    RuntimeOperation::CloseStdin,
 ];
 
+mod close_stdin;
+pub(super) use close_stdin::run as run_close_stdin;
 mod delete;
 pub(super) use delete::run as run_delete;
 mod delete_support;
@@ -59,12 +75,30 @@ mod exec;
 pub(super) use exec::run as run_exec;
 mod kill;
 pub(super) use kill::run as run_kill;
+mod pause;
+pub(super) use pause::run as run_pause;
+mod processes;
+pub(super) use processes::run as run_processes;
+mod read_output;
+pub(super) use read_output::run as run_read_output;
+mod resume;
+pub(super) use resume::run as run_resume;
+mod signal_process;
+pub(super) use signal_process::run as run_signal_process;
+mod stats;
+pub(super) use stats::run as run_stats;
 mod state;
 pub(super) use state::run as run_state;
 mod start;
 pub(super) use start::run as run_start;
+mod update;
+pub(super) use update::run as run_update;
 mod wait;
 pub(super) use wait::run as run_wait;
+mod wait_process;
+pub(super) use wait_process::run as run_wait_process;
+mod write_stdin;
+pub(super) use write_stdin::run as run_write_stdin;
 
 pub(super) async fn run(
     shim: &Path,
@@ -701,12 +735,30 @@ struct QualificationHvfDriver {
     recovery_start: Option<StartRequest>,
     recovery_kill: Option<KillRequest>,
     recovery_exec: Option<ExecRequest>,
+    recovery_signal_process: Option<SignalProcessRequest>,
+    recovery_signal_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_write_stdin: Option<WriteStdinRequest>,
+    recovery_write_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_close_stdin: Option<CloseStdinRequest>,
+    recovery_close_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_pause: Option<ContainerOperationRequest>,
+    recovery_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_resume: Option<ContainerOperationRequest>,
+    recovery_update: Option<UpdateRequest>,
+    recovery_update_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    recovery_exec_is_live: bool,
     recovery_marker: Option<PathBuf>,
     recovery_calls: AtomicU32,
     rehydrated_created_record: AtomicBool,
     rehydrated_running_record: AtomicBool,
     rehydrated_stopped_record: AtomicBool,
     rehydrated_exec_record: AtomicBool,
+    rehydrated_signal_process: AtomicBool,
+    rehydrated_write_stdin: AtomicBool,
+    rehydrated_close_stdin: AtomicBool,
+    rehydrated_paused_record: AtomicBool,
+    rehydrated_resumed_record: AtomicBool,
+    rehydrated_update: AtomicBool,
     rehydrated_running_pid: AtomicI32,
     rehydrated_exec_pid: AtomicI32,
     create_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
@@ -714,12 +766,38 @@ struct QualificationHvfDriver {
     kill_identity: StdMutex<Option<(OperationId, ContainerTarget, a3s_oci_sdk::Signal, bool)>>,
     delete_identity: StdMutex<Option<(OperationId, ContainerTarget, DeleteMode)>>,
     wait_identity: StdMutex<Option<(ContainerTarget, Option<u64>)>>,
+    wait_process_identity: StdMutex<Option<(ProcessTarget, Option<u64>)>>,
     exec_identity: StdMutex<Option<DriverExecRequest>>,
+    signal_process_identity: StdMutex<Option<DriverSignalProcessRequest>>,
+    write_stdin_identity: StdMutex<Option<DriverWriteStdinRequest>>,
+    close_stdin_identity: StdMutex<Option<DriverCloseStdinRequest>>,
+    pause_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
+    resume_identity: StdMutex<Option<(OperationId, ContainerTarget)>>,
+    processes_identity: StdMutex<Option<ContainerTarget>>,
+    update_identity: StdMutex<Option<DriverUpdateRequest>>,
+    stats_identity: StdMutex<Option<ContainerTarget>>,
+    read_output_identity: StdMutex<Option<DriverReadOutputRequest>>,
     start_calls: AtomicU32,
     kill_calls: AtomicU32,
     delete_calls: AtomicU32,
     wait_calls: AtomicU32,
+    wait_process_calls: AtomicU32,
     exec_calls: AtomicU32,
+    signal_process_calls: AtomicU32,
+    write_stdin_calls: AtomicU32,
+    close_stdin_calls: AtomicU32,
+    pause_calls: AtomicU32,
+    resume_calls: AtomicU32,
+    processes_calls: AtomicU32,
+    update_calls: AtomicU32,
+    stats_calls: AtomicU32,
+    read_output_calls: AtomicU32,
+}
+
+struct WaitProcessRecovery {
+    signal_process: SignalProcessRequest,
+    signal_ready_marker: (PathBuf, Vec<u8>),
+    exec_is_live: bool,
 }
 
 impl QualificationHvfDriver {
@@ -804,6 +882,166 @@ impl QualificationHvfDriver {
         )
     }
 
+    fn with_signal_process_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_exec: ExecRequest,
+        recovery_signal_process: Option<SignalProcessRequest>,
+        recovery_signal_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            Some(recovery_exec),
+        );
+        driver.recovery_signal_process = recovery_signal_process;
+        driver.recovery_signal_ready_marker = recovery_signal_ready_marker;
+        driver
+    }
+
+    fn with_write_stdin_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_exec: ExecRequest,
+        recovery_write_stdin: Option<WriteStdinRequest>,
+        recovery_write_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            Some(recovery_exec),
+        );
+        driver.recovery_write_stdin = recovery_write_stdin;
+        driver.recovery_write_ready_marker = recovery_write_ready_marker;
+        driver
+    }
+
+    fn with_close_stdin_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_exec: ExecRequest,
+        recovery_close_stdin: Option<CloseStdinRequest>,
+        recovery_close_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            Some(recovery_exec),
+        );
+        driver.recovery_close_stdin = recovery_close_stdin;
+        driver.recovery_close_ready_marker = recovery_close_ready_marker;
+        driver
+    }
+
+    fn with_pause_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_pause: Option<ContainerOperationRequest>,
+        recovery_pause_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            None,
+        );
+        driver.recovery_pause = recovery_pause;
+        driver.recovery_pause_ready_marker = recovery_pause_ready_marker;
+        driver
+    }
+
+    fn with_resume_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_pause: ContainerOperationRequest,
+        recovery_pause_ready_marker: (PathBuf, Vec<u8>),
+        recovery_resume: Option<ContainerOperationRequest>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            None,
+        );
+        driver.recovery_pause = Some(recovery_pause);
+        driver.recovery_pause_ready_marker = Some(recovery_pause_ready_marker);
+        driver.recovery_resume = recovery_resume;
+        driver
+    }
+
+    fn with_update_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_update: Option<UpdateRequest>,
+        recovery_update_ready_marker: Option<(PathBuf, Vec<u8>)>,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            None,
+        );
+        driver.recovery_update = recovery_update;
+        driver.recovery_update_ready_marker = recovery_update_ready_marker;
+        driver
+    }
+
+    fn with_wait_process_recovery(
+        session: Arc<UtilityVmSession>,
+        vm_rootfs: PathBuf,
+        recovery_create: CreateRequest,
+        recovery_start: StartRequest,
+        recovery_exec: ExecRequest,
+        recovery: WaitProcessRecovery,
+    ) -> Self {
+        let mut driver = Self::with_recovery_operations(
+            session,
+            vm_rootfs,
+            recovery_create,
+            Some(recovery_start),
+            None,
+            None,
+            Some(recovery_exec),
+        );
+        driver.recovery_signal_process = Some(recovery.signal_process);
+        driver.recovery_signal_ready_marker = Some(recovery.signal_ready_marker);
+        driver.recovery_exec_is_live = recovery.exec_is_live;
+        driver
+    }
+
     fn with_recovery_operations(
         session: Arc<UtilityVmSession>,
         vm_rootfs: PathBuf,
@@ -827,11 +1065,29 @@ impl QualificationHvfDriver {
             recovery_kill,
             recovery_marker,
             recovery_exec,
+            recovery_signal_process: None,
+            recovery_signal_ready_marker: None,
+            recovery_write_stdin: None,
+            recovery_write_ready_marker: None,
+            recovery_close_stdin: None,
+            recovery_close_ready_marker: None,
+            recovery_pause: None,
+            recovery_pause_ready_marker: None,
+            recovery_resume: None,
+            recovery_update: None,
+            recovery_update_ready_marker: None,
+            recovery_exec_is_live: true,
             recovery_calls: AtomicU32::new(0),
             rehydrated_created_record: AtomicBool::new(false),
             rehydrated_running_record: AtomicBool::new(false),
             rehydrated_stopped_record: AtomicBool::new(false),
             rehydrated_exec_record: AtomicBool::new(false),
+            rehydrated_signal_process: AtomicBool::new(false),
+            rehydrated_write_stdin: AtomicBool::new(false),
+            rehydrated_close_stdin: AtomicBool::new(false),
+            rehydrated_paused_record: AtomicBool::new(false),
+            rehydrated_resumed_record: AtomicBool::new(false),
+            rehydrated_update: AtomicBool::new(false),
             rehydrated_running_pid: AtomicI32::new(0),
             rehydrated_exec_pid: AtomicI32::new(0),
             create_identity: StdMutex::new(None),
@@ -839,12 +1095,32 @@ impl QualificationHvfDriver {
             kill_identity: StdMutex::new(None),
             delete_identity: StdMutex::new(None),
             wait_identity: StdMutex::new(None),
+            wait_process_identity: StdMutex::new(None),
             exec_identity: StdMutex::new(None),
+            signal_process_identity: StdMutex::new(None),
+            write_stdin_identity: StdMutex::new(None),
+            close_stdin_identity: StdMutex::new(None),
+            pause_identity: StdMutex::new(None),
+            resume_identity: StdMutex::new(None),
+            processes_identity: StdMutex::new(None),
+            update_identity: StdMutex::new(None),
+            stats_identity: StdMutex::new(None),
+            read_output_identity: StdMutex::new(None),
             start_calls: AtomicU32::new(0),
             kill_calls: AtomicU32::new(0),
             delete_calls: AtomicU32::new(0),
             wait_calls: AtomicU32::new(0),
+            wait_process_calls: AtomicU32::new(0),
             exec_calls: AtomicU32::new(0),
+            signal_process_calls: AtomicU32::new(0),
+            write_stdin_calls: AtomicU32::new(0),
+            close_stdin_calls: AtomicU32::new(0),
+            pause_calls: AtomicU32::new(0),
+            resume_calls: AtomicU32::new(0),
+            processes_calls: AtomicU32::new(0),
+            update_calls: AtomicU32::new(0),
+            stats_calls: AtomicU32::new(0),
+            read_output_calls: AtomicU32::new(0),
         }
     }
 
@@ -866,6 +1142,30 @@ impl QualificationHvfDriver {
 
     fn rehydrated_exec_record(&self) -> bool {
         self.rehydrated_exec_record.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_signal_process(&self) -> bool {
+        self.rehydrated_signal_process.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_write_stdin(&self) -> bool {
+        self.rehydrated_write_stdin.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_close_stdin(&self) -> bool {
+        self.rehydrated_close_stdin.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_paused_record(&self) -> bool {
+        self.rehydrated_paused_record.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_resumed_record(&self) -> bool {
+        self.rehydrated_resumed_record.load(Ordering::SeqCst)
+    }
+
+    fn rehydrated_update(&self) -> bool {
+        self.rehydrated_update.load(Ordering::SeqCst)
     }
 
     fn rehydrated_running_pid(&self) -> Option<i32> {
@@ -898,8 +1198,48 @@ impl QualificationHvfDriver {
         self.wait_calls.load(Ordering::SeqCst)
     }
 
+    fn wait_process_calls(&self) -> u32 {
+        self.wait_process_calls.load(Ordering::SeqCst)
+    }
+
     fn exec_calls(&self) -> u32 {
         self.exec_calls.load(Ordering::SeqCst)
+    }
+
+    fn signal_process_calls(&self) -> u32 {
+        self.signal_process_calls.load(Ordering::SeqCst)
+    }
+
+    fn write_stdin_calls(&self) -> u32 {
+        self.write_stdin_calls.load(Ordering::SeqCst)
+    }
+
+    fn close_stdin_calls(&self) -> u32 {
+        self.close_stdin_calls.load(Ordering::SeqCst)
+    }
+
+    fn pause_calls(&self) -> u32 {
+        self.pause_calls.load(Ordering::SeqCst)
+    }
+
+    fn resume_calls(&self) -> u32 {
+        self.resume_calls.load(Ordering::SeqCst)
+    }
+
+    fn processes_calls(&self) -> u32 {
+        self.processes_calls.load(Ordering::SeqCst)
+    }
+
+    fn update_calls(&self) -> u32 {
+        self.update_calls.load(Ordering::SeqCst)
+    }
+
+    fn stats_calls(&self) -> u32 {
+        self.stats_calls.load(Ordering::SeqCst)
+    }
+
+    fn read_output_calls(&self) -> u32 {
+        self.read_output_calls.load(Ordering::SeqCst)
     }
 
     async fn shutdown(&self) -> AgentVmSmokeReport {
@@ -951,12 +1291,94 @@ impl QualificationHvfDriver {
             .ok_or_else(|| "qualification HVF driver recorded no wait dispatch".to_string())
     }
 
+    fn wait_process_identity(&self) -> std::result::Result<(ProcessTarget, Option<u64>), String> {
+        self.wait_process_identity
+            .lock()
+            .map_err(|_| "qualification HVF wait-process-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no WaitProcess dispatch".to_string())
+    }
+
     fn exec_identity(&self) -> std::result::Result<DriverExecRequest, String> {
         self.exec_identity
             .lock()
             .map_err(|_| "qualification HVF exec-identity lock was poisoned".to_string())?
             .clone()
             .ok_or_else(|| "qualification HVF driver recorded no exec dispatch".to_string())
+    }
+
+    fn signal_process_identity(&self) -> std::result::Result<DriverSignalProcessRequest, String> {
+        self.signal_process_identity
+            .lock()
+            .map_err(|_| "qualification HVF signal-process-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| {
+                "qualification HVF driver recorded no SignalProcess dispatch".to_string()
+            })
+    }
+
+    fn write_stdin_identity(&self) -> std::result::Result<DriverWriteStdinRequest, String> {
+        self.write_stdin_identity
+            .lock()
+            .map_err(|_| "qualification HVF write-stdin-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no WriteStdin dispatch".to_string())
+    }
+
+    fn close_stdin_identity(&self) -> std::result::Result<DriverCloseStdinRequest, String> {
+        self.close_stdin_identity
+            .lock()
+            .map_err(|_| "qualification HVF close-stdin-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no CloseStdin dispatch".to_string())
+    }
+
+    fn pause_identity(&self) -> std::result::Result<(OperationId, ContainerTarget), String> {
+        self.pause_identity
+            .lock()
+            .map_err(|_| "qualification HVF pause-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no Pause dispatch".to_string())
+    }
+
+    fn resume_identity(&self) -> std::result::Result<(OperationId, ContainerTarget), String> {
+        self.resume_identity
+            .lock()
+            .map_err(|_| "qualification HVF resume-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no Resume dispatch".to_string())
+    }
+
+    fn processes_identity(&self) -> std::result::Result<ContainerTarget, String> {
+        self.processes_identity
+            .lock()
+            .map_err(|_| "qualification HVF processes-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no Processes dispatch".to_string())
+    }
+
+    fn update_identity(&self) -> std::result::Result<DriverUpdateRequest, String> {
+        self.update_identity
+            .lock()
+            .map_err(|_| "qualification HVF update-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no Update dispatch".to_string())
+    }
+
+    fn stats_identity(&self) -> std::result::Result<ContainerTarget, String> {
+        self.stats_identity
+            .lock()
+            .map_err(|_| "qualification HVF stats-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no Stats dispatch".to_string())
+    }
+
+    fn read_output_identity(&self) -> std::result::Result<DriverReadOutputRequest, String> {
+        self.read_output_identity
+            .lock()
+            .map_err(|_| "qualification HVF read-output-identity lock was poisoned".to_string())?
+            .clone()
+            .ok_or_else(|| "qualification HVF driver recorded no ReadOutput dispatch".to_string())
     }
 
     fn guest_bundle(&self, bundle: &OciBundle) -> Result<a3s_oci_agent_protocol::GuestPath> {
@@ -1063,6 +1485,210 @@ impl QualificationHvfDriver {
             },
             process: request.process.clone(),
             io: request.io.clone(),
+        })
+    }
+
+    fn recovery_signal_process_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverSignalProcessRequest> {
+        let request = self.recovery_signal_process.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained SignalProcess request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .recovery_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "qualification HVF SignalProcess recovery has no retained Exec request",
+                )
+                .for_operation("recover-qualification-hvf")
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.recovery_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery SignalProcess target differs from the durable Exec process",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverSignalProcessRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
+            signal: request.signal,
+        })
+    }
+
+    fn recovery_write_stdin_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverWriteStdinRequest> {
+        let request = self.recovery_write_stdin.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained WriteStdin request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .recovery_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "qualification HVF WriteStdin recovery has no retained Exec request",
+                )
+                .for_operation("recover-qualification-hvf")
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.recovery_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery WriteStdin target differs from the durable Exec process",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverWriteStdinRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
+            data: request.data.clone(),
+        })
+    }
+
+    fn recovery_close_stdin_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverCloseStdinRequest> {
+        let request = self.recovery_close_stdin.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained CloseStdin request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_container =
+            ContainerTarget::exact(request.process.container.id.clone(), record.generation);
+        let expected_process_id = self
+            .recovery_exec
+            .as_ref()
+            .map(|exec| &exec.process_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::FailedPrecondition,
+                    "qualification HVF CloseStdin recovery has no retained Exec request",
+                )
+                .for_operation("recover-qualification-hvf")
+            })?;
+        if request.process.container != exact_container
+            || request.process.container.id != self.recovery_create.id
+            || &request.process.process_id != expected_process_id
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery CloseStdin target differs from the durable Exec process",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverCloseStdinRequest {
+            context: request.context.clone(),
+            target: ProcessTarget {
+                container: exact_container,
+                process_id: request.process.process_id.clone(),
+            },
+        })
+    }
+
+    fn recovery_pause_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverContainerOperationRequest> {
+        let request = self.recovery_pause.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained Pause request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.recovery_create.id {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery Pause target differs from the durable record",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverContainerOperationRequest {
+            context: request.context.clone(),
+            target: exact_target,
+        })
+    }
+
+    fn recovery_resume_request(
+        &self,
+        record: &ContainerRecord,
+    ) -> Result<DriverContainerOperationRequest> {
+        let request = self.recovery_resume.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained Resume request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.recovery_create.id {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery Resume target differs from the durable record",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverContainerOperationRequest {
+            context: request.context.clone(),
+            target: exact_target,
+        })
+    }
+
+    fn recovery_update_request(&self, record: &ContainerRecord) -> Result<DriverUpdateRequest> {
+        let request = self.recovery_update.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF replacement has no retained Update request",
+            )
+            .for_operation("recover-qualification-hvf")
+        })?;
+        let exact_target = ContainerTarget::exact(request.target.id.clone(), record.generation);
+        if request.target != exact_target || request.target.id != self.recovery_create.id {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF recovery Update target differs from the durable record",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        Ok(DriverUpdateRequest {
+            context: request.context.clone(),
+            target: exact_target,
+            resources: request.resources.clone(),
         })
     }
 
@@ -1229,6 +1855,268 @@ impl QualificationHvfDriver {
         self.exec_calls.fetch_add(1, Ordering::SeqCst);
         self.client.exec(request).await
     }
+
+    async fn dispatch_signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        {
+            let mut retained = self.signal_process_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF signal-process-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-signal-process")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed SignalProcess request",
+                    )
+                    .for_operation("qualification-hvf-signal-process"));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.signal_process_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.signal_process(request).await
+    }
+
+    async fn dispatch_write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        {
+            let mut retained = self.write_stdin_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF write-stdin-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-write-stdin")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed WriteStdin request",
+                    )
+                    .for_operation("qualification-hvf-write-stdin"));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.write_stdin_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.write_stdin(request).await
+    }
+
+    async fn dispatch_close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
+        {
+            let mut retained = self.close_stdin_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF close-stdin-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-close-stdin")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed CloseStdin request",
+                    )
+                    .for_operation("qualification-hvf-close-stdin"));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.close_stdin_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.close_stdin(request).await
+    }
+
+    async fn dispatch_pause(
+        &self,
+        request: DriverContainerOperationRequest,
+    ) -> Result<DriverState> {
+        let identity = (request.context.operation_id.clone(), request.target.clone());
+        {
+            let mut retained = self.pause_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF pause-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-pause")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed Pause identity",
+                    )
+                    .for_operation("qualification-hvf-pause"));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.pause_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.pause(request).await
+    }
+
+    async fn dispatch_resume(
+        &self,
+        request: DriverContainerOperationRequest,
+    ) -> Result<DriverState> {
+        let identity = (request.context.operation_id.clone(), request.target.clone());
+        {
+            let mut retained = self.resume_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF resume-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-resume")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed Resume identity",
+                    )
+                    .for_operation("qualification-hvf-resume"));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.resume_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.resume(request).await
+    }
+
+    async fn dispatch_processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        {
+            let mut retained = self.processes_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF processes-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-processes")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &target => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed Processes target",
+                    )
+                    .for_operation("qualification-hvf-processes"));
+                }
+                Some(_) => {}
+                None => *retained = Some(target.clone()),
+            }
+        }
+        self.processes_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.processes(target).await
+    }
+
+    async fn dispatch_update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        {
+            let mut retained = self.update_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF update-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-update")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed Update request",
+                    )
+                    .for_operation("qualification-hvf-update"));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.update_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.update(request).await
+    }
+
+    async fn dispatch_stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        {
+            let mut retained = self.stats_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF stats-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-stats")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &target => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed Stats target",
+                    )
+                    .for_operation("qualification-hvf-stats"));
+                }
+                Some(_) => {}
+                None => *retained = Some(target.clone()),
+            }
+        }
+        self.stats_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.stats(target).await
+    }
+
+    async fn dispatch_read_output(
+        &self,
+        request: DriverReadOutputRequest,
+    ) -> Result<Vec<OutputChunk>> {
+        {
+            let mut retained = self.read_output_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF read-output-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-read-output")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &request => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed ReadOutput request",
+                    )
+                    .for_operation("qualification-hvf-read-output"));
+                }
+                Some(_) => {}
+                None => *retained = Some(request.clone()),
+            }
+        }
+        self.read_output_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.read_output(request).await
+    }
+
+    async fn dispatch_wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        let identity = (request.target.clone(), request.timeout_ms);
+        {
+            let mut retained = self.wait_process_identity.lock().map_err(|_| {
+                Error::new(
+                    ErrorCode::Internal,
+                    "qualification HVF wait-process-identity lock was poisoned",
+                )
+                .for_operation("qualification-hvf-wait-process")
+            })?;
+            match retained.as_ref() {
+                Some(existing) if existing != &identity => {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "qualification HVF driver received a changed WaitProcess request",
+                    )
+                    .for_operation("qualification-hvf-wait-process"));
+                }
+                Some(_) => {}
+                None => *retained = Some(identity),
+            }
+        }
+        self.wait_process_calls.fetch_add(1, Ordering::SeqCst);
+        self.client.wait_process(request).await
+    }
 }
 
 #[async_trait]
@@ -1269,7 +2157,23 @@ impl RuntimeDriver for QualificationHvfDriver {
         {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
-                "qualification HVF replacement accepts only its interrupted Create, Start, Kill, Delete, Wait, or Exec record",
+                "qualification HVF replacement accepts only its interrupted Create, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, or Update record",
+            )
+            .for_operation("recover-qualification-hvf"));
+        }
+        let freezer_recovery_matches = match (
+            self.recovery_pause.is_some(),
+            self.recovery_resume.is_some(),
+        ) {
+            (false, false) => !record.is_paused(),
+            (true, false) => record.is_paused(),
+            (true, true) => !record.is_paused(),
+            (false, true) => false,
+        };
+        if *record.state.status() == ContainerState::Running && !freezer_recovery_matches {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "qualification HVF Pause/Resume recovery requests do not match the durable freezer state",
             )
             .for_operation("recover-qualification-hvf"));
         }
@@ -1328,6 +2232,108 @@ impl RuntimeDriver for QualificationHvfDriver {
                 .store(running_pid, Ordering::SeqCst);
             self.rehydrated_running_record.store(true, Ordering::SeqCst);
             if *record.state.status() == ContainerState::Running {
+                if self.recovery_update.is_some() {
+                    let (marker, expected) =
+                        self.recovery_update_ready_marker.as_ref().ok_or_else(|| {
+                            Error::new(
+                                ErrorCode::FailedPrecondition,
+                                "qualification HVF Update recovery has no init readiness marker",
+                            )
+                            .for_operation("recover-qualification-hvf")
+                        })?;
+                    exec::support::wait_for_exact_marker(
+                        marker,
+                        expected,
+                        "replacement Update init readiness",
+                    )
+                    .await
+                    .map_err(|reason| {
+                        Error::new(ErrorCode::FailedPrecondition, reason)
+                            .for_operation("recover-qualification-hvf")
+                    })?;
+                    let updated = self
+                        .dispatch_update(self.recovery_update_request(record)?)
+                        .await?;
+                    if updated.status() != ContainerState::Running
+                        || updated.paused()
+                        || updated.pid() != Some(running_pid)
+                    {
+                        return Err(Error::new(
+                            ErrorCode::Conflict,
+                            format!(
+                                "replacement Guest rebuilt Update as {} with PID {:?} and paused={}; durable state requires unpaused running PID {running_pid}",
+                                updated.status(),
+                                updated.pid(),
+                                updated.paused()
+                            ),
+                        )
+                        .for_operation("recover-qualification-hvf"));
+                    }
+                    self.rehydrated_update.store(true, Ordering::SeqCst);
+                    return DriverRecovery::recreated_running(updated);
+                }
+                if self.recovery_pause.is_some() {
+                    let (marker, expected) =
+                        self.recovery_pause_ready_marker.as_ref().ok_or_else(|| {
+                            Error::new(
+                                ErrorCode::FailedPrecondition,
+                                "qualification HVF Pause recovery has no init readiness marker",
+                            )
+                            .for_operation("recover-qualification-hvf")
+                        })?;
+                    exec::support::wait_for_exact_marker(
+                        marker,
+                        expected,
+                        "replacement Pause init readiness",
+                    )
+                    .await
+                    .map_err(|reason| {
+                        Error::new(ErrorCode::FailedPrecondition, reason)
+                            .for_operation("recover-qualification-hvf")
+                    })?;
+                    let paused = self
+                        .dispatch_pause(self.recovery_pause_request(record)?)
+                        .await?;
+                    if paused.status() != ContainerState::Running
+                        || !paused.paused()
+                        || paused.pid() != Some(running_pid)
+                    {
+                        return Err(Error::new(
+                            ErrorCode::Conflict,
+                            format!(
+                                "replacement Guest rebuilt Pause as {} with PID {:?} and paused={}; durable state requires paused running PID {running_pid}",
+                                paused.status(),
+                                paused.pid(),
+                                paused.paused()
+                            ),
+                        )
+                        .for_operation("recover-qualification-hvf"));
+                    }
+                    self.rehydrated_paused_record.store(true, Ordering::SeqCst);
+                    if self.recovery_resume.is_some() {
+                        let resumed = self
+                            .dispatch_resume(self.recovery_resume_request(record)?)
+                            .await?;
+                        if resumed.status() != ContainerState::Running
+                            || resumed.paused()
+                            || resumed.pid() != Some(running_pid)
+                        {
+                            return Err(Error::new(
+                                ErrorCode::Conflict,
+                                format!(
+                                    "replacement Guest rebuilt Resume as {} with PID {:?} and paused={}; durable state requires unpaused running PID {running_pid}",
+                                    resumed.status(),
+                                    resumed.pid(),
+                                    resumed.paused()
+                                ),
+                            )
+                            .for_operation("recover-qualification-hvf"));
+                        }
+                        self.rehydrated_resumed_record.store(true, Ordering::SeqCst);
+                        return DriverRecovery::recreated_running(resumed);
+                    }
+                    return DriverRecovery::recreated_paused_running(paused);
+                }
                 if self.recovery_exec.is_some() {
                     let request = self.recovery_exec_request(record)?;
                     let target = request.target.clone();
@@ -1342,14 +2348,86 @@ impl RuntimeDriver for QualificationHvfDriver {
                     })?;
                     self.rehydrated_exec_pid.store(pid, Ordering::SeqCst);
                     self.rehydrated_exec_record.store(true, Ordering::SeqCst);
-                    return DriverRecovery::recreated_running_with_processes(
-                        running,
-                        vec![ProcessRecord {
-                            target,
-                            pid: Some(durable_pid),
-                            terminal: process.terminal(),
-                        }],
-                    );
+                    if self.recovery_signal_process.is_some() {
+                        let (marker, expected) =
+                            self.recovery_signal_ready_marker.as_ref().ok_or_else(|| {
+                                Error::new(
+                                    ErrorCode::FailedPrecondition,
+                                    "qualification HVF SignalProcess recovery has no Exec readiness marker",
+                                )
+                                .for_operation("recover-qualification-hvf")
+                            })?;
+                        exec::support::wait_for_exact_marker(
+                            marker,
+                            expected,
+                            "replacement signalable Exec readiness",
+                        )
+                        .await
+                        .map_err(|reason| {
+                            Error::new(ErrorCode::FailedPrecondition, reason)
+                                .for_operation("recover-qualification-hvf")
+                        })?;
+                        let request = self.recovery_signal_process_request(record)?;
+                        self.dispatch_signal_process(request).await?;
+                        self.rehydrated_signal_process.store(true, Ordering::SeqCst);
+                    }
+                    if self.recovery_write_stdin.is_some() {
+                        let (marker, expected) =
+                            self.recovery_write_ready_marker.as_ref().ok_or_else(|| {
+                                Error::new(
+                                    ErrorCode::FailedPrecondition,
+                                    "qualification HVF WriteStdin recovery has no Exec readiness marker",
+                                )
+                                .for_operation("recover-qualification-hvf")
+                            })?;
+                        exec::support::wait_for_exact_marker(
+                            marker,
+                            expected,
+                            "replacement stdin Exec readiness",
+                        )
+                        .await
+                        .map_err(|reason| {
+                            Error::new(ErrorCode::FailedPrecondition, reason)
+                                .for_operation("recover-qualification-hvf")
+                        })?;
+                        let request = self.recovery_write_stdin_request(record)?;
+                        self.dispatch_write_stdin(request).await?;
+                        self.rehydrated_write_stdin.store(true, Ordering::SeqCst);
+                    }
+                    if self.recovery_close_stdin.is_some() {
+                        let (marker, expected) =
+                            self.recovery_close_ready_marker.as_ref().ok_or_else(|| {
+                                Error::new(
+                                    ErrorCode::FailedPrecondition,
+                                    "qualification HVF CloseStdin recovery has no Exec readiness marker",
+                                )
+                                .for_operation("recover-qualification-hvf")
+                            })?;
+                        exec::support::wait_for_exact_marker(
+                            marker,
+                            expected,
+                            "replacement closable stdin Exec readiness",
+                        )
+                        .await
+                        .map_err(|reason| {
+                            Error::new(ErrorCode::FailedPrecondition, reason)
+                                .for_operation("recover-qualification-hvf")
+                        })?;
+                        let request = self.recovery_close_stdin_request(record)?;
+                        self.dispatch_close_stdin(request).await?;
+                        self.rehydrated_close_stdin.store(true, Ordering::SeqCst);
+                    }
+                    if self.recovery_exec_is_live {
+                        return DriverRecovery::recreated_running_with_processes(
+                            running,
+                            vec![ProcessRecord {
+                                target,
+                                pid: Some(durable_pid),
+                                terminal: process.terminal(),
+                            }],
+                        );
+                    }
+                    return DriverRecovery::recreated_running(running);
                 }
                 return DriverRecovery::recreated_running(running);
             }
@@ -1412,6 +2490,46 @@ impl RuntimeDriver for QualificationHvfDriver {
 
     async fn exec(&self, request: DriverExecRequest) -> Result<DriverProcess> {
         self.dispatch_exec(request).await
+    }
+
+    async fn signal_process(&self, request: DriverSignalProcessRequest) -> Result<()> {
+        self.dispatch_signal_process(request).await
+    }
+
+    async fn write_stdin(&self, request: DriverWriteStdinRequest) -> Result<()> {
+        self.dispatch_write_stdin(request).await
+    }
+
+    async fn close_stdin(&self, request: DriverCloseStdinRequest) -> Result<()> {
+        self.dispatch_close_stdin(request).await
+    }
+
+    async fn pause(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.dispatch_pause(request).await
+    }
+
+    async fn resume(&self, request: DriverContainerOperationRequest) -> Result<DriverState> {
+        self.dispatch_resume(request).await
+    }
+
+    async fn processes(&self, target: ContainerTarget) -> Result<Vec<ProcessRecord>> {
+        self.dispatch_processes(target).await
+    }
+
+    async fn update(&self, request: DriverUpdateRequest) -> Result<DriverState> {
+        self.dispatch_update(request).await
+    }
+
+    async fn stats(&self, target: ContainerTarget) -> Result<ContainerStats> {
+        self.dispatch_stats(target).await
+    }
+
+    async fn read_output(&self, request: DriverReadOutputRequest) -> Result<Vec<OutputChunk>> {
+        self.dispatch_read_output(request).await
+    }
+
+    async fn wait_process(&self, request: DriverWaitProcessRequest) -> Result<ExitStatus> {
+        self.dispatch_wait_process(request).await
     }
 }
 

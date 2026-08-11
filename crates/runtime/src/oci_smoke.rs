@@ -15,7 +15,7 @@ use crate::{
     all(target_os = "windows", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
-mod utility_vm;
+pub(crate) mod utility_vm;
 
 /// Exercise the fixed OCI core lifecycle inside one utility VM.
 ///
@@ -404,5 +404,318 @@ pub async fn oci_vm_exec_reopen_replacement_at(
     {
         let _ = (shim, vm_rootfs, bundle, console_directory);
         OciVmOperationReopenReplacementReport::unsupported_exec(HostPlatform::current(), stage)
+    }
+}
+
+/// Reissue one interrupted SignalProcess through a replacement macOS HVF owner.
+///
+/// Recovery always rebuilds the exact live terminal Exec. If the first Host
+/// journal already committed, recovery reapplies the signal to that fresh
+/// process before the API retry replays without another driver dispatch.
+#[must_use]
+pub async fn oci_vm_signal_process_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_signal_process_reopen_replacement(
+            shim,
+            vm_rootfs,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_signal_process(
+            HostPlatform::current(),
+            stage,
+        )
+    }
+}
+
+/// Reissue one interrupted non-init WaitProcess through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds and terminates the exact terminal Exec. An uncommitted
+/// WaitProcess is dispatched once after reopen; a committed result and every
+/// later wait replay from the durable non-init exit cache.
+#[must_use]
+pub async fn oci_vm_wait_process_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_wait_process_reopen_replacement(
+            shim,
+            vm_rootfs,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_wait_process(
+            HostPlatform::current(),
+            stage,
+        )
+    }
+}
+
+/// Reissue one interrupted Pause through a replacement macOS HVF owner.
+///
+/// An uncommitted Pause rebuilds an unpaused running init and dispatches the
+/// original request once after reopen. A committed Pause rebuilds the init,
+/// waits for its exact readiness marker, reapplies the freezer state, repairs
+/// Create, Start, and Pause journal PIDs, and replays without API dispatch.
+#[must_use]
+pub async fn oci_vm_pause_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_pause_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_pause(HostPlatform::current(), stage)
+    }
+}
+
+/// Reissue one interrupted Processes query through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact live init and terminal Exec processes, repairs
+/// their durable PIDs, and then reissues the read-only inventory query once on
+/// every stage, including after a complete first-owner response.
+#[must_use]
+pub async fn oci_vm_processes_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_processes_reopen_replacement(
+            shim,
+            vm_rootfs,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_processes(HostPlatform::current(), stage)
+    }
+}
+
+/// Reissue one interrupted ReadOutput query through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact captured-output Exec and repairs its response
+/// PID. The read-only cursor request is then dispatched once to every fresh
+/// owner, including after a complete first-owner response.
+#[must_use]
+pub async fn oci_vm_read_output_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_read_output_reopen_replacement(
+            shim,
+            vm_rootfs,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_read_output(
+            HostPlatform::current(),
+            stage,
+        )
+    }
+}
+
+/// Reissue one interrupted WriteStdin through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact pipe-backed Exec. A write that committed in
+/// the first owner is replayed during recovery before the durable Host journal
+/// serves the API retry; other stages dispatch once after reopen.
+#[must_use]
+pub async fn oci_vm_write_stdin_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_write_stdin_reopen_replacement(
+            shim,
+            vm_rootfs,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_write_stdin(
+            HostPlatform::current(),
+            stage,
+        )
+    }
+}
+
+/// Reissue one interrupted CloseStdin through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the exact pipe-backed Exec. A close that committed in the
+/// first owner is replayed during recovery before the durable Host journal
+/// serves the API retry; other stages dispatch once after reopen.
+#[must_use]
+pub async fn oci_vm_close_stdin_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_close_stdin_reopen_replacement(
+            shim,
+            vm_rootfs,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_close_stdin(
+            HostPlatform::current(),
+            stage,
+        )
+    }
+}
+
+/// Reissue one interrupted Resume through a replacement macOS HVF owner.
+///
+/// Recovery always rebuilds Create, Start, and the setup Pause after the exact
+/// init readiness marker. If the first owner committed Resume, recovery also
+/// reapplies it before the API retry replays without another driver dispatch.
+#[must_use]
+pub async fn oci_vm_resume_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_resume_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_resume(HostPlatform::current(), stage)
+    }
+}
+
+/// Reissue one interrupted Stats query through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds Create and Start, waits for the exact init readiness
+/// marker, reapplies the committed setup Update, repairs its journal response,
+/// and dispatches a fresh Stats query once through every replacement owner.
+#[must_use]
+pub async fn oci_vm_stats_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_stats_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_stats(HostPlatform::current(), stage)
+    }
+}
+
+/// Reissue one interrupted Update through a replacement macOS HVF owner.
+///
+/// Recovery rebuilds the running init for every stage. If the first owner
+/// committed Update, recovery reapplies the complete resource request before
+/// the API retry replays its rebound journal response. Repeated replacement
+/// Stats then prove the resource effect in the fresh Guest.
+#[must_use]
+pub async fn oci_vm_update_reopen_replacement_at(
+    shim: &Path,
+    vm_rootfs: &Path,
+    bundle: &Path,
+    console_directory: &Path,
+    stage: AgentTransportOperationStage,
+) -> OciVmOperationReopenReplacementReport {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        utility_vm::run_update_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
+            .await
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (shim, vm_rootfs, bundle, console_directory);
+        OciVmOperationReopenReplacementReport::unsupported_update(HostPlatform::current(), stage)
     }
 }

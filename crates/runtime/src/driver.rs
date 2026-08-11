@@ -183,6 +183,7 @@ pub(crate) enum RecreatedProcess {
     None,
     Created,
     Running,
+    RunningPaused,
 }
 
 impl DriverRecovery {
@@ -236,6 +237,34 @@ impl DriverRecovery {
     /// Paused and stopped workloads require their own stronger recovery proof.
     pub fn recreated_running(observation: DriverState) -> Result<Self> {
         Self::recreated_running_with_processes(observation, Vec::new())
+    }
+
+    /// Report a frozen running init process rebuilt by a replacement owner.
+    ///
+    /// The replacement must recreate and start the process, then reapply the
+    /// durable freezer state before returning this evidence. Live Exec
+    /// recovery for paused containers is not accepted by this mode.
+    pub fn recreated_paused_running(observation: DriverState) -> Result<Self> {
+        if observation.status() != ContainerState::Running || !observation.paused() {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "recreated paused recovery requires a paused running driver state",
+            )
+            .for_operation("construct-driver-recovery"));
+        }
+        if observation.pid().is_none_or(|pid| pid <= 0) {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                "recreated paused recovery requires a positive init PID",
+            )
+            .for_operation("construct-driver-recovery"));
+        }
+        Ok(Self {
+            observation: Some(observation),
+            init_exit_status: None,
+            recreated_process: RecreatedProcess::RunningPaused,
+            recreated_exec_processes: Vec::new(),
+        })
     }
 
     /// Report a running init process and every live exec process rebuilt by a

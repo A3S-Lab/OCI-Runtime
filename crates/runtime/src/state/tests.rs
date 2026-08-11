@@ -15,9 +15,11 @@ use super::{
     DurableStateStore, ProcessOperationPreparation, ProcessWaitPreparation,
     RecordOperationPreparation, SignalProcessPreparation,
 };
+use crate::DriverState;
 
 mod events;
 mod fault_matrix;
+mod recovery;
 
 const TEST_CONFIG: &str = concat!(
     "{\n",
@@ -625,6 +627,92 @@ async fn freezer_state_is_durable_idempotent_and_generation_fenced() {
             .code,
         ErrorCode::Conflict
     );
+}
+
+#[tokio::test]
+async fn recreated_paused_running_process_rebinds_all_completed_setup_journals() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let create = create_request(
+        &bundle_directory,
+        "paused-recovery-container",
+        "paused-recovery-create",
+    );
+    let store = DurableStateStore::open(state_root(&temporary))
+        .await
+        .expect("initialize state root");
+    create_container(&store, &create).await;
+    let target = ContainerTarget::exact(create.id.clone(), Generation(1));
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("paused-recovery-start")),
+        target: target.clone(),
+    };
+    store.prepare_start(&start).await.expect("prepare start");
+    store
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+        )
+        .await
+        .expect("complete start");
+    let pause = ContainerOperationRequest {
+        context: OperationContext::new(operation_id("paused-recovery-pause")),
+        target: target.clone(),
+    };
+    store.prepare_pause(&pause).await.expect("prepare pause");
+    store
+        .complete_pause(
+            &pause.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+            true,
+        )
+        .await
+        .expect("complete pause");
+
+    let replacement = DriverState::running(5_151)
+        .and_then(|state| state.with_paused(true))
+        .expect("paused replacement state");
+    let recovered = store
+        .observe_recreated_paused_running_process(&target, replacement)
+        .await
+        .expect("rebind paused process");
+    assert_eq!(*recovered.state.pid(), Some(5_151));
+    assert!(recovered.is_paused());
+
+    let RecordOperationPreparation::Replayed(created) = store
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .expect("replay rebound Create")
+    else {
+        panic!("Create must replay");
+    };
+    assert_eq!(*created.state.pid(), Some(5_151));
+    assert_eq!(*created.state.status(), ContainerState::Created);
+    assert!(!created.is_paused());
+
+    let RecordOperationPreparation::Replayed(started) = store
+        .prepare_start(&start)
+        .await
+        .expect("replay rebound Start")
+    else {
+        panic!("Start must replay");
+    };
+    assert_eq!(*started.state.pid(), Some(5_151));
+    assert_eq!(*started.state.status(), ContainerState::Running);
+    assert!(!started.is_paused());
+
+    let RecordOperationPreparation::Replayed(paused) = store
+        .prepare_pause(&pause)
+        .await
+        .expect("replay rebound Pause")
+    else {
+        panic!("Pause must replay");
+    };
+    assert_eq!(*paused.state.pid(), Some(5_151));
+    assert!(paused.is_paused());
 }
 
 #[tokio::test]

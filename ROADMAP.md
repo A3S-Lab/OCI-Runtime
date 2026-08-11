@@ -798,12 +798,136 @@ enforce it. No property is silently ignored.
     Guest inventories. The August 10, 2026 matrix passed all nine stages in 18
     fresh VMs under
     `a3s.oci.oci-vm-operation-reopen-replacement.v6`.
+  - [x] Carry all nine Host/Guest `signal-process` stages through durable
+    service reopen and an actual HVF owner replacement after exact Create,
+    Start, and a long-running terminal Exec. The first eight paths retain a
+    Prepared SignalProcess journal; replacement recovery recreates init and
+    Exec, then the unchanged signal-10 request dispatches once. A fully written
+    response instead retains SucceededEmpty. Recovery recreates Exec, waits for
+    its nonce-bound readiness marker after the SIGUSR1 trap is installed, and
+    reapplies the committed signal before Host replay returns without another
+    API-driven dispatch. Every path preserves the generation, process ID,
+    complete Exec and SignalProcess identities, and terminal mode; rejects
+    stale and changed Host and Guest requests; requires the replacement trap to
+    write the exact signal marker; force-deletes the generation; and restores
+    Host and Guest inventories. The August 11, 2026 matrix passed all nine
+    stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v7`.
+  - [x] Carry all nine Host/Guest non-init `wait-process` stages through
+    durable service reopen and an actual HVF owner replacement after exact
+    Create, Start, terminal Exec, and signal-10 setup. Recovery always rebuilds
+    the Exec, waits for its nonce-bound readiness marker, and reapplies the
+    committed signal. The first eight paths have no Host process-exit cache, so
+    the unchanged exact target and 15-second timeout dispatch once after
+    reopen. A fully written response already holds `signal=10,
+    oom_killed=false`; replacement and later waits return from that cache with
+    no driver dispatch, while the rebuilt exited process is not advertised as
+    live. Every path preserves setup identities, terminal mode, generation,
+    and process ID; rejects stale Host and Guest generations; force-deletes the
+    still-running init; and restores Host and Guest inventories. The August 11,
+    2026 matrix passed all nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v8`.
+  - [x] Carry all nine Host/Guest `pause` stages through durable service reopen
+    and an actual HVF owner replacement after exact Create and Start. The first
+    eight paths retain an unpaused running record and a Prepared Pause journal;
+    recovery recreates and starts init, rebinds its PID, repairs the completed
+    Create and Start responses, and dispatches the unchanged Pause once. A
+    fully written response instead retains the paused running record and a
+    Succeeded journal. Recovery recreates and starts init, waits for its exact
+    nonce-bound readiness marker, reapplies the committed freezer state, and
+    repairs the Create, Start, and Pause journal PIDs before Host replay returns
+    without API-driven dispatch. Every path preserves generation and complete
+    request identities, rejects changed and stale Host and Guest requests,
+    force-deletes the paused generation, and restores Host and Guest
+    inventories. The August 11, 2026 Apple Silicon matrix passed all nine
+    stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v9`.
+  - [x] Carry all nine Host/Guest `resume` stages through durable service
+    reopen and an actual HVF owner replacement after exact Create, Start, and
+    Pause. Every recovery recreates and starts init, waits for the exact
+    nonce-bound readiness marker, and reapplies the setup Pause with its
+    original identity. The first eight paths retain a paused running record and
+    Prepared Resume journal, then dispatch the unchanged Resume once. A fully
+    written response instead retains an unpaused running record and Succeeded
+    journal; recovery replays Pause and the committed Resume before returning
+    recreated-running evidence, so Create, Start, Pause, and Resume responses
+    all bind to the replacement PID and the Host retry does not dispatch.
+    Every path preserves generation and complete request identities, rejects
+    changed and stale Host and Guest requests, force-deletes the resumed
+    generation, and restores Host and Guest inventories. The August 11, 2026
+    Apple Silicon matrix passed all nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v10`.
+  - [x] Carry all nine Host/Guest read-only `processes` stages through durable
+    service reopen and an actual HVF owner replacement after exact Create,
+    Start, and live terminal Exec setup. Recovery always recreates init and
+    Exec, rebinds both durable PIDs, repairs their completed responses, and
+    verifies the nonce-bound replacement markers. The Processes query then
+    resolves the same exact generation and returns exactly those two logical
+    process identities from the fresh Guest. Because the query is not
+    journaled, every replacement path dispatches it once, including when the
+    first owner wrote a complete response. Every path rejects stale Host and
+    Guest generations, force-deletes the live generation, and restores both
+    owner inventories. The August 11, 2026 Apple Silicon matrix passed all
+    nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v11`.
+  - [x] Carry all nine Host/Guest `update` stages through durable service
+    reopen and an actual HVF owner replacement after exact Create and Start.
+    The first eight paths retain a Prepared Update journal and dispatch the
+    unchanged exact target plus complete `LinuxResources` once after recovery
+    recreates the running init. A fully written response retains a Succeeded
+    journal; recovery waits for the fresh nonce-bound workload marker and
+    reapplies the committed resource request before returning recreated-running
+    evidence, so the Host retry repairs the Update response PID and does not
+    dispatch again. Every path preserves the operation, target, resources, and
+    generation; rejects changed resources and stale Host and Guest generations;
+    reads two replacement Stats snapshots proving the 512 MiB memory limit and
+    monotonic live counters; force-deletes the generation; and restores both
+    owner inventories. The August 11, 2026 Apple Silicon matrix passed all
+    nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v12`.
+  - [x] Carry all nine Host/Guest read-only `stats` stages through durable
+    service reopen and an actual HVF owner replacement after exact Create,
+    Start, and committed Update setup. Every recovery recreates and starts
+    init, waits for its nonce-bound readiness marker, reapplies the complete
+    resource profile to the fresh cgroup, and repairs the completed Create,
+    Start, and Update response PIDs. Stats has no Host response journal, so the
+    replacement query dispatches exactly once at every stage, including after
+    the first owner wrote a complete snapshot. Both delivered snapshots must
+    prove the exact 512 MiB profile and required live counters; the completed
+    first-owner path additionally requires a newer, distinct replacement
+    snapshot. Every path preserves the target and generation, rejects stale
+    Host and Guest generations, force-deletes the generation, and restores
+    both owner inventories. The August 11, 2026 Apple Silicon matrix passed
+    all nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v13`.
+  - [x] Carry all nine Host/Guest read-only `read-output` stages through
+    durable service reopen and actual HVF owner replacement. Recovery rebuilds
+    the exact Create, Start, and non-terminal captured-output Exec requests,
+    repairs all completed response PIDs, and dispatches the same cursor,
+    byte-limit, and long-poll query once to every fresh owner. A delivered
+    first response must match the nonce-bound stdout chunk, while replacement
+    output must come from the rebuilt Exec. Stale Host and Guest generations
+    fail closed, force delete removes the generation, and both owner
+    inventories return to baseline. The August 11, 2026 Apple Silicon matrix
+    passed all nine stages in 18 fresh VMs under
+    `a3s.oci.oci-vm-operation-reopen-replacement.v14`.
+  - [x] Carry all nine Host/Guest `write-stdin` stages through durable
+    service reopen and actual HVF owner replacement. Recovery always rebuilds
+    the exact pipe-backed Exec. The first eight stages leave the Host journal
+    resumable and dispatch the write once after reopen; when the first owner
+    committed the response, recovery replays those exact bytes into the fresh
+    Exec before Host open completes and the API retry returns from the durable
+    journal without another driver call. Exact effect markers, request
+    identity, changed-payload rejection, stale generations, PID rebinding,
+    force delete, and both owner cleanup inventories are required. The
+    August 11, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs
+    under `a3s.oci.oci-vm-operation-reopen-replacement.v15`.
   - [ ] Carry the remaining operations through `HostRuntimeService` reopen and
     actual VM/owner replacement. The portable matrix, eleven real cleanup
-    stages, and all 63 real Create/State/Start/Kill/Delete/Wait/Exec replacement
-    paths do not satisfy the complete 20-operation matrix gate. SignalProcess,
-    WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput,
-    WriteStdin, CloseStdin, Resize, File, and Filesystem remain.
+    stages, and all 144 real Create/State/Start/Kill/Delete/Wait/Exec/
+    SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/
+    WriteStdin replacement paths do not satisfy the complete 20-operation
+    matrix gate. CloseStdin, Resize, File, and Filesystem remain.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

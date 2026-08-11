@@ -13,7 +13,7 @@ use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
-use super::oci_state::{is_paused, rebuild_paused_state};
+use super::oci_state::{is_paused, rebuild_paused_state, rebuild_state};
 use super::operation::{request_digest, validate_deadline, validate_retry};
 use super::{
     claim_active_operation, ensure_active_operation, generation_conflict, DurableStateStore,
@@ -135,7 +135,7 @@ impl DurableStateStore {
                 &digest,
                 operation_name,
             )?;
-            return match &operation.outcome {
+            return match operation.outcome.clone() {
                 StoredOperationStatus::Prepared => {
                     let mut stored = self
                         .load_stored_exact(&operation.container_id, operation.generation)
@@ -197,9 +197,10 @@ impl DurableStateStore {
                     Ok(RecordOperationPreparation::Resume(stored.record))
                 }
                 StoredOperationStatus::Succeeded { response } => {
-                    Ok(RecordOperationPreparation::Replayed(response.clone()))
+                    self.reconcile_succeeded_freezer(operation, response, action)
+                        .await
                 }
-                StoredOperationStatus::Failed { error } => Err(error.clone()),
+                StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::SucceededProcess { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -262,6 +263,68 @@ impl DurableStateStore {
         )
         .await?;
         Ok(RecordOperationPreparation::Prepared(stored.record))
+    }
+
+    async fn reconcile_succeeded_freezer(
+        &self,
+        mut operation: StoredOperation,
+        response: ContainerRecord,
+        action: FreezerAction,
+    ) -> Result<RecordOperationPreparation> {
+        let stored = match self.load_stored_container(&operation.container_id).await {
+            Ok(stored) => stored,
+            Err(error) if error.code == ErrorCode::NotFound => {
+                return Ok(RecordOperationPreparation::Replayed(response));
+            }
+            Err(error) => return Err(error),
+        };
+        if stored.record.generation != operation.generation || stored.record == response {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        if *stored.record.state.status() != ContainerState::Running
+            || *response.state.status() != ContainerState::Running
+            || is_paused(&response.state) != action.desired()
+            || stored.record.state.pid() == response.state.pid()
+        {
+            return Ok(RecordOperationPreparation::Replayed(response));
+        }
+        let rebound_state = rebuild_state(
+            &response.state,
+            ContainerState::Running,
+            *stored.record.state.pid(),
+        )?;
+        let rebound_state = rebuild_paused_state(&rebound_state, action.desired())?;
+        let rebound_response = ContainerRecord {
+            state: rebound_state,
+            ..response
+        };
+        let expected_state =
+            rebuild_paused_state(&rebound_response.state, is_paused(&stored.record.state))?;
+        let expected_durable = ContainerRecord {
+            state: expected_state,
+            ..rebound_response.clone()
+        };
+        if expected_durable != stored.record {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                action.name(),
+                format!(
+                    "completed {} operation {} changed beyond its recovered process identity",
+                    action.name(),
+                    operation.operation_id
+                ),
+            ));
+        }
+        operation.outcome = StoredOperationStatus::Succeeded {
+            response: rebound_response.clone(),
+        };
+        self.write_json(
+            action.reconcile_operation_mutation(),
+            &self.operation_path(&operation.operation_id),
+            &operation,
+        )
+        .await?;
+        Ok(RecordOperationPreparation::Replayed(rebound_response))
     }
 
     pub(crate) async fn complete_pause(

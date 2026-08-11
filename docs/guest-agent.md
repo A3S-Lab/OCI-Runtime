@@ -479,6 +479,109 @@ long-running, terminal-backed, and write the exact nonce-bound marker. Stale or
 changed Host and Guest requests fail closed. All nine stages passed in 18 fresh
 VMs on August 10, 2026.
 
+SignalProcess now follows that live-process matrix. Setup installs a
+nonce-bound SIGUSR1 trap in the terminal Exec. The first eight points leave the
+Host signal journal Prepared; a replacement Guest rebuilds init and Exec, then
+receives the unchanged signal-10 request once. At
+`guest-after-response-write`, Host state is already SucceededEmpty. Recovery
+waits until the replacement process has installed its trap, reapplies the
+committed signal, and lets the API retry replay without another driver
+dispatch. The replacement signal marker is mandatory even when the first VM
+exits before its shell can schedule the trap. Changed content under the same
+operation ID and stale generations fail at both Host and Guest boundaries. All
+nine stages passed in 18 fresh VMs on August 11, 2026 under schema
+`a3s.oci.oci-vm-operation-reopen-replacement.v7`.
+
+WaitProcess now carries the same owner handoff through a terminated non-init
+Exec. Recovery rebuilds the terminal process, waits for its exact readiness
+marker, and reapplies the committed signal before any uncached wait. The first
+eight transport points dispatch the exact resolved target and timeout once in
+the replacement Guest, then store the signal exit result. A fully written
+first response is already cached by the Host, so replacement and later API
+calls do not reach the driver; the temporary rebuilt process is also omitted
+from the recovered live inventory. Stale generations fail at both Host and
+Guest boundaries. All nine stages passed in 18 fresh VMs on August 11, 2026
+under `a3s.oci.oci-vm-operation-reopen-replacement.v8`.
+
+Pause now crosses the same nine owner-handoff points. The first eight leave the
+Host journal Prepared, so the replacement Guest rebuilds an unpaused init and
+receives the unchanged Pause once. A fully written response is already durable
+as paused. Recovery starts the replacement init, waits for its exact readiness
+marker, sends the committed Pause before Host service open completes, and then
+returns explicit paused-process recovery evidence. Host replay repairs Create,
+Start, and Pause journal PIDs without a second API-driven dispatch. Changed
+requests and stale generations fail at both Host and Guest boundaries, and
+force-delete cleans up the frozen replacement. All nine stages passed in 18
+fresh VMs on August 11, 2026 under
+`a3s.oci.oci-vm-operation-reopen-replacement.v9`.
+
+Resume adds a deliberately reconstructed freezer history rather than treating
+the fresh init as already thawed. Every replacement Guest receives the original
+Create and Start, waits for the exact init marker, and receives the setup Pause.
+The first eight stages then receive the unchanged Resume once. When the first
+owner already wrote the complete response, recovery also replays that committed
+Resume before Host service open completes. The Host can therefore distinguish
+the historical paused response from the current unpaused record while rebinding
+Create, Start, Pause, and Resume to the replacement PID. Changed requests and
+stale generations fail at both boundaries. All nine stages passed in 18 fresh
+VMs on August 11, 2026 under
+`a3s.oci.oci-vm-operation-reopen-replacement.v10`.
+
+Processes crosses the same nine owner handoffs after a live terminal Exec has
+been committed. The replacement Guest receives the original Create, Start, and
+Exec requests, writes both nonce-bound markers, and exposes exactly the live
+init and Exec identities with fresh PIDs. The read-only query has no mutation
+journal, so it is sent once to every replacement Guest even when the first
+Guest wrote a complete response. The Host validates the exact generation,
+positive unique PIDs, init presence, process IDs, and terminal mode; stale
+generations fail at both boundaries. All nine stages passed in 18 fresh VMs on
+August 11, 2026 under
+`a3s.oci.oci-vm-operation-reopen-replacement.v11`.
+
+Update crosses the same nine owner handoffs with the complete OCI resource
+profile bound to its OperationId and exact generation. The first eight paths
+send that request once after the replacement Guest rebuilds the running init.
+When the first Guest already wrote a complete response, the Host journal is
+Succeeded but the old VM's cgroup is gone, so recovery waits for the fresh init
+marker and reapplies the committed Update before Host service open completes.
+The API retry then returns the response rebound to the replacement PID without
+another dispatch. Two Stats queries to the fresh Guest must report the 512 MiB
+memory limit, live CPU and process counters, and the required memory/PID event
+metrics. Changed resources and stale generations fail at both boundaries. All
+nine stages passed in 18 fresh VMs on August 11, 2026 under
+`a3s.oci.oci-vm-operation-reopen-replacement.v12`.
+
+Stats crosses all nine owner handoffs after Create, Start, and that complete
+Update have committed. The replacement Guest always rebuilds init, waits for
+the exact readiness marker, and receives the original Update so the fresh
+cgroup has the same resource profile. Because Stats is read-only and has no
+Host response journal, the replacement Guest receives one new query at every
+stage, including after the first Guest wrote a complete response. Each returned
+snapshot must carry the original exact generation, 512 MiB memory limit, live
+CPU and process counters, and the required memory/PID event metrics. A
+delivered first-owner snapshot must differ from and precede the replacement
+snapshot. Stale generations fail at both boundaries. All nine stages passed in
+18 fresh VMs on August 11, 2026 under
+`a3s.oci.oci-vm-operation-reopen-replacement.v13`.
+
+ReadOutput crosses the same nine handoffs with a non-terminal Exec that writes
+one nonce-bound stdout chunk and stays live. Recovery replays the exact Create,
+Start, and Exec requests and repairs their response PIDs. Because ReadOutput is
+read-only, the replacement Guest receives one new request at every stage with
+the same process target, cursor, byte limit, and timeout. Stale generations
+fail at both boundaries. All nine stages passed in 18 fresh VMs on August 11,
+2026 under `a3s.oci.oci-vm-operation-reopen-replacement.v14`.
+
+WriteStdin crosses the same nine handoffs with a pipe-backed Exec waiting for
+one nonce-bound line. The first eight paths receive the write once when the
+prepared Host journal resumes. If the old Guest completed the response, the
+fresh Guest receives the same committed request during recovery before the
+Host journal serves the retry. Its journal then rejects changed bytes under
+the same operation ID, and the rebuilt Exec must write the exact line to its
+effect marker. Stale generations fail at both boundaries. All nine stages
+passed in 18 fresh VMs on August 11, 2026 under
+`a3s.oci.oci-vm-operation-reopen-replacement.v15`.
+
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,
