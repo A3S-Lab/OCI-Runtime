@@ -19,6 +19,7 @@ const MAX_SCANNED_ROOTFS_ENTRIES: usize = 1_000_000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DevicePlan {
     nodes: Vec<DeviceNode>,
+    allow_access_masks: Vec<u8>,
     enforce_allowlist: bool,
 }
 
@@ -50,6 +51,7 @@ impl DevicePlan {
         let Some(linux) = linux else {
             return Ok(Self {
                 nodes: Vec::new(),
+                allow_access_masks: Vec::new(),
                 enforce_allowlist: false,
             });
         };
@@ -88,13 +90,14 @@ impl DevicePlan {
                 )));
             }
         }
-        validate_device_policy(&nodes, Some(rules))?;
+        let allow_access_masks = validate_device_policy(&nodes, Some(rules))?;
         let enforce_allowlist = !nodes.is_empty() || !rules.is_empty();
         if enforce_allowlist {
             validate_bind_mounts_are_nodev(mounts)?;
         }
         Ok(Self {
             nodes,
+            allow_access_masks,
             enforce_allowlist,
         })
     }
@@ -260,7 +263,7 @@ impl DevicePlan {
         if !self.enforce_allowlist {
             return Ok(());
         }
-        let program = build_cgroup_device_program(&self.nodes)?;
+        let program = build_cgroup_device_program(&self.nodes, &self.allow_access_masks)?;
         attach_cgroup_device_program(cgroup_path, &program)
     }
 
@@ -542,17 +545,22 @@ struct BpfInsn {
 const BPF_ALU64: u32 = 0x07;
 const BPF_MOV: u32 = 0xb0;
 const BPF_AND: u32 = 0x50;
+const BPF_RSH: u32 = 0x70;
 const BPF_JNE: u32 = 0x50;
 const BPF_EXIT: u32 = 0x90;
 const BPF_REG_0: u8 = 0;
 const BPF_REG_1: u8 = 1;
 const BPF_REG_2: u8 = 2;
+const BPF_REG_3: u8 = 3;
 const BPF_REG_4: u8 = 4;
 const BPF_REG_5: u8 = 5;
 const BPF_PROG_LOAD: u32 = 5;
 const BPF_PROG_ATTACH: u32 = 8;
 const BPF_PROG_TYPE_CGROUP_DEVICE: u32 = 15;
 const BPF_CGROUP_DEVICE: u32 = 6;
+const BPF_DEVCG_ACC_MKNOD: u32 = 1;
+const BPF_DEVCG_ACC_READ: u32 = 2;
+const BPF_DEVCG_ACC_WRITE: u32 = 4;
 const BPF_DEVCG_DEV_BLOCK: u32 = 1;
 const BPF_DEVCG_DEV_CHAR: u32 = 2;
 const MAX_BPF_LOG_BYTES: usize = 64 * 1024;
@@ -582,12 +590,25 @@ struct BpfProgAttachAttr {
     replace_bpf_fd: u32,
 }
 
-fn build_cgroup_device_program(nodes: &[DeviceNode]) -> Result<Vec<BpfInsn>> {
+fn build_cgroup_device_program(
+    nodes: &[DeviceNode],
+    allow_access_masks: &[u8],
+) -> Result<Vec<BpfInsn>> {
+    if nodes.len() != allow_access_masks.len() {
+        return Err(device_error(
+            ErrorCode::Internal,
+            "device access mask count does not match the OCI device node count",
+        ));
+    }
+
     let allow_rules = nodes
         .iter()
-        .filter_map(|node| match node.kind {
-            DeviceKind::Block => Some((BPF_DEVCG_DEV_BLOCK, node.major, node.minor)),
-            DeviceKind::Character => Some((BPF_DEVCG_DEV_CHAR, node.major, node.minor)),
+        .zip(allow_access_masks.iter().copied())
+        .filter_map(|(node, access_mask)| match node.kind {
+            DeviceKind::Block => Some((BPF_DEVCG_DEV_BLOCK, node.major, node.minor, access_mask)),
+            DeviceKind::Character => {
+                Some((BPF_DEVCG_DEV_CHAR, node.major, node.minor, access_mask))
+            }
             DeviceKind::Fifo => None,
         })
         .collect::<Vec<_>>();
@@ -599,16 +620,23 @@ fn build_cgroup_device_program(nodes: &[DeviceNode]) -> Result<Vec<BpfInsn>> {
     let mut program = vec![
         ldx_mem(libc::BPF_W, BPF_REG_2, BPF_REG_1, 0),
         alu32_imm(BPF_AND, BPF_REG_2, 0xFFFF),
+        ldx_mem(libc::BPF_W, BPF_REG_3, BPF_REG_1, 0),
+        alu32_imm(BPF_RSH, BPF_REG_3, 16),
         ldx_mem(libc::BPF_W, BPF_REG_4, BPF_REG_1, 4),
         ldx_mem(libc::BPF_W, BPF_REG_5, BPF_REG_1, 8),
     ];
     let mut rule_starts = Vec::with_capacity(allow_rules.len());
     let mut mismatch_jumps = Vec::with_capacity(allow_rules.len());
 
-    for (device_type, major, minor) in allow_rules {
+    for (device_type, major, minor, access_mask) in allow_rules {
         rule_starts.push(program.len());
-        let mut rule_jumps = Vec::with_capacity(3);
+        let mut rule_jumps = Vec::with_capacity(4);
         rule_jumps.push(push_jne_imm(&mut program, BPF_REG_2, device_type as i32));
+        if access_mask != (BPF_DEVCG_ACC_READ | BPF_DEVCG_ACC_WRITE | BPF_DEVCG_ACC_MKNOD) as u8 {
+            program.push(mov64_reg(BPF_REG_1, BPF_REG_3));
+            program.push(alu32_imm(BPF_AND, BPF_REG_1, i32::from(access_mask)));
+            rule_jumps.push(push_jne_reg(&mut program, BPF_REG_1, BPF_REG_3));
+        }
         rule_jumps.push(push_jne_imm(&mut program, BPF_REG_4, major as i32));
         rule_jumps.push(push_jne_imm(&mut program, BPF_REG_5, minor as i32));
         program.push(mov64_imm(BPF_REG_0, 1));
@@ -834,6 +862,15 @@ fn alu32_imm(op: u32, dst: u8, imm: i32) -> BpfInsn {
     }
 }
 
+fn mov64_reg(dst: u8, src: u8) -> BpfInsn {
+    BpfInsn {
+        code: (BPF_ALU64 | BPF_MOV | libc::BPF_X) as u8,
+        regs: pack_regs(dst, src),
+        off: 0,
+        imm: 0,
+    }
+}
+
 fn push_jne_imm(program: &mut Vec<BpfInsn>, dst: u8, imm: i32) -> usize {
     let index = program.len();
     program.push(BpfInsn {
@@ -841,6 +878,17 @@ fn push_jne_imm(program: &mut Vec<BpfInsn>, dst: u8, imm: i32) -> usize {
         regs: pack_regs(dst, 0),
         off: 0,
         imm,
+    });
+    index
+}
+
+fn push_jne_reg(program: &mut Vec<BpfInsn>, dst: u8, src: u8) -> usize {
+    let index = program.len();
+    program.push(BpfInsn {
+        code: (libc::BPF_JMP | BPF_JNE | libc::BPF_X) as u8,
+        regs: pack_regs(dst, src),
+        off: 0,
+        imm: 0,
     });
     index
 }
@@ -867,10 +915,13 @@ fn pack_regs(dst: u8, src: u8) -> u8 {
     (dst & 0x0f) | ((src & 0x0f) << 4)
 }
 
-fn validate_device_policy(nodes: &[DeviceNode], rules: Option<&[LinuxDeviceCgroup]>) -> Result<()> {
+fn validate_device_policy(
+    nodes: &[DeviceNode],
+    rules: Option<&[LinuxDeviceCgroup]>,
+) -> Result<Vec<u8>> {
     let rules = rules.unwrap_or_default();
     if nodes.is_empty() && rules.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let Some(default_deny) = rules.first() else {
         return Err(unsupported(
@@ -895,25 +946,55 @@ fn validate_device_policy(nodes: &[DeviceNode], rules: Option<&[LinuxDeviceCgrou
             "the allow rules must exactly match the created device nodes",
         ));
     }
+    let mut allow_access_masks = Vec::with_capacity(nodes.len());
     for (index, (node, rule)) in nodes.iter().zip(&rules[1..]).enumerate() {
         let expected_type = match node.kind {
             DeviceKind::Block => LinuxDeviceType::B,
             DeviceKind::Character => LinuxDeviceType::C,
             DeviceKind::Fifo => LinuxDeviceType::P,
         };
+        let access_mask = parse_device_access_mask(
+            &format!("linux.resources.devices[{}].access", index + 1),
+            rule.access().as_deref(),
+        )?;
         if !rule.allow()
             || rule.typ() != Some(expected_type)
             || rule.major() != Some(i64::from(node.major))
             || rule.minor() != Some(i64::from(node.minor))
-            || rule.access().as_deref() != Some("rwm")
         {
             return Err(unsupported(
                 &format!("linux.resources.devices[{}]", index + 1),
-                "the rule must allow rwm for the matching created device",
+                "the rule must allow a matching created device",
             ));
         }
+        allow_access_masks.push(access_mask);
     }
-    Ok(())
+    Ok(allow_access_masks)
+}
+
+fn parse_device_access_mask(field: &str, value: Option<&str>) -> Result<u8> {
+    let Some(value) = value else {
+        return Err(invalid(format!("{field} is required for allow rules")));
+    };
+    let mut mask = 0_u8;
+    for access in value.chars() {
+        match access {
+            'r' => mask |= BPF_DEVCG_ACC_READ as u8,
+            'w' => mask |= BPF_DEVCG_ACC_WRITE as u8,
+            'm' => mask |= BPF_DEVCG_ACC_MKNOD as u8,
+            _ => {
+                return Err(invalid(format!(
+                    "{field} must contain only `r`, `w`, and `m`"
+                )));
+            }
+        }
+    }
+    if mask == 0 {
+        return Err(invalid(format!(
+            "{field} must not be empty for a device allow rule"
+        )));
+    }
+    Ok(mask)
 }
 
 fn validate_bind_mounts_are_nodev(mounts: &[MountPlan]) -> Result<()> {
@@ -1076,7 +1157,10 @@ mod tests {
     use a3s_oci_sdk::oci_spec::runtime::Linux;
     use a3s_oci_sdk::ErrorCode;
 
-    use super::{build_cgroup_device_program, DeviceKind, DeviceNode, DevicePlan};
+    use super::{
+        build_cgroup_device_program, DeviceKind, DeviceNode, DevicePlan, BPF_ALU64,
+        BPF_DEVCG_ACC_READ, BPF_MOV,
+    };
     use crate::executor::mount;
     use crate::executor::namespace::NamespacePlan;
 
@@ -1101,6 +1185,33 @@ mod tests {
         .expect("mount plan");
         let plan = DevicePlan::from_linux(Some(&linux), &mounts).expect("device plan");
         assert_eq!(plan.len(), 6);
+    }
+
+    #[test]
+    fn plans_read_only_device_allowlist_rules() {
+        let linux: Linux = serde_json::from_value(serde_json::json!({
+            "devices": [
+                {
+                    "path": "/dev/null",
+                    "type": "c",
+                    "major": 1,
+                    "minor": 3,
+                    "fileMode": 420,
+                    "uid": 0,
+                    "gid": 0
+                }
+            ],
+            "resources": {
+                "devices": [
+                    {"allow": false, "access": "rwm"},
+                    {"allow": true, "type": "c", "major": 1, "minor": 3, "access": "r"}
+                ]
+            }
+        }))
+        .expect("decode read-only device policy");
+        let plan = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
+        assert!(plan.requires_setup());
+        assert_eq!(plan.len(), 1);
     }
 
     #[test]
@@ -1176,19 +1287,24 @@ mod tests {
                 gid: 0,
             },
         ];
-        let program = build_cgroup_device_program(&nodes).expect("device BPF program");
-        assert_eq!(program.len(), 16);
+        let program = build_cgroup_device_program(&nodes, &[7, 7, 7]).expect("device BPF program");
+        assert_eq!(program.len(), 18);
         assert_eq!(
             program[0].code,
             (libc::BPF_LDX | libc::BPF_W | libc::BPF_MEM) as u8
         );
         assert_eq!(program[1].imm, 0xFFFF);
-        assert_eq!(program[4].imm, 2);
-        assert_eq!(program[4].off, 4);
-        assert_eq!(program[9].imm, 1);
-        assert_eq!(program[9].off, 4);
-        assert_eq!(program[14].imm, 0);
-        assert_eq!(program[15].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
+        assert_eq!(
+            program[2].code,
+            (libc::BPF_LDX | libc::BPF_W | libc::BPF_MEM) as u8
+        );
+        assert_eq!(program[3].imm, 16);
+        assert_eq!(program[6].imm, 2);
+        assert_eq!(program[6].off, 4);
+        assert_eq!(program[11].imm, 1);
+        assert_eq!(program[11].off, 4);
+        assert_eq!(program[16].imm, 0);
+        assert_eq!(program[17].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
     }
 
     #[test]
@@ -1202,9 +1318,40 @@ mod tests {
             uid: 0,
             gid: 0,
         }];
-        let program = build_cgroup_device_program(&nodes).expect("device BPF program");
+        let program = build_cgroup_device_program(&nodes, &[7]).expect("device BPF program");
         assert_eq!(program.len(), 2);
         assert_eq!(program[0].imm, 0);
         assert_eq!(program[1].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
+    }
+
+    #[test]
+    fn builds_cgroup_device_bpf_with_access_subsets() {
+        let nodes = vec![DeviceNode {
+            path: std::path::PathBuf::from("/dev/null"),
+            kind: DeviceKind::Character,
+            major: 1,
+            minor: 3,
+            mode: 0o660,
+            uid: 0,
+            gid: 0,
+        }];
+        let program = build_cgroup_device_program(&nodes, &[BPF_DEVCG_ACC_READ as u8])
+            .expect("device BPF program");
+        assert_eq!(program.len(), 16);
+        assert_eq!(
+            program[2].code,
+            (libc::BPF_LDX | libc::BPF_W | libc::BPF_MEM) as u8
+        );
+        assert_eq!(program[3].imm, 16);
+        assert_eq!(program[6].imm, 2);
+        assert_eq!(program[7].code, (BPF_ALU64 | BPF_MOV | libc::BPF_X) as u8);
+        assert_eq!(program[8].imm, BPF_DEVCG_ACC_READ as i32);
+        assert_eq!(program[9].off, 4);
+        assert_eq!(program[10].off, 3);
+        assert_eq!(program[11].off, 2);
+        assert_eq!(program[12].imm, 1);
+        assert_eq!(program[13].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
+        assert_eq!(program[14].imm, 0);
+        assert_eq!(program[15].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
     }
 }
