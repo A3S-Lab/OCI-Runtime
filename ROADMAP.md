@@ -1232,7 +1232,7 @@ leak. Only then may KVM become `experimental`.
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   CAP_MKNOD exclusion, and verified device-node creation.
 - [ ] Complete the remaining process and rootless configuration boundary.
-  - [ ] Enforce or explicitly reject supplementary credentials, scheduler,
+  - [x] Enforce or explicitly reject supplementary credentials, scheduler,
     I/O priority, CPU affinity, and unsupported rootless ID-mapping shapes
     before executor mutation.
   - [ ] Advertise and enforce the exact supported LSM set, with fail-closed
@@ -1244,7 +1244,7 @@ leak. Only then may KVM become `experimental`.
     generated support policy or reject broader OCI device requests without
     mutating the rootfs or cgroup.
 - [ ] Complete the remaining cgroup v2 resource boundary.
-  - [ ] Enforce or explicitly reject I/O, hugepage, RDMA, and unified resource
+  - [x] Enforce or explicitly reject I/O, hugepage, RDMA, and unified resource
     requests with exact read-back and rollback.
   - [ ] Add device-access BPF and the required delegation model for every
     advertised rootful or rootless profile.

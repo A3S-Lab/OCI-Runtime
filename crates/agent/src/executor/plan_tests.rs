@@ -377,6 +377,58 @@ fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
 }
 
 #[test]
+fn rejects_process_scheduler_io_priority_and_cpu_affinity() {
+    for (field, value) in [
+        ("scheduler", serde_json::json!({"policy": "SCHED_OTHER"})),
+        (
+            "ioPriority",
+            serde_json::json!({"class": "IOPRIO_CLASS_BE", "priority": 4}),
+        ),
+        (
+            "execCPUAffinity",
+            serde_json::json!({"initial": "0-3", "final": "0-3"}),
+        ),
+    ] {
+        let mut config_value: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+        config_value["process"][field] = value;
+        let config_json =
+            serde_json::to_string(&config_value).expect("encode unsupported process field");
+        let error = InitPlan::from_bundle(&bundle(&config_json), &null_io())
+            .expect_err("unsupported process fields must fail closed");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains(&format!("process.{field}")));
+
+        let process: Process =
+            serde_json::from_value(config_value["process"].clone()).expect("decode process");
+        let error = ProcessPlan::from_process(&process, &null_io())
+            .expect_err("unsupported exec process fields must fail closed");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains(&format!("process.{field}")));
+    }
+}
+
+#[test]
+fn rejects_unimplemented_cgroup_v2_resource_families() {
+    for (field, value) in [
+        ("blockIO", serde_json::json!({})),
+        ("hugepageLimits", serde_json::json!([{}])),
+        ("rdma", serde_json::json!({"mlx5_0": {}})),
+        ("unified", serde_json::json!({"memory.max": "1"})),
+    ] {
+        let mut config: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+        config["linux"] = serde_json::json!({"resources": {}});
+        config["linux"]["resources"][field] = value;
+        let config = serde_json::to_string(&config).expect("encode unsupported cgroup field");
+        let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+            .expect_err("unsupported cgroup resource families must fail closed");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains(&format!("linux.resources.{field}")));
+    }
+}
+
+#[test]
 fn accepts_capture_pipe_and_inherited_process_io() {
     let mut io = null_io();
     io.stdin = IoMode::Pipe;
