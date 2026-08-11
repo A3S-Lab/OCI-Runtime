@@ -82,7 +82,7 @@ impl PreparedProcess {
             inherited_descriptors
                 .ensure_targets_available(&[CONTROL_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD])?;
         }
-        let mut cgroup = CgroupHandle::create(&plan.cgroup, cgroup_manager)?;
+        let mut cgroup = CgroupHandle::create(&plan.cgroup, &plan.devices, cgroup_manager)?;
         let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
         let control_workload_descriptors = cgroup
             .as_ref()

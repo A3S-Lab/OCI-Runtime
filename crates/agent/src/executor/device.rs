@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -254,6 +254,14 @@ impl DevicePlan {
 
     pub(super) fn requires_setup(&self) -> bool {
         self.enforce_allowlist
+    }
+
+    pub(super) fn install_cgroup_device_filter(&self, cgroup_path: &Path) -> Result<()> {
+        if !self.enforce_allowlist {
+            return Ok(());
+        }
+        let program = build_cgroup_device_program(&self.nodes)?;
+        attach_cgroup_device_program(cgroup_path, &program)
     }
 
     #[cfg(test)]
@@ -522,6 +530,343 @@ impl DeviceKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+struct BpfInsn {
+    code: u8,
+    regs: u8,
+    off: i16,
+    imm: i32,
+}
+
+const BPF_ALU64: u32 = 0x07;
+const BPF_MOV: u32 = 0xb0;
+const BPF_AND: u32 = 0x50;
+const BPF_JNE: u32 = 0x50;
+const BPF_EXIT: u32 = 0x90;
+const BPF_REG_0: u8 = 0;
+const BPF_REG_1: u8 = 1;
+const BPF_REG_2: u8 = 2;
+const BPF_REG_4: u8 = 4;
+const BPF_REG_5: u8 = 5;
+const BPF_PROG_LOAD: u32 = 5;
+const BPF_PROG_ATTACH: u32 = 8;
+const BPF_PROG_TYPE_CGROUP_DEVICE: u32 = 15;
+const BPF_CGROUP_DEVICE: u32 = 6;
+const BPF_DEVCG_DEV_BLOCK: u32 = 1;
+const BPF_DEVCG_DEV_CHAR: u32 = 2;
+const MAX_BPF_LOG_BYTES: usize = 64 * 1024;
+
+#[repr(C)]
+struct BpfProgLoadAttr {
+    prog_type: u32,
+    insn_cnt: u32,
+    insns: u64,
+    license: u64,
+    log_level: u32,
+    log_size: u32,
+    log_buf: u64,
+    kern_version: u32,
+    prog_flags: u32,
+    prog_name: [u8; 16],
+    prog_ifindex: u32,
+    expected_attach_type: u32,
+}
+
+#[repr(C)]
+struct BpfProgAttachAttr {
+    target_fd: u32,
+    attach_bpf_fd: u32,
+    attach_type: u32,
+    attach_flags: u32,
+    replace_bpf_fd: u32,
+}
+
+fn build_cgroup_device_program(nodes: &[DeviceNode]) -> Result<Vec<BpfInsn>> {
+    let allow_rules = nodes
+        .iter()
+        .filter_map(|node| match node.kind {
+            DeviceKind::Block => Some((BPF_DEVCG_DEV_BLOCK, node.major, node.minor)),
+            DeviceKind::Character => Some((BPF_DEVCG_DEV_CHAR, node.major, node.minor)),
+            DeviceKind::Fifo => None,
+        })
+        .collect::<Vec<_>>();
+
+    if allow_rules.is_empty() {
+        return Ok(vec![mov64_imm(BPF_REG_0, 0), exit_insn()]);
+    }
+
+    let mut program = vec![
+        ldx_mem(libc::BPF_W, BPF_REG_2, BPF_REG_1, 0),
+        alu32_imm(BPF_AND, BPF_REG_2, 0xFFFF),
+        ldx_mem(libc::BPF_W, BPF_REG_4, BPF_REG_1, 4),
+        ldx_mem(libc::BPF_W, BPF_REG_5, BPF_REG_1, 8),
+    ];
+    let mut rule_starts = Vec::with_capacity(allow_rules.len());
+    let mut mismatch_jumps = Vec::with_capacity(allow_rules.len());
+
+    for (device_type, major, minor) in allow_rules {
+        rule_starts.push(program.len());
+        let mut rule_jumps = Vec::with_capacity(3);
+        rule_jumps.push(push_jne_imm(&mut program, BPF_REG_2, device_type as i32));
+        rule_jumps.push(push_jne_imm(&mut program, BPF_REG_4, major as i32));
+        rule_jumps.push(push_jne_imm(&mut program, BPF_REG_5, minor as i32));
+        program.push(mov64_imm(BPF_REG_0, 1));
+        program.push(exit_insn());
+        mismatch_jumps.push(rule_jumps);
+    }
+
+    let reject_start = program.len();
+    program.push(mov64_imm(BPF_REG_0, 0));
+    program.push(exit_insn());
+
+    for (rule_index, rule_jumps) in mismatch_jumps.iter().enumerate() {
+        let target = rule_starts
+            .get(rule_index + 1)
+            .copied()
+            .unwrap_or(reject_start);
+        for &jump_index in rule_jumps {
+            let jump = program.get_mut(jump_index).ok_or_else(|| {
+                device_error(
+                    ErrorCode::Internal,
+                    "cgroup device BPF program lost a patch target",
+                )
+            })?;
+            let offset = target as isize - jump_index as isize - 1;
+            jump.off = i16::try_from(offset).map_err(|error| {
+                device_error(
+                    ErrorCode::ResourceExhausted,
+                    format!("cgroup device BPF program exceeds jump limits: {error}"),
+                )
+            })?;
+        }
+    }
+
+    Ok(program)
+}
+
+fn attach_cgroup_device_program(cgroup_path: &Path, program: &[BpfInsn]) -> Result<()> {
+    let loaded = load_cgroup_device_program(program)?;
+    let cgroup = open_cgroup_descriptor(cgroup_path)?;
+    let mut attr = BpfProgAttachAttr {
+        target_fd: cgroup.as_raw_fd() as u32,
+        attach_bpf_fd: loaded.as_raw_fd() as u32,
+        attach_type: BPF_CGROUP_DEVICE,
+        attach_flags: 0,
+        replace_bpf_fd: 0,
+    };
+    // SAFETY: the cgroup and program descriptors are live owned fds and the
+    // attribute struct matches the kernel layout for BPF_PROG_ATTACH.
+    let attached = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_PROG_ATTACH,
+            &mut attr as *mut _ as *mut libc::c_void,
+            std::mem::size_of::<BpfProgAttachAttr>(),
+        )
+    };
+    if attached != 0 {
+        return Err(bpf_last_os_error(format!(
+            "failed to attach cgroup device BPF program to {}",
+            cgroup_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn load_cgroup_device_program(program: &[BpfInsn]) -> Result<OwnedFd> {
+    let insn_cnt = u32::try_from(program.len()).map_err(|error| {
+        device_error(
+            ErrorCode::ResourceExhausted,
+            format!("cgroup device BPF program exceeds the kernel instruction limit: {error}"),
+        )
+    })?;
+    let license = c"GPL";
+    let mut log = Vec::new();
+    let mut with_log = false;
+    loop {
+        let mut attr = BpfProgLoadAttr {
+            prog_type: BPF_PROG_TYPE_CGROUP_DEVICE,
+            insn_cnt,
+            insns: program.as_ptr() as u64,
+            license: license.as_ptr() as u64,
+            log_level: if with_log { 1 } else { 0 },
+            log_size: log.len() as u32,
+            log_buf: if with_log { log.as_mut_ptr() as u64 } else { 0 },
+            kern_version: 0,
+            prog_flags: 0,
+            prog_name: [0; 16],
+            prog_ifindex: 0,
+            expected_attach_type: BPF_CGROUP_DEVICE,
+        };
+        // SAFETY: the attribute struct is fully initialized and the program
+        // and license pointers stay live for the duration of the syscall.
+        let loaded = unsafe {
+            libc::syscall(
+                libc::SYS_bpf,
+                BPF_PROG_LOAD,
+                &mut attr as *mut _ as *mut libc::c_void,
+                std::mem::size_of::<BpfProgLoadAttr>(),
+            )
+        };
+        if loaded >= 0 {
+            let fd = i32::try_from(loaded).map_err(|error| {
+                device_error(
+                    ErrorCode::Internal,
+                    format!("BPF_PROG_LOAD returned an invalid descriptor: {error}"),
+                )
+            })?;
+            // SAFETY: `fd` is a fresh owned descriptor returned by BPF_PROG_LOAD.
+            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+
+        let error = io::Error::last_os_error();
+        if !with_log {
+            bump_memlock_limit();
+            log.resize(16 * 1024, 0);
+            with_log = true;
+            continue;
+        }
+        if error.raw_os_error() == Some(libc::ENOSPC) && log.len() < MAX_BPF_LOG_BYTES {
+            let next = (log.len().max(16 * 1024) * 2).min(MAX_BPF_LOG_BYTES);
+            log.resize(next, 0);
+            continue;
+        }
+        return Err(bpf_load_failure(error, &log));
+    }
+}
+
+fn open_cgroup_descriptor(path: &Path) -> Result<OwnedFd> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|error| {
+            device_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to open cgroup directory {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    let raw = file.into_raw_fd();
+    // SAFETY: `raw` is a live owned descriptor from OpenOptions.
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
+fn bump_memlock_limit() {
+    let mut current = libc::rlimit {
+        rlim_cur: libc::RLIM_INFINITY,
+        rlim_max: libc::RLIM_INFINITY,
+    };
+    // SAFETY: the pointed-to structure is valid and owned by this function.
+    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &current) } == 0 {
+        return;
+    }
+    // SAFETY: the pointed-to structure is valid and owned by this function.
+    if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut current) } != 0 {
+        return;
+    }
+    current.rlim_cur = current.rlim_max;
+    // SAFETY: the pointed-to structure is valid and owned by this function.
+    let _ = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &current) };
+}
+
+fn bpf_load_failure(error: io::Error, log: &[u8]) -> Error {
+    let message = if let Some(verifier_log) = verifier_log(log) {
+        format!("failed to load cgroup device BPF program: {error}: {verifier_log}")
+    } else {
+        format!("failed to load cgroup device BPF program: {error}")
+    };
+    device_error(bpf_error_code(&error), message)
+}
+
+fn bpf_last_os_error(message: impl Into<String>) -> Error {
+    let error = io::Error::last_os_error();
+    device_error(
+        bpf_error_code(&error),
+        format!("{}: {error}", message.into()),
+    )
+}
+
+fn bpf_error_code(error: &io::Error) -> ErrorCode {
+    match error.raw_os_error() {
+        Some(code) if code == libc::EPERM || code == libc::EACCES => ErrorCode::PermissionDenied,
+        Some(code) if code == libc::ENOMEM => ErrorCode::ResourceExhausted,
+        Some(code)
+            if code == libc::EINVAL
+                || code == libc::EOPNOTSUPP
+                || code == libc::ENOSYS
+                || code == libc::ENOTSUP =>
+        {
+            ErrorCode::Unsupported
+        }
+        _ => ErrorCode::FailedPrecondition,
+    }
+}
+
+fn verifier_log(log: &[u8]) -> Option<String> {
+    let end = log.iter().rposition(|byte| *byte != 0)?;
+    let log = String::from_utf8_lossy(&log[..=end]).trim().to_string();
+    if log.is_empty() {
+        None
+    } else {
+        Some(log)
+    }
+}
+
+fn ldx_mem(size: u32, dst: u8, src: u8, off: i16) -> BpfInsn {
+    BpfInsn {
+        code: (libc::BPF_LDX | size | libc::BPF_MEM) as u8,
+        regs: pack_regs(dst, src),
+        off,
+        imm: 0,
+    }
+}
+
+fn alu32_imm(op: u32, dst: u8, imm: i32) -> BpfInsn {
+    BpfInsn {
+        code: (libc::BPF_ALU | op | libc::BPF_K) as u8,
+        regs: pack_regs(dst, 0),
+        off: 0,
+        imm,
+    }
+}
+
+fn push_jne_imm(program: &mut Vec<BpfInsn>, dst: u8, imm: i32) -> usize {
+    let index = program.len();
+    program.push(BpfInsn {
+        code: (libc::BPF_JMP | BPF_JNE | libc::BPF_K) as u8,
+        regs: pack_regs(dst, 0),
+        off: 0,
+        imm,
+    });
+    index
+}
+
+fn mov64_imm(dst: u8, imm: i32) -> BpfInsn {
+    BpfInsn {
+        code: (BPF_ALU64 | BPF_MOV | libc::BPF_K) as u8,
+        regs: pack_regs(dst, 0),
+        off: 0,
+        imm,
+    }
+}
+
+fn exit_insn() -> BpfInsn {
+    BpfInsn {
+        code: (libc::BPF_JMP | BPF_EXIT) as u8,
+        regs: 0,
+        off: 0,
+        imm: 0,
+    }
+}
+
+fn pack_regs(dst: u8, src: u8) -> u8 {
+    (dst & 0x0f) | ((src & 0x0f) << 4)
+}
+
 fn validate_device_policy(nodes: &[DeviceNode], rules: Option<&[LinuxDeviceCgroup]>) -> Result<()> {
     let rules = rules.unwrap_or_default();
     if nodes.is_empty() && rules.is_empty() {
@@ -731,7 +1076,7 @@ mod tests {
     use a3s_oci_sdk::oci_spec::runtime::Linux;
     use a3s_oci_sdk::ErrorCode;
 
-    use super::DevicePlan;
+    use super::{build_cgroup_device_program, DeviceKind, DeviceNode, DevicePlan};
     use crate::executor::mount;
     use crate::executor::namespace::NamespacePlan;
 
@@ -798,5 +1143,68 @@ mod tests {
             .expect_err("mismatched allowlist must fail");
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error.message.contains("matching created device"));
+    }
+
+    #[test]
+    fn builds_cgroup_device_bpf_for_block_and_char_devices_only() {
+        let nodes = vec![
+            DeviceNode {
+                path: std::path::PathBuf::from("/dev/ttyS0"),
+                kind: DeviceKind::Character,
+                major: 4,
+                minor: 64,
+                mode: 0o660,
+                uid: 0,
+                gid: 0,
+            },
+            DeviceNode {
+                path: std::path::PathBuf::from("/dev/loop0"),
+                kind: DeviceKind::Block,
+                major: 7,
+                minor: 0,
+                mode: 0o660,
+                uid: 0,
+                gid: 0,
+            },
+            DeviceNode {
+                path: std::path::PathBuf::from("/tmp/fifo"),
+                kind: DeviceKind::Fifo,
+                major: 0,
+                minor: 0,
+                mode: 0o600,
+                uid: 0,
+                gid: 0,
+            },
+        ];
+        let program = build_cgroup_device_program(&nodes).expect("device BPF program");
+        assert_eq!(program.len(), 16);
+        assert_eq!(
+            program[0].code,
+            (libc::BPF_LDX | libc::BPF_W | libc::BPF_MEM) as u8
+        );
+        assert_eq!(program[1].imm, 0xFFFF);
+        assert_eq!(program[4].imm, 2);
+        assert_eq!(program[4].off, 4);
+        assert_eq!(program[9].imm, 1);
+        assert_eq!(program[9].off, 4);
+        assert_eq!(program[14].imm, 0);
+        assert_eq!(program[15].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
+    }
+
+    #[test]
+    fn fifo_only_device_plans_fall_back_to_reject_all() {
+        let nodes = vec![DeviceNode {
+            path: std::path::PathBuf::from("/tmp/fifo"),
+            kind: DeviceKind::Fifo,
+            major: 0,
+            minor: 0,
+            mode: 0o600,
+            uid: 0,
+            gid: 0,
+        }];
+        let program = build_cgroup_device_program(&nodes).expect("device BPF program");
+        assert_eq!(program.len(), 2);
+        assert_eq!(program[0].imm, 0);
+        assert_eq!(program[1].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
     }
 }

@@ -10,6 +10,8 @@ use a3s_oci_sdk::{
     WORKLOAD_CGROUP_PROCS_FD,
 };
 
+use super::device::DevicePlan;
+
 mod plan;
 mod stats;
 mod update;
@@ -141,6 +143,7 @@ struct ControlWorkloadMembership {
 impl CgroupHandle {
     pub(super) fn create(
         plan: &CgroupPlan,
+        devices: &DevicePlan,
         manager: Option<&CgroupManager>,
     ) -> Result<Option<Self>> {
         let Some(relative_path) = &plan.relative_path else {
@@ -190,6 +193,7 @@ impl CgroupHandle {
         }
         let configured = (|| {
             initialize_cpuset(&current)?;
+            devices.install_cgroup_device_filter(&current)?;
             let Some(headroom) = plan.control_headroom() else {
                 apply_settings(&current, &plan.settings())?;
                 let init_procs = open_cgroup_procs(&current)?;
