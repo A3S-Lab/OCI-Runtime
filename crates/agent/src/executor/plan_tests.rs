@@ -366,6 +366,16 @@ fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
     assert!(error.message.contains("process.apparmorProfile"));
 
     let config = FIXED_CONFIG.replace(
+        r#""noNewPrivileges": true"#,
+        r#""noNewPrivileges": true,
+           "selinuxLabel": "system_u:system_r:container_t:s0""#,
+    );
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("SELinux label remains unsupported");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("process.selinuxLabel"));
+
+    let config = FIXED_CONFIG.replace(
         r#""ociVersion": "1.3.0","#,
         r#""ociVersion": "1.3.0",
            "linux": {"mountLabel": "system_u:object_r:container_file_t:s0"},"#,

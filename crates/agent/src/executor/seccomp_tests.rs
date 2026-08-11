@@ -44,6 +44,53 @@ fn rejects_seccomp_features_that_cannot_be_enforced() {
 }
 
 #[test]
+fn plans_the_supported_seccomp_architectures() {
+    for architecture in ["SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"] {
+        let plan = plan(json!({
+            "defaultAction": "SCMP_ACT_ERRNO",
+            "defaultErrnoRet": 1,
+            "architectures": [architecture],
+            "syscalls": [{
+                "names": ["getpid"],
+                "action": "SCMP_ACT_ALLOW"
+            }]
+        }))
+        .expect("supported seccomp architecture");
+        assert!(plan.is_enabled());
+        assert_eq!(plan.filter_count(), 1);
+    }
+}
+
+#[test]
+fn rejects_unsupported_seccomp_architectures_and_notify_actions() {
+    let error = plan(json!({
+        "defaultAction": "SCMP_ACT_ALLOW",
+        "architectures": ["SCMP_ARCH_X86"]
+    }))
+    .expect_err("unsupported seccomp architecture must fail");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("architectures[0]"));
+
+    let error = plan(json!({
+        "defaultAction": "SCMP_ACT_NOTIFY"
+    }))
+    .expect_err("default notification action must fail");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("notification listener"));
+
+    let error = plan(json!({
+        "defaultAction": "SCMP_ACT_ALLOW",
+        "syscalls": [{
+            "names": ["getpid"],
+            "action": "SCMP_ACT_NOTIFY"
+        }]
+    }))
+    .expect_err("syscall notification action must fail");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("notification listener"));
+}
+
+#[test]
 fn rejects_invalid_seccomp_argument_profiles() {
     let error = plan(json!({
         "defaultAction": "SCMP_ACT_ERRNO",

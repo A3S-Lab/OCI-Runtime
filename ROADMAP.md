@@ -1237,7 +1237,7 @@ leak. Only then may KVM become `experimental`.
     before executor mutation.
   - [ ] Advertise and enforce the exact supported LSM set, with fail-closed
     behavior and positive and negative evidence for every reported module.
-  - [ ] Extend seccomp classification and enforcement to every advertised
+  - [x] Extend seccomp classification and enforcement to every advertised
     architecture and notification mode; reject every other requested action,
     flag, or architecture before launch.
   - [ ] Replace the Box-specific device profile boundary with an exact
