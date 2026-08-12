@@ -341,6 +341,9 @@ Real execution gates require a prepared host and isolated runtime root.
 | Apple Silicon | `cargo run -p a3s-oci-cli -- hvf-smoke` followed by the signed utility-VM profiles | [macOS HVF development](docs/macos-hvf.md) |
 | Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` and `scripts/windows-whpx-recovery-smoke.ps1` with a verified rootfs archive | [Windows WHPX development](docs/windows-whpx.md) |
 
+The Linux smoke now also drives the delegated rootless recovery gate and can
+archive its JSON evidence through `A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT`.
+
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.
 Read the linked host guide before running them.

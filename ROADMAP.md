@@ -1240,14 +1240,23 @@ leak. Only then may KVM become `experimental`.
   - [x] Extend seccomp classification and enforcement to every advertised
     architecture and notification mode; reject every other requested action,
     flag, or architecture before launch.
-  - [ ] Replace the Box-specific device profile boundary with an exact
+  - [x] Replace the Box-specific device profile boundary with an exact
     generated support policy or reject broader OCI device requests without
-    mutating the rootfs or cgroup.
+    mutating the rootfs or cgroup by requiring an explicit cgroup path before
+    any device-policy mutation.
 - [ ] Complete the remaining cgroup v2 resource boundary.
   - [x] Enforce or explicitly reject I/O, hugepage, RDMA, and unified resource
     requests with exact read-back and rollback.
-  - [ ] Add device-access BPF and the required delegation model for every
-    advertised rootful or rootless profile.
+  - [x] Add rootful device-access BPF with exact block/char allowlists, access
+    subsets, and live filter replacement on update.
+  - [ ] Qualify the rootless delegation model and device support for every
+    advertised profile on real hosts; the v5 smoke now covers delegated
+    create/update/stats/pause/resume, recovery, the exact a3s-box device
+    fixture evidence, delegated cgroup subtree cleanup, and fail-closed
+    rejection of device-policy changes without a privileged helper, plus
+    fail-closed negative checks for missing cgroupsPath,
+    supplementary groups, rootless device node-list drift, device resource
+    policy drift, and namespace-set drift before runtime mutation.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
     for every newly advertised controller on x86_64 and aarch64.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
@@ -1305,7 +1314,11 @@ and recovery suites in the Windows guest and on native Linux.
   aarch64.
 - [x] Prove the helper-backed non-root core lifecycle with subordinate
   UID/GID ownership and `setgroups=deny` on x86_64 and aarch64; rootless
-  cgroup-v2 delegation remains a separate release gate.
+  cgroup-v2 control-plane delegation now has a v5 smoke gate, with the
+  exact a3s-box rootless device fixture, fail-closed device-policy update
+  rejection, and owner-death recovery plus delegated cgroup subtree cleanup included in that
+  gate, including negative checks for missing cgroupsPath, supplementary
+  groups, the fixture's node list, resource policy, and namespace set.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [x] Add the Sandbox-scoped native runtime owner, bind its protected Unix SDK
