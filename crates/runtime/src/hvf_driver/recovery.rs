@@ -156,7 +156,7 @@ impl RecoveryStore {
                 None => {
                     // Recheck the committed path after observing no pending
                     // marker so rename/remove races cannot hide a report.
-                    return Ok(path_metadata(path).await?);
+                    return path_metadata(path).await;
                 }
             }
             if Instant::now() >= deadline {

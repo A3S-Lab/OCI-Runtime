@@ -27,6 +27,8 @@ use crate::driver::{
 mod handoff;
 mod layout;
 mod recovery;
+#[cfg(test)]
+pub(crate) mod tests;
 
 use handoff::BundleHandoffStore;
 use layout::{require_exact_generation, PreparedHvfLayout};
@@ -88,10 +90,9 @@ pub struct HvfRuntimeDriver {
     runtime_share_root: PathBuf,
     system_image_manifest: PathBuf,
     system_image_manifest_sha256: String,
-    console_directory: PathBuf,
     recovery: RecoveryStore,
     handoff: BundleHandoffStore,
-    shim: PathBuf,
+    factory: Arc<dyn HvfVmFactory>,
     sessions: Mutex<BTreeMap<ContainerId, HvfAttachment>>,
     create_gates: Mutex<BTreeMap<ContainerId, Weak<Mutex<()>>>>,
 }
@@ -156,16 +157,21 @@ impl HvfRuntimeDriver {
             prepared.runtime_root.clone(),
             prepared.runtime_share_root.clone(),
         );
+        let factory = Arc::new(LiveHvfVmFactory {
+            shim: prepared.shim,
+            system_image_manifest: prepared.system_image_manifest.clone(),
+            console_directory: prepared.console_directory,
+            recovery: recovery.clone(),
+        });
         Ok(Self {
             capability,
             runtime_root: prepared.runtime_root,
             runtime_share_root: prepared.runtime_share_root,
             system_image_manifest: prepared.system_image_manifest,
             system_image_manifest_sha256: prepared.system_image_manifest_sha256,
-            console_directory: prepared.console_directory,
             recovery,
             handoff,
-            shim: prepared.shim,
+            factory,
             sessions: Mutex::new(BTreeMap::new()),
             create_gates: Mutex::new(BTreeMap::new()),
         })
@@ -307,29 +313,13 @@ impl HvfRuntimeDriver {
     }
 
     async fn launch(&self, target: &ContainerTarget) -> Result<Arc<HvfContainer>> {
-        let generation = require_exact_generation(target, "launch-hvf-utility-vm")?;
         let runtime_share =
             layout::exact_runtime_share_path(&self.runtime_share_root, target).await?;
-        let console = self
-            .console_directory
-            .join(format!("{}-{}.log", target.id, generation.0));
-        let recovery_report = self.recovery.path(target)?;
-        let session = Arc::new(
-            UtilityVmSession::connect_with_runtime_share(
-                &self.shim,
-                &self.system_image_manifest,
-                &runtime_share,
-                &console,
-                Some(&recovery_report),
-            )
-            .await
-            .map_err(vm_launch_error)?,
-        );
-        let service: Arc<dyn GuestAgentService> = Arc::new(session.client());
+        let launched = self.factory.launch(target, &runtime_share).await?;
         Ok(Arc::new(HvfContainer {
             target: target.clone(),
-            client: AgentDriverClient::new(service, "HVF guest agent", "hvf"),
-            owner: session,
+            client: launched.client,
+            owner: launched.owner,
         }))
     }
 
@@ -753,15 +743,80 @@ impl HvfAttachment {
 struct HvfContainer {
     target: ContainerTarget,
     client: AgentDriverClient,
-    owner: Arc<UtilityVmSession>,
+    owner: Arc<dyn HvfVmOwner>,
 }
 
 async fn shutdown_session(session: &HvfContainer) -> Result<()> {
-    let report = session.owner.shutdown().await;
-    if report.is_success() {
-        Ok(())
-    } else {
-        Err(vm_report_error("shutdown-hvf-utility-vm", report))
+    session.owner.shutdown().await
+}
+
+struct LaunchedHvfVm {
+    client: AgentDriverClient,
+    owner: Arc<dyn HvfVmOwner>,
+}
+
+#[async_trait]
+trait HvfVmFactory: Send + Sync {
+    async fn launch(&self, target: &ContainerTarget, runtime_share: &Path)
+        -> Result<LaunchedHvfVm>;
+}
+
+#[async_trait]
+trait HvfVmOwner: Send + Sync {
+    async fn shutdown(&self) -> Result<()>;
+}
+
+struct LiveHvfVmFactory {
+    shim: PathBuf,
+    system_image_manifest: PathBuf,
+    console_directory: PathBuf,
+    recovery: RecoveryStore,
+}
+
+#[async_trait]
+impl HvfVmFactory for LiveHvfVmFactory {
+    async fn launch(
+        &self,
+        target: &ContainerTarget,
+        runtime_share: &Path,
+    ) -> Result<LaunchedHvfVm> {
+        let generation = require_exact_generation(target, "launch-hvf-utility-vm")?;
+        let console = self
+            .console_directory
+            .join(format!("{}-{}.log", target.id, generation.0));
+        let recovery_report = self.recovery.path(target)?;
+        let session = Arc::new(
+            UtilityVmSession::connect_with_runtime_share(
+                &self.shim,
+                &self.system_image_manifest,
+                runtime_share,
+                &console,
+                Some(&recovery_report),
+            )
+            .await
+            .map_err(vm_launch_error)?,
+        );
+        let service: Arc<dyn GuestAgentService> = Arc::new(session.client());
+        Ok(LaunchedHvfVm {
+            client: AgentDriverClient::new(service, "HVF guest agent", "hvf"),
+            owner: Arc::new(LiveHvfVmOwner { session }),
+        })
+    }
+}
+
+struct LiveHvfVmOwner {
+    session: Arc<UtilityVmSession>,
+}
+
+#[async_trait]
+impl HvfVmOwner for LiveHvfVmOwner {
+    async fn shutdown(&self) -> Result<()> {
+        let report = self.session.shutdown().await;
+        if report.is_success() {
+            Ok(())
+        } else {
+            Err(vm_report_error("shutdown-hvf-utility-vm", report))
+        }
     }
 }
 

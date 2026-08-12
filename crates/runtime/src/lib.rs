@@ -35,6 +35,8 @@ mod filesystem_smoke;
 mod host_cleanup;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf_driver;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_hvf_service;
 mod marker;
 mod multi_container_report;
 mod namespace_join;
@@ -57,6 +59,8 @@ mod service;
 mod soak_report;
 mod state;
 mod transport_cleanup_report;
+#[cfg(unix)]
+mod unix_service;
 mod utility_vm_soak_report;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_driver;
@@ -91,6 +95,8 @@ pub use driver::{
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use hvf_driver::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub use macos_hvf_service::{MacosHvfHostService, MacosHvfHostServiceConfig};
 pub use multi_container_report::{
     InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
     NativeLinuxMultiContainerSmokeReport, NetworkModeEvidence, OciVmMultiContainerSmokeReport,

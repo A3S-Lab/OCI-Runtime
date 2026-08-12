@@ -233,10 +233,10 @@ fn capability_from_observation(observation: HvfObservation) -> DriverCapability 
         driver: DriverKind::LibkrunHvf,
         status,
         readiness: DriverReadiness::Experimental,
-        isolation_classes: vec![
-            IsolationClass::DedicatedVm,
-            IsolationClass::SharedGuestKernel,
-        ],
+        // The public HVF driver owns one fresh VM per exact generation. Do
+        // not advertise pooling until a real trust-domain-aware shared guest
+        // owner exists and is qualified.
+        isolation_classes: vec![IsolationClass::DedicatedVm],
         reason: observation.reason,
         evidence,
     }
@@ -265,6 +265,10 @@ mod tests {
         assert_eq!(capability.driver, DriverKind::LibkrunHvf);
         assert_eq!(capability.status, CapabilityStatus::Available);
         assert_eq!(capability.readiness, DriverReadiness::Experimental);
+        assert_eq!(
+            capability.isolation_classes,
+            vec![a3s_oci_core::IsolationClass::DedicatedVm]
+        );
         assert!(capability.can_launch());
     }
 

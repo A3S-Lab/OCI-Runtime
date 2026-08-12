@@ -100,7 +100,7 @@ and `experimental` or `supported` readiness.
 | --- | --- |
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
-| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, ordered events, and a same-UID multi-container Native Linux owner |
+| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
@@ -239,6 +239,23 @@ shutdown. Box's explicit `A3S_BOX_OCI_MIGRATION=sandbox` production route uses
 this owner. The existing `native-linux-service` command remains the
 Sandbox-scoped FD 3/4/5 owner for compatibility and focused qualification.
 
+On Apple Silicon, the public HVF owner exposes the same SDK contract while
+keeping durable state separate from per-generation VM state:
+
+```bash
+a3s-oci macos-hvf-host-service \
+  --root "$HOME/Library/Application Support/A3S/oci-hvf" \
+  --shim /absolute/path/to/a3s-oci-krun-shim \
+  --system-image-manifest /absolute/path/to/system-image.json
+```
+
+It prepares an owner-only `0700` root, publishes a same-UID `0600`
+`runtime.sock`, accepts concurrent clients, and removes only the socket inode
+it created. The service advertises all 20 HVF driver operations plus
+`features`, `list`, and `events`, requires the runtime bundle-handoff
+extension, and reaps every live dedicated VM on graceful shutdown. The HVF
+driver advertises only `DedicatedVm`; shared-guest pooling is not implemented.
+
 The runtime contract suite also restarts the owner across two distinct OS
 processes on the same Unix socket or Windows named pipe. The replacement opens
 the same durable `HostRuntimeService` state, while one retained client recovers
@@ -264,7 +281,7 @@ reattachment remains open for the Box B2 cutover.
 | --- | --- | --- |
 | Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64/aarch64 Box production-owner composition through all four SDKs plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
 | Linux KVM utility VM | Device access, ioctl result, and KVM API version probes | `probe-only`; workload driver not implemented |
-| macOS arm64/HVF | Manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate writable runtime share; real protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves | `experimental` on Apple Silicon. R2M is 15/15; signed release artifacts, OCI conformance, adversarial security, upgrade compatibility, and production certification remain before `supported` |
+| macOS arm64/HVF | Public same-UID SDK host service; one dedicated VM per exact generation; manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate writable runtime share; real protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves | `experimental` on Apple Silicon. The historical R2M qualification suite is 15/15; the new public Host Service path still requires current-code real-HVF lifecycle, owner-death/reopen, and 25-wave requalification before product-path completion may be called 100% |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup | `probe-only`; pinned immutable system root and in-process native-handle reclamation remain before `experimental` |
 
 Linux discovery and Native Linux development must work when `/dev/kvm` is
@@ -389,6 +406,7 @@ The repository turns release claims into checked inventories:
 | Real HVF lifecycle/transport cleanup fault points | 14 / 14 |
 | Real HVF immutable-system-image soak | 25 / 25 fresh VMs (75 primary generations) |
 | macOS HVF R2M implementation gates | 15 / 15 |
+| Public macOS HVF Host Service implementation | Complete; current-code real-host requalification pending |
 | Guest operations behind protocol v9 | 20 |
 
 The locks prove inventory and exercised boundaries, not full conformance by

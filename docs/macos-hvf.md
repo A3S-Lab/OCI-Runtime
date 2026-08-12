@@ -13,10 +13,50 @@ macOS feature discovery reports the `libkrun-hvf` driver. The feature probe:
 Intel macOS is reported as unsupported by A3S driver policy instead of being
 silently treated as an unavailable Apple Silicon host.
 
+The launch-ready public driver and Host Service advertise only
+`DedicatedVm`: one exact container generation owns one utility VM. The probe
+does not advertise `SharedGuestKernel`; a trust-domain-aware VM pool has not
+been implemented or qualified.
+
 The separate `hvf-smoke` command crosses the next host API boundary. On Apple
 Silicon it calls the system Hypervisor.framework directly, creates the single
 VM object associated with the process, destroys it, and emits a versioned
 `a3s.oci.hvf-smoke.v1` report. No libkrun dependency is involved.
+
+## Public same-UID Host Service
+
+The Apple Silicon product entry point is:
+
+```sh
+a3s-oci macos-hvf-host-service \
+  --root "$HOME/Library/Application Support/A3S/oci-hvf" \
+  --shim /absolute/path/to/a3s-oci-krun-shim \
+  --system-image-manifest /absolute/path/to/system-image.json
+```
+
+The owner creates this fixed layout before publishing the endpoint:
+
+```text
+<root>/
+├── runtime.sock   # same UID, mode 0600, inode-scoped cleanup
+├── state/         # durable HostRuntimeService records and exclusive lock
+└── runtime/       # HVF shares, consoles, recovery, and bundle handoffs
+```
+
+Every path must be absolute and normalized. The root, state, and runtime
+directories are real same-UID `0700` directories; the immutable manifest must
+remain outside the writable owner root. The service opens the HVF driver and
+reconciles durable state before binding `runtime.sock`, accepts up to 32
+concurrent authenticated same-UID clients, isolates client disconnects, and
+removes only the exact socket inode it created. Graceful SIGINT or SIGTERM
+closes active transports and invokes the idempotent HVF shutdown path so every
+live VM owner is reaped exactly once.
+
+SDK `features()` through this socket reports the 20 protocol-v9 driver
+operations plus `features`, `list`, and `events`, and requires the versioned
+runtime bundle-handoff extension. This is the integration boundary for A3S
+Box; the direct VM harnesses below remain evidence tools rather than a second
+product lifecycle.
 
 ## Entitlement and signing
 
@@ -1008,7 +1048,7 @@ stale-generation rejection, replacement Stat, explicit Remove, and cleanup
 passed all nine stages on Apple Silicon. The real-HVF replacement matrix now
 covers all 180 operation-stage paths across all 20 protocol-v9 operations.
 
-## Qualification result and remaining release gates
+## Qualification result and remaining product-path gates
 
 R2M is 15/15. The August 13, 2026 Apple Silicon qualification used one exact
 immutable system-image manifest across direct VM entry, authenticated agent,
@@ -1018,7 +1058,22 @@ authentication cases, and 25/25 fresh-VM soak waves. The soak completed 75
 primary generations with unique endpoints and a stable descriptor count of
 10. The HVF capability therefore reports `experimental`.
 
-This is the complete macOS implementation gate, not a `supported` production
-claim. Signed release-artifact qualification, upstream OCI conformance,
-adversarial security review, upgrade and rollback compatibility, and broader
-long-duration release testing remain before `supported`.
+Those results qualify the historical direct R2M harness. They predate the
+public `macos-hvf-host-service` entry point and therefore do not by themselves
+prove that the current product path is 100% complete. The service
+implementation, same-UID socket contract, public SDK feature negotiation,
+20-operation advertisement, bundle-handoff capability, exact-generation VM
+factory, interrupted-create resume, and graceful one-time reap now have local
+tests. Current-code real-host evidence is still required for:
+
+1. a lifecycle initiated only through public `RuntimeClient` connections;
+2. Host Service `SIGKILL`, authenticated recovery publication, replacement
+   service reopen, exact exit or Creating-resume behavior, and cleanup;
+3. a new 25/25 fresh-VM soak through the public service with no socket,
+   process, descriptor, share, or runtime-root leaks.
+
+Until those three gates pass, documentation must not call the public macOS
+product path 100% complete. Signed release-artifact qualification, upstream
+OCI conformance, adversarial security review, upgrade and rollback
+compatibility, and broader long-duration testing also remain before
+`supported`.

@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use thiserror::Error;
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_hvf_service;
 #[cfg(target_os = "linux")]
 mod native_service;
 mod reopen_replacement;
@@ -80,6 +82,19 @@ enum Command {
         /// Absolute matching a3s-oci-agent executable used for prepared init.
         #[arg(long, value_name = "FILE")]
         agent: PathBuf,
+    },
+    /// Serve dedicated Apple Silicon HVF VMs through one durable SDK owner.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    MacosHvfHostService {
+        /// Private absolute root containing runtime.sock, state, and runtime data.
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        /// Absolute entitlement-signed isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable macOS utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
     },
     /// Hold one real Native Linux workload for owner-death qualification.
     #[cfg(target_os = "linux")]
@@ -592,6 +607,15 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         #[cfg(target_os = "linux")]
         Command::NativeLinuxHostService { root, agent } => {
             native_service::run_host(root, agent).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        Command::MacosHvfHostService {
+            root,
+            shim,
+            system_image_manifest,
+        } => {
+            macos_hvf_service::run(root, shim, system_image_manifest).await?;
             Ok(ExitCode::SUCCESS)
         }
         #[cfg(target_os = "linux")]

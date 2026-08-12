@@ -1071,7 +1071,7 @@ bundle, validates negative isolation cases, retains exact terminal evidence
 across host restart, and leaves no process, handle, or runtime-root leak. Only
 then may WHPX become `experimental`.
 
-### R2M — macOS HVF Utility VM — 15/15 complete
+### R2M — macOS HVF Utility VM qualification harness — 15/15 complete
 
 - [x] Query Apple Silicon Hypervisor.framework support directly.
 - [x] Add the minimal checked-in Hypervisor entitlement used to sign runtime
@@ -1119,6 +1119,29 @@ then may WHPX become `experimental`.
 - [x] Retain fail-closed unavailable-virtualization, missing-entitlement,
   invalid-runtime-asset, missing-agent-rootfs, wrong-token, and unexpected-peer
   evidence without reporting false negotiation.
+- [x] Expose the launch-ready `HvfRuntimeDriver` through a public Apple Silicon
+  Host Service and CLI. Use one same-UID mode-0600 Unix socket below a real
+  owner-only mode-0700 root, separate durable `state/` from writable HVF
+  `runtime/`, accept concurrent clients, scope disconnect failures to one
+  connection, clean up only the bound inode, advertise all 20 driver
+  operations and the runtime bundle-handoff extension, and reap every active
+  VM once on graceful shutdown.
+- [x] Abstract exact-generation VM launch and ownership behind testable
+  factory/owner interfaces. Prove concurrent Create reuses one VM, interrupted
+  Create resumes the moved bundle and starts one VM, and terminal Create
+  failure reaps the VM and removes runtime-owned handoff state.
+- [x] Advertise only `DedicatedVm` from both the macOS probe and the public HVF
+  driver until trust-domain-aware shared-guest pooling exists.
+- [ ] Requalify the current public Host Service through `RuntimeClient` on the
+  signed Apple Silicon build, including all 20 operations and Box-style bundle
+  handoff without invoking a qualification-only lifecycle entry point.
+- [ ] Kill the public Host Service while a real generation is live, require
+  exact shim/worker owner-death cleanup and authenticated recovery evidence,
+  reopen a replacement service, resume Creating or expose exact stopped/exit
+  state, and prove no socket, process, descriptor, share, or runtime-root leak.
+- [ ] Run a new 25/25 fresh-VM soak through the current public Host Service and
+  retain current-commit evidence. Do not use the historical 15/15 harness or
+  August 13 soak alone to claim the public product path is 100% complete.
 
 Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
 fixed OCI lifecycle through the authenticated guest agent, validates negative
@@ -1129,6 +1152,9 @@ no-delete cleanup points, all 11 transport fault points, all 180 operation
 replacement paths, the asset/authentication/entitlement negatives, and 25/25
 fresh-VM soak waves with 75 primary generations and a stable 10-descriptor
 baseline. The built-in HVF capability is therefore `experimental`.
+That evidence qualifies the historical R2M harness. The public Host Service
+product path remains below 100% until its three unchecked real-host gates above
+pass against the current signed artifacts.
 
 ### R2L — Linux KVM Utility VM
 
