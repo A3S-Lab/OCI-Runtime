@@ -51,8 +51,19 @@ pub(super) async fn run_rootless(
     init_executable: &Path,
     bundle: &Path,
     work_parent: &Path,
+    delegated_cgroup_root: Option<&Path>,
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
 ) -> crate::NativeLinuxRootlessSmokeReport {
-    rootless::run(init_executable, bundle, work_parent).await
+    rootless::run(
+        init_executable,
+        bundle,
+        work_parent,
+        delegated_cgroup_root,
+        ready_file,
+        continue_file,
+    )
+    .await
 }
 
 pub(super) async fn run_soak(

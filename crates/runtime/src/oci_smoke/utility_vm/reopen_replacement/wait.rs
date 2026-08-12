@@ -49,6 +49,7 @@ use support::{
 async fn exercise(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     state_root: &Path,
     first_console: &Path,
     replacement_console: &Path,
@@ -72,6 +73,7 @@ async fn exercise(
             UtilityVmSession::connect_with_guest_qualification(
                 shim,
                 vm_rootfs,
+                Some(system_image_manifest),
                 first_console,
                 qualification,
             )
@@ -81,6 +83,7 @@ async fn exercise(
             UtilityVmSession::connect_with_host_fault_injector(
                 shim,
                 vm_rootfs,
+                Some(system_image_manifest),
                 first_console,
                 Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
             )
@@ -521,18 +524,24 @@ async fn exercise(
     drop(first_session);
 
     let replacement_cleanup = MacosHostCleanupTracker::capture();
-    let replacement_session =
-        match UtilityVmSession::connect(shim, vm_rootfs, replacement_console).await {
-            Ok(session) => Arc::new(session),
-            Err(mut bridge) => {
-                replacement_cleanup.apply(&mut bridge).await;
-                let reason = bridge.reason.clone().unwrap_or_else(|| {
-                    "failed to launch the replacement Wait qualification VM".to_string()
-                });
-                report.replacement_vm = bridge;
-                return Err(reason);
-            }
-        };
+    let replacement_session = match UtilityVmSession::connect(
+        shim,
+        vm_rootfs,
+        Some(system_image_manifest),
+        replacement_console,
+    )
+    .await
+    {
+        Ok(session) => Arc::new(session),
+        Err(mut bridge) => {
+            replacement_cleanup.apply(&mut bridge).await;
+            let reason = bridge.reason.clone().unwrap_or_else(|| {
+                "failed to launch the replacement Wait qualification VM".to_string()
+            });
+            report.replacement_vm = bridge;
+            return Err(reason);
+        }
+    };
     let replacement_driver = Arc::new(QualificationHvfDriver::with_kill_recovery(
         Arc::clone(&replacement_session),
         vm_rootfs.to_path_buf(),

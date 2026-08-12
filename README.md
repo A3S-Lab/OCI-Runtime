@@ -41,8 +41,9 @@ the public `a3s-oci-sdk`.
 > This repository is in active development. No built-in driver is currently
 > advertised as `supported`. The default host service exposes discovery
 > only; Native Linux becomes `experimental` only when explicitly opened as a
-> development instance, while HVF and WHPX remain `probe-only`. A successful
-> hypervisor probe is not permission to launch a workload.
+> development instance, Apple Silicon HVF is `experimental`, and WHPX remains
+> `probe-only`. Experimental means the reviewed development profile may launch;
+> it does not imply production certification.
 
 ## Inspect before you launch
 
@@ -263,7 +264,7 @@ reattachment remains open for the Box B2 cutover.
 | --- | --- | --- |
 | Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64/aarch64 Box production-owner composition through all four SDKs plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
 | Linux KVM utility VM | Device access, ioctl result, and KVM API version probes | `probe-only`; workload driver not implemented |
-| macOS arm64/HVF | Real HVF object lifecycle, pinned libkrun context and guest entry, protocol-v9 agent, fixed and multi-container lifecycle, descriptor-confined filesystem sessions, mount/namespace profiles, no-delete cleanup, all nine Host/Guest Create transport stages, both Host shutdown stages, every protocol-v9 operation resumed or reissued through Host-service reopen and a fresh VM/session owner, and 25 fresh-VM waves | `probe-only`; immutable system image and release hardware qualification remain |
+| macOS arm64/HVF | Manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate writable runtime share; real protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves | `experimental` on Apple Silicon. R2M is 15/15; signed release artifacts, OCI conformance, adversarial security, upgrade compatibility, and production certification remain before `supported` |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup | `probe-only`; pinned immutable system root and in-process native-handle reclamation remain before `experimental` |
 
 Linux discovery and Native Linux development must work when `/dev/kvm` is
@@ -341,8 +342,11 @@ Real execution gates require a prepared host and isolated runtime root.
 | Apple Silicon | `cargo run -p a3s-oci-cli -- hvf-smoke` followed by the signed utility-VM profiles | [macOS HVF development](docs/macos-hvf.md) |
 | Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` and `scripts/windows-whpx-recovery-smoke.ps1` with a verified rootfs archive | [Windows WHPX development](docs/windows-whpx.md) |
 
-The Linux smoke now also drives the delegated rootless recovery gate and can
-archive its JSON evidence through `A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT`.
+The Linux smoke now prepares an explicit user-owned cgroup-v2 subtree for the
+rootless v3 gate. The gate covers create, live update/stats, workload-proven
+pause/resume, an exact lifecycle event sequence, and cleanup without allowing
+the runtime to guess or take over a host cgroup. Rootless device-policy
+enforcement and owner-death cgroup recovery remain separate promotion work.
 
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.
@@ -382,6 +386,9 @@ The repository turns release claims into checked inventories:
 | Real HVF session-scoped File reopen plus VM/session-owner replacement paths | 9 |
 | Real HVF session-scoped Filesystem reopen plus VM/session-owner replacement paths | 9 |
 | Real HVF operation replacement coverage | 180 / 180 paths (20 / 20 operations) |
+| Real HVF lifecycle/transport cleanup fault points | 14 / 14 |
+| Real HVF immutable-system-image soak | 25 / 25 fresh VMs (75 primary generations) |
+| macOS HVF R2M implementation gates | 15 / 15 |
 | Guest operations behind protocol v9 | 20 |
 
 The locks prove inventory and exercised boundaries, not full conformance by
@@ -397,7 +404,7 @@ qualification must all pass before a driver becomes `supported`.
 - production-ready Native Linux and utility-VM drivers;
 - live Native Linux process-I/O reattachment across owner death and exact
   terminal evidence when a persistent authenticated reaper can retain it;
-- pinned immutable utility-VM system roots;
+- pinned immutable system roots for WHPX and KVM;
 - utility-VM hook recovery and security certification;
 - the default and cross-platform A3S Box cutover and OCI Runtime-owned
   containerd shim;

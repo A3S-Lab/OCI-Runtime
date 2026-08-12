@@ -8,7 +8,7 @@ macOS feature discovery reports the `libkrun-hvf` driver. The feature probe:
 2. reads `kern.hv_support` directly through `sysctlbyname`;
 3. records both observations in the versioned feature inventory;
 4. does not create a VM or mutate runtime state;
-5. keeps driver readiness at `probe-only`.
+5. reports the R2M-qualified driver as `experimental`.
 
 Intel macOS is reported as unsupported by A3S driver policy instead of being
 silently treated as an unavailable Apple Silicon host.
@@ -169,11 +169,11 @@ Native runtime hashes and source provenance are recorded in
 
 ## Real Linux guest entry gate
 
-The `vm-smoke` command crosses the guest-execution boundary without claiming
-an OCI workload driver. It uses the kernel embedded in the pinned
-`libkrunfw.5.dylib`, presents a caller-supplied arm64 Linux rootfs through
-virtiofs, executes `/bin/sh`, and requires an exact guest-written marker to be
-visible on the host.
+The `vm-smoke` command crosses the guest-execution boundary through the
+manifest-bound immutable system image. It attaches the raw ext4 system disk
+read-only, pins the A3S Linux kernel and guest agent through the manifest, keeps
+the writable runtime share separate, executes `/bin/sh`, and requires an exact
+guest-written marker to be visible on the host.
 
 Standard macOS libkrun consumes the process in `krun_start_enter`. The shim
 therefore keeps verification in a parent process and performs all libkrun work
@@ -205,6 +205,13 @@ guest execution. Success requires all of the following in one report:
   "context_created": true,
   "vm_configured": true,
   "rootfs_configured": true,
+  "runtime_share_configured": true,
+  "macos_boot_assets": {
+    "manifest_sha256": "e7206ea5c645259fcc9f00d8b3042792d6a6b380436a0a38a1b85dda7c0d4284",
+    "system_image_sha256": "e8f5f6713ac093b278b5851129f154b783c08bb8489fe6964bbd93dae0c43910",
+    "root_disk_read_only": true,
+    "runtime_share_separate": true
+  },
   "workload_configured": true,
   "console_configured": true,
   "vm_entered": true,
@@ -217,8 +224,8 @@ guest execution. Success requires all of the following in one report:
 }
 ```
 
-The retained qualification rootfs is the untouched Alpine 3.22.5 aarch64
-minirootfs:
+The retained immutable system root is reproducibly built from the pinned
+Alpine 3.22.5 aarch64 minirootfs plus the static A3S agent:
 
 - URL:
   `https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz`
@@ -230,18 +237,20 @@ Run the gate with the signed relocatable shim from the previous section:
 
 ```sh
 asset_dir="$(mktemp -d)"
-rootfs="$asset_dir/rootfs"
+runtime_share="$asset_dir/runtime-share"
 archive="$asset_dir/alpine-minirootfs-3.22.5-aarch64.tar.gz"
-mkdir "$rootfs"
+system_image_manifest="$asset_dir/system-image/system-image.json"
+mkdir "$runtime_share"
 curl --fail --location --output "$archive" \
   https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz
 printf '%s  %s\n' \
   '3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70' \
   "$archive" | shasum -a 256 --check
-tar -xzf "$archive" -C "$rootfs"
 
 "$smoke_dir/a3s-oci-krun-shim" vm-smoke \
-  --rootfs "$rootfs" \
+  --rootfs "$runtime_share" \
+  --system-image-manifest "$system_image_manifest" \
+  --runtime-share "$runtime_share" \
   --console "$asset_dir/console.log"
 ```
 
@@ -252,7 +261,7 @@ build without the Hypervisor entitlement reached the complete context
 configuration boundary, failed `krun_start_enter`, returned status `2`, wrote
 no marker, and reported no false VM entry.
 
-macOS CI downloads and verifies the same rootfs. When
+macOS CI downloads and verifies the same immutable image artifact. When
 `kern.hv_support = 1`, it requires the complete positive report. On hosted
 runners where virtualization is unavailable, it requires status `2`, complete
 pre-entry configuration evidence, no guest exit code, no marker, and no false
@@ -261,9 +270,9 @@ startup interval.
 
 ## Authenticated guest-agent bridge
 
-The `agent-vm-smoke` command now crosses the authenticated host/guest boundary
-without promoting HVF to a workload driver. It reuses the same protocol and
-static Linux executor used by WHPX; there is no macOS-specific guest protocol.
+The `agent-vm-smoke` command crosses the authenticated host/guest boundary used
+by the experimental HVF driver. It reuses the same protocol and static Linux
+executor used by WHPX; there is no macOS-specific guest protocol.
 
 The host runtime establishes the trust chain in this order:
 
@@ -413,26 +422,30 @@ maps and offsets, installs an explicit `SIGTERM` handler, writes the known
 marker only after those checks and start, and remains running until the host
 delivers the lifecycle signal.
 
-Prepare a contained bundle from the already verified Alpine archive:
+Prepare a caller-owned contained bundle from the already verified Alpine
+archive without `sudo` or ownership mutation:
 
 ```sh
-bundle="$rootfs/var/lib/a3s-oci-smoke/bundle"
-mkdir -p "$bundle/rootfs"
-cp fixtures/utility-vm/config.json "$bundle/config.json"
-tar -xzf "$archive" -C "$bundle/rootfs"
-sudo chown -R 0:0 "$bundle/rootfs"
+runtime_share="$asset_dir/runtime-share"
+bundle="$runtime_share/var/lib/a3s-oci-smoke/bundle"
+scripts/prepare-macos-utility-vm-bundle.sh \
+  --alpine-archive "$archive" \
+  --config fixtures/utility-vm/config.json \
+  --bundle "$bundle"
 
 target/debug/a3s-oci oci-vm-smoke \
   --shim "$smoke_dir/a3s-oci-krun-shim" \
-  --vm-rootfs "$rootfs" \
+  --vm-rootfs "$runtime_share" \
+  --system-image-manifest "$system_image_manifest" \
   --bundle "$bundle" \
   --console "$asset_dir/oci-console.log"
 ```
 
-The fixture maps container ID 0 to guest ID 0. Rootfs trees extracted by a
-macOS user therefore must be changed to guest-root ownership before the VM
-starts; otherwise APFS ownership such as ID 501 remains unmapped and the
-create barrier correctly fails instead of weakening filesystem checks.
+The preparation script records the APFS owner in an exact container-root
+mapping. For a normal local checkout this is commonly UID/GID `501:0`; the
+container still observes `0:0`. Derived rootfs-enforcement bundles preserve
+that root mapping and add non-overlapping ranges for IDs `1..65535`, so the
+1000/2000 ID-mapped-mount checks remain available without changing host files.
 
 The signed Apple Silicon qualification contract is
 `a3s.oci.oci-vm-smoke.v9`: bundle loading, created state, exact create replay,
@@ -532,7 +545,8 @@ mkdir "$console_dir"
 
 target/debug/a3s-oci macos-hvf-soak \
   --shim "$smoke_dir/a3s-oci-krun-shim" \
-  --vm-rootfs "$rootfs" \
+  --vm-rootfs "$runtime_share" \
+  --system-image-manifest "$system_image_manifest" \
   --bundle-a "$bundle_a" \
   --bundle-b "$bundle_b" \
   --console-dir "$console_dir" \
@@ -994,19 +1008,17 @@ stale-generation rejection, replacement Stat, explicit Remove, and cleanup
 passed all nine stages on Apple Silicon. The real-HVF replacement matrix now
 covers all 180 operation-stage paths across all 20 protocol-v9 operations.
 
-## Remaining workload gates
+## Qualification result and remaining release gates
 
-The fixed lifecycle proves the real static A3S Linux guest, transport, and
-reviewed executor slice, but it is not yet an arbitrary OCI workload driver.
-The current gates do not:
+R2M is 15/15. The August 13, 2026 Apple Silicon qualification used one exact
+immutable system-image manifest across direct VM entry, authenticated agent,
+fixed and multi-container lifecycle, 3 no-delete cleanup points, 11 transport
+fault points, 180/180 operation reopen/replacement paths, negative asset and
+authentication cases, and 25/25 fresh-VM soak waves. The soak completed 75
+primary generations with unique endpoints and a stable descriptor count of
+10. The HVF capability therefore reports `experimental`.
 
-- boot the production A3S immutable Linux system image.
-
-The next macOS increments must add, in order:
-
-1. the production A3S immutable system root;
-2. negative tests for isolation weakening and recovery injection beyond the
-   complete operation-stage matrix.
-
-Only after those gates and the shared Linux executor requirements pass may
-the HVF driver move from `probe-only` to `experimental`.
+This is the complete macOS implementation gate, not a `supported` production
+claim. Signed release-artifact qualification, upstream OCI conformance,
+adversarial security review, upgrade and rollback compatibility, and broader
+long-duration release testing remain before `supported`.

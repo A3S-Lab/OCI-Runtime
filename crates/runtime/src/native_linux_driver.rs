@@ -81,6 +81,54 @@ impl NativeLinuxDriver {
         })
     }
 
+    /// Open the experimental native driver with one explicit rootless
+    /// cgroup-v2 delegation supplied by the host.
+    pub async fn open_experimental_with_rootless_cgroup_delegation(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+        delegated_cgroup_root: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let mut capability = crate::platform::native_driver_capability();
+        if capability.status != CapabilityStatus::Available {
+            return Err(Error::new(
+                ErrorCode::Unavailable,
+                capability
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "native Linux prerequisites are unavailable".to_string()),
+            )
+            .for_operation("open-native-linux-driver"));
+        }
+        capability.readiness = DriverReadiness::Experimental;
+        capability.evidence.insert(
+            "execution_path".to_string(),
+            "shared-linux-executor".to_string(),
+        );
+        capability
+            .evidence
+            .insert("kvm_required".to_string(), "false".to_string());
+        capability.evidence.insert(
+            "rootless_cgroup_delegation".to_string(),
+            "explicit-v1".to_string(),
+        );
+
+        let executor = Arc::new(
+            LinuxExecutor::open_native_with_rootless_cgroup_delegation(
+                runtime_parent,
+                init_executable,
+                delegated_cgroup_root,
+            )
+            .await?,
+        );
+        let service: Arc<dyn GuestAgentService> = executor.clone();
+        Ok(Self {
+            capability,
+            executor,
+            client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
+            recovered: Mutex::new(BTreeMap::new()),
+        })
+    }
+
     /// Stop every process owned by this driver and remove transient state.
     pub async fn shutdown(&self) -> Result<()> {
         self.executor.shutdown().await

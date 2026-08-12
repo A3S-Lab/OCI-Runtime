@@ -11,6 +11,9 @@ pub(crate) struct Args {
     /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
     #[arg(long, value_name = "DIR")]
     vm_rootfs: PathBuf,
+    /// Immutable system-image manifest bound to both macOS HVF owners.
+    #[arg(long, value_name = "FILE")]
+    system_image_manifest: PathBuf,
     /// OCI bundle contained by the VM root filesystem.
     #[arg(long, value_name = "DIR")]
     bundle: PathBuf,
@@ -94,6 +97,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -107,6 +111,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_close_stdin_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -120,6 +125,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_delete_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -133,6 +139,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_exec_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -146,6 +153,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_file_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -159,6 +167,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_filesystem_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -172,6 +181,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_kill_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -185,6 +195,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_pause_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -198,6 +209,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_processes_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -211,6 +223,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_read_output_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -224,6 +237,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_resize_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -237,6 +251,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_resume_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -250,6 +265,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_signal_process_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -263,6 +279,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_state_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -276,6 +293,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_start_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -289,6 +307,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_stats_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -302,6 +321,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_update_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -315,6 +335,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_wait_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -328,6 +349,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_wait_process_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,
@@ -341,6 +363,7 @@ pub(crate) async fn run(arguments: Args) -> Result<ExitCode, super::CliError> {
             let report = a3s_oci_runtime::oci_vm_write_stdin_reopen_replacement_at(
                 &arguments.shim,
                 &arguments.vm_rootfs,
+                &arguments.system_image_manifest,
                 &arguments.bundle,
                 &arguments.console_dir,
                 stage,

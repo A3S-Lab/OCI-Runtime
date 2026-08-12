@@ -8,6 +8,8 @@ pub const AGENT_RUNTIME_SHARE_ENV: &str = "A3S_OCI_AGENT_RUNTIME_SHARE";
 pub const AGENT_RUNTIME_SHARE_TAG: &str = "a3s-oci-runtime";
 /// Fixed guest mount point for the per-generation runtime share.
 pub const AGENT_RUNTIME_SHARE_GUEST_ROOT: &str = "/run/a3s-oci-runtime";
+/// Fixed directory inside the mounted runtime share used for guest executor state.
+pub const AGENT_RUNTIME_SHARE_STATE_GUEST_ROOT: &str = "/run/a3s-oci-runtime/run";
 
 /// Exact endpoint basename mapped to the guest-agent vsock port.
 #[derive(Debug, Clone, PartialEq, Eq)]

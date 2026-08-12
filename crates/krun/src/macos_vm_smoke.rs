@@ -10,10 +10,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::macos_context::{KrunContext, MacosKrunApi};
 use crate::macos_process::{
-    canonical_rootfs, read_bounded_worker_output, require_absent, resolve_console,
-    resolve_guest_regular_file, terminate_and_wait, wait_for_worker,
+    read_bounded_worker_output, require_absent, resolve_console, terminate_and_wait,
+    wait_for_worker,
 };
-use crate::{KrunVmSmokeReport, VmConfig};
+use crate::macos_system_image::MacosSystemImage;
+use crate::{KrunVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
+use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_TAG;
 
 const MACOS_VM_SMOKE_TOKEN: &str = "a3s-oci-hvf-vm-smoke-v1";
 const WORKER_COMMAND: &str = "__macos-vm-smoke-worker";
@@ -29,6 +31,9 @@ struct WorkerEvidence {
     context_created: bool,
     vm_configured: bool,
     rootfs_configured: bool,
+    runtime_share_configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    macos_boot_assets: Option<MacosBootAssetsEvidence>,
     workload_configured: bool,
     console_configured: bool,
     enter_attempted: bool,
@@ -44,6 +49,8 @@ impl WorkerEvidence {
             context_created: false,
             vm_configured: false,
             rootfs_configured: false,
+            runtime_share_configured: false,
+            macos_boot_assets: None,
             workload_configured: false,
             console_configured: false,
             enter_attempted: false,
@@ -52,18 +59,24 @@ impl WorkerEvidence {
     }
 }
 
-pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunVmSmokeReport {
+pub(crate) fn vm_smoke(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    console: &Path,
+    config: VmConfig,
+) -> KrunVmSmokeReport {
     let mut report = KrunVmSmokeReport::initial(HostPlatform::Macos, config);
     // The parent does not load libkrun. Only bounded evidence from the private
     // worker may advance this field from staged-at-build-time to loaded.
     report.runtime_bundle_loaded = false;
-    let rootfs = match resolve_rootfs(rootfs) {
-        Ok(rootfs) => rootfs,
+    let runtime_share = match canonical_runtime_share(runtime_share) {
+        Ok(runtime_share) => runtime_share,
         Err(reason) => {
             report.reason = Some(reason);
             return report;
         }
     };
+    report.runtime_share_configured = true;
     let console = match resolve_console(console) {
         Ok(console) => console,
         Err(reason) => {
@@ -73,7 +86,7 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
     };
 
     let marker_name = format!("{MARKER_PREFIX}{}", std::process::id());
-    let marker_path = rootfs.join(&marker_name);
+    let marker_path = runtime_share.join(&marker_name);
     if let Err(reason) = require_absent(&marker_path, "smoke marker") {
         report.reason = Some(reason);
         return report;
@@ -91,8 +104,10 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
 
     let mut child = match Command::new(executable)
         .arg(WORKER_COMMAND)
-        .arg("--rootfs")
-        .arg(&rootfs)
+        .arg("--system-image-manifest")
+        .arg(system_image_manifest)
+        .arg("--runtime-share")
+        .arg(&runtime_share)
         .arg("--console")
         .arg(&console)
         .arg("--marker-name")
@@ -132,6 +147,8 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
             report.context_created = evidence.context_created;
             report.vm_configured = evidence.vm_configured;
             report.rootfs_configured = evidence.rootfs_configured;
+            report.runtime_share_configured = evidence.runtime_share_configured;
+            report.macos_boot_assets = evidence.macos_boot_assets.clone();
             report.workload_configured = evidence.workload_configured;
             report.console_configured = evidence.console_configured;
             if let Some(reason) = evidence.reason.clone() {
@@ -187,6 +204,11 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
         && report.context_created
         && report.vm_configured
         && report.rootfs_configured
+        && report.runtime_share_configured
+        && report
+            .macos_boot_assets
+            .as_ref()
+            .is_some_and(MacosBootAssetsEvidence::is_success)
         && report.workload_configured
         && report.console_configured
         && report.vm_entered
@@ -204,10 +226,15 @@ pub(crate) fn vm_smoke(rootfs: &Path, console: &Path, config: VmConfig) -> KrunV
     report
 }
 
-pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bool {
+pub(crate) fn run_worker(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    console: &Path,
+    marker_name: &str,
+) -> bool {
     let mut evidence = WorkerEvidence::initial();
-    let rootfs = match resolve_rootfs(rootfs) {
-        Ok(rootfs) => rootfs,
+    let runtime_share = match canonical_runtime_share(runtime_share) {
+        Ok(runtime_share) => runtime_share,
         Err(reason) => return fail_worker(&mut evidence, reason),
     };
     let console = match resolve_console(console) {
@@ -217,7 +244,7 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
     if let Err(reason) = validate_marker_name(marker_name) {
         return fail_worker(&mut evidence, reason);
     }
-    let marker_path = rootfs.join(marker_name);
+    let marker_path = runtime_share.join(marker_name);
     if let Err(reason) = require_absent(&marker_path, "smoke marker") {
         return fail_worker(&mut evidence, reason);
     }
@@ -229,6 +256,23 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
         }
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
+    let system_image = match MacosSystemImage::load(system_image_manifest, api.runtime_provenance())
+    {
+        Ok(system_image) => system_image,
+        Err(error) => return fail_worker(&mut evidence, error.to_string()),
+    };
+    if system_image.image_path().starts_with(&runtime_share)
+        || runtime_share.starts_with(system_image.image_path())
+        || system_image.manifest_path().starts_with(&runtime_share)
+        || runtime_share.starts_with(system_image.manifest_path())
+    {
+        return fail_worker(
+            &mut evidence,
+            "immutable system image, manifest, and writable runtime share must be disjoint"
+                .to_string(),
+        );
+    }
+    evidence.macos_boot_assets = Some(system_image.evidence(true));
     let config = crate::fallback_config();
     let mut context = match KrunContext::create(api) {
         Ok(context) => {
@@ -242,17 +286,22 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.vm_configured = true;
-    if let Err(error) = context.set_root(&rootfs) {
+    if let Err(error) = context.set_read_only_system_image(system_image) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.rootfs_configured = true;
+    if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, &runtime_share) {
+        return fail_worker(&mut evidence, error.to_string());
+    }
+    evidence.runtime_share_configured = true;
     if let Err(error) = context.set_workdir("/") {
         return fail_worker(&mut evidence, error.to_string());
     }
 
-    let marker_guest_path = format!("/{marker_name}");
+    let marker_guest_path = format!("/run/a3s-oci-runtime/{marker_name}");
     let command = format!(
-        "printf '%s\\n' '{MACOS_VM_SMOKE_TOKEN}' > '{marker_guest_path}' && \
+        "mount -t virtiofs {AGENT_RUNTIME_SHARE_TAG} /run/a3s-oci-runtime && \
+         printf '%s\\n' '{MACOS_VM_SMOKE_TOKEN}' > '{marker_guest_path}' && \
          printf '%s\\n' '{MACOS_VM_SMOKE_TOKEN}'"
     );
     let arguments = vec!["-c".to_string(), command];
@@ -280,10 +329,25 @@ pub(crate) fn run_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bo
     }
 }
 
-fn resolve_rootfs(rootfs: &Path) -> Result<std::path::PathBuf, String> {
-    let rootfs = canonical_rootfs(rootfs)?;
-    resolve_guest_regular_file(&rootfs, Path::new("/bin/sh"), "guest shell")?;
-    Ok(rootfs)
+fn canonical_runtime_share(path: &Path) -> Result<std::path::PathBuf, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect writable runtime share {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(format!(
+            "writable runtime share must be a real directory, not a symlink: {}",
+            path.display()
+        ));
+    }
+    path.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize writable runtime share {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn validate_marker_name(marker_name: &str) -> Result<(), String> {

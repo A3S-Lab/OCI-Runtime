@@ -25,6 +25,7 @@ pub(super) async fn run(
     let session = match UtilityVmSession::connect(
         &qualification.shim,
         &qualification.vm_rootfs,
+        Some(&qualification.system_image_manifest),
         &qualification.replacement_console,
     )
     .await

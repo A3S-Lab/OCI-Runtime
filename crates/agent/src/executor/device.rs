@@ -23,7 +23,8 @@ use super::recovery::read_json_record;
 const MAX_DEVICES: usize = 256;
 const MAX_SCANNED_ROOTFS_ENTRIES: usize = 1_000_000;
 const DEVICE_TARGETS_RECORD_NAME: &str = "device-targets.json";
-const DEVICE_TARGETS_SCHEMA_VERSION: &str = "a3s.oci.native-linux-device-targets.v1";
+const DEVICE_TARGETS_SCHEMA_VERSION: &str = "a3s.oci.native-linux-device-targets.v2";
+const DEVICE_TARGETS_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-device-targets.v1";
 const MAX_DEVICE_TARGETS_RECORD_BYTES: u64 = 64 * 1024;
 const DEVICE_TARGET_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEVICE_TARGET_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -39,15 +40,14 @@ pub(super) struct DevicePlan {
 pub(super) struct PreparedDeviceSources {
     mounts: Option<Vec<OwnedFd>>,
     verify_ownership: bool,
-    created_targets: Mutex<Vec<PathBuf>>,
-    manifest_targets: Mutex<Vec<DeviceTargetRecord>>,
+    manifest: Mutex<Option<DeviceTargetManifest>>,
     manifest_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct DeviceTargetRecord {
-    path: PathBuf,
+    relative_path: PathBuf,
     dev: u64,
     ino: u64,
     mode: u32,
@@ -57,25 +57,34 @@ pub(super) struct DeviceTargetRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeviceTargetManifest {
+pub(super) struct DeviceTargetManifest {
     schema_version: String,
+    rootfs: DeviceRootfsRecord,
     targets: Vec<DeviceTargetRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeviceRootfsRecord {
+    canonical_path: PathBuf,
+    dev: u64,
+    ino: u64,
+}
+
 impl DeviceTargetRecord {
-    fn capture(path: &Path, metadata: &fs::Metadata) -> Result<Self> {
-        validate_device_target_path(path)?;
+    fn capture(relative_path: &Path, metadata: &fs::Metadata) -> Result<Self> {
+        validate_device_target_relative_path(relative_path)?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(device_error(
                 ErrorCode::FailedPrecondition,
                 format!(
                     "device bind target is not a regular file placeholder: {}",
-                    path.display()
+                    relative_path.display()
                 ),
             ));
         }
         Ok(Self {
-            path: path.to_path_buf(),
+            relative_path: relative_path.to_path_buf(),
             dev: metadata.dev(),
             ino: metadata.ino(),
             mode: metadata.mode() & 0o7777,
@@ -84,25 +93,53 @@ impl DeviceTargetRecord {
         })
     }
 
-    fn validate_exact(&self, metadata: &fs::Metadata) -> Result<()> {
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || metadata.dev() != self.dev
-            || metadata.ino() != self.ino
-            || metadata.mode() & 0o7777 != self.mode
-            || metadata.uid() != self.uid
-            || metadata.gid() != self.gid
-        {
-            return Err(device_error(
+    fn matches(&self, metadata: &TargetMetadata) -> bool {
+        metadata.file_type == libc::S_IFREG
+            && metadata.dev == self.dev
+            && metadata.ino == self.ino
+            && metadata.mode == self.mode
+            && metadata.uid == self.uid
+            && metadata.gid == self.gid
+    }
+}
+
+impl DeviceRootfsRecord {
+    fn capture(canonical_rootfs: &Path) -> Result<Self> {
+        validate_device_rootfs_path(canonical_rootfs)?;
+        let metadata = fs::symlink_metadata(canonical_rootfs).map_err(|error| {
+            device_error(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "device bind target changed before cleanup: {}",
-                    self.path.display()
+                    "failed to inspect device target rootfs {}: {error}",
+                    canonical_rootfs.display()
+                ),
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "device target rootfs is not a real directory: {}",
+                    canonical_rootfs.display()
                 ),
             ));
         }
-        Ok(())
+        Ok(Self {
+            canonical_path: canonical_rootfs.to_path_buf(),
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TargetMetadata {
+    file_type: u32,
+    dev: u64,
+    ino: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -261,8 +298,7 @@ impl DevicePlan {
             return Ok(PreparedDeviceSources {
                 mounts: None,
                 verify_ownership: true,
-                created_targets: Mutex::new(Vec::new()),
-                manifest_targets: Mutex::new(Vec::new()),
+                manifest: Mutex::new(None),
                 manifest_path: None,
             });
         }
@@ -276,8 +312,7 @@ impl DevicePlan {
             return Ok(PreparedDeviceSources {
                 mounts: Some(Vec::new()),
                 verify_ownership: !rootless,
-                created_targets: Mutex::new(Vec::new()),
-                manifest_targets: Mutex::new(Vec::new()),
+                manifest: Mutex::new(None),
                 manifest_path: None,
             });
         }
@@ -292,8 +327,7 @@ impl DevicePlan {
             return Ok(PreparedDeviceSources {
                 mounts: Some(mounts),
                 verify_ownership: false,
-                created_targets: Mutex::new(Vec::new()),
-                manifest_targets: Mutex::new(Vec::new()),
+                manifest: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
             });
         }
@@ -321,8 +355,7 @@ impl DevicePlan {
             Ok(mounts) => Ok(PreparedDeviceSources {
                 mounts: Some(mounts),
                 verify_ownership: true,
-                created_targets: Mutex::new(Vec::new()),
-                manifest_targets: Mutex::new(Vec::new()),
+                manifest: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
             }),
             Err(error) => {
@@ -367,10 +400,6 @@ impl DevicePlan {
         self.enforce_allowlist
     }
 
-    pub(super) fn requires_cgroup_device_filter(&self) -> bool {
-        self.enforce_allowlist
-    }
-
     pub(super) fn update_from_resources(&self, resources: &LinuxResources) -> Result<Option<Self>> {
         let Some(rules) = resources.devices().as_deref() else {
             return Ok(None);
@@ -397,6 +426,15 @@ impl DevicePlan {
         loaded: &OwnedFd,
     ) -> Result<()> {
         attach_loaded_cgroup_device_program(cgroup_path, loaded)
+    }
+
+    pub(super) fn replace_loaded_cgroup_device_program(
+        &self,
+        cgroup_path: &Path,
+        loaded: &OwnedFd,
+        replaced: &OwnedFd,
+    ) -> Result<()> {
+        replace_loaded_cgroup_device_program(cgroup_path, loaded, replaced)
     }
 
     pub(super) fn detach_loaded_cgroup_device_program(
@@ -428,39 +466,39 @@ impl DevicePlan {
 }
 
 impl PreparedDeviceSources {
-    /// Record target paths that do not exist before the supervised child is
-    /// forked. The launcher retains this list across the fork and removes only
-    /// those placeholders after the child mount namespace has gone away.
-    pub(super) fn record_missing_targets(&self, rootfs: &Path, plan: &DevicePlan) -> Result<()> {
-        if self.mounts.is_none() {
+    /// Bind the cleanup manifest to the exact retained rootfs before the
+    /// supervised child enters its mount namespace.
+    pub(super) fn bind_rootfs(&self, rootfs: &Path) -> Result<()> {
+        if self.mounts.is_none() || self.manifest_path.is_none() {
             return Ok(());
         }
-        let mut created_targets = self.created_targets.lock().map_err(|_| {
+        let canonical_rootfs = rootfs.canonicalize().map_err(|error| {
             device_error(
-                ErrorCode::Internal,
-                "prepared device target state was poisoned",
+                ErrorCode::InvalidArgument,
+                format!(
+                    "failed to resolve device target rootfs {}: {error}",
+                    rootfs.display()
+                ),
             )
         })?;
-        let mut observed_missing_targets = Vec::new();
-        for node in &plan.nodes {
-            let target = node.target_path(rootfs)?;
-            match fs::symlink_metadata(&target) {
-                Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    observed_missing_targets.push(target);
-                }
-                Err(error) => {
-                    return Err(device_error(
-                        ErrorCode::InvalidArgument,
-                        format!(
-                            "failed to inspect OCI device bind target {}: {error}",
-                            node.path.display()
-                        ),
-                    ));
-                }
-            }
+        let manifest = DeviceTargetManifest {
+            schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
+            rootfs: DeviceRootfsRecord::capture(&canonical_rootfs)?,
+            targets: Vec::new(),
+        };
+        let mut retained = self.manifest.lock().map_err(|_| {
+            device_error(
+                ErrorCode::Internal,
+                "prepared device target manifest state was poisoned",
+            )
+        })?;
+        if retained.is_some() {
+            return Err(device_error(
+                ErrorCode::Conflict,
+                "prepared device target rootfs was already bound",
+            ));
         }
-        created_targets.extend(observed_missing_targets);
+        *retained = Some(manifest);
         Ok(())
     }
 
@@ -471,145 +509,54 @@ impl PreparedDeviceSources {
                 "prepared device target manifest path was not retained",
             ));
         };
-        let targets = {
-            let mut targets = self.manifest_targets.lock().map_err(|_| {
-                device_error(
-                    ErrorCode::Internal,
-                    "prepared device target manifest state was poisoned",
-                )
-            })?;
-            targets.push(record);
-            targets.clone()
-        };
-        write_device_target_manifest(manifest_path, targets.as_slice())
-    }
-
-    /// Remove regular-file placeholders created for prepared device mounts.
-    ///
-    /// The mount namespace owns the attached device mounts; once its child
-    /// exits, only these host-rootfs placeholders remain. Never remove a
-    /// pre-existing target or a path that changed type while the workload was
-    /// running.
-    pub(super) fn cleanup_created_targets(&self) -> Result<()> {
-        if let Some(records) = self.load_recorded_targets()? {
-            let recorded_paths = records
-                .iter()
-                .map(|record| record.path.clone())
-                .collect::<BTreeSet<_>>();
-            cleanup_device_target_records(records.as_slice())?;
-            let targets = self
-                .created_targets
-                .lock()
-                .map_err(|_| {
-                    device_error(
-                        ErrorCode::Internal,
-                        "prepared device target state was poisoned",
-                    )
-                })?
-                .clone();
-            let mut failures = Vec::new();
-            for target in targets.iter().rev() {
-                if recorded_paths.contains(target) {
-                    continue;
-                }
-                if let Err(error) = cleanup_unrecorded_target(target) {
-                    failures.push(format!("{}: {error}", target.display()));
-                }
-            }
-            if failures.is_empty() {
-                self.clear_cleanup_state()?;
-                return Ok(());
-            }
+        let mut retained = self.manifest.lock().map_err(|_| {
+            device_error(
+                ErrorCode::Internal,
+                "prepared device target manifest state was poisoned",
+            )
+        })?;
+        let manifest = retained.as_mut().ok_or_else(|| {
+            device_error(
+                ErrorCode::Internal,
+                "prepared device target rootfs identity was not retained",
+            )
+        })?;
+        if manifest
+            .targets
+            .iter()
+            .any(|target| target.relative_path == record.relative_path)
+        {
             return Err(device_error(
-                ErrorCode::FailedPrecondition,
+                ErrorCode::Conflict,
                 format!(
-                    "failed to clean prepared OCI device targets: {}",
-                    failures.join("; ")
+                    "prepared device target was recorded twice: {}",
+                    record.relative_path.display()
                 ),
             ));
         }
-
-        let targets = self
-            .created_targets
-            .lock()
-            .map_err(|_| {
-                device_error(
+        manifest.targets.push(record.clone());
+        if let Err(error) = write_device_target_manifest(manifest_path, manifest) {
+            let removed = manifest.targets.pop();
+            if removed.as_ref() != Some(&record) {
+                return Err(device_error(
                     ErrorCode::Internal,
-                    "prepared device target state was poisoned",
-                )
-            })?
-            .clone();
-        let mut failures = Vec::new();
-        for target in targets.iter().rev() {
-            if let Err(error) = cleanup_unrecorded_target(target) {
-                failures.push(format!("{}: {error}", target.display()));
+                    "prepared device target manifest rollback lost its last record",
+                ));
             }
-        }
-        if failures.is_empty() {
-            self.clear_cleanup_state()?;
-            Ok(())
-        } else {
-            Err(device_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "failed to clean prepared OCI device targets: {}",
-                    failures.join("; ")
-                ),
-            ))
-        }
-    }
-
-    fn load_recorded_targets(&self) -> Result<Option<Vec<DeviceTargetRecord>>> {
-        let Some(manifest_path) = &self.manifest_path else {
-            return Ok(None);
-        };
-        load_device_target_records_from(manifest_path)
-    }
-
-    fn clear_cleanup_state(&self) -> Result<()> {
-        self.created_targets
-            .lock()
-            .map_err(|_| {
-                device_error(
-                    ErrorCode::Internal,
-                    "prepared device target state was poisoned",
-                )
-            })?
-            .clear();
-        self.manifest_targets
-            .lock()
-            .map_err(|_| {
-                device_error(
-                    ErrorCode::Internal,
-                    "prepared device target manifest state was poisoned",
-                )
-            })?
-            .clear();
-        if let Some(manifest_path) = &self.manifest_path {
-            if let Err(error) = fs::remove_file(manifest_path) {
-                if error.kind() != io::ErrorKind::NotFound {
-                    return Err(device_error(
-                        ErrorCode::PermissionDenied,
-                        format!(
-                            "failed to remove prepared OCI device target manifest {}: {error}",
-                            manifest_path.display()
-                        ),
-                    ));
-                }
-            }
+            return Err(error);
         }
         Ok(())
     }
 }
 
-pub(super) fn load_device_target_records(
+pub(super) fn load_device_target_manifest(
     runtime_directory: &Path,
-) -> Result<Option<Vec<DeviceTargetRecord>>> {
-    load_device_target_records_from(&runtime_directory.join(DEVICE_TARGETS_RECORD_NAME))
+) -> Result<Option<DeviceTargetManifest>> {
+    load_device_target_manifest_from(&runtime_directory.join(DEVICE_TARGETS_RECORD_NAME))
 }
 
-fn load_device_target_records_from(path: &Path) -> Result<Option<Vec<DeviceTargetRecord>>> {
-    let manifest: DeviceTargetManifest = match fs::symlink_metadata(path) {
+fn load_device_target_manifest_from(path: &Path) -> Result<Option<DeviceTargetManifest>> {
+    let value: serde_json::Value = match fs::symlink_metadata(path) {
         Ok(_) => read_json_record(path, MAX_DEVICE_TARGETS_RECORD_BYTES)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -622,27 +569,52 @@ fn load_device_target_records_from(path: &Path) -> Result<Option<Vec<DeviceTarge
             ));
         }
     };
-    if manifest.schema_version != DEVICE_TARGETS_SCHEMA_VERSION {
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            device_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "prepared OCI device target manifest {} has no schema version",
+                    path.display()
+                ),
+            )
+        })?;
+    if schema_version == DEVICE_TARGETS_SCHEMA_VERSION_V1 {
         return Err(device_error(
-            ErrorCode::FailedPrecondition,
+            ErrorCode::PermissionDenied,
             format!(
-                "prepared OCI device target manifest {} has unsupported schema {}",
-                path.display(),
-                manifest.schema_version
+                "prepared OCI device target manifest {} uses legacy v1 absolute paths without a rootfs identity; refusing cleanup",
+                path.display()
             ),
         ));
     }
-    validate_device_target_records(manifest.targets.as_slice())?;
-    Ok(Some(manifest.targets))
+    if schema_version != DEVICE_TARGETS_SCHEMA_VERSION {
+        return Err(device_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "prepared OCI device target manifest {} has unsupported schema {schema_version}",
+                path.display()
+            ),
+        ));
+    }
+    let manifest: DeviceTargetManifest = serde_json::from_value(value).map_err(|error| {
+        device_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "prepared OCI device target manifest {} is invalid: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    validate_device_target_manifest(&manifest)?;
+    Ok(Some(manifest))
 }
 
-fn write_device_target_manifest(path: &Path, targets: &[DeviceTargetRecord]) -> Result<()> {
-    validate_device_target_records(targets)?;
-    let manifest = DeviceTargetManifest {
-        schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
-        targets: targets.to_vec(),
-    };
-    let mut encoded = serde_json::to_vec_pretty(&manifest).map_err(|error| {
+fn write_device_target_manifest(path: &Path, manifest: &DeviceTargetManifest) -> Result<()> {
+    validate_device_target_manifest(manifest)?;
+    let mut encoded = serde_json::to_vec_pretty(manifest).map_err(|error| {
         device_error(
             ErrorCode::Internal,
             format!("failed to encode prepared OCI device target manifest: {error}"),
@@ -705,25 +677,35 @@ fn write_device_target_manifest(path: &Path, targets: &[DeviceTargetRecord]) -> 
     Ok(())
 }
 
-pub(super) fn validate_device_target_records(records: &[DeviceTargetRecord]) -> Result<()> {
+fn validate_device_target_manifest(manifest: &DeviceTargetManifest) -> Result<()> {
+    if manifest.schema_version != DEVICE_TARGETS_SCHEMA_VERSION {
+        return Err(device_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "prepared OCI device target manifest has unsupported schema {}",
+                manifest.schema_version
+            ),
+        ));
+    }
+    validate_device_rootfs_path(&manifest.rootfs.canonical_path)?;
     let mut paths = BTreeSet::new();
-    for record in records {
-        validate_device_target_path(&record.path)?;
+    for record in &manifest.targets {
+        validate_device_target_relative_path(&record.relative_path)?;
         if record.mode > 0o7777 {
             return Err(device_error(
                 ErrorCode::PermissionDenied,
                 format!(
                     "device bind target record has invalid mode for {}",
-                    record.path.display()
+                    record.relative_path.display()
                 ),
             ));
         }
-        if !paths.insert(record.path.clone()) {
+        if !paths.insert(record.relative_path.clone()) {
             return Err(device_error(
                 ErrorCode::PermissionDenied,
                 format!(
                     "device bind target record is duplicated: {}",
-                    record.path.display()
+                    record.relative_path.display()
                 ),
             ));
         }
@@ -731,12 +713,20 @@ pub(super) fn validate_device_target_records(records: &[DeviceTargetRecord]) -> 
     Ok(())
 }
 
-pub(super) fn cleanup_device_target_records(records: &[DeviceTargetRecord]) -> Result<()> {
-    validate_device_target_records(records)?;
+pub(super) fn cleanup_device_target_manifest(manifest: &DeviceTargetManifest) -> Result<()> {
+    validate_device_target_manifest(manifest)?;
+    let rootfs = open_device_rootfs(&manifest.rootfs)?;
+
+    // Validate every target before the first unlink. Each target is opened
+    // again immediately before mutation to close ordinary replacement races.
+    for record in &manifest.targets {
+        wait_for_recorded_target(&rootfs, &manifest.rootfs, record)?;
+    }
+
     let mut failures = Vec::new();
-    for record in records.iter().rev() {
-        if let Err(error) = cleanup_recorded_target(record) {
-            failures.push(format!("{}: {error}", record.path.display()));
+    for record in manifest.targets.iter().rev() {
+        if let Err(error) = cleanup_recorded_target(&rootfs, &manifest.rootfs, record) {
+            failures.push(format!("{}: {error}", record.relative_path.display()));
         }
     }
     if failures.is_empty() {
@@ -752,45 +742,77 @@ pub(super) fn cleanup_device_target_records(records: &[DeviceTargetRecord]) -> R
     }
 }
 
-fn cleanup_recorded_target(record: &DeviceTargetRecord) -> Result<()> {
-    wait_for_recorded_target(record)?;
-    fs::remove_file(&record.path).map_err(|error| {
+fn cleanup_recorded_target(
+    rootfs: &OwnedFd,
+    rootfs_record: &DeviceRootfsRecord,
+    record: &DeviceTargetRecord,
+) -> Result<()> {
+    if !wait_for_recorded_target(rootfs, rootfs_record, record)? {
+        return Ok(());
+    }
+    let parent = open_device_target_parent(rootfs, &record.relative_path)?;
+    let name = record
+        .relative_path
+        .file_name()
+        .ok_or_else(|| device_error(ErrorCode::Internal, "device target has no filename"))?;
+    let name = CString::new(name.as_bytes()).map_err(|error| {
         device_error(
+            ErrorCode::PermissionDenied,
+            format!("device target filename contains NUL: {error}"),
+        )
+    })?;
+    let metadata = metadata_at(parent.as_raw_fd(), &name)?;
+    let Some(metadata) = metadata else {
+        return Ok(());
+    };
+    if !record.matches(&metadata) {
+        return Err(device_error(
+            ErrorCode::Conflict,
+            format!(
+                "device bind target changed immediately before cleanup: {}",
+                rootfs_record
+                    .canonical_path
+                    .join(&record.relative_path)
+                    .display()
+            ),
+        ));
+    }
+    // SAFETY: `parent` is a descriptor opened beneath the exact retained
+    // rootfs and `name` is one validated normal path component.
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::NotFound {
+            return Ok(());
+        }
+        return Err(device_error(
             ErrorCode::FailedPrecondition,
             format!(
                 "failed to remove recorded OCI device target {}: {error}",
-                record.path.display()
+                rootfs_record
+                    .canonical_path
+                    .join(&record.relative_path)
+                    .display()
             ),
-        )
-    })
+        ));
+    }
+    Ok(())
 }
 
-fn cleanup_unrecorded_target(target: &Path) -> Result<()> {
-    wait_for_unrecorded_target(target)?;
-    fs::remove_file(target).map_err(|error| {
-        device_error(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "failed to remove unrecorded OCI device target {}: {error}",
-                target.display()
-            ),
-        )
-    })
-}
-
-fn validate_device_target_path(path: &Path) -> Result<()> {
-    if !path.is_absolute()
+fn validate_device_rootfs_path(path: &Path) -> Result<()> {
+    if path == Path::new("/")
+        || !path.is_absolute()
+        || path.as_os_str().as_bytes().contains(&0)
         || path.components().any(|component| {
-            matches!(
+            !matches!(
                 component,
-                std::path::Component::CurDir | std::path::Component::ParentDir
+                std::path::Component::RootDir | std::path::Component::Normal(_)
             )
         })
     {
         return Err(device_error(
             ErrorCode::PermissionDenied,
             format!(
-                "device bind target record must be absolute and normalized: {}",
+                "device target rootfs must be a normalized absolute non-root path: {}",
                 path.display()
             ),
         ));
@@ -798,130 +820,280 @@ fn validate_device_target_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_recorded_target(record: &DeviceTargetRecord) -> Result<()> {
+fn validate_device_target_relative_path(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path.as_os_str().as_bytes().contains(&0)
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(device_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "device bind target record must be relative and normalized: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn open_device_rootfs(record: &DeviceRootfsRecord) -> Result<OwnedFd> {
+    validate_device_rootfs_path(&record.canonical_path)?;
+    let observed_canonical = record.canonical_path.canonicalize().map_err(|error| {
+        device_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to resolve recorded device target rootfs {}: {error}",
+                record.canonical_path.display()
+            ),
+        )
+    })?;
+    if observed_canonical != record.canonical_path {
+        return Err(device_error(
+            ErrorCode::Conflict,
+            format!(
+                "recorded device target rootfs is no longer canonical: {}",
+                record.canonical_path.display()
+            ),
+        ));
+    }
+    let path = path_cstring(&record.canonical_path, "recorded device target rootfs")?;
+    // SAFETY: `path` is NUL-terminated and open does not retain the pointer.
+    let descriptor = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor < 0 {
+        return Err(last_os_error(format!(
+            "open recorded device target rootfs {}",
+            record.canonical_path.display()
+        )));
+    }
+    // SAFETY: `descriptor` is a fresh descriptor returned by open.
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let metadata = metadata_for_fd(&descriptor)?;
+    if metadata.file_type != libc::S_IFDIR
+        || metadata.dev != record.dev
+        || metadata.ino != record.ino
+    {
+        return Err(device_error(
+            ErrorCode::Conflict,
+            format!(
+                "recorded device target rootfs identity changed before cleanup: {}",
+                record.canonical_path.display()
+            ),
+        ));
+    }
+    Ok(descriptor)
+}
+
+fn wait_for_recorded_target(
+    rootfs: &OwnedFd,
+    rootfs_record: &DeviceRootfsRecord,
+    record: &DeviceTargetRecord,
+) -> Result<bool> {
     let deadline = Instant::now() + DEVICE_TARGET_CLEANUP_TIMEOUT;
-    let mut last_observation = None;
     loop {
-        match fs::symlink_metadata(&record.path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
+        match open_device_target(rootfs, &record.relative_path)? {
+            None => return Ok(false),
+            Some(target) => {
+                let metadata = metadata_for_fd(&target)?;
+                if record.matches(&metadata) {
+                    return Ok(true);
+                }
+                if Instant::now() >= deadline {
                     return Err(device_error(
-                        ErrorCode::PermissionDenied,
+                        ErrorCode::FailedPrecondition,
                         format!(
-                            "device bind target became a symlink: {}",
-                            record.path.display()
+                            "device bind target never returned to its recorded placeholder before cleanup: {} (expected {}; observed {})",
+                            rootfs_record
+                                .canonical_path
+                                .join(&record.relative_path)
+                                .display(),
+                            describe_device_metadata(
+                                record.dev,
+                                record.ino,
+                                record.mode,
+                                record.uid,
+                                record.gid
+                            ),
+                            describe_target_metadata(&metadata),
                         ),
                     ));
                 }
-                if metadata.is_file() {
-                    if metadata.dev() == record.dev
-                        && metadata.ino() == record.ino
-                        && metadata.mode() & 0o7777 == record.mode
-                        && metadata.uid() == record.uid
-                        && metadata.gid() == record.gid
-                    {
-                        return Ok(());
-                    }
-                    last_observation = Some(describe_metadata(&metadata));
-                } else {
-                    last_observation = Some(describe_metadata(&metadata));
-                }
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(device_error(
-                    ErrorCode::FailedPrecondition,
-                    format!(
-                        "failed to inspect recorded OCI device target {}: {error}",
-                        record.path.display()
-                    ),
-                ));
-            }
-        }
-        if Instant::now() >= deadline {
-            break;
         }
         sleep(DEVICE_TARGET_CLEANUP_POLL_INTERVAL);
     }
-    let observed = last_observation.unwrap_or_else(|| "not found".to_string());
-    Err(device_error(
-        ErrorCode::FailedPrecondition,
-        format!(
-            "device bind target never returned to its recorded placeholder before cleanup: {} (expected {}; observed {observed})",
-            record.path.display(),
-            describe_device_metadata(record.dev, record.ino, record.mode, record.uid, record.gid),
-        ),
-    ))
 }
 
-fn wait_for_unrecorded_target(target: &Path) -> Result<()> {
-    let deadline = Instant::now() + DEVICE_TARGET_CLEANUP_TIMEOUT;
-    let mut last_observation = None;
-    loop {
-        match fs::symlink_metadata(target) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err(device_error(
-                        ErrorCode::PermissionDenied,
-                        format!("device bind target became a symlink: {}", target.display()),
-                    ));
-                }
-                if metadata.is_file() {
-                    return Ok(());
-                }
-                last_observation = Some(describe_metadata(&metadata));
-            }
-            Err(error) => {
-                return Err(device_error(
-                    ErrorCode::FailedPrecondition,
-                    format!(
-                        "failed to inspect unrecorded OCI device target {}: {error}",
-                        target.display()
-                    ),
-                ));
-            }
+fn open_device_target(rootfs: &OwnedFd, relative_path: &Path) -> Result<Option<OwnedFd>> {
+    validate_device_target_relative_path(relative_path)?;
+    openat2_beneath(
+        rootfs.as_raw_fd(),
+        relative_path,
+        libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        false,
+    )
+}
+
+fn open_device_target_parent(rootfs: &OwnedFd, relative_path: &Path) -> Result<OwnedFd> {
+    validate_device_target_relative_path(relative_path)?;
+    let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
+    if parent.as_os_str().is_empty() {
+        // SAFETY: fcntl duplicates the live rootfs descriptor and returns a new
+        // owned descriptor on success.
+        let descriptor = unsafe { libc::fcntl(rootfs.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if descriptor < 0 {
+            return Err(last_os_error("duplicate device target rootfs descriptor"));
         }
-        if Instant::now() >= deadline {
-            break;
-        }
-        sleep(DEVICE_TARGET_CLEANUP_POLL_INTERVAL);
+        // SAFETY: descriptor is freshly returned by F_DUPFD_CLOEXEC.
+        return Ok(unsafe { OwnedFd::from_raw_fd(descriptor) });
     }
-    let observed = last_observation.unwrap_or_else(|| "not found".to_string());
-    Err(device_error(
-        ErrorCode::FailedPrecondition,
-        format!(
-            "unrecorded OCI device target never returned to a removable file before cleanup: {} (observed {observed})",
-            target.display()
-        ),
-    ))
+    openat2_beneath(
+        rootfs.as_raw_fd(),
+        parent,
+        libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        true,
+    )?
+    .ok_or_else(|| {
+        device_error(
+            ErrorCode::FailedPrecondition,
+            format!("device target parent disappeared: {}", parent.display()),
+        )
+    })
+}
+
+fn openat2_beneath(
+    directory: libc::c_int,
+    path: &Path,
+    flags: libc::c_int,
+    require_directory: bool,
+) -> Result<Option<OwnedFd>> {
+    let path = path_cstring(path, "descriptor-relative device target")?;
+    let mut how = std::mem::MaybeUninit::<libc::open_how>::zeroed();
+    // SAFETY: zero is a valid initialization for every field in open_how.
+    let how = unsafe { how.assume_init_mut() };
+    how.flags = flags as u64;
+    how.resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS | libc::RESOLVE_NO_SYMLINKS;
+    // SAFETY: the directory descriptor is live, `path` is NUL-terminated, and
+    // `how` is initialized for the exact kernel ABI size.
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            directory,
+            path.as_ptr(),
+            how as *const libc::open_how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    if descriptor < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(device_error(
+            if error.raw_os_error() == Some(libc::EXDEV)
+                || error.raw_os_error() == Some(libc::ELOOP)
+            {
+                ErrorCode::PermissionDenied
+            } else {
+                ErrorCode::FailedPrecondition
+            },
+            format!(
+                "failed to open descriptor-relative device target {}: {error}",
+                path.to_string_lossy()
+            ),
+        ));
+    }
+    let descriptor = libc::c_int::try_from(descriptor).map_err(|error| {
+        device_error(
+            ErrorCode::Internal,
+            format!("openat2 returned an invalid descriptor: {error}"),
+        )
+    })?;
+    // SAFETY: descriptor is freshly returned by openat2.
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    if require_directory && metadata_for_fd(&descriptor)?.file_type != libc::S_IFDIR {
+        return Err(device_error(
+            ErrorCode::PermissionDenied,
+            "descriptor-relative device target parent is not a directory",
+        ));
+    }
+    Ok(Some(descriptor))
+}
+
+fn metadata_for_fd(descriptor: &OwnedFd) -> Result<TargetMetadata> {
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `descriptor` is live and metadata points to writable storage for
+    // one stat result.
+    if unsafe { libc::fstat(descriptor.as_raw_fd(), metadata.as_mut_ptr()) } != 0 {
+        return Err(last_os_error("inspect descriptor-relative device target"));
+    }
+    // SAFETY: fstat succeeded and initialized metadata.
+    Ok(target_metadata_from_stat(unsafe {
+        &metadata.assume_init()
+    }))
+}
+
+fn metadata_at(directory: libc::c_int, name: &CString) -> Result<Option<TargetMetadata>> {
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `directory` is live, name is NUL-terminated, and metadata points
+    // to writable storage for one stat result.
+    if unsafe {
+        libc::fstatat(
+            directory,
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(device_error(
+            ErrorCode::FailedPrecondition,
+            format!("failed to revalidate device target before cleanup: {error}"),
+        ));
+    }
+    // SAFETY: fstatat succeeded and initialized metadata.
+    Ok(Some(target_metadata_from_stat(unsafe {
+        &metadata.assume_init()
+    })))
+}
+
+fn target_metadata_from_stat(metadata: &libc::stat) -> TargetMetadata {
+    TargetMetadata {
+        file_type: metadata.st_mode & libc::S_IFMT,
+        dev: metadata.st_dev,
+        ino: metadata.st_ino,
+        mode: metadata.st_mode & 0o7777,
+        uid: metadata.st_uid,
+        gid: metadata.st_gid,
+    }
 }
 
 fn describe_device_metadata(dev: u64, ino: u64, mode: u32, uid: u32, gid: u32) -> String {
     format!("dev={dev} ino={ino} mode={mode:04o} uid={uid} gid={gid}")
 }
 
-fn describe_metadata(metadata: &fs::Metadata) -> String {
+fn describe_target_metadata(metadata: &TargetMetadata) -> String {
     describe_device_metadata(
-        metadata.dev(),
-        metadata.ino(),
-        metadata.mode() & 0o7777,
-        metadata.uid(),
-        metadata.gid(),
+        metadata.dev,
+        metadata.ino,
+        metadata.mode,
+        metadata.uid,
+        metadata.gid,
     )
 }
 
 impl DeviceNode {
-    fn target_path(&self, rootfs: &Path) -> Result<PathBuf> {
-        let relative = self.path.strip_prefix("/").map_err(|error| {
-            device_error(
-                ErrorCode::Internal,
-                format!("invalid normalized OCI device path: {error}"),
-            )
-        })?;
-        Ok(rootfs.join(relative))
-    }
-
     fn from_oci(index: usize, device: &LinuxDevice) -> Result<Self> {
         let path = normalize_device_path(index, device.path())?;
         let kind = DeviceKind::from_oci(index, device.typ())?;
@@ -1103,8 +1275,19 @@ impl DeviceNode {
                 ),
             )
         })?;
-        let record = DeviceTargetRecord::capture(&target, &metadata)?;
-        prepared.record_device_target(record)?;
+        let record = DeviceTargetRecord::capture(relative, &metadata)?;
+        if let Err(error) = prepared.record_device_target(record) {
+            if let Err(rollback) = fs::remove_file(&target) {
+                return Err(device_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "{error}; failed to roll back unrecorded OCI device placeholder {}: {rollback}",
+                        target.display()
+                    ),
+                ));
+            }
+            return Err(error);
+        }
 
         attach_device_mount(source, &target, &self.path)?;
         if verify_ownership {
@@ -1296,6 +1479,8 @@ const BPF_REG_5: u8 = 5;
 const BPF_PROG_LOAD: u32 = 5;
 const BPF_PROG_ATTACH: u32 = 8;
 const BPF_PROG_DETACH: u32 = 9;
+const BPF_F_ALLOW_MULTI: u32 = 1 << 1;
+const BPF_F_REPLACE: u32 = 1 << 2;
 const BPF_PROG_TYPE_CGROUP_DEVICE: u32 = 15;
 const BPF_CGROUP_DEVICE: u32 = 6;
 const BPF_DEVCG_ACC_MKNOD: u32 = 1;
@@ -1414,13 +1599,29 @@ fn build_cgroup_device_program(
 }
 
 fn attach_loaded_cgroup_device_program(cgroup_path: &Path, loaded: &OwnedFd) -> Result<()> {
+    attach_cgroup_device_program(cgroup_path, loaded, None)
+}
+
+fn replace_loaded_cgroup_device_program(
+    cgroup_path: &Path,
+    loaded: &OwnedFd,
+    replaced: &OwnedFd,
+) -> Result<()> {
+    attach_cgroup_device_program(cgroup_path, loaded, Some(replaced))
+}
+
+fn attach_cgroup_device_program(
+    cgroup_path: &Path,
+    loaded: &OwnedFd,
+    replaced: Option<&OwnedFd>,
+) -> Result<()> {
     let cgroup = open_cgroup_descriptor(cgroup_path)?;
     let mut attr = BpfProgAttachAttr {
         target_fd: cgroup.as_raw_fd() as u32,
         attach_bpf_fd: loaded.as_raw_fd() as u32,
         attach_type: BPF_CGROUP_DEVICE,
-        attach_flags: 0,
-        replace_bpf_fd: 0,
+        attach_flags: BPF_F_ALLOW_MULTI | if replaced.is_some() { BPF_F_REPLACE } else { 0 },
+        replace_bpf_fd: replaced.map_or(0, |program| program.as_raw_fd() as u32),
     };
     // SAFETY: the cgroup and program descriptors are live owned fds and the
     // attribute struct matches the kernel layout for BPF_PROG_ATTACH.
@@ -1921,15 +2122,17 @@ fn device_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::OwnedFd;
     use std::os::unix::fs::PermissionsExt;
 
     use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        build_cgroup_device_program, cleanup_device_target_records,
-        load_device_target_records_from, write_device_target_manifest, DeviceKind, DeviceNode,
-        DevicePlan, DeviceTargetRecord, BPF_ALU64, BPF_DEVCG_ACC_READ, BPF_MOV,
+        build_cgroup_device_program, cleanup_device_target_manifest, load_device_target_manifest,
+        load_device_target_manifest_from, write_device_target_manifest, DeviceKind, DeviceNode,
+        DevicePlan, DeviceTargetManifest, DeviceTargetRecord, PreparedDeviceSources, BPF_ALU64,
+        BPF_DEVCG_ACC_READ, BPF_MOV, DEVICE_TARGETS_SCHEMA_VERSION,
     };
     use crate::executor::mount;
     use crate::executor::namespace::NamespacePlan;
@@ -1943,10 +2146,15 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .expect("placeholder permissions");
         let metadata = std::fs::symlink_metadata(&path).expect("placeholder metadata");
-        let record = DeviceTargetRecord::capture(&path, &metadata).expect("capture target");
+        let record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
+            .expect("capture target");
+        let manifest = DeviceTargetManifest {
+            schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
+            rootfs: super::DeviceRootfsRecord::capture(temporary.path()).expect("rootfs record"),
+            targets: vec![record],
+        };
 
-        cleanup_device_target_records(std::slice::from_ref(&record))
-            .expect("cleanup exact placeholder");
+        cleanup_device_target_manifest(&manifest).expect("cleanup exact placeholder");
 
         assert!(!path.exists());
     }
@@ -1959,81 +2167,176 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .expect("placeholder permissions");
         let metadata = std::fs::symlink_metadata(&path).expect("placeholder metadata");
-        let record = DeviceTargetRecord::capture(&path, &metadata).expect("capture target");
+        let record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
+            .expect("capture target");
+        let manifest = DeviceTargetManifest {
+            schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
+            rootfs: super::DeviceRootfsRecord::capture(temporary.path()).expect("rootfs record"),
+            targets: vec![record],
+        };
         let replacement = temporary.path().join("null.replacement");
         std::fs::rename(&path, &replacement).expect("move original placeholder");
         std::fs::write(&path, b"replacement").expect("replacement file");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .expect("replacement permissions");
 
-        let error =
-            cleanup_device_target_records(std::slice::from_ref(&record)).expect_err("fail closed");
+        let error = cleanup_device_target_manifest(&manifest).expect_err("fail closed");
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
         assert!(path.exists());
         assert!(replacement.exists());
     }
 
     #[test]
-    fn record_missing_targets_keeps_state_atomic_on_probe_error() {
+    fn cleanup_device_target_fails_closed_on_rootfs_inode_drift() {
+        let temporary = tempdir().expect("temporary device target directory");
+        let rootfs = temporary.path().join("rootfs");
+        let retained_rootfs = temporary.path().join("rootfs.retained");
+        std::fs::create_dir(&rootfs).expect("rootfs directory");
+        let path = rootfs.join("null");
+        std::fs::write(&path, b"placeholder").expect("placeholder file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("placeholder permissions");
+        let metadata = std::fs::symlink_metadata(&path).expect("placeholder metadata");
+        let record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
+            .expect("capture target");
+        let manifest = DeviceTargetManifest {
+            schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
+            rootfs: super::DeviceRootfsRecord::capture(&rootfs).expect("rootfs record"),
+            targets: vec![record],
+        };
+
+        std::fs::rename(&rootfs, &retained_rootfs).expect("move recorded rootfs");
+        std::fs::create_dir(&rootfs).expect("replacement rootfs");
+        std::fs::write(rootfs.join("null"), b"replacement").expect("replacement target");
+
+        let error = cleanup_device_target_manifest(&manifest).expect_err("fail closed");
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert!(error.message.contains("rootfs identity changed"));
+        assert_eq!(
+            std::fs::read(retained_rootfs.join("null")).expect("retained placeholder"),
+            b"placeholder"
+        );
+        assert_eq!(
+            std::fs::read(rootfs.join("null")).expect("replacement target"),
+            b"replacement"
+        );
+    }
+
+    #[test]
+    fn cleanup_device_target_rejects_symlink_parent_and_traversal() {
+        let temporary = tempdir().expect("temporary device target directory");
+        let rootfs = temporary.path().join("rootfs");
+        let external = temporary.path().join("external");
+        std::fs::create_dir_all(rootfs.join("dev")).expect("rootfs device directory");
+        std::fs::create_dir(&external).expect("external directory");
+        let path = rootfs.join("dev/null");
+        std::fs::write(&path, b"placeholder").expect("placeholder file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("placeholder permissions");
+        let metadata = std::fs::symlink_metadata(&path).expect("placeholder metadata");
+        let record = DeviceTargetRecord::capture(std::path::Path::new("dev/null"), &metadata)
+            .expect("capture target");
+        let rootfs_record = super::DeviceRootfsRecord::capture(&rootfs).expect("rootfs record");
+        let manifest = DeviceTargetManifest {
+            schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
+            rootfs: rootfs_record.clone(),
+            targets: vec![record.clone()],
+        };
+        let retained_parent = rootfs.join("dev.retained");
+        std::fs::rename(rootfs.join("dev"), &retained_parent).expect("move target parent");
+        std::fs::write(external.join("null"), b"external").expect("external target");
+        std::os::unix::fs::symlink(&external, rootfs.join("dev")).expect("escaping parent symlink");
+
+        let error = cleanup_device_target_manifest(&manifest).expect_err("reject symlink parent");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            std::fs::read(external.join("null")).expect("external target"),
+            b"external"
+        );
+        assert_eq!(
+            std::fs::read(retained_parent.join("null")).expect("retained placeholder"),
+            b"placeholder"
+        );
+
+        let mut traversal = record;
+        traversal.relative_path = std::path::PathBuf::from("../external/null");
+        let traversal_manifest = DeviceTargetManifest {
+            schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
+            rootfs: rootfs_record,
+            targets: vec![traversal],
+        };
+        let error = cleanup_device_target_manifest(&traversal_manifest)
+            .expect_err("reject traversal target");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            std::fs::read(external.join("null")).expect("external target after traversal"),
+            b"external"
+        );
+    }
+
+    #[test]
+    fn device_target_rootfs_binding_is_single_assignment() {
         let temporary = tempdir().expect("temporary plan workspace");
         let runtime_directory = temporary.path().join("runtime");
         let rootfs = temporary.path().join("rootfs");
         std::fs::create_dir_all(&runtime_directory).expect("runtime directory");
         std::fs::create_dir_all(&rootfs).expect("rootfs directory");
-        std::fs::write(rootfs.join("a"), b"blocked").expect("blocked rootfs file");
-
-        let mut linux = serde_json::from_value::<Linux>(serde_json::json!({
-            "devices": [
-                {
-                    "path": "/tmp/missing",
-                    "type": "c",
-                    "major": 1,
-                    "minor": 3,
-                    "fileMode": 644,
-                    "uid": 0,
-                    "gid": 0,
-                },
-                {
-                    "path": "/a/child",
-                    "type": "c",
-                    "major": 1,
-                    "minor": 4,
-                    "fileMode": 644,
-                    "uid": 0,
-                    "gid": 0,
-                }
-            ],
-            "resources": {
-                "devices": [
-                    {"allow": false, "access": "rwm"},
-                    {"allow": true, "type": "c", "major": 1, "minor": 3, "access": "r"},
-                    {"allow": true, "type": "c", "major": 1, "minor": 4, "access": "rw"}
-                ]
-            }
-        }))
-        .expect("decode linux");
-        let plan = DevicePlan::from_linux(Some(&mut linux), &[]).expect("device plan");
         let prepared = PreparedDeviceSources {
             mounts: Some(Vec::new()),
             verify_ownership: true,
-            created_targets: std::sync::Mutex::new(Vec::new()),
-            manifest_targets: std::sync::Mutex::new(Vec::new()),
+            manifest: std::sync::Mutex::new(None),
             manifest_path: Some(runtime_directory.join("device-targets.json")),
         };
 
-        let result = prepared.record_missing_targets(&rootfs, &plan);
-        assert!(result.is_err());
+        prepared.bind_rootfs(&rootfs).expect("bind rootfs once");
+        assert!(prepared.bind_rootfs(&rootfs).is_err());
+    }
 
-        let manifest = load_device_target_records(&runtime_directory).expect("load manifest");
-        assert!(manifest.is_none());
-        assert_eq!(
-            prepared
-                .created_targets
-                .lock()
-                .expect("created target state")
-                .len(),
-            0
-        );
+    #[test]
+    fn device_target_manifest_failure_rolls_back_new_placeholder() {
+        let temporary = tempdir().expect("temporary plan workspace");
+        let runtime_directory = temporary.path().join("runtime");
+        let rootfs = temporary.path().join("rootfs");
+        std::fs::create_dir(&runtime_directory).expect("runtime directory");
+        std::fs::create_dir(&rootfs).expect("rootfs directory");
+        std::fs::create_dir(rootfs.join("dev")).expect("device directory");
+        let manifest_path = runtime_directory.join("device-targets.json");
+        std::fs::create_dir(&manifest_path).expect("blocking manifest directory");
+        let prepared = PreparedDeviceSources {
+            mounts: Some(Vec::new()),
+            verify_ownership: false,
+            manifest: std::sync::Mutex::new(None),
+            manifest_path: Some(manifest_path.clone()),
+        };
+        prepared.bind_rootfs(&rootfs).expect("bind rootfs");
+        let node = DeviceNode {
+            path: std::path::PathBuf::from("/dev/null"),
+            kind: DeviceKind::Character,
+            major: 1,
+            minor: 3,
+            mode: 0o666,
+            uid: 0,
+            gid: 0,
+        };
+        let source: OwnedFd = std::fs::File::open("/dev/null")
+            .expect("device source")
+            .into();
+
+        let error = node
+            .bind_source(&rootfs, &source, false, &prepared)
+            .expect_err("manifest persistence must fail");
+        assert!(error.message.contains("failed to persist"));
+        assert!(!rootfs.join("dev/null").exists());
+        assert!(manifest_path.is_dir());
+        assert!(!runtime_directory.join(".device-targets.json.next").exists());
+        assert!(prepared
+            .manifest
+            .lock()
+            .expect("manifest state")
+            .as_ref()
+            .expect("bound manifest")
+            .targets
+            .is_empty());
     }
 
     #[test]
@@ -2043,20 +2346,62 @@ mod tests {
         std::fs::create_dir(&runtime_directory).expect("runtime directory");
         std::fs::set_permissions(&runtime_directory, std::fs::Permissions::from_mode(0o700))
             .expect("runtime permissions");
-        let path = runtime_directory.join("null");
+        let rootfs = runtime_directory.join("rootfs");
+        std::fs::create_dir(&rootfs).expect("rootfs directory");
+        let path = rootfs.join("null");
         std::fs::write(&path, b"placeholder").expect("placeholder file");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .expect("placeholder permissions");
         let metadata = std::fs::symlink_metadata(&path).expect("placeholder metadata");
-        let record = DeviceTargetRecord::capture(&path, &metadata).expect("capture target");
+        let record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
+            .expect("capture target");
+        let manifest = DeviceTargetManifest {
+            schema_version: DEVICE_TARGETS_SCHEMA_VERSION.to_string(),
+            rootfs: super::DeviceRootfsRecord::capture(&rootfs).expect("rootfs record"),
+            targets: vec![record],
+        };
         let manifest_path = runtime_directory.join("device-targets.json");
 
-        write_device_target_manifest(&manifest_path, std::slice::from_ref(&record))
-            .expect("write manifest");
-        let loaded = load_device_target_records_from(&manifest_path)
+        write_device_target_manifest(&manifest_path, &manifest).expect("write manifest");
+        let loaded = load_device_target_manifest_from(&manifest_path)
             .expect("load manifest")
-            .expect("manifest records");
-        assert_eq!(loaded, vec![record]);
+            .expect("manifest");
+        assert_eq!(loaded, manifest);
+        assert_eq!(
+            load_device_target_manifest(&runtime_directory)
+                .expect("load runtime manifest")
+                .expect("runtime manifest"),
+            manifest
+        );
+    }
+
+    #[test]
+    fn legacy_absolute_device_target_manifest_fails_closed() {
+        let temporary = tempdir().expect("temporary device target directory");
+        let manifest_path = temporary.path().join("device-targets.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schemaVersion": "a3s.oci.native-linux-device-targets.v1",
+                "targets": [{
+                    "path": "/tmp/untrusted",
+                    "dev": 1,
+                    "ino": 2,
+                    "mode": 384,
+                    "uid": 0,
+                    "gid": 0
+                }]
+            }))
+            .expect("encode legacy manifest"),
+        )
+        .expect("write legacy manifest");
+        std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o600))
+            .expect("legacy manifest permissions");
+
+        let error = load_device_target_manifest_from(&manifest_path)
+            .expect_err("legacy manifest must fail closed");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("legacy v1 absolute paths"));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use crate::{LifecycleFaultPoint, OciVmFaultCleanupReport};
 pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
     fault: LifecycleFaultPoint,
@@ -83,20 +84,21 @@ pub(super) async fn run(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let session = match UtilityVmSession::connect(shim, &vm_rootfs, console).await {
-        Ok(session) => session,
-        Err(bridge) => {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            let bridge = {
-                let mut bridge = bridge;
-                cleanup.apply(&mut bridge).await;
-                bridge
-            };
-            report.reason = bridge.reason.clone();
-            report.bridge = bridge;
-            return report;
-        }
-    };
+    let session =
+        match UtilityVmSession::connect(shim, &vm_rootfs, system_image_manifest, console).await {
+            Ok(session) => session,
+            Err(bridge) => {
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                let bridge = {
+                    let mut bridge = bridge;
+                    cleanup.apply(&mut bridge).await;
+                    bridge
+                };
+                report.reason = bridge.reason.clone();
+                report.bridge = bridge;
+                return report;
+            }
+        };
 
     let client = session.client();
     let exercise = exercise_until_fault(

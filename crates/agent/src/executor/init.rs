@@ -36,6 +36,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let container_id = arguments.next();
     let rootfs_scope = arguments.next();
     let expected_owner_pid = arguments.next();
+    let mapping_mode = arguments.next();
     let extra = arguments.next();
     let (
         Some(config_snapshot),
@@ -44,6 +45,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         Some(container_id),
         Some(rootfs_scope),
         Some(expected_owner_pid),
+        Some(mapping_mode),
         None,
     ) = (
         config_snapshot,
@@ -52,12 +54,13 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         container_id,
         rootfs_scope,
         expected_owner_pid,
+        mapping_mode,
         extra,
     )
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID MAPPING_MODE and no extra arguments",
         )));
     };
     let container_id = match container_id.into_string() {
@@ -88,6 +91,16 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
             )));
         }
     };
+    let rootless = match mapping_mode.to_str() {
+        Some("rootless") => true,
+        Some("privileged") => false,
+        _ => {
+            return Some(Err(init_error(
+                ErrorCode::InvalidArgument,
+                "container-init received an invalid user-mapping mode",
+            )));
+        }
+    };
     Some(run_container_init(
         config_snapshot,
         bundle_directory,
@@ -95,6 +108,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         container_id,
         rootfs_scope,
         expected_owner_pid,
+        rootless,
     ))
 }
 
@@ -105,6 +119,7 @@ fn run_container_init(
     container_id: String,
     rootfs_scope: RootfsScope,
     expected_owner_pid: libc::pid_t,
+    rootless: bool,
 ) -> Result<()> {
     pid_supervisor::verify_and_arm_parent_death_signal(expected_owner_pid, "container launcher")?;
     let runtime_directory = config_snapshot
@@ -139,13 +154,17 @@ fn run_container_init(
             Ok(prepared) => prepared,
             Err(error) => return reject_before_ready(&mut control, error),
         };
-    let prepared_devices = match plan
-        .devices
-        .prepare_sources(&plan.namespaces, &runtime_directory)
-    {
-        Ok(prepared) => prepared,
-        Err(error) => return reject_before_ready(&mut control, error),
-    };
+    let prepared_devices =
+        match plan
+            .devices
+            .prepare_sources(&plan.namespaces, &runtime_directory, rootless)
+        {
+            Ok(prepared) => prepared,
+            Err(error) => return reject_before_ready(&mut control, error),
+        };
+    if let Err(error) = prepared_devices.bind_rootfs(&rootfs) {
+        return reject_before_ready(&mut control, error);
+    }
     let idmap_namespaces = match IdmapNamespaceHandles::prepare(
         plan.mounts.iter().filter_map(|mount| mount.idmap.as_ref()),
     ) {

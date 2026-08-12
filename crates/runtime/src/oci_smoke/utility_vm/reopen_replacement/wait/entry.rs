@@ -3,6 +3,7 @@ use super::*;
 pub(in crate::oci_smoke::utility_vm) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -147,6 +148,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
     let exercise = exercise(
         shim,
         &vm_rootfs,
+        system_image_manifest,
         &state_root,
         &first_console,
         &replacement_console,

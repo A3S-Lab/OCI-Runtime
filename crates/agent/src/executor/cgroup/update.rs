@@ -11,8 +11,13 @@ use super::{
 const UPDATE_OPERATION: &str = "update-container-cgroup";
 
 impl CgroupHandle {
-    pub(in crate::executor) async fn update(&self, resources: &LinuxResources) -> Result<()> {
+    pub(in crate::executor) async fn update(&mut self, resources: &LinuxResources) -> Result<()> {
         let plan = CgroupUpdatePlan::from_resources(resources)?;
+        let next_devices = self.devices.update_from_resources(resources)?;
+        let next_device_filter = match &next_devices {
+            Some(plan) => plan.load_cgroup_device_program()?,
+            None => None,
+        };
         let mut prepared = Vec::new();
         if let Some(layout) = &self.control_workload {
             let management = plan.management_plan(&layout.headroom)?;
@@ -23,7 +28,31 @@ impl CgroupHandle {
             .settings(&self.leaf, self.control_workload.is_none())
             .await?;
         prepared.extend(prepare_update_settings(&self.leaf, settings).await?);
-        apply_prepared_update_settings(prepared).await
+        let applied = apply_prepared_update_settings(prepared).await?;
+
+        let Some(next_devices) = next_devices else {
+            return Ok(());
+        };
+        let device_update = match (&self.device_filter, &next_device_filter) {
+            (Some(current), Some(next)) => next_devices.replace_loaded_cgroup_device_program(
+                &self.device_filter_path,
+                next,
+                current,
+            ),
+            (None, Some(next)) => {
+                next_devices.attach_loaded_cgroup_device_program(&self.device_filter_path, next)
+            }
+            (Some(current), None) => self
+                .devices
+                .detach_loaded_cgroup_device_program(&self.device_filter_path, current),
+            (None, None) => Ok(()),
+        };
+        if let Err(error) = device_update {
+            return rollback_update(&applied, error).await;
+        }
+        self.devices = next_devices;
+        self.device_filter = next_device_filter;
+        Ok(())
     }
 }
 
@@ -43,7 +72,6 @@ struct CgroupUpdatePlan {
 impl CgroupUpdatePlan {
     fn from_resources(resources: &LinuxResources) -> Result<Self> {
         validate_supported_resource_fields(resources)?;
-        reject_live_device_updates(resources)?;
         let memory = resources.memory().as_ref();
         let cpu = resources.cpu().as_ref();
         let pids = resources.pids().as_ref();
@@ -278,7 +306,7 @@ impl CgroupUpdatePlan {
 #[cfg(test)]
 async fn apply_update_settings(path: &Path, settings: Vec<(&'static str, String)>) -> Result<()> {
     let prepared = prepare_update_settings(path, settings).await?;
-    apply_prepared_update_settings(prepared).await
+    apply_prepared_update_settings(prepared).await.map(|_| ())
 }
 
 #[derive(Debug)]
@@ -306,7 +334,9 @@ async fn prepare_update_settings(
     Ok(prepared)
 }
 
-async fn apply_prepared_update_settings(prepared: Vec<PreparedUpdateSetting>) -> Result<()> {
+async fn apply_prepared_update_settings(
+    prepared: Vec<PreparedUpdateSetting>,
+) -> Result<Vec<(PathBuf, &'static str, String)>> {
     let mut applied = Vec::new();
     for setting in prepared {
         if normalize_cgroup_value(&setting.value) == setting.old {
@@ -325,7 +355,8 @@ async fn apply_prepared_update_settings(prepared: Vec<PreparedUpdateSetting>) ->
                     ),
                 ),
             )
-            .await;
+            .await
+            .map(|()| applied);
         }
         applied.push((setting.path, setting.file, setting.old));
         let actual = match tokio::fs::read_to_string(&destination).await {
@@ -341,7 +372,8 @@ async fn apply_prepared_update_settings(prepared: Vec<PreparedUpdateSetting>) ->
                         ),
                     ),
                 )
-                .await;
+                .await
+                .map(|()| applied);
             }
         };
         if normalize_cgroup_value(&actual) != normalize_cgroup_value(&setting.value) {
@@ -355,10 +387,11 @@ async fn apply_prepared_update_settings(prepared: Vec<PreparedUpdateSetting>) ->
                     ),
                 ),
             )
-            .await;
+            .await
+            .map(|()| applied);
         }
     }
-    Ok(())
+    Ok(applied)
 }
 
 async fn rollback_update(
@@ -394,26 +427,6 @@ async fn rollback_update(
         )
         .for_operation(UPDATE_OPERATION))
     }
-}
-
-fn reject_live_device_updates(resources: &LinuxResources) -> Result<()> {
-    let value = serde_json::to_value(resources).map_err(|error| {
-        update_error(
-            ErrorCode::Internal,
-            format!("failed to inspect OCI resource update: {error}"),
-        )
-    })?;
-    if value
-        .get("devices")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|devices| !devices.is_empty())
-    {
-        return Err(update_error(
-            ErrorCode::Unsupported,
-            "live linux.resources.devices updates are not implemented",
-        ));
-    }
-    Ok(())
 }
 
 fn parse_cpu_max(value: &str) -> Result<(String, u64)> {
@@ -530,7 +543,7 @@ mod tests {
             .write(true)
             .open(workload.join("cgroup.procs"))
             .expect("workload cgroup.procs");
-        let handle = CgroupHandle {
+        let mut handle = CgroupHandle {
             created: Vec::new(),
             leaf: workload.clone(),
             init_procs,
@@ -544,6 +557,9 @@ mod tests {
                 control_procs,
                 workload_procs,
             }),
+            devices: super::super::DevicePlan::default(),
+            device_filter_path: management.clone(),
+            device_filter: None,
         };
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "memory": {"limit": 268435456, "swap": 536870912},

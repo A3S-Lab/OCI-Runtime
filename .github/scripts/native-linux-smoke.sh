@@ -11,6 +11,15 @@ rootless_uid=20000
 rootless_gid=20000
 rootless_user_created=false
 rootless_group_created=false
+rootless_cgroup_parent="/sys/fs/cgroup/a3s-oci-rootless-$rootless_uid-$$"
+rootless_cgroup_created=false
+rootless_cgroup_host_control="$rootless_cgroup_parent/a3s-host-control"
+rootless_cgroup_host_control_created=false
+rootless_cgroup_replacement="$rootless_cgroup_parent-replacement"
+rootless_cgroup_replacement_created=false
+rootless_cgroup_bind_mounted=false
+rootless_cgroup_process_pid=""
+rootless_cgroup_process_launcher_pid=""
 recovery_owner_pid=""
 recovery_runtime_owner_pid=""
 soak_bundles=()
@@ -38,8 +47,53 @@ restore_host() {
     wait "$recovery_owner_pid" 2>/dev/null
   fi
 
+  if [[ "$rootless_cgroup_bind_mounted" == true ]]; then
+    sudo umount "$rootless_cgroup_parent"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+    rootless_cgroup_bind_mounted=false
+  fi
+  if [[ -n "$rootless_cgroup_process_pid" ]]; then
+    if sudo kill -0 "$rootless_cgroup_process_pid" 2>/dev/null; then
+      sudo kill -KILL "$rootless_cgroup_process_pid"
+    fi
+    rootless_cgroup_process_pid=""
+  fi
+  if [[ -n "$rootless_cgroup_process_launcher_pid" ]]; then
+    wait "$rootless_cgroup_process_launcher_pid" 2>/dev/null
+    rootless_cgroup_process_launcher_pid=""
+  fi
+  if [[ "$rootless_cgroup_replacement_created" == true && \
+      -d "$rootless_cgroup_replacement" ]]; then
+    sudo rmdir "$rootless_cgroup_replacement"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+    rootless_cgroup_replacement_created=false
+  fi
+
+  if [[ "$rootless_cgroup_host_control_created" == true && \
+      -d "$rootless_cgroup_host_control" ]]; then
+    sudo rmdir "$rootless_cgroup_host_control"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+    rootless_cgroup_host_control_created=false
+  fi
+
   if [[ "$kvm_test_directory_created" == true && -d /dev/kvm ]]; then
     sudo rmdir /dev/kvm
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ "$rootless_cgroup_created" == true && -d "$rootless_cgroup_parent" ]]; then
+    sudo rmdir "$rootless_cgroup_parent"
     status=$?
     if ((status != 0)); then
       cleanup_status=$status
@@ -307,13 +361,19 @@ if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
 fi
 
 # shellcheck disable=SC2016 # Expanded inside the rootless workload.
-rootless_command='set -eu; test "$(/bin/busybox id -u)" = 0; test "$(/bin/busybox id -g)" = 0; test "$(/bin/busybox cat /proc/self/setgroups)" = deny; test "$(/bin/busybox stat -c "%u:%g" /.a3s-oci-rootless-subordinate)" = 1:1; printf "a3s-oci-rootless-mapping-v1\n" > /.a3s-oci-rootless-smoke; exec /bin/busybox sleep 300'
+rootless_command='set -eu; test "$(/bin/busybox id -u)" = 0; test "$(/bin/busybox id -g)" = 0; test "$(/bin/busybox cat /proc/self/setgroups)" = deny; test "$(/bin/busybox stat -c "%u:%g" /.a3s-oci-rootless-subordinate)" = 1:1; printf "a3s-oci-rootless-mapping-v1\n" > /.a3s-oci-rootless-smoke; progress=0; while :; do progress=$((progress + 1)); printf "%s\n" "$progress" > /.a3s-oci-rootless-progress.next; /bin/busybox mv /.a3s-oci-rootless-progress.next /.a3s-oci-rootless-progress; /bin/busybox sleep 0.05; done'
 jq \
   --arg command "$rootless_command" \
   --argjson uid "$rootless_uid" \
   --argjson gid "$rootless_gid" \
   '
-    del(.linux.cgroupsPath, .linux.timeOffsets, .hooks)
+    del(.linux.timeOffsets, .hooks)
+    | .linux.cgroupsPath = "a3s-oci-rootless-smoke"
+    | .linux.resources = {
+        memory: {limit: 268435456, reservation: 33554432, swap: 536870912},
+        cpu: {shares: 512, quota: 50000, period: 100000},
+        pids: {limit: 64}
+      }
     | .linux.namespaces = [
         {"type": "uts"},
         {"type": "mount"},
@@ -332,6 +392,23 @@ jq \
   ' \
   "$rootless_bundle/config.json" >"$rootless_bundle/config.json.tmp"
 mv "$rootless_bundle/config.json.tmp" "$rootless_bundle/config.json"
+for controller in cpu cpuset memory pids; do
+  grep -qw "$controller" /sys/fs/cgroup/cgroup.controllers
+done
+sudo sh -c \
+  'printf "+cpu +cpuset +memory +pids" > /sys/fs/cgroup/cgroup.subtree_control'
+sudo mkdir "$rootless_cgroup_parent"
+rootless_cgroup_created=true
+sudo chown "$rootless_uid:$rootless_gid" "$rootless_cgroup_parent"
+sudo sh -c \
+  'printf "+cpu +cpuset +memory +pids" > "$1/cgroup.subtree_control"' \
+  sh "$rootless_cgroup_parent"
+sudo chown "$rootless_uid:$rootless_gid" \
+  "$rootless_cgroup_parent/cgroup.procs" \
+  "$rootless_cgroup_parent/cgroup.subtree_control"
+sudo mkdir "$rootless_cgroup_host_control"
+rootless_cgroup_host_control_created=true
+test -z "$(sudo cat "$rootless_cgroup_parent/cgroup.procs")"
 sudo chown -R "$rootless_uid:$rootless_gid" \
   "$rootless_bin" "$rootless_bundle" "$rootless_work_parent"
 sudo install \
@@ -781,15 +858,22 @@ run_fault_cleanup() {
 run_rootless_smoke() {
   local output
   local status
-  if output="$(sudo setpriv \
-      --reuid="$rootless_uid" \
-      --regid="$rootless_gid" \
-      --clear-groups \
-      -- \
+  if output="$(sudo sh -c '
+      control=$1
+      uid=$2
+      gid=$3
+      shift 3
+      printf 0 > "$control/cgroup.procs"
+      exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+    ' sh \
+      "$rootless_cgroup_host_control" \
+      "$rootless_uid" \
+      "$rootless_gid" \
       "$rootless_bin/a3s-oci" native-linux-rootless-smoke \
       --agent "$rootless_bin/a3s-oci-agent" \
       --bundle "$rootless_bundle" \
-      --work-parent "$rootless_work_parent")"; then
+      --work-parent "$rootless_work_parent" \
+      --delegated-cgroup-root "$rootless_cgroup_parent")"; then
     status=0
   else
     status=$?
@@ -807,7 +891,7 @@ run_rootless_smoke() {
   jq --exit-status \
     --argjson uid "$rootless_uid" \
     --argjson gid "$rootless_gid" \
-    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v1"
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v3"
      and .platform == "linux" and .status == "available"
      and .effective_uid == $uid and .effective_gid == $gid
      and .bundle_loaded
@@ -823,6 +907,15 @@ run_rootless_smoke() {
      and .uid_map_verified
      and .gid_map_verified
      and .setgroups_denied
+     and .cgroup_delegation_requested
+     and .cgroup_delegation_verified
+     and .resources_updated
+     and .stats_verified
+     and .freezer_verified
+     and (.progress_before_pause > 0)
+     and .progress_while_paused == .progress_before_pause
+     and .progress_after_resume > .progress_while_paused
+     and .cgroup_delegation_clean
      and .workload_verified
      and .exec_replayed
      and .exec_signal_replayed
@@ -838,7 +931,230 @@ run_rootless_smoke() {
      and (.reason == null)' \
     <<<"$output" >/dev/null
   test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress.next"
   test -z "$(sudo find "$rootless_work_parent" -mindepth 1 -print -quit)"
+  test -z "$(sudo cat "$rootless_cgroup_host_control/cgroup.procs")"
+  test -z "$(sudo find "$rootless_cgroup_parent" -mindepth 1 -maxdepth 1 \
+    -type d ! -name a3s-host-control -print -quit)"
+}
+
+run_rootless_negative_smoke() {
+  local case_name="$1"
+  local delegated_root="$2"
+  local expected_reason="$3"
+  local output
+  local status
+  local before_work
+  local after_work
+  local before_cgroup
+  local after_cgroup
+  local before_rootfs
+  local after_rootfs
+  local -a command=(
+    "$rootless_bin/a3s-oci" native-linux-rootless-smoke
+    --agent "$rootless_bin/a3s-oci-agent"
+    --bundle "$rootless_bundle"
+    --work-parent "$rootless_work_parent"
+  )
+
+  if [[ -n "$delegated_root" ]]; then
+    command+=(--delegated-cgroup-root "$delegated_root")
+  fi
+
+  before_work="$(sudo find "$rootless_work_parent" -mindepth 1 -printf '%P\n' | sort)"
+  before_cgroup="$(sudo find "$rootless_cgroup_parent" -mindepth 1 -printf '%P\n' | sort)"
+  before_rootfs="$(
+    sudo find "$rootless_bundle/rootfs" -xdev \
+      -printf '%P|%y|%m|%U|%G|%s|%T@|%l\n' | sort
+    sudo find "$rootless_bundle/rootfs" -xdev -type f \
+      -exec sha256sum {} + | sort
+  )"
+  if output="$(sudo sh -c '
+      control=$1
+      uid=$2
+      gid=$3
+      shift 3
+      printf 0 > "$control/cgroup.procs"
+      exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+    ' sh \
+      "$rootless_cgroup_host_control" \
+      "$rootless_uid" \
+      "$rootless_gid" \
+      "${command[@]}")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  test "$status" -eq 2
+  jq --exit-status \
+    --arg reason "$expected_reason" \
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v3"
+     and .status != "available"
+     and (.reason | contains($reason))
+     and (.created_pid == null)' \
+    <<<"$output" >/dev/null
+  after_work="$(sudo find "$rootless_work_parent" -mindepth 1 -printf '%P\n' | sort)"
+  after_cgroup="$(sudo find "$rootless_cgroup_parent" -mindepth 1 -printf '%P\n' | sort)"
+  after_rootfs="$(
+    sudo find "$rootless_bundle/rootfs" -xdev \
+      -printf '%P|%y|%m|%U|%G|%s|%T@|%l\n' | sort
+    sudo find "$rootless_bundle/rootfs" -xdev -type f \
+      -exec sha256sum {} + | sort
+  )"
+  test "$after_work" = "$before_work"
+  test "$after_cgroup" = "$before_cgroup"
+  test "$after_rootfs" = "$before_rootfs"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress.next"
+  printf 'Rootless negative case passed: %s\n' "$case_name"
+}
+
+run_rootless_post_open_negative_smoke() {
+  local case_name="$1"
+  local mutation="$2"
+  local expected_reason="$3"
+  local barrier_root="$qualification_root/rootless-post-open-$case_name"
+  local ready_file="$barrier_root/ready"
+  local continue_file="$barrier_root/continue"
+  local output_file="$barrier_root/output"
+  local command_pid
+  local output
+  local status
+  local ready_observed=false
+  local before_work
+  local after_work
+  local before_cgroup
+  local after_cgroup
+  local before_rootfs
+  local after_rootfs
+
+  sudo mkdir "$barrier_root"
+  sudo touch "$output_file"
+  sudo chown "$(id -u):$(id -g)" "$output_file"
+  sudo chown "$rootless_uid:$rootless_gid" "$barrier_root"
+  before_work="$(sudo find "$rootless_work_parent" -mindepth 1 -printf '%P\n' | sort)"
+  before_cgroup="$(sudo find "$rootless_cgroup_parent" -mindepth 1 -printf '%P\n' | sort)"
+  before_rootfs="$(
+    sudo find "$rootless_bundle/rootfs" -xdev \
+      -printf '%P|%y|%m|%U|%G|%s|%T@|%l\n' | sort
+    sudo find "$rootless_bundle/rootfs" -xdev -type f \
+      -exec sha256sum {} + | sort
+  )"
+
+  sudo sh -c '
+    control=$1
+    uid=$2
+    gid=$3
+    shift 3
+    printf 0 > "$control/cgroup.procs"
+    exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+  ' sh \
+    "$rootless_cgroup_host_control" \
+    "$rootless_uid" \
+    "$rootless_gid" \
+    "$rootless_bin/a3s-oci" native-linux-rootless-smoke \
+    --agent "$rootless_bin/a3s-oci-agent" \
+    --bundle "$rootless_bundle" \
+    --work-parent "$rootless_work_parent" \
+    --delegated-cgroup-root "$rootless_cgroup_parent" \
+    --post-open-ready-file "$ready_file" \
+    --post-open-continue-file "$continue_file" \
+    >"$output_file" 2>&1 &
+  command_pid=$!
+
+  for _ in $(seq 1 300); do
+    if sudo test -f "$ready_file"; then
+      ready_observed=true
+      break
+    fi
+    if ! kill -0 "$command_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "$ready_observed" != true ]]; then
+    kill "$command_pid" 2>/dev/null || true
+    wait "$command_pid" 2>/dev/null || true
+    sudo cat "$output_file" || true
+    sudo rm -rf --one-file-system "$barrier_root"
+    printf 'Rootless post-open case did not reach readiness: %s\n' "$case_name" >&2
+    return 1
+  fi
+
+  case "$mutation" in
+    inode-drift)
+      sudo mkdir "$rootless_cgroup_replacement"
+      rootless_cgroup_replacement_created=true
+      sudo chown "$rootless_uid:$rootless_gid" "$rootless_cgroup_replacement"
+      sudo sh -c \
+        'printf "+cpu +cpuset +memory +pids" > "$1/cgroup.subtree_control"' \
+        sh "$rootless_cgroup_replacement"
+      sudo chown "$rootless_uid:$rootless_gid" \
+        "$rootless_cgroup_replacement/cgroup.procs" \
+        "$rootless_cgroup_replacement/cgroup.subtree_control"
+      sudo mount --bind "$rootless_cgroup_replacement" "$rootless_cgroup_parent"
+      rootless_cgroup_bind_mounted=true
+      ;;
+    controller-drift)
+      sudo sh -c \
+        'printf -- "-pids" > "$1/cgroup.subtree_control"' \
+        sh "$rootless_cgroup_parent"
+      ;;
+    *)
+      printf 'Unknown rootless post-open mutation: %s\n' "$mutation" >&2
+      return 2
+      ;;
+  esac
+  sudo -u "$rootless_user" touch "$continue_file"
+  if wait "$command_pid"; then
+    status=0
+  else
+    status=$?
+  fi
+  output="$(sudo cat "$output_file")"
+  printf '%s\n' "$output"
+
+  if [[ "$rootless_cgroup_bind_mounted" == true ]]; then
+    sudo umount "$rootless_cgroup_parent"
+    rootless_cgroup_bind_mounted=false
+  fi
+  if [[ "$rootless_cgroup_replacement_created" == true ]]; then
+    sudo rmdir "$rootless_cgroup_replacement"
+    rootless_cgroup_replacement_created=false
+  fi
+  if [[ "$mutation" == controller-drift ]]; then
+    sudo sh -c \
+      'printf "+pids" > "$1/cgroup.subtree_control"' \
+      sh "$rootless_cgroup_parent"
+  fi
+  sudo rm -rf --one-file-system "$barrier_root"
+
+  test "$status" -eq 2
+  jq --exit-status \
+    --arg reason "$expected_reason" \
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v3"
+     and .status != "available"
+     and (.reason | contains($reason))
+     and (.created_pid == null)' \
+    <<<"$output" >/dev/null
+  after_work="$(sudo find "$rootless_work_parent" -mindepth 1 -printf '%P\n' | sort)"
+  after_cgroup="$(sudo find "$rootless_cgroup_parent" -mindepth 1 -printf '%P\n' | sort)"
+  after_rootfs="$(
+    sudo find "$rootless_bundle/rootfs" -xdev \
+      -printf '%P|%y|%m|%U|%G|%s|%T@|%l\n' | sort
+    sudo find "$rootless_bundle/rootfs" -xdev -type f \
+      -exec sha256sum {} + | sort
+  )"
+  test "$after_work" = "$before_work"
+  test "$after_cgroup" = "$before_cgroup"
+  test "$after_rootfs" = "$before_rootfs"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress"
+  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress.next"
+  printf 'Rootless post-open negative case passed: %s\n' "$case_name"
 }
 
 run_owner_death_recovery() {
@@ -1084,6 +1400,72 @@ if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   sudo mv /dev/kvm "$saved_kvm"
   kvm_original_moved=true
 fi
+
+run_rootless_negative_smoke \
+  missing-delegation \
+  "" \
+  "requires --delegated-cgroup-root"
+
+run_rootless_negative_smoke \
+  noncanonical-delegation \
+  "$rootless_cgroup_parent/." \
+  "must already be canonical"
+
+sudo chown root:root "$rootless_cgroup_parent"
+run_rootless_negative_smoke \
+  wrong-delegation-owner \
+  "$rootless_cgroup_parent" \
+  "must be a real directory owned by"
+sudo chown "$rootless_uid:$rootless_gid" "$rootless_cgroup_parent"
+
+sudo sh -c \
+  'printf -- "-pids" > "$1/cgroup.subtree_control"' \
+  sh "$rootless_cgroup_parent"
+run_rootless_negative_smoke \
+  disabled-delegated-controller \
+  "$rootless_cgroup_parent" \
+  "has not enabled required controller"
+sudo sh -c \
+  'printf "+pids" > "$1/cgroup.subtree_control"' \
+  sh "$rootless_cgroup_parent"
+
+sudo sh -c \
+  'printf -- "-cpu -cpuset -memory -pids" > "$1/cgroup.subtree_control"' \
+  sh "$rootless_cgroup_parent"
+sudo sleep 300 &
+rootless_cgroup_process_launcher_pid=$!
+rootless_cgroup_process_pid="$rootless_cgroup_process_launcher_pid"
+sudo sh -c \
+  'printf "%s" "$2" > "$1/cgroup.procs"' \
+  sh "$rootless_cgroup_parent" "$rootless_cgroup_process_pid"
+run_rootless_negative_smoke \
+  populated-delegation \
+  "$rootless_cgroup_parent" \
+  "must not contain processes"
+sudo kill -KILL "$rootless_cgroup_process_pid" 2>/dev/null || true
+wait "$rootless_cgroup_process_launcher_pid" 2>/dev/null || true
+rootless_cgroup_process_pid=""
+rootless_cgroup_process_launcher_pid=""
+for _ in $(seq 1 100); do
+  if [[ -z "$(sudo cat "$rootless_cgroup_parent/cgroup.procs")" ]]; then
+    break
+  fi
+  sleep 0.01
+done
+test -z "$(sudo cat "$rootless_cgroup_parent/cgroup.procs")"
+sudo sh -c \
+  'printf "+cpu +cpuset +memory +pids" > "$1/cgroup.subtree_control"' \
+  sh "$rootless_cgroup_parent"
+
+run_rootless_post_open_negative_smoke \
+  inode-drift \
+  inode-drift \
+  "changed after executor open"
+
+run_rootless_post_open_negative_smoke \
+  controller-drift \
+  controller-drift \
+  "has not enabled required controller"
 
 run_rootless_smoke
 run_smoke false

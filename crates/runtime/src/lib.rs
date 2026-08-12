@@ -33,6 +33,8 @@ mod fault;
 mod filesystem_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod host_cleanup;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod hvf_driver;
 mod marker;
 mod multi_container_report;
 mod namespace_join;
@@ -87,6 +89,8 @@ pub use driver::{
     DriverStartRequest, DriverState, DriverUpdateRequest, DriverWaitProcessRequest,
     DriverWaitRequest, DriverWriteStdinRequest, OciHookPhase, RuntimeDriver,
 };
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub use hvf_driver::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
 pub use multi_container_report::{
     InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
     NativeLinuxMultiContainerSmokeReport, NetworkModeEvidence, OciVmMultiContainerSmokeReport,
@@ -112,7 +116,9 @@ pub use native_service::{
 };
 pub use native_smoke::{
     native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_rootless_smoke,
-    native_linux_service_smoke, native_linux_smoke, native_linux_soak,
+    native_linux_rootless_smoke_with_cgroup_delegation,
+    native_linux_rootless_smoke_with_cgroup_delegation_barrier, native_linux_service_smoke,
+    native_linux_smoke, native_linux_soak,
 };
 pub use oci_smoke::{
     macos_hvf_soak, oci_vm_close_stdin_reopen_replacement_at, oci_vm_delete_reopen_replacement_at,

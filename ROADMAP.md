@@ -1071,7 +1071,7 @@ bundle, validates negative isolation cases, retains exact terminal evidence
 across host restart, and leaves no process, handle, or runtime-root leak. Only
 then may WHPX become `experimental`.
 
-### R2M — macOS HVF Utility VM
+### R2M — macOS HVF Utility VM — 15/15 complete
 
 - [x] Query Apple Silicon Hypervisor.framework support directly.
 - [x] Add the minimal checked-in Hypervisor entitlement used to sign runtime
@@ -1091,10 +1091,16 @@ then may WHPX become `experimental`.
   cleanup.
 - [x] Retain fail-closed unavailable-HVF and missing-entitlement evidence
   without accepting pre-entry configuration as guest execution.
-- [ ] Boot the same pinned A3S Linux kernel and immutable system root through
+- [x] Boot the same pinned A3S Linux kernel and immutable system root through
   HVF, retain their digests in the host report, keep the writable
   per-generation share separate, and rerun the complete macOS SDK and soak
-  matrices against those exact assets.
+  matrices against those exact assets. The retained Apple Silicon run used
+  manifest SHA-256
+  `e7206ea5c645259fcc9f00d8b3042792d6a6b380436a0a38a1b85dda7c0d4284`,
+  raw-image SHA-256
+  `e8f5f6713ac093b278b5851129f154b783c08bb8489fe6964bbd93dae0c43910`,
+  and agent SHA-256
+  `ee7099e367c91b70a1c84cc6f8921da67e7aec4805e6b5c99b6aa683e7544ed1`.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
   authenticate protocol-v9 negotiation with a one-time token.
@@ -1117,7 +1123,12 @@ then may WHPX become `experimental`.
 Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
 fixed OCI lifecycle through the authenticated guest agent, validates negative
 isolation cases, and leaves no process, descriptor, or runtime-root leak. Only
-then may HVF become `experimental`.
+then may HVF become `experimental`. The August 13, 2026 Apple Silicon
+qualification passed the same immutable-image multi-container matrix, all 3
+no-delete cleanup points, all 11 transport fault points, all 180 operation
+replacement paths, the asset/authentication/entitlement negatives, and 25/25
+fresh-VM soak waves with 75 primary generations and a stable 10-descriptor
+baseline. The built-in HVF capability is therefore `experimental`.
 
 ### R2L — Linux KVM Utility VM
 
@@ -1250,13 +1261,12 @@ leak. Only then may KVM become `experimental`.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
   - [ ] Qualify the rootless delegation model and device support for every
-    advertised profile on real hosts; the v5 smoke now covers delegated
-    create/update/stats/pause/resume, recovery, the exact a3s-box device
-    fixture evidence, delegated cgroup subtree cleanup, and fail-closed
-    rejection of device-policy changes without a privileged helper, plus
-    fail-closed negative checks for missing cgroupsPath,
-    supplementary groups, rootless device node-list drift, device resource
-    policy drift, and namespace-set drift before runtime mutation.
+    advertised profile on real hosts. The v3 rootless smoke now requires an
+    explicit user-owned cgroup-v2 delegation and covers delegated create,
+    update, stats, workload-proven pause/resume, an exact event sequence, and
+    runtime-owned subtree cleanup. Recovery, x86_64/aarch64 host evidence, the exact a3s-box device
+    fixture, and a privileged authenticated device-policy helper remain open;
+    without that helper, rootless device policy continues to fail closed.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
     for every newly advertised controller on x86_64 and aarch64.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
@@ -1313,12 +1323,11 @@ and recovery suites in the Windows guest and on native Linux.
   PTY allocation, resize, interactive I/O, and VEOF without KVM on x86_64 and
   aarch64.
 - [x] Prove the helper-backed non-root core lifecycle with subordinate
-  UID/GID ownership and `setgroups=deny` on x86_64 and aarch64; rootless
-  cgroup-v2 control-plane delegation now has a v5 smoke gate, with the
-  exact a3s-box rootless device fixture, fail-closed device-policy update
-  rejection, and owner-death recovery plus delegated cgroup subtree cleanup included in that
-  gate, including negative checks for missing cgroupsPath, supplementary
-  groups, the fixture's node list, resource policy, and namespace set.
+  UID/GID ownership and `setgroups=deny` on x86_64 and aarch64.
+- [ ] Qualify explicit rootless cgroup-v2 delegation on x86_64 and aarch64.
+  The v2 gate is implemented for create, update, stats, pause/resume, replay,
+  events, and runtime-owned subtree cleanup; real-host evidence and
+  owner-death recovery remain required before promotion.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [x] Add the Sandbox-scoped native runtime owner, bind its protected Unix SDK

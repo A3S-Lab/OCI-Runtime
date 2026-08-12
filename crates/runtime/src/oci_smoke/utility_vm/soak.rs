@@ -9,6 +9,7 @@ use crate::{MacosHvfSoakConfig, MacosHvfSoakReport, OciVmMultiContainerSmokeRepo
 pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_a: &Path,
     bundle_b: &Path,
     console_directory: &Path,
@@ -30,7 +31,15 @@ pub(super) async fn run(
         if let Err(reason) = require_absent_console(&console).await {
             return failed_iteration(report, iteration, reason);
         }
-        let wave = multi_container::run(shim, vm_rootfs, bundle_a, bundle_b, &console).await;
+        let wave = multi_container::run(
+            shim,
+            vm_rootfs,
+            Some(system_image_manifest),
+            bundle_a,
+            bundle_b,
+            &console,
+        )
+        .await;
         if !wave.is_success() {
             let reason = wave
                 .reason

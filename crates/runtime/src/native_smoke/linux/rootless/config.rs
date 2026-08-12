@@ -18,6 +18,12 @@ pub(super) struct MappingPlan {
     pub(super) gid: Vec<Mapping>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CgroupRequirement {
+    None,
+    ExplicitPath,
+}
+
 pub(super) fn validate_mapping_plan(
     bundle: &OciBundle,
     effective_uid: u32,
@@ -25,12 +31,6 @@ pub(super) fn validate_mapping_plan(
 ) -> Result<MappingPlan, String> {
     let config: serde_json::Value = serde_json::from_str(bundle.config_json())
         .map_err(|error| format!("failed to decode rootless OCI configuration: {error}"))?;
-    if config
-        .pointer("/linux/cgroupsPath")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err("rootless smoke bundle must not configure linux.cgroupsPath".into());
-    }
     if config
         .pointer("/process/user/uid")
         .and_then(serde_json::Value::as_u64)
@@ -65,6 +65,18 @@ pub(super) fn validate_mapping_plan(
     validate_root_mapping("UID", &uid, effective_uid)?;
     validate_root_mapping("GID", &gid, effective_gid)?;
     Ok(MappingPlan { uid, gid })
+}
+
+pub(super) fn cgroup_requirement(bundle: &OciBundle) -> Result<CgroupRequirement, String> {
+    let config: serde_json::Value = serde_json::from_str(bundle.config_json())
+        .map_err(|error| format!("failed to decode rootless OCI configuration: {error}"))?;
+    match config.pointer("/linux/cgroupsPath") {
+        None | Some(serde_json::Value::Null) => Ok(CgroupRequirement::None),
+        Some(serde_json::Value::String(path)) if !path.is_empty() => {
+            Ok(CgroupRequirement::ExplicitPath)
+        }
+        Some(_) => Err("rootless smoke linux.cgroupsPath must be a non-empty string".into()),
+    }
 }
 
 fn parse_config_mappings(config: &serde_json::Value, field: &str) -> Result<Vec<Mapping>, String> {

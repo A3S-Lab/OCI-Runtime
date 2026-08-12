@@ -118,6 +118,7 @@ impl AgentTransportFaultInjector for HostTransportFault {
 pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
     stage: AgentTransportFaultStage,
@@ -231,6 +232,7 @@ pub(super) async fn run(
             UtilityVmSession::connect_with_guest_qualification(
                 shim,
                 &vm_rootfs,
+                system_image_manifest,
                 console,
                 qualification,
             )
@@ -240,6 +242,7 @@ pub(super) async fn run(
             UtilityVmSession::connect_with_host_fault_injector(
                 shim,
                 &vm_rootfs,
+                system_image_manifest,
                 console,
                 Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
             )

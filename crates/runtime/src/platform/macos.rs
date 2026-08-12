@@ -232,7 +232,7 @@ fn capability_from_observation(observation: HvfObservation) -> DriverCapability 
     DriverCapability {
         driver: DriverKind::LibkrunHvf,
         status,
-        readiness: DriverReadiness::ProbeOnly,
+        readiness: DriverReadiness::Experimental,
         isolation_classes: vec![
             IsolationClass::DedicatedVm,
             IsolationClass::SharedGuestKernel,
@@ -240,6 +240,10 @@ fn capability_from_observation(observation: HvfObservation) -> DriverCapability 
         reason: observation.reason,
         evidence,
     }
+}
+
+pub(crate) fn hvf_driver_capability() -> DriverCapability {
+    capability_from_observation(observe_hvf())
 }
 
 #[cfg(test)]
@@ -251,7 +255,7 @@ mod tests {
     use super::{check_hvf_status, hvf_status_name};
 
     #[test]
-    fn available_hvf_remains_probe_only() {
+    fn available_hvf_is_an_explicit_experimental_driver() {
         let capability = capability_from_observation(HvfObservation {
             apple_silicon: true,
             hypervisor_supported: Some(true),
@@ -260,8 +264,8 @@ mod tests {
 
         assert_eq!(capability.driver, DriverKind::LibkrunHvf);
         assert_eq!(capability.status, CapabilityStatus::Available);
-        assert_eq!(capability.readiness, DriverReadiness::ProbeOnly);
-        assert!(!capability.can_launch());
+        assert_eq!(capability.readiness, DriverReadiness::Experimental);
+        assert!(capability.can_launch());
     }
 
     #[test]
@@ -285,8 +289,11 @@ mod tests {
             .expect("macOS features must include the HVF driver");
 
         assert_eq!(inventory.drivers.len(), 1);
-        assert_eq!(capability.readiness, DriverReadiness::ProbeOnly);
-        assert!(!capability.can_launch());
+        assert_eq!(capability.readiness, DriverReadiness::Experimental);
+        assert_eq!(
+            capability.can_launch(),
+            capability.status == CapabilityStatus::Available
+        );
     }
 
     #[cfg(target_arch = "aarch64")]

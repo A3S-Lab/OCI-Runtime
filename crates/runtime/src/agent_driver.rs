@@ -16,7 +16,8 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 #[cfg(any(
     target_os = "linux",
-    all(target_os = "windows", target_arch = "x86_64")
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 use a3s_oci_sdk::RuntimeOperation;
 use a3s_oci_sdk::{
@@ -33,7 +34,8 @@ use sha2::{Digest, Sha256};
 use crate::driver::DriverCreateRequest;
 #[cfg(any(
     target_os = "linux",
-    all(target_os = "windows", target_arch = "x86_64")
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 use crate::driver::OciHookPhase;
 use crate::driver::{
@@ -45,7 +47,8 @@ use crate::driver::{
 
 #[cfg(any(
     target_os = "linux",
-    all(target_os = "windows", target_arch = "x86_64")
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 20] = [
     RuntimeOperation::Create,
@@ -72,7 +75,8 @@ pub(crate) const AGENT_DRIVER_OPERATIONS: [RuntimeOperation; 20] = [
 
 #[cfg(any(
     target_os = "linux",
-    all(target_os = "windows", target_arch = "x86_64")
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 pub(crate) const AGENT_DRIVER_HOOKS: [OciHookPhase; 6] = OciHookPhase::ALL;
 

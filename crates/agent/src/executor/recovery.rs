@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use tokio::time::{sleep, Instant};
 
 use super::cgroup::CgroupManager;
+use super::device::{cleanup_device_target_manifest, load_device_target_manifest};
 use super::process::PreparedProcess;
 
 const RUNTIME_ROOT_PREFIX: &str = "a3s-oci-agent-";
@@ -17,7 +18,8 @@ const OWNER_RECORD_NAME: &str = "owner.json";
 const CONTAINER_RECORD_NAME: &str = "recovery.json";
 const CONFIG_SNAPSHOT_NAME: &str = "config.json";
 const OWNER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-executor-owner.v1";
-const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v1";
+const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v2";
+const CONTAINER_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-recovery.v1";
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
 const TERMINATION_TIMEOUT: Duration = Duration::from_secs(10);
 const TERMINATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -86,6 +88,15 @@ struct ExecutorOwnerRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecoveryCgroupRecord {
+    authority_root: PathBuf,
+    manager_root: PathBuf,
+    leaf: PathBuf,
+    created: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyRecoveryCgroupRecord {
     manager_root: PathBuf,
     leaf: PathBuf,
     created: Vec<PathBuf>,
@@ -101,6 +112,18 @@ struct ContainerRecoveryRecord {
     launcher: ProcessIdentity,
     init: ProcessIdentity,
     cgroup: Option<RecoveryCgroupRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyContainerRecoveryRecord {
+    schema_version: String,
+    target: ContainerTarget,
+    config_digest: String,
+    owner: ProcessIdentity,
+    launcher: ProcessIdentity,
+    init: ProcessIdentity,
+    cgroup: Option<LegacyRecoveryCgroupRecord>,
 }
 
 /// Exact stopped-generation cleanup evidence retained after owner death.
@@ -177,6 +200,7 @@ pub(super) async fn write_container_record(
             ));
         }
         (Some((leaf, created)), Some(manager)) => Some(RecoveryCgroupRecord {
+            authority_root: manager.authority_root().to_path_buf(),
             manager_root: manager.root().to_path_buf(),
             leaf: leaf.to_path_buf(),
             created: created.to_vec(),
@@ -243,7 +267,7 @@ pub(super) async fn recover_stale_generation(
         for runtime_directory in slots {
             let record_path = runtime_directory.join(CONTAINER_RECORD_NAME);
             let record = match std::fs::symlink_metadata(&record_path) {
-                Ok(_) => read_json_record(&record_path, MAX_RECORD_BYTES)?,
+                Ok(_) => read_container_record(&record_path)?,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => {
                     return Err(recovery_io_error(
@@ -305,10 +329,7 @@ pub(super) async fn recover_stale_generation(
 }
 
 pub(super) async fn delete_stale_generation(tombstone: &LinuxExecutorTombstone) -> Result<()> {
-    let record: ContainerRecoveryRecord = read_json_record(
-        &tombstone.runtime_directory.join(CONTAINER_RECORD_NAME),
-        MAX_RECORD_BYTES,
-    )?;
+    let record = read_container_record(&tombstone.runtime_directory.join(CONTAINER_RECORD_NAME))?;
     if record != tombstone.record
         || record.target != tombstone.target
         || record.config_digest != tombstone.config_digest
@@ -345,6 +366,9 @@ pub(super) async fn delete_stale_generation(tombstone: &LinuxExecutorTombstone) 
         ));
     }
     reject_symlinks_below(&tombstone.runtime_directory)?;
+    if let Some(manifest) = load_device_target_manifest(&tombstone.runtime_directory)? {
+        cleanup_device_target_manifest(&manifest)?;
+    }
     std::fs::remove_dir_all(&tombstone.runtime_directory).map_err(|error| {
         recovery_io_error(
             format!(
@@ -415,6 +439,95 @@ fn validate_container_record(
     Ok(())
 }
 
+fn read_container_record(path: &Path) -> Result<ContainerRecoveryRecord> {
+    let value: serde_json::Value = read_json_record(path, MAX_RECORD_BYTES)?;
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "native container recovery record {} has no schema version",
+                    path.display()
+                ),
+            )
+        })?;
+    match schema_version {
+        CONTAINER_SCHEMA_VERSION => serde_json::from_value(value).map_err(|error| {
+            recovery_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "native container recovery record {} is invalid: {error}",
+                    path.display()
+                ),
+            )
+        }),
+        CONTAINER_SCHEMA_VERSION_V1 => {
+            let legacy: LegacyContainerRecoveryRecord =
+                serde_json::from_value(value).map_err(|error| {
+                    recovery_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "legacy native container recovery record {} is invalid: {error}",
+                            path.display()
+                        ),
+                    )
+                })?;
+            normalize_legacy_container_record(legacy)
+        }
+        other => Err(recovery_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "native container recovery record {} has unsupported schema {other}",
+                path.display()
+            ),
+        )),
+    }
+}
+
+fn normalize_legacy_container_record(
+    legacy: LegacyContainerRecoveryRecord,
+) -> Result<ContainerRecoveryRecord> {
+    let cgroup = legacy
+        .cgroup
+        .map(|legacy| {
+            let authority_root = legacy.manager_root.parent().ok_or_else(|| {
+                recovery_error(
+                    ErrorCode::PermissionDenied,
+                    "legacy native recovery cgroup manager has no authority root",
+                )
+            })?;
+            if authority_root != Path::new("/sys/fs/cgroup") {
+                return Err(recovery_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "legacy native recovery cgroup is not a direct rootful cgroup-v2 manager: {}",
+                        legacy.manager_root.display()
+                    ),
+                ));
+            }
+            let normalized = RecoveryCgroupRecord {
+                authority_root: authority_root.to_path_buf(),
+                manager_root: legacy.manager_root,
+                leaf: legacy.leaf,
+                created: legacy.created,
+            };
+            validate_cgroup_record(&normalized)?;
+            Ok(normalized)
+        })
+        .transpose()?;
+    Ok(ContainerRecoveryRecord {
+        schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+        target: legacy.target,
+        config_digest: legacy.config_digest,
+        owner: legacy.owner,
+        launcher: legacy.launcher,
+        init: legacy.init,
+        cgroup,
+    })
+}
+
 async fn wait_for_identity_exit(
     identity: ProcessIdentity,
     role: &str,
@@ -439,13 +552,23 @@ async fn wait_for_identity_exit(
 }
 
 fn validate_cgroup_record(cgroup: &RecoveryCgroupRecord) -> Result<()> {
+    validate_absolute_normalized(&cgroup.authority_root, "cgroup authority root")?;
     validate_absolute_normalized(&cgroup.manager_root, "cgroup manager root")?;
+    if cgroup.authority_root == Path::new("/") {
+        return Err(recovery_error(
+            ErrorCode::PermissionDenied,
+            "native recovery cgroup authority root must not be the filesystem root",
+        ));
+    }
     let manager_name = cgroup
         .manager_root
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    if !manager_name.starts_with("a3s-oci-") || cgroup.created.is_empty() {
+    if !manager_name.starts_with("a3s-oci-")
+        || cgroup.manager_root.parent() != Some(cgroup.authority_root.as_path())
+        || cgroup.created.is_empty()
+    {
         return Err(recovery_error(
             ErrorCode::PermissionDenied,
             format!(
@@ -868,7 +991,7 @@ fn write_atomic_record<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn read_json_record<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> Result<T> {
+pub(super) fn read_json_record<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> Result<T> {
     let bytes = read_bounded_plain_file(path, limit)?;
     serde_json::from_slice(&bytes).map_err(|error| {
         recovery_error(
@@ -1037,6 +1160,7 @@ mod tests {
     #[test]
     fn cgroup_record_rejects_broad_or_escaping_paths() {
         let broad = RecoveryCgroupRecord {
+            authority_root: PathBuf::from("/sys/fs/cgroup"),
             manager_root: PathBuf::from("/sys/fs/cgroup"),
             leaf: PathBuf::from("/sys/fs/cgroup/workload"),
             created: vec![PathBuf::from("/sys/fs/cgroup/workload")],
@@ -1044,11 +1168,95 @@ mod tests {
         assert!(validate_cgroup_record(&broad).is_err());
 
         let escaping = RecoveryCgroupRecord {
+            authority_root: PathBuf::from("/sys/fs/cgroup"),
             manager_root: PathBuf::from("/sys/fs/cgroup/a3s-oci-1-test"),
             leaf: PathBuf::from("/sys/fs/cgroup/unrelated"),
             created: vec![PathBuf::from("/sys/fs/cgroup/unrelated")],
         };
         assert!(validate_cgroup_record(&escaping).is_err());
+
+        let unrelated_authority = RecoveryCgroupRecord {
+            authority_root: PathBuf::from("/sys/fs/cgroup/delegated-a"),
+            manager_root: PathBuf::from("/sys/fs/cgroup/delegated-b/a3s-oci-1-test"),
+            leaf: PathBuf::from("/sys/fs/cgroup/delegated-b/a3s-oci-1-test/workload"),
+            created: vec![PathBuf::from(
+                "/sys/fs/cgroup/delegated-b/a3s-oci-1-test/workload",
+            )],
+        };
+        assert!(validate_cgroup_record(&unrelated_authority).is_err());
+    }
+
+    #[test]
+    fn legacy_rootful_recovery_cgroup_normalizes_to_the_v2_model() {
+        let legacy = LegacyContainerRecoveryRecord {
+            schema_version: CONTAINER_SCHEMA_VERSION_V1.to_string(),
+            target: ContainerTarget::exact(
+                a3s_oci_sdk::ContainerId::new("legacy-rootful").expect("container ID"),
+                a3s_oci_sdk::Generation(1),
+            ),
+            config_digest: "sha256:test".to_string(),
+            owner: ProcessIdentity {
+                pid: 100,
+                start_time_ticks: 1,
+            },
+            launcher: ProcessIdentity {
+                pid: 101,
+                start_time_ticks: 2,
+            },
+            init: ProcessIdentity {
+                pid: 102,
+                start_time_ticks: 3,
+            },
+            cgroup: Some(LegacyRecoveryCgroupRecord {
+                manager_root: PathBuf::from("/sys/fs/cgroup/a3s-oci-100-test"),
+                leaf: PathBuf::from("/sys/fs/cgroup/a3s-oci-100-test/workload"),
+                created: vec![PathBuf::from("/sys/fs/cgroup/a3s-oci-100-test/workload")],
+            }),
+        };
+
+        let normalized =
+            normalize_legacy_container_record(legacy).expect("normalize rootful v1 record");
+        assert_eq!(normalized.schema_version, CONTAINER_SCHEMA_VERSION);
+        assert_eq!(
+            normalized.cgroup.expect("normalized cgroup").authority_root,
+            PathBuf::from("/sys/fs/cgroup")
+        );
+    }
+
+    #[test]
+    fn legacy_delegated_recovery_cgroup_fails_closed() {
+        let legacy = LegacyContainerRecoveryRecord {
+            schema_version: CONTAINER_SCHEMA_VERSION_V1.to_string(),
+            target: ContainerTarget::exact(
+                a3s_oci_sdk::ContainerId::new("legacy-delegated").expect("container ID"),
+                a3s_oci_sdk::Generation(1),
+            ),
+            config_digest: "sha256:test".to_string(),
+            owner: ProcessIdentity {
+                pid: 100,
+                start_time_ticks: 1,
+            },
+            launcher: ProcessIdentity {
+                pid: 101,
+                start_time_ticks: 2,
+            },
+            init: ProcessIdentity {
+                pid: 102,
+                start_time_ticks: 3,
+            },
+            cgroup: Some(LegacyRecoveryCgroupRecord {
+                manager_root: PathBuf::from("/sys/fs/cgroup/delegated/a3s-oci-100-test"),
+                leaf: PathBuf::from("/sys/fs/cgroup/delegated/a3s-oci-100-test/workload"),
+                created: vec![PathBuf::from(
+                    "/sys/fs/cgroup/delegated/a3s-oci-100-test/workload",
+                )],
+            }),
+        };
+
+        let error = normalize_legacy_container_record(legacy)
+            .expect_err("v1 delegated authority is unknowable");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("not a direct rootful"));
     }
 
     #[tokio::test]

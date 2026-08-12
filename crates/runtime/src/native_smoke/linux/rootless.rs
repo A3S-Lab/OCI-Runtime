@@ -4,13 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest,
-    Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, IoMode, IsolationRequest,
-    KillRequest, ListRequest, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo,
-    ProcessTarget, RuntimeClient, RuntimeEventKind, Signal, SignalProcessRequest, StartRequest,
-    StateRequest, WaitProcessRequest, WaitRequest,
+    ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest,
+    DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, IoMode,
+    IsolationRequest, KillRequest, ListRequest, OciBundle, OperationContext, OperationId,
+    ProcessId, ProcessIo, ProcessTarget, RuntimeClient, RuntimeEventKind, Signal,
+    SignalProcessRequest, StartRequest, StateRequest, StatsRequest, UpdateRequest,
+    WaitProcessRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -24,8 +25,8 @@ use crate::{HostRuntimeService, NativeLinuxDriver, NativeLinuxRootlessSmokeRepor
 mod config;
 
 use config::{
-    read_mapping_file, sorted_mappings, validate_mapping_plan, validate_rootfs_ownership,
-    MappingPlan,
+    cgroup_requirement, read_mapping_file, sorted_mappings, validate_mapping_plan,
+    validate_rootfs_ownership, CgroupRequirement, MappingPlan,
 };
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -33,11 +34,24 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MARKER_NAME: &str = ".a3s-oci-rootless-smoke";
 const MARKER_CONTENTS: &[u8] = b"a3s-oci-rootless-mapping-v1\n";
+const PROGRESS_NAME: &str = ".a3s-oci-rootless-progress";
+const PROGRESS_PENDING_NAME: &str = ".a3s-oci-rootless-progress.next";
+const UPDATED_MEMORY_LIMIT: u64 = 192 * 1024 * 1024;
+const FREEZER_OBSERVATION_INTERVAL: Duration = Duration::from_millis(300);
+
+struct WorkloadFiles {
+    marker: std::path::PathBuf,
+    progress: std::path::PathBuf,
+    progress_pending: std::path::PathBuf,
+}
 
 pub(super) async fn run(
     init_executable: &Path,
     bundle_directory: &Path,
     work_parent: &Path,
+    delegated_cgroup_root: Option<&Path>,
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
 ) -> NativeLinuxRootlessSmokeReport {
     let mut report = NativeLinuxRootlessSmokeReport::initial(HostPlatform::Linux);
     // SAFETY: these credential queries have no pointer arguments or failure
@@ -77,6 +91,26 @@ pub(super) async fn run(
         Ok(mappings) => mappings,
         Err(reason) => return failed(report, reason),
     };
+    let cgroup_requirement = match cgroup_requirement(&bundle) {
+        Ok(requirement) => requirement,
+        Err(reason) => return failed(report, reason),
+    };
+    report.cgroup_delegation_requested =
+        matches!(cgroup_requirement, CgroupRequirement::ExplicitPath);
+    if matches!(cgroup_requirement, CgroupRequirement::ExplicitPath)
+        && delegated_cgroup_root.is_none()
+    {
+        return failed(
+            report,
+            "rootless smoke linux.cgroupsPath requires --delegated-cgroup-root",
+        );
+    }
+    if matches!(cgroup_requirement, CgroupRequirement::None) && delegated_cgroup_root.is_some() {
+        return failed(
+            report,
+            "rootless smoke delegated cgroup root requires linux.cgroupsPath",
+        );
+    }
     let rootfs = match fixed_rootfs(&bundle).await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
@@ -86,19 +120,29 @@ pub(super) async fn run(
         return failed(report, reason);
     }
     report.mapping_plan_verified = true;
-    let marker = rootfs.join(MARKER_NAME);
-    match path_exists(&marker).await {
-        Ok(false) => {}
-        Ok(true) => {
-            return failed(
-                report,
-                format!(
-                    "refusing to overwrite an existing rootless smoke marker: {}",
-                    marker.display()
-                ),
-            );
+    let workload_files = WorkloadFiles {
+        marker: rootfs.join(MARKER_NAME),
+        progress: rootfs.join(PROGRESS_NAME),
+        progress_pending: rootfs.join(PROGRESS_PENDING_NAME),
+    };
+    for path in [
+        &workload_files.marker,
+        &workload_files.progress,
+        &workload_files.progress_pending,
+    ] {
+        match path_exists(path).await {
+            Ok(false) => {}
+            Ok(true) => {
+                return failed(
+                    report,
+                    format!(
+                        "refusing to overwrite an existing rootless smoke artifact: {}",
+                        path.display()
+                    ),
+                );
+            }
+            Err(reason) => return failed(report, reason),
         }
-        Err(reason) => return failed(report, reason),
     }
 
     let nonce = match unique_nonce() {
@@ -113,8 +157,17 @@ pub(super) async fn run(
     if let Err(reason) = create_private_directory(&executor_parent).await {
         return cleanup_session(report, &session_root, reason).await;
     }
-    let driver = match NativeLinuxDriver::open_experimental(&executor_parent, init_executable).await
-    {
+    let driver = match match delegated_cgroup_root {
+        Some(root) => {
+            NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
+                &executor_parent,
+                init_executable,
+                root,
+            )
+            .await
+        }
+        None => NativeLinuxDriver::open_experimental(&executor_parent, init_executable).await,
+    } {
         Ok(driver) => Arc::new(driver),
         Err(error) => {
             return cleanup_session(
@@ -126,24 +179,61 @@ pub(super) async fn run(
         }
     };
     let executor_root = driver.executor_root().to_path_buf();
+    if let Err(reason) = qualification_barrier(ready_file, continue_file).await {
+        cleanup_driver(
+            &driver,
+            &executor_root,
+            delegated_cgroup_root,
+            &workload_files,
+            &session_root,
+            &mut report,
+        )
+        .await;
+        return failed(report, reason);
+    }
     let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
     let service = match HostRuntimeService::open(session_root.join("state"), runtime_driver).await {
         Ok(service) => service,
         Err(error) => {
             let reason = format!("failed to open durable rootless runtime: {error}");
-            cleanup_driver(&driver, &executor_root, &marker, &session_root, &mut report).await;
+            cleanup_driver(
+                &driver,
+                &executor_root,
+                delegated_cgroup_root,
+                &workload_files,
+                &session_root,
+                &mut report,
+            )
+            .await;
             return failed(report, reason);
         }
     };
     let client = RuntimeClient::new(service.clone());
-    let exercise = exercise(&client, &bundle, &mappings, &nonce, &marker, &mut report).await;
+    let exercise = exercise(
+        &client,
+        &bundle,
+        &mappings,
+        cgroup_requirement,
+        &nonce,
+        &workload_files,
+        &mut report,
+    )
+    .await;
     if exercise.is_err() {
         best_effort_delete(&client, &nonce).await;
     }
     drop(client);
     drop(service);
 
-    cleanup_driver(&driver, &executor_root, &marker, &session_root, &mut report).await;
+    cleanup_driver(
+        &driver,
+        &executor_root,
+        delegated_cgroup_root,
+        &workload_files,
+        &session_root,
+        &mut report,
+    )
+    .await;
     if let Err(reason) = exercise {
         append_reason(&mut report, reason);
     }
@@ -154,12 +244,79 @@ pub(super) async fn run(
     report
 }
 
+async fn qualification_barrier(
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
+) -> Result<(), String> {
+    let (Some(ready_file), Some(continue_file)) = (ready_file, continue_file) else {
+        if ready_file.is_some() || continue_file.is_some() {
+            return Err(
+                "rootless post-open qualification requires both ready and continue files".into(),
+            );
+        }
+        return Ok(());
+    };
+    for (path, label) in [(ready_file, "ready"), (continue_file, "continue")] {
+        if !path.is_absolute() || path.parent().is_none_or(|parent| !parent.is_dir()) {
+            return Err(format!(
+                "rootless post-open qualification {label} path must have an existing absolute parent: {}",
+                path.display()
+            ));
+        }
+    }
+    if path_exists(ready_file).await? || path_exists(continue_file).await? {
+        return Err("refusing to overwrite a rootless post-open qualification marker".into());
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    let file = options.open(ready_file).await.map_err(|error| {
+        format!(
+            "failed to publish rootless post-open qualification readiness {}: {error}",
+            ready_file.display()
+        )
+    })?;
+    file.sync_all().await.map_err(|error| {
+        format!(
+            "failed to sync rootless post-open qualification readiness {}: {error}",
+            ready_file.display()
+        )
+    })?;
+    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+    loop {
+        if path_exists(continue_file).await? {
+            let metadata = tokio::fs::symlink_metadata(continue_file)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "failed to inspect rootless post-open qualification continuation {}: {error}",
+                        continue_file.display()
+                    )
+                })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "rootless post-open qualification continuation must be a regular file: {}",
+                    continue_file.display()
+                ));
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for rootless post-open qualification continuation {}",
+                continue_file.display()
+            ));
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
 async fn exercise(
     client: &RuntimeClient,
     bundle: &OciBundle,
     mappings: &MappingPlan,
+    cgroup_requirement: CgroupRequirement,
     nonce: &str,
-    marker: &Path,
+    workload_files: &WorkloadFiles,
     report: &mut NativeLinuxRootlessSmokeReport,
 ) -> Result<(), String> {
     report.service_operations = call("rootless features", client.features())
@@ -240,8 +397,12 @@ async fn exercise(
     if *started.state.status() != ContainerState::Running {
         return Err("rootless start did not leave the workload running".into());
     }
-    wait_for_marker(client, &target, marker).await?;
+    wait_for_marker(client, &target, &workload_files.marker).await?;
     report.workload_verified = true;
+
+    if matches!(cgroup_requirement, CgroupRequirement::ExplicitPath) {
+        exercise_cgroup_control(client, &target, nonce, &workload_files.progress, report).await?;
+    }
 
     exercise_exec(client, &target, nonce, report).await?;
 
@@ -292,7 +453,12 @@ async fn exercise(
     call("rootless delete", client.delete(delete.clone())).await?;
     call("replayed rootless delete", client.delete(delete)).await?;
     report.delete_replayed = true;
-    verify_events(client, &target).await?;
+    verify_events(
+        client,
+        &target,
+        matches!(cgroup_requirement, CgroupRequirement::ExplicitPath),
+    )
+    .await?;
     report.events_verified = true;
     report.durable_state_removed = state_is_missing(client, target).await?
         && call(
@@ -380,7 +546,11 @@ async fn exercise_exec(
     Ok(())
 }
 
-async fn verify_events(client: &RuntimeClient, target: &ContainerTarget) -> Result<(), String> {
+async fn verify_events(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    delegated_cgroup: bool,
+) -> Result<(), String> {
     let batch = call(
         "rootless runtime events",
         client.events(EventsRequest {
@@ -396,17 +566,26 @@ async fn verify_events(client: &RuntimeClient, target: &ContainerTarget) -> Resu
         .iter()
         .map(|event| event.kind)
         .collect::<Vec<_>>();
-    let expected = [
+    let mut expected = vec![
         RuntimeEventKind::ContainerCreating,
         RuntimeEventKind::ContainerCreated,
         RuntimeEventKind::ContainerStarted,
+    ];
+    if delegated_cgroup {
+        expected.extend([
+            RuntimeEventKind::ResourcesUpdated,
+            RuntimeEventKind::ContainerPaused,
+            RuntimeEventKind::ContainerResumed,
+        ]);
+    }
+    expected.extend([
         RuntimeEventKind::ProcessCreated,
         RuntimeEventKind::ProcessStarted,
         RuntimeEventKind::ProcessExited,
         RuntimeEventKind::ContainerStopped,
         RuntimeEventKind::ProcessExited,
         RuntimeEventKind::ContainerDeleted,
-    ];
+    ]);
     if kinds != expected
         || batch.events.iter().any(|event| event.container != *target)
         || batch
@@ -416,7 +595,7 @@ async fn verify_events(client: &RuntimeClient, target: &ContainerTarget) -> Resu
         || batch.events.last().map(|event| event.sequence) != Some(batch.next_sequence)
     {
         return Err(format!(
-            "rootless durable event sequence was {kinds:?}, expected {expected:?}"
+            "rootless durable event sequence was not exact: expected {expected:?}; observed {kinds:?}"
         ));
     }
     let tail = call(
@@ -434,6 +613,127 @@ async fn verify_events(client: &RuntimeClient, target: &ContainerTarget) -> Resu
     } else {
         Err("rootless durable event tail was not empty and cursor-stable".into())
     }
+}
+
+async fn exercise_cgroup_control(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    nonce: &str,
+    progress: &Path,
+    report: &mut NativeLinuxRootlessSmokeReport,
+) -> Result<(), String> {
+    let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+        "memory": {
+            "limit": UPDATED_MEMORY_LIMIT,
+            "reservation": 32 * 1024 * 1024,
+            "swap": 384 * 1024 * 1024
+        },
+        "cpu": {"shares": 256, "quota": 40000, "period": 100000},
+        "pids": {"limit": 48}
+    }))
+    .map_err(|error| format!("failed to construct rootless resource update: {error}"))?;
+    let update = UpdateRequest {
+        context: operation(nonce, "update")?,
+        target: target.clone(),
+        resources,
+    };
+    let updated = call("rootless resource update", client.update(update.clone())).await?;
+    report.resources_updated = updated
+        == call("replayed rootless resource update", client.update(update)).await?
+        && *updated.state.status() == ContainerState::Running;
+    if !report.resources_updated {
+        return Err("rootless cgroup update was not exact or replay-safe".into());
+    }
+
+    let first = call(
+        "rootless cgroup stats",
+        client.stats(StatsRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    let second = call(
+        "repeated rootless cgroup stats",
+        client.stats(StatsRequest {
+            target: target.clone(),
+        }),
+    )
+    .await?;
+    report.stats_verified = first.target == *target
+        && second.target == *target
+        && first.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
+        && second.memory.limit_bytes == Some(UPDATED_MEMORY_LIMIT)
+        && second.cpu.usage_ns >= first.cpu.usage_ns
+        && first.metrics.contains_key("memory.events.oom_kill")
+        && first.metrics.contains_key("pids.events.max");
+    if !report.stats_verified {
+        return Err("rootless cgroup stats did not match the updated profile".into());
+    }
+
+    let pause = ContainerOperationRequest {
+        context: operation(nonce, "pause")?,
+        target: target.clone(),
+    };
+    let paused = call("rootless pause", client.pause(pause.clone())).await?;
+    if !paused.is_paused() || call("replayed rootless pause", client.pause(pause)).await? != paused
+    {
+        return Err("rootless cgroup pause did not replay exactly".into());
+    }
+    let before_pause = wait_for_progress(progress, None).await?;
+    sleep(FREEZER_OBSERVATION_INTERVAL).await;
+    let while_paused = read_progress(progress).await?;
+    report.progress_before_pause = Some(before_pause);
+    report.progress_while_paused = Some(while_paused);
+    if while_paused != before_pause {
+        return Err(format!(
+            "rootless workload progressed while frozen: {before_pause} -> {while_paused}"
+        ));
+    }
+    let resume = ContainerOperationRequest {
+        context: operation(nonce, "resume")?,
+        target: target.clone(),
+    };
+    let resumed = call("rootless resume", client.resume(resume.clone())).await?;
+    let replayed = call("replayed rootless resume", client.resume(resume)).await?;
+    let after_resume = wait_for_progress(progress, Some(while_paused)).await?;
+    report.progress_after_resume = Some(after_resume);
+    report.freezer_verified = !resumed.is_paused()
+        && replayed == resumed
+        && while_paused == before_pause
+        && after_resume > while_paused;
+    if !report.freezer_verified {
+        return Err("rootless cgroup resume did not replay exactly".into());
+    }
+    report.cgroup_delegation_verified = true;
+    Ok(())
+}
+
+async fn wait_for_progress(path: &Path, after: Option<u64>) -> Result<u64, String> {
+    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+    loop {
+        match read_progress(path).await {
+            Ok(value) if after.is_none_or(|previous| value > previous) => return Ok(value),
+            Ok(_) => {}
+            Err(reason) if reason.contains("No such file") => {}
+            Err(reason) => return Err(reason),
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for rootless workload progress beyond {after:?}"
+            ));
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
+async fn read_progress(path: &Path) -> Result<u64, String> {
+    let value = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|error| format!("failed to read rootless workload progress: {error}"))?;
+    value
+        .trim()
+        .parse::<u64>()
+        .map_err(|error| format!("rootless workload progress is invalid: {error}"))
 }
 
 async fn wait_for_marker(
@@ -523,7 +823,8 @@ fn operation(nonce: &str, name: &str) -> Result<OperationContext, String> {
 async fn cleanup_driver(
     driver: &NativeLinuxDriver,
     executor_root: &Path,
-    marker: &Path,
+    delegated_cgroup_root: Option<&Path>,
+    workload_files: &WorkloadFiles,
     session_root: &Path,
     report: &mut NativeLinuxRootlessSmokeReport,
 ) {
@@ -537,9 +838,21 @@ async fn cleanup_driver(
         Ok(exists) => report.executor_runtime_clean = !exists,
         Err(reason) => append_reason(report, reason),
     }
-    match remove_marker(marker).await {
+    if let Some(root) = delegated_cgroup_root {
+        match delegated_cgroup_has_no_children(root).await {
+            Ok(clean) => report.cgroup_delegation_clean = clean,
+            Err(reason) => append_reason(report, reason),
+        }
+    }
+    match remove_marker(&workload_files.marker).await {
         Ok(()) => report.marker_removed = true,
         Err(reason) => append_reason(report, reason),
+    }
+    if let Err(reason) = remove_marker(&workload_files.progress).await {
+        append_reason(report, reason);
+    }
+    if let Err(reason) = remove_marker(&workload_files.progress_pending).await {
+        append_reason(report, reason);
     }
     match tokio::fs::remove_dir_all(session_root).await {
         Ok(()) => match path_exists(session_root).await {
@@ -554,6 +867,37 @@ async fn cleanup_driver(
             ),
         ),
     }
+}
+
+async fn delegated_cgroup_has_no_children(root: &Path) -> Result<bool, String> {
+    let mut entries = tokio::fs::read_dir(root).await.map_err(|error| {
+        format!(
+            "failed to inspect rootless cgroup delegation cleanup {}: {error}",
+            root.display()
+        )
+    })?;
+    while let Some(entry) = entries.next_entry().await.map_err(|error| {
+        format!(
+            "failed to enumerate rootless cgroup delegation {}: {error}",
+            root.display()
+        )
+    })? {
+        let file_type = entry.file_type().await.map_err(|error| {
+            format!(
+                "failed to inspect rootless cgroup delegation entry {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        if file_type.is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| name.starts_with("a3s-oci-"))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn cleanup_session(

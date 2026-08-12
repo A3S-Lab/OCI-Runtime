@@ -295,15 +295,23 @@ fails instead of weakening the boundary.
 supplementary groups. Executor startup verifies that unprivileged user
 namespaces are enabled and accepts only fixed, regular, root-owned,
 setuid-root, unprivileged-executable, not group/world-writable `newuidmap` and
-`newgidmap` helpers. The bundle must omit `linux.cgroupsPath`, map container ID 0 exactly
-to the effective host UID/GID with size 1, map no host ID 0, and cover
+`newgidmap` helpers. The bundle must map container ID 0 exactly to the
+effective host UID/GID with size 1, map no host ID 0, and cover
 container ID 1 through delegated subordinate ranges. Additional process GIDs
 are rejected because the child installs `setgroups=deny` before `newgidmap`.
+
+If the bundle contains `linux.cgroupsPath`, the command also requires
+`--delegated-cgroup-root`. That path must already be canonical, be an empty
+cgroup-v2 directory owned by the effective UID/GID, and expose and enable the
+`cpu`, `cpuset`, `memory`, and `pids` controllers. The runtime revalidates its
+device/inode identity before creating a private `a3s-oci-*` manager below it;
+it never guesses a systemd scope or enables controllers outside the supplied
+delegation.
 
 The CI fixture creates a dedicated UID/GID 20000 account with UID range
 300000:65536 and GID range 400000:65536. A host file owned by 300000:400000
 must appear as 1:1 inside the workload. The versioned
-`a3s.oci.native-linux-rootless-smoke.v1` report then requires:
+`a3s.oci.native-linux-rootless-smoke.v3` report then requires:
 
 1. exact create and replay behind the OCI `created` barrier;
 2. exact `/proc/<pid>/uid_map` and `gid_map` read-back plus
@@ -314,13 +322,16 @@ must appear as 1:1 inside the workload. The versioned
 5. exact init kill/replay and stable signal-9 lifecycle wait;
 6. one ordered creating/created/started, exec create/start/exit, stopped, init
    exit, and deleted event sequence with an empty tail cursor;
-7. stopped-only delete replay, post-delete `NotFound`, empty list, and removal
+7. delegated resource update/stats, exact pause/resume replay, and workload
+   progress that stops while frozen and continues after resume;
+8. stopped-only delete replay, post-delete `NotFound`, empty list, and removal
    of every process, marker, executor root, and durable session directory.
 
-GitHub Actions runs this gate as the dedicated user on both x86_64 and
-aarch64. It proves the core helper-backed lifecycle only. Rootless cgroup-v2
-delegation, pause/resume, updates/stats, device access, and broader security
-policy remain promotion gates.
+GitHub Actions prepares a dedicated cgroup-v2 subtree and runs this gate as the
+dedicated user on both x86_64 and aarch64. Real-host results are still required
+for the v3 schema before marking the delegation gate complete. Rootless device
+policy, owner-death cgroup recovery, and broader security policy remain
+promotion gates.
 
 ## Multi-container generation gate
 
@@ -552,8 +563,8 @@ This evidence proves rootful and core rootless bootstrap profiles, not general
 OCI support. The default driver must remain `probe-only` until at least the
 following pass:
 
-- rootless cgroup-v2 delegation, pause/resume, live updates/stats, and device
-  policy without privileged host fallback;
+- real-host rootless cgroup-v2 delegation/recovery evidence and an
+  authenticated privileged helper for rootless device policy;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
 - remaining mount and credential controls, broader cgroup v2 policies,

@@ -3,9 +3,11 @@ set -euo pipefail
 
 rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
 signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
+system_image_manifest="${A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST:?macOS system-image manifest is required}"
 bundle_dir="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
 marker="$bundle_dir/rootfs/.a3s-oci-create-start-smoke"
 support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+test -f "$system_image_manifest"
 
 endpoint_baseline="$(
   find /private/tmp -maxdepth 1 -name 'a3s-oci-agent-*' -print | sort
@@ -36,6 +38,7 @@ run_lifecycle_fault() {
     target/debug/a3s-oci oci-vm-fault-cleanup \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console "$console" \
       --fault-after "$phase"
@@ -122,6 +125,7 @@ run_transport_fault() {
     target/debug/a3s-oci oci-vm-transport-fault-cleanup \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console "$console" \
       --fault-at "$transport_stage"

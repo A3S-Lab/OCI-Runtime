@@ -1,5 +1,10 @@
 use std::process::Command;
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use std::os::unix::process::CommandExt;
+
 #[test]
 fn context_smoke_emits_consistent_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci-krun-shim"))
@@ -33,7 +38,7 @@ fn context_smoke_emits_consistent_versioned_output() {
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]
-fn vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
+fn vm_smoke_rejects_a_missing_system_image_before_starting_a_worker() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time must follow the Unix epoch")
@@ -42,6 +47,14 @@ fn vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
         "a3s-oci-missing-vm-rootfs-{}-{nonce}",
         std::process::id(),
     ));
+    let missing_manifest = std::env::temp_dir().join(format!(
+        "a3s-oci-missing-system-image-{}-{nonce}.json",
+        std::process::id(),
+    ));
+    let runtime_share = tempfile::tempdir().expect("runtime share");
+    std::fs::set_permissions(runtime_share.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("private runtime share mode");
+    std::fs::create_dir(runtime_share.path().join("run")).expect("runtime state directory");
     let console = std::env::temp_dir().join(format!(
         "a3s-oci-missing-vm-console-{}-{nonce}.log",
         std::process::id(),
@@ -50,6 +63,10 @@ fn vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci-krun-shim"))
         .args(["vm-smoke", "--rootfs"])
         .arg(&missing_rootfs)
+        .arg("--system-image-manifest")
+        .arg(&missing_manifest)
+        .arg("--runtime-share")
+        .arg(runtime_share.path())
         .arg("--console")
         .arg(&console)
         .output()
@@ -58,9 +75,9 @@ fn vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
     let report: a3s_oci_krun::KrunVmSmokeReport =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
     assert_eq!(output.status.code(), Some(2));
-    assert_eq!(report.schema_version, "a3s.oci.krun-vm-smoke.v1");
+    assert_eq!(report.schema_version, "a3s.oci.krun-vm-smoke.v2");
     assert!(!report.is_success());
-    assert!(!report.runtime_bundle_loaded);
+    assert!(report.runtime_bundle_loaded);
     assert!(!report.context_created);
     assert!(!report.vm_entered);
     assert!(!report.marker_verified);
@@ -68,13 +85,14 @@ fn vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
     assert!(report
         .reason
         .as_deref()
-        .is_some_and(|reason| reason.contains("failed to resolve rootfs")));
+        .is_some_and(|reason| reason.contains("system-image manifest")));
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]
-fn agent_vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
+fn agent_vm_smoke_rejects_a_missing_system_image_before_starting_a_worker() {
     use a3s_oci_agent_protocol::{SessionToken, AGENT_SESSION_TOKEN_ENV};
+    use std::os::unix::net::UnixListener;
 
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -84,35 +102,59 @@ fn agent_vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
         "a3s-oci-missing-agent-rootfs-{}-{nonce}",
         std::process::id(),
     ));
+    let missing_manifest = std::env::temp_dir().join(format!(
+        "a3s-oci-missing-agent-system-image-{}-{nonce}.json",
+        std::process::id(),
+    ));
+    let runtime_share = tempfile::tempdir().expect("runtime share");
+    std::fs::set_permissions(runtime_share.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("private runtime share mode");
+    std::fs::create_dir(runtime_share.path().join("run")).expect("runtime state directory");
     let console = std::env::temp_dir().join(format!(
         "a3s-oci-missing-agent-console-{}-{nonce}.log",
         std::process::id(),
     ));
-    let missing_socket = std::env::temp_dir().join(format!(
-        "a3s-oci-missing-agent-socket-{}-{nonce}.sock",
-        std::process::id(),
-    ));
+    let pipe_name = format!("a3s-oci-agent-missing-image-{}-{nonce}", std::process::id());
+    let socket_directory = std::path::Path::new("/private/tmp").join(&pipe_name);
+    std::fs::create_dir(&socket_directory).expect("private socket directory");
+    std::fs::set_permissions(&socket_directory, std::fs::Permissions::from_mode(0o700))
+        .expect("private socket directory mode");
+    let missing_socket = socket_directory.join("agent.sock");
+    let listener = UnixListener::bind(&missing_socket).expect("private Unix socket");
+    std::fs::set_permissions(&missing_socket, std::fs::Permissions::from_mode(0o600))
+        .expect("private socket mode");
     let token = SessionToken::generate().expect("operating-system random source");
     let encoded = token.expose_hex();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci-krun-shim"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_a3s-oci-krun-shim"));
+    command
+        .process_group(0)
         .args(["agent-vm-smoke", "--rootfs"])
         .arg(&missing_rootfs)
+        .arg("--system-image-manifest")
+        .arg(&missing_manifest)
+        .arg("--runtime-share")
+        .arg(runtime_share.path())
         .arg("--console")
         .arg(&console)
-        .args(["--pipe-name", "a3s-oci-agent-missing-rootfs"])
+        .arg("--pipe-name")
+        .arg(&pipe_name)
         .arg("--socket-path")
         .arg(&missing_socket)
-        .env(AGENT_SESSION_TOKEN_ENV, encoded.as_str())
-        .output()
-        .expect("agent VM smoke command must start");
+        .arg("--owner-pid")
+        .arg(std::process::id().to_string())
+        .env(AGENT_SESSION_TOKEN_ENV, encoded.as_str());
+    let output = command.output().expect("agent VM smoke command must start");
+    drop(listener);
+    std::fs::remove_file(&missing_socket).expect("remove private Unix socket");
+    std::fs::remove_dir(&socket_directory).expect("remove private socket directory");
 
     let report: a3s_oci_krun::KrunAgentVmSmokeReport =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
     assert_eq!(output.status.code(), Some(2));
-    assert_eq!(report.schema_version, "a3s.oci.krun-agent-vm-smoke.v2");
+    assert_eq!(report.schema_version, "a3s.oci.krun-agent-vm-smoke.v3");
     assert!(!report.is_success());
-    assert!(!report.runtime_bundle_loaded);
+    assert!(report.runtime_bundle_loaded);
     assert!(!report.context_created);
     assert!(!report.vm_entered);
     assert!(!report.agent_binary_present);
@@ -120,5 +162,5 @@ fn agent_vm_smoke_rejects_a_missing_rootfs_before_starting_a_worker() {
     assert!(report
         .reason
         .as_deref()
-        .is_some_and(|reason| reason.contains("failed to resolve rootfs")));
+        .is_some_and(|reason| reason.contains("system-image manifest")));
 }

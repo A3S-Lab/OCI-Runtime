@@ -19,6 +19,7 @@ use lifecycle::{best_effort_delete, exercise};
 pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
@@ -123,20 +124,21 @@ pub(super) async fn run(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let session = match UtilityVmSession::connect(shim, &vm_rootfs, console).await {
-        Ok(session) => session,
-        Err(bridge) => {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            let bridge = {
-                let mut bridge = bridge;
-                cleanup.apply(&mut bridge).await;
-                bridge
-            };
-            report.reason = bridge.reason.clone();
-            report.bridge = bridge;
-            return report;
-        }
-    };
+    let session =
+        match UtilityVmSession::connect(shim, &vm_rootfs, system_image_manifest, console).await {
+            Ok(session) => session,
+            Err(bridge) => {
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                let bridge = {
+                    let mut bridge = bridge;
+                    cleanup.apply(&mut bridge).await;
+                    bridge
+                };
+                report.reason = bridge.reason.clone();
+                report.bridge = bridge;
+                return report;
+            }
+        };
     let client = session.client();
     let rootfs_fixture =
         crate::rootfs_enforcement::RootfsEnforcementFixture::prepare(&bundle_b, &nonce).await;
@@ -340,7 +342,7 @@ pub(super) async fn run_windows(
         Ok(nonce) => nonce,
         Err(reason) => return failed_windows(report, reason),
     };
-    let session = match UtilityVmSession::connect(shim, &vm_rootfs, console).await {
+    let session = match UtilityVmSession::connect(shim, &vm_rootfs, None, console).await {
         Ok(session) => session,
         Err(bridge) => {
             report.reason = bridge.reason.clone();

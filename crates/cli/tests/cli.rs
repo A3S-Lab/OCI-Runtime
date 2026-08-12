@@ -35,10 +35,18 @@ fn features_command_emits_versioned_machine_readable_output() {
             assert!(features.driver(DriverKind::LibkrunWhpx).is_some());
         }
     }
-    assert!(features
-        .drivers
-        .iter()
-        .all(|driver| driver.readiness == DriverReadiness::ProbeOnly && !driver.can_launch()));
+    for driver in &features.drivers {
+        if driver.driver == DriverKind::LibkrunHvf {
+            assert_eq!(driver.readiness, DriverReadiness::Experimental);
+            assert_eq!(
+                driver.can_launch(),
+                driver.status == a3s_oci_core::CapabilityStatus::Available
+            );
+        } else {
+            assert_eq!(driver.readiness, DriverReadiness::ProbeOnly);
+            assert!(!driver.can_launch());
+        }
+    }
 }
 
 #[test]
@@ -134,7 +142,7 @@ fn native_linux_rootless_smoke_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("rootless smoke output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.native-linux-rootless-smoke.v1"
+        "a3s.oci.native-linux-rootless-smoke.v3"
     );
     assert_ne!(report["status"], "available");
 }
@@ -409,6 +417,8 @@ fn oci_vm_multi_container_smoke_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle-a",
             "missing-a3s-oci-bundle-a",
             "--bundle-b",
@@ -438,6 +448,8 @@ fn macos_hvf_soak_fails_closed_with_versioned_configuration() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle-a",
             "missing-a3s-oci-bundle-a",
             "--bundle-b",
@@ -528,6 +540,8 @@ fn oci_vm_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -557,6 +571,8 @@ fn oci_vm_state_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -590,6 +606,8 @@ fn oci_vm_start_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -623,6 +641,8 @@ fn oci_vm_kill_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -658,6 +678,8 @@ fn oci_vm_delete_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -692,6 +714,8 @@ fn oci_vm_wait_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -730,6 +754,8 @@ fn oci_vm_exec_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -764,6 +790,8 @@ fn oci_vm_signal_process_reopen_replacement_fails_closed_with_versioned_output()
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -799,6 +827,8 @@ fn oci_vm_wait_process_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -838,6 +868,8 @@ fn oci_vm_pause_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -871,6 +903,8 @@ fn oci_vm_resume_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -904,6 +938,8 @@ fn oci_vm_processes_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -938,6 +974,8 @@ fn oci_vm_read_output_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -972,6 +1010,8 @@ fn oci_vm_write_stdin_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -1006,6 +1046,8 @@ fn oci_vm_close_stdin_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -1040,6 +1082,8 @@ fn oci_vm_resize_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -1076,6 +1120,8 @@ fn oci_vm_file_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -1110,6 +1156,8 @@ fn oci_vm_filesystem_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -1145,6 +1193,8 @@ fn oci_vm_update_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -1178,6 +1228,8 @@ fn oci_vm_stats_reopen_replacement_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console-dir",
@@ -1222,6 +1274,8 @@ fn oci_vm_reopen_replacement_accepts_each_create_transport_stage() {
                 "missing-a3s-oci-krun-shim",
                 "--vm-rootfs",
                 "missing-a3s-oci-vm-rootfs",
+                "--system-image-manifest",
+                "missing-a3s-oci-system-image-manifest",
                 "--bundle",
                 "missing-a3s-oci-bundle",
                 "--console-dir",

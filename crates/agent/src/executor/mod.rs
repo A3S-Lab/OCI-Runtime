@@ -63,7 +63,7 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 
 use crate::AGENT_VERSION;
-use cgroup::CgroupManager;
+use cgroup::{CgroupManager, RootlessCgroupDelegation};
 use hook::HookStateTemplate;
 use pidfd::SignalOutcome;
 use plan::InitPlan;
@@ -126,6 +126,7 @@ pub struct LinuxExecutor {
     owner_identity: Option<recovery::ProcessIdentity>,
     rootfs_scope: RootfsScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
+    rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
     state: Mutex<ExecutorState>,
 }
 
@@ -139,6 +140,23 @@ impl LinuxExecutor {
         })?;
         Self::open_with_rootfs_scope(
             DEFAULT_RUNTIME_PARENT,
+            executable,
+            RootfsScope::BundleOnly,
+            RecoveryMode::Transient,
+        )
+        .await
+    }
+
+    /// Open the transient utility-VM executor inside its mounted writable share.
+    pub(crate) async fn new_utility_vm(runtime_parent: impl AsRef<Path>) -> Result<Self> {
+        let executable = std::env::current_exe().map_err(|error| {
+            executor_error(
+                ErrorCode::Internal,
+                format!("failed to resolve guest-agent executable: {error}"),
+            )
+        })?;
+        Self::open_with_rootfs_scope(
+            runtime_parent,
             executable,
             RootfsScope::BundleOnly,
             RecoveryMode::Transient,
@@ -181,6 +199,54 @@ impl LinuxExecutor {
             RecoveryMode::DurableNative,
         )
         .await
+    }
+
+    /// Open the native Linux executor with an explicit rootless cgroup-v2 delegation.
+    ///
+    /// The path must be a canonical, process-free cgroup-v2 directory owned by
+    /// the executor's effective UID/GID. All supported controllers must have
+    /// been delegated and enabled by the host before this call.
+    pub async fn open_native_with_rootless_cgroup_delegation(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+        delegated_cgroup_root: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let executor = Self::open_with_rootfs_scope(
+            runtime_parent,
+            init_executable,
+            RootfsScope::NativeAbsolute,
+            RecoveryMode::DurableNative,
+        )
+        .await?;
+        executor
+            .install_rootless_cgroup_delegation(delegated_cgroup_root)
+            .await
+    }
+
+    async fn install_rootless_cgroup_delegation(
+        mut self,
+        delegated_cgroup_root: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let Some((effective_uid, effective_gid)) = self.user_mapping_runtime.effective_ids() else {
+            let _ = tokio::fs::remove_dir_all(&self.runtime_root).await;
+            return Err(executor_error(
+                ErrorCode::InvalidArgument,
+                "rootless cgroup delegation requires a non-root Linux executor",
+            ));
+        };
+        let delegation = match RootlessCgroupDelegation::open(
+            delegated_cgroup_root,
+            effective_uid,
+            effective_gid,
+        ) {
+            Ok(delegation) => delegation,
+            Err(error) => {
+                let _ = tokio::fs::remove_dir_all(&self.runtime_root).await;
+                return Err(error);
+            }
+        };
+        self.rootless_cgroup_delegation = Some(delegation);
+        Ok(self)
     }
 
     async fn open_with_rootfs_scope(
@@ -280,6 +346,7 @@ impl LinuxExecutor {
             owner_identity,
             rootfs_scope,
             user_mapping_runtime,
+            rootless_cgroup_delegation: None,
             state: Mutex::new(ExecutorState::default()),
         })
     }
@@ -399,10 +466,10 @@ impl LinuxExecutor {
                     "rootless native execution cannot apply process.user.additionalGids after setgroups=deny",
                 ));
             }
-            if plan.cgroup.has_cgroup() {
+            if plan.cgroup.has_cgroup() && self.rootless_cgroup_delegation.is_none() {
                 return Err(executor_error(
                     ErrorCode::Unsupported,
-                    "rootless cgroup-v2 delegation is not implemented; omit linux.cgroupsPath",
+                    "rootless linux.cgroupsPath requires an explicit verified cgroup-v2 delegation",
                 ));
             }
             if plan.devices.requires_setup() {
@@ -419,7 +486,10 @@ impl LinuxExecutor {
             plan.annotations.clone(),
         )?;
         if plan.cgroup.has_cgroup() && state.cgroup_manager.is_none() {
-            state.cgroup_manager = Some(CgroupManager::create()?);
+            state.cgroup_manager = Some(match &self.rootless_cgroup_delegation {
+                Some(delegation) => CgroupManager::create_delegated(delegation)?,
+                None => CgroupManager::create()?,
+            });
         }
         let slot = state.next_slot.checked_add(1).ok_or_else(|| {
             executor_error(
@@ -454,7 +524,10 @@ impl LinuxExecutor {
         {
             Ok(process) => process,
             Err(error) => {
-                let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                if cleanup_device_targets(&runtime_directory).is_ok() {
+                    let _ =
+                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                }
                 return Err(error);
             }
         };
@@ -471,7 +544,10 @@ impl LinuxExecutor {
             .await
             {
                 let _ = process.force_stop().await;
-                let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                if cleanup_device_targets(&runtime_directory).is_ok() {
+                    let _ =
+                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                }
                 return Err(error);
             }
         }
@@ -755,6 +831,7 @@ impl LinuxExecutor {
                 record.process.poststop_plan(),
             )
         };
+        cleanup_device_targets(&runtime_directory)?;
         remove_container_directory(&self.runtime_root, &runtime_directory).await?;
         state.containers.remove(&key);
         match poststop {
@@ -1058,6 +1135,13 @@ async fn remove_container_directory(root: &Path, directory: &Path) -> Result<()>
     }
 }
 
+fn cleanup_device_targets(runtime_directory: &Path) -> Result<()> {
+    let Some(manifest) = device::load_device_target_manifest(runtime_directory)? else {
+        return Ok(());
+    };
+    device::cleanup_device_target_manifest(&manifest)
+}
+
 async fn remove_process_directory(container_directory: &Path, directory: &Path) -> Result<()> {
     if directory.parent() != Some(container_directory) || directory == container_directory {
         return Err(executor_error(
@@ -1218,6 +1302,7 @@ mod rootless_device_tests {
                 newuidmap: PathBuf::from("/usr/bin/newuidmap"),
                 newgidmap: PathBuf::from("/usr/bin/newgidmap"),
             },
+            rootless_cgroup_delegation: None,
             state: Mutex::new(ExecutorState::default()),
         };
 
@@ -1232,7 +1317,7 @@ mod rootless_device_tests {
     }
 
     #[tokio::test]
-    async fn rejects_cgroup_delegation_while_rootless() {
+    async fn rejects_cgroup_path_without_explicit_rootless_delegation() {
         let tempdir = TempDir::new().expect("temp dir");
         let bundle_directory = tempdir.path().join("bundle");
         fs::create_dir_all(&bundle_directory).expect("bundle dir");
@@ -1301,14 +1386,17 @@ mod rootless_device_tests {
                 newuidmap: PathBuf::from("/usr/bin/newuidmap"),
                 newgidmap: PathBuf::from("/usr/bin/newgidmap"),
             },
+            rootless_cgroup_delegation: None,
             state: Mutex::new(ExecutorState::default()),
         };
 
         let error = executor
             .create_with_inherited_descriptors(request, InheritedDescriptorPlan::empty())
             .await
-            .expect_err("rootless cgroup delegation must fail closed");
+            .expect_err("missing rootless cgroup delegation must fail closed");
         assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains("rootless cgroup-v2 delegation"));
+        assert!(error
+            .message
+            .contains("requires an explicit verified cgroup-v2 delegation"));
     }
 }

@@ -38,6 +38,7 @@ pub(super) async fn run(
             crate::agent_session::UtilityVmSession::connect_with_guest_qualification(
                 &qualification.shim,
                 &qualification.vm_rootfs,
+                Some(&qualification.system_image_manifest),
                 &qualification.first_console,
                 request,
             )
@@ -47,6 +48,7 @@ pub(super) async fn run(
             crate::agent_session::UtilityVmSession::connect_with_host_fault_injector(
                 &qualification.shim,
                 &qualification.vm_rootfs,
+                Some(&qualification.system_image_manifest),
                 &qualification.first_console,
                 Arc::clone(&faults) as Arc<dyn AgentTransportFaultInjector>,
             )

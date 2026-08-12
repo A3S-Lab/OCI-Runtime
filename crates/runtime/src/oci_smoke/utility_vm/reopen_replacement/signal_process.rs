@@ -15,6 +15,7 @@ pub(super) const SIGNAL_PROCESS_SIGNAL: i32 = 10;
 struct Qualification {
     shim: PathBuf,
     vm_rootfs: PathBuf,
+    system_image_manifest: PathBuf,
     state_root: PathBuf,
     first_console: PathBuf,
     replacement_console: PathBuf,

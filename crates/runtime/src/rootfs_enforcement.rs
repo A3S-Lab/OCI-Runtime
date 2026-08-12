@@ -327,42 +327,34 @@ struct EnforcementIdMappings {
 
 impl EnforcementIdMappings {
     fn from_base(base: &OciBundle, preserve_user_mappings: bool) -> Result<Self, String> {
+        let linux = base
+            .spec()
+            .linux()
+            .as_ref()
+            .ok_or_else(|| "rootfs enforcement fixture requires linux mappings".to_string())?;
+        let base_uids = collect_fixture_mappings(
+            linux.uid_mappings().as_deref(),
+            "rootfs enforcement fixture requires UID mappings",
+        )?;
+        let base_gids = collect_fixture_mappings(
+            linux.gid_mappings().as_deref(),
+            "rootfs enforcement fixture requires GID mappings",
+        )?;
         let (uids, gids) = if preserve_user_mappings {
-            let linux = base
-                .spec()
-                .linux()
-                .as_ref()
-                .ok_or_else(|| "native rootfs fixture requires linux mappings".to_string())?;
-            let uids = linux
-                .uid_mappings()
-                .as_deref()
-                .ok_or_else(|| "native rootfs fixture requires UID mappings".to_string())?
-                .iter()
-                .map(|mapping| FixtureIdMapping {
-                    container_id: mapping.container_id(),
-                    host_id: mapping.host_id(),
-                    size: mapping.size(),
-                })
-                .collect::<Vec<_>>();
-            let gids = linux
-                .gid_mappings()
-                .as_deref()
-                .ok_or_else(|| "native rootfs fixture requires GID mappings".to_string())?
-                .iter()
-                .map(|mapping| FixtureIdMapping {
-                    container_id: mapping.container_id(),
-                    host_id: mapping.host_id(),
-                    size: mapping.size(),
-                })
-                .collect::<Vec<_>>();
-            (uids, gids)
+            (base_uids, base_gids)
         } else {
-            let identity = FixtureIdMapping {
-                container_id: 0,
-                host_id: 0,
-                size: IDMAP_VISIBLE_ID_RANGE,
-            };
-            (vec![identity], vec![identity])
+            // Utility-VM bundles can expose a caller-owned rootfs whose files
+            // are represented by the macOS caller's UID/GID. Preserve the
+            // exact host IDs that represent container root, then extend the
+            // mapping so the complete qualification range remains visible.
+            // This keeps the derived workload able to access its rootfs while
+            // still exercising IDs 1000 and 2000 through ID-mapped mounts.
+            let root_uid = translate_fixture_id(&base_uids, 0, "base UID")?;
+            let root_gid = translate_fixture_id(&base_gids, 0, "base GID")?;
+            (
+                complete_fixture_mapping(root_uid),
+                complete_fixture_mapping(root_gid),
+            )
         };
 
         let root_uid = translate_fixture_id(&uids, 0, "UID")?;
@@ -410,6 +402,51 @@ impl EnforcementIdMappings {
             translate_fixture_id(&self.gids, 0, "GID")?,
         ))
     }
+}
+
+fn collect_fixture_mappings(
+    mappings: Option<&[a3s_oci_sdk::oci_spec::runtime::LinuxIdMapping]>,
+    missing: &str,
+) -> Result<Vec<FixtureIdMapping>, String> {
+    mappings.ok_or_else(|| missing.to_string()).map(|mappings| {
+        mappings
+            .iter()
+            .map(|mapping| FixtureIdMapping {
+                container_id: mapping.container_id(),
+                host_id: mapping.host_id(),
+                size: mapping.size(),
+            })
+            .collect()
+    })
+}
+
+fn complete_fixture_mapping(root_host_id: u32) -> Vec<FixtureIdMapping> {
+    if root_host_id == 0 {
+        return vec![FixtureIdMapping {
+            container_id: 0,
+            host_id: 0,
+            size: IDMAP_VISIBLE_ID_RANGE,
+        }];
+    }
+
+    let mut mappings = vec![single_mapping(0, root_host_id)];
+    let displaced_host_ids = root_host_id.min(IDMAP_VISIBLE_ID_RANGE - 1);
+    if displaced_host_ids > 0 {
+        mappings.push(FixtureIdMapping {
+            container_id: 1,
+            host_id: 0,
+            size: displaced_host_ids,
+        });
+    }
+    let remaining_start = displaced_host_ids + 1;
+    if remaining_start < IDMAP_VISIBLE_ID_RANGE {
+        mappings.push(FixtureIdMapping {
+            container_id: remaining_start,
+            host_id: remaining_start,
+            size: IDMAP_VISIBLE_ID_RANGE - remaining_start,
+        });
+    }
+    mappings
 }
 
 const fn single_mapping(container_id: u32, host_id: u32) -> FixtureIdMapping {
@@ -1168,7 +1205,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::tempdir;
 
-    use super::{build_bundle, RootfsEnforcementFixture};
+    use super::{build_bundle, EnforcementIdMappings, FixtureIdMapping, RootfsEnforcementFixture};
 
     const CONFIG: &str = include_str!("../../../fixtures/utility-vm/config.json");
     const NATIVE_CONFIG: &str = include_str!("../../../fixtures/native-linux/config.json");
@@ -1294,6 +1331,112 @@ mod tests {
         assert!(!PathBuf::from(base.directory())
             .join(".a3s-oci-rootfs-output-fixture-123")
             .exists());
+    }
+
+    #[test]
+    fn utility_vm_fixture_preserves_caller_owned_root_and_extends_id_range() {
+        let temporary = tempdir().expect("temporary utility-VM fixture");
+        let bundle_directory = temporary.path().join("bundle");
+        std::fs::create_dir_all(bundle_directory.join("rootfs")).expect("fixture rootfs");
+        let mut config: Value = serde_json::from_str(CONFIG).expect("utility-VM config");
+        config["linux"]["uidMappings"] =
+            serde_json::json!([{"containerID": 0, "hostID": 501, "size": 1}]);
+        config["linux"]["gidMappings"] =
+            serde_json::json!([{"containerID": 0, "hostID": 0, "size": 1}]);
+        let base = OciBundle::from_json(
+            bundle_directory,
+            serde_json::to_string(&config).expect("caller-owned config JSON"),
+        )
+        .expect("caller-owned utility-VM base bundle");
+
+        let mappings =
+            EnforcementIdMappings::from_base(&base, false).expect("extended fixture mappings");
+        assert_eq!(
+            mappings.uids,
+            vec![
+                FixtureIdMapping {
+                    container_id: 0,
+                    host_id: 501,
+                    size: 1,
+                },
+                FixtureIdMapping {
+                    container_id: 1,
+                    host_id: 0,
+                    size: 501,
+                },
+                FixtureIdMapping {
+                    container_id: 502,
+                    host_id: 502,
+                    size: 65_034,
+                },
+            ]
+        );
+        assert_eq!(
+            mappings.gids,
+            vec![FixtureIdMapping {
+                container_id: 0,
+                host_id: 0,
+                size: 65_536,
+            }]
+        );
+        assert_mapping_ranges_do_not_overlap(&mappings.uids);
+        assert_mapping_ranges_do_not_overlap(&mappings.gids);
+        for (container_id, expected_uid, expected_gid) in [
+            (0, 501, 0),
+            (1, 0, 1),
+            (501, 500, 501),
+            (1_000, 1_000, 1_000),
+            (2_000, 2_000, 2_000),
+            (65_535, 65_535, 65_535),
+        ] {
+            assert_eq!(
+                super::translate_fixture_id(&mappings.uids, container_id, "UID")
+                    .expect("visible UID"),
+                expected_uid
+            );
+            assert_eq!(
+                super::translate_fixture_id(&mappings.gids, container_id, "GID")
+                    .expect("visible GID"),
+                expected_gid
+            );
+        }
+        assert_eq!(
+            mappings.filesystem_1000.uid,
+            super::single_mapping(0, 1_000)
+        );
+        assert_eq!(
+            mappings.filesystem_1000.gid,
+            super::single_mapping(0, 1_000)
+        );
+        assert_eq!(
+            mappings.filesystem_2000.uid,
+            super::single_mapping(0, 2_000)
+        );
+        assert_eq!(
+            mappings.filesystem_2000.gid,
+            super::single_mapping(0, 2_000)
+        );
+    }
+
+    fn assert_mapping_ranges_do_not_overlap(mappings: &[FixtureIdMapping]) {
+        for (index, mapping) in mappings.iter().enumerate() {
+            let container_end = u64::from(mapping.container_id) + u64::from(mapping.size);
+            let host_end = u64::from(mapping.host_id) + u64::from(mapping.size);
+            for prior in &mappings[..index] {
+                let prior_container_end = u64::from(prior.container_id) + u64::from(prior.size);
+                let prior_host_end = u64::from(prior.host_id) + u64::from(prior.size);
+                assert!(
+                    container_end <= u64::from(prior.container_id)
+                        || prior_container_end <= u64::from(mapping.container_id),
+                    "container ranges overlap: {prior:?} and {mapping:?}"
+                );
+                assert!(
+                    host_end <= u64::from(prior.host_id)
+                        || prior_host_end <= u64::from(mapping.host_id),
+                    "host ranges overlap: {prior:?} and {mapping:?}"
+                );
+            }
+        }
     }
 
     #[test]

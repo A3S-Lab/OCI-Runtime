@@ -9,6 +9,7 @@ run_pause_stage() {
       --operation pause \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console-dir "$stage_console_dir" \
       --fault-at "$fault_stage"

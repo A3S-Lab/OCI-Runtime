@@ -1,5 +1,8 @@
 use std::io;
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -8,11 +11,20 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 mod bootstrap_token;
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 mod owner_process;
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 mod recovery_report;
 
 #[derive(Debug, Parser)]
@@ -32,6 +44,14 @@ enum Command {
         /// Extracted Linux root filesystem presented as the guest root.
         #[arg(long, value_name = "DIR")]
         rootfs: PathBuf,
+        /// Exact immutable system-image manifest required by macOS HVF.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// Separate writable host directory exported to the macOS guest.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[arg(long, value_name = "DIR")]
+        runtime_share: PathBuf,
         /// Host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
@@ -41,6 +61,10 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         rootfs: PathBuf,
+        /// Exact immutable system-image manifest required by macOS HVF.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         /// Host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
@@ -52,24 +76,36 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         socket_path: PathBuf,
         /// Runtime process whose exit must terminate this shim and its VM.
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        #[cfg(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        ))]
         #[arg(long, value_name = "PID")]
         owner_pid: NonZeroU32,
         /// Protected host-only destination for verified shutdown evidence.
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        #[cfg(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        ))]
         #[arg(long, value_name = "FILE")]
         recovery_report: Option<PathBuf>,
-        /// Exact per-generation host directory exported at the fixed guest mount point.
+        /// Optional exact-generation host directory exported to the Windows guest.
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         #[arg(long, value_name = "DIR")]
         runtime_share: Option<PathBuf>,
+        /// Writable host directory exported to the macOS guest.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[arg(long, value_name = "DIR")]
+        runtime_share: PathBuf,
     },
     /// Internal process-takeover boundary for the macOS VM smoke.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[command(name = "__macos-vm-smoke-worker", hide = true)]
     MacosVmSmokeWorker {
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
-        rootfs: PathBuf,
+        runtime_share: PathBuf,
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
         #[arg(long, value_name = "NAME")]
@@ -79,12 +115,18 @@ enum Command {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[command(name = "__macos-agent-vm-worker", hide = true)]
     MacosAgentVmWorker {
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
-        rootfs: PathBuf,
+        runtime_share: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        guest_token_file: String,
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
         #[arg(long, value_name = "FILE")]
         socket_path: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        guest_recovery_report: Option<String>,
     },
 }
 
@@ -103,8 +145,23 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         }
-        Command::VmSmoke { rootfs, console } => {
-            let report = a3s_oci_krun::vm_smoke(&rootfs, &console);
+        Command::VmSmoke {
+            rootfs,
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            system_image_manifest,
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            runtime_share,
+            console,
+        } => {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            let (system_image_manifest, runtime_share) = (
+                Some(system_image_manifest.as_path()),
+                Some(runtime_share.as_path()),
+            );
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            let (system_image_manifest, runtime_share) = (None, None);
+            let report =
+                a3s_oci_krun::vm_smoke(&rootfs, system_image_manifest, runtime_share, &console);
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
                 eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");
@@ -118,15 +175,25 @@ fn main() -> ExitCode {
         }
         Command::AgentVmSmoke {
             rootfs,
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            system_image_manifest,
             console,
             pipe_name,
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             socket_path,
-            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            #[cfg(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(target_os = "macos", target_arch = "aarch64")
+            ))]
             owner_pid,
-            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            #[cfg(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(target_os = "macos", target_arch = "aarch64")
+            ))]
             recovery_report,
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            runtime_share,
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             runtime_share,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
@@ -206,6 +273,7 @@ fn main() -> ExitCode {
                 };
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
+                    None,
                     &console,
                     &endpoint,
                     socket_path,
@@ -233,16 +301,79 @@ fn main() -> ExitCode {
                 owner_monitor.mark_vm_finished();
                 report
             };
-            #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
-            let report = a3s_oci_krun::agent_vm_smoke(
-                &rootfs,
-                &console,
-                &endpoint,
-                socket_path,
-                &token,
-                a3s_oci_krun::AgentVmHandoff::default()
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            let report = {
+                let bootstrap = match bootstrap_token::BootstrapTokenFile::create(
+                    &runtime_share,
+                    a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT,
+                    &endpoint,
+                    &token,
+                ) {
+                    Ok(bootstrap) => bootstrap,
+                    Err(error) => {
+                        eprintln!(
+                            "a3s-oci-krun-shim: failed to stage guest bootstrap token: {error}"
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let recovery = match recovery_report {
+                    Some(destination) => match recovery_report::RecoveryReportHandoff::create(
+                        &runtime_share,
+                        a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT,
+                        &endpoint,
+                        &destination,
+                    ) {
+                        Ok(recovery) => Some(recovery),
+                        Err(error) => {
+                            eprintln!(
+                                "a3s-oci-krun-shim: failed to stage guest recovery report: {error}"
+                            );
+                            return ExitCode::FAILURE;
+                        }
+                    },
+                    None => None,
+                };
+                let owner_monitor = match owner_process::start(
+                    owner_pid,
+                    bootstrap.cleanup_paths(),
+                    recovery.as_ref().map(|recovery| recovery.cleanup_paths()),
+                ) {
+                    Ok(owner_monitor) => owner_monitor,
+                    Err(error) => {
+                        eprintln!("a3s-oci-krun-shim: failed to monitor runtime owner: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                let mut report = a3s_oci_krun::agent_vm_smoke(
+                    &rootfs,
+                    Some(&system_image_manifest),
+                    &console,
+                    &endpoint,
+                    socket_path,
+                    &token,
+                    a3s_oci_krun::AgentVmHandoff::new(
+                        Some(&runtime_share),
+                        Some(bootstrap.guest_path()),
+                        recovery.as_ref().map(|recovery| recovery.guest_path()),
+                    )
                     .with_transport_qualification(transport_qualification.as_ref()),
-            );
+                );
+                if let Err(error) = bootstrap.cleanup() {
+                    report.status = a3s_oci_core::CapabilityStatus::Unavailable;
+                    report.reason = Some(format!(
+                        "failed to clean one-time guest bootstrap token: {error}"
+                    ));
+                }
+                if let Some(Err(error)) = recovery.map(|recovery| recovery.persist(&token)) {
+                    report.status = a3s_oci_core::CapabilityStatus::Unavailable;
+                    report.reason = Some(format!(
+                        "failed to retain authenticated guest recovery report: {error}"
+                    ));
+                }
+                owner_monitor.mark_vm_finished();
+                report
+            };
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
                 eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");
@@ -256,11 +387,17 @@ fn main() -> ExitCode {
         }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         Command::MacosVmSmokeWorker {
-            rootfs,
+            system_image_manifest,
+            runtime_share,
             console,
             marker_name,
         } => {
-            if a3s_oci_krun::run_macos_vm_smoke_worker(&rootfs, &console, &marker_name) {
+            if a3s_oci_krun::run_macos_vm_smoke_worker(
+                &system_image_manifest,
+                &runtime_share,
+                &console,
+                &marker_name,
+            ) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(2)
@@ -268,17 +405,13 @@ fn main() -> ExitCode {
         }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         Command::MacosAgentVmWorker {
-            rootfs,
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
             console,
             socket_path,
+            guest_recovery_report,
         } => {
-            let token = match take_session_token() {
-                Ok(token) => token,
-                Err(error) => {
-                    eprintln!("a3s-oci-krun-shim: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
             let transport_qualification = match take_transport_qualification() {
                 Ok(request) => request,
                 Err(error) => {
@@ -287,10 +420,12 @@ fn main() -> ExitCode {
                 }
             };
             if a3s_oci_krun::run_macos_agent_vm_worker(
-                &rootfs,
+                &system_image_manifest,
+                &runtime_share,
+                &guest_token_file,
                 &console,
                 &socket_path,
-                &token,
+                guest_recovery_report.as_deref(),
                 transport_qualification.as_ref(),
             ) {
                 ExitCode::SUCCESS

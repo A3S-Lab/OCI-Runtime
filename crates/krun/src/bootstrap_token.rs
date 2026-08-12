@@ -109,6 +109,10 @@ impl BootstrapTokenFile {
         &self.guest_path
     }
 
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     pub(crate) fn cleanup_paths(&self) -> CleanupPaths {
         self.paths.clone()
     }

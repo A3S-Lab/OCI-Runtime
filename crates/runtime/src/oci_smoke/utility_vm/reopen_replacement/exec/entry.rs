@@ -21,6 +21,7 @@ use crate::OciVmOperationReopenReplacementReport;
 pub(in crate::oci_smoke::utility_vm) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -188,6 +189,7 @@ pub(in crate::oci_smoke::utility_vm) async fn run(
     let qualification = Qualification {
         shim: shim.to_path_buf(),
         vm_rootfs,
+        system_image_manifest: system_image_manifest.to_path_buf(),
         state_root: state_root.clone(),
         first_console: console_directory.join(format!("a3s-oci-exec-reopen-{nonce}-first.log")),
         replacement_console: console_directory

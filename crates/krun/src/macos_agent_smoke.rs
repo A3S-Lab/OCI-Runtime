@@ -5,24 +5,24 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use crate::macos_context::{KrunContext, MacosKrunApi};
+use crate::macos_process::{
+    read_bounded_worker_output, resolve_agent_socket, resolve_console, terminate_and_wait,
+    wait_for_worker,
+};
+use crate::macos_system_image::MacosSystemImage;
+use crate::{KrunAgentVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
 use a3s_oci_agent_protocol::{
-    AgentTransportQualificationRequest, AgentVsockEndpoint, SessionToken, AGENT_SESSION_TOKEN_ENV,
+    AgentTransportQualificationRequest, AgentVsockEndpoint, AGENT_RECOVERY_REPORT_ENV,
+    AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_TAG, AGENT_SESSION_TOKEN_FILE_ENV,
     AGENT_TRANSPORT_QUALIFICATION_ENV, AGENT_VSOCK_PORT,
 };
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
-
-use crate::macos_context::{KrunContext, MacosKrunApi};
-use crate::macos_process::{
-    canonical_rootfs, read_bounded_worker_output, resolve_agent_socket, resolve_console,
-    resolve_guest_regular_file, terminate_and_wait, wait_for_worker,
-};
-use crate::{KrunAgentVmSmokeReport, VmConfig};
 
 const AGENT_GUEST_PATH: &str = "/usr/bin/a3s-oci-agent";
 const WORKER_COMMAND: &str = "__macos-agent-vm-worker";
-const WORKER_SCHEMA_VERSION: &str = "a3s.oci.macos-agent-vm-worker.v1";
+const WORKER_SCHEMA_VERSION: &str = "a3s.oci.macos-agent-vm-worker.v2";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_WORKER_OUTPUT_BYTES: u64 = 64 * 1024;
 
@@ -33,6 +33,9 @@ struct WorkerEvidence {
     context_created: bool,
     vm_configured: bool,
     rootfs_configured: bool,
+    runtime_share_configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    macos_boot_assets: Option<MacosBootAssetsEvidence>,
     agent_binary_present: bool,
     agent_vsock_configured: bool,
     workload_configured: bool,
@@ -50,6 +53,8 @@ impl WorkerEvidence {
             context_created: false,
             vm_configured: false,
             rootfs_configured: false,
+            runtime_share_configured: false,
+            macos_boot_assets: None,
             agent_binary_present: false,
             agent_vsock_configured: false,
             workload_configured: false,
@@ -60,29 +65,63 @@ impl WorkerEvidence {
     }
 }
 
-pub(crate) fn agent_vm_smoke(
-    rootfs: &Path,
-    console: &Path,
-    endpoint: &AgentVsockEndpoint,
-    socket: &Path,
-    token: &SessionToken,
-    transport_qualification: Option<&AgentTransportQualificationRequest>,
-    config: VmConfig,
-) -> KrunAgentVmSmokeReport {
+pub(crate) struct MacosAgentVmConfig<'a> {
+    pub(crate) system_image_manifest: &'a Path,
+    pub(crate) runtime_share: &'a Path,
+    pub(crate) guest_token_file: &'a str,
+    pub(crate) console: &'a Path,
+    pub(crate) endpoint: &'a AgentVsockEndpoint,
+    pub(crate) socket: &'a Path,
+    pub(crate) guest_recovery_report: Option<&'a str>,
+    pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
+    pub(crate) vm: VmConfig,
+}
+
+pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgentVmSmokeReport {
+    let MacosAgentVmConfig {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        endpoint,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+        vm: config,
+    } = configuration;
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
     // The parent intentionally does not load libkrun. Only bounded worker
     // evidence may advance the native setup fields.
     report.runtime_bundle_loaded = false;
-    let rootfs = match resolve_rootfs(rootfs) {
-        Ok(rootfs) => {
-            report.agent_binary_present = true;
-            rootfs
-        }
+    let runtime_share = match canonical_runtime_share(runtime_share) {
+        Ok(runtime_share) => runtime_share,
         Err(reason) => {
             report.reason = Some(reason);
             return report;
         }
     };
+    let state_directory = runtime_share.join("run");
+    let state_metadata = fs::symlink_metadata(&state_directory).map_err(|error| {
+        format!(
+            "failed to inspect writable runtime-state directory {}: {error}",
+            state_directory.display()
+        )
+    });
+    match state_metadata {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            report.reason = Some(format!(
+                "runtime-state path must be a real directory inside the writable share: {}",
+                state_directory.display()
+            ));
+            return report;
+        }
+        Err(reason) => {
+            report.reason = Some(reason);
+            return report;
+        }
+    }
+    report.runtime_share_configured = true;
     let console = match resolve_console(console) {
         Ok(console) => console,
         Err(reason) => {
@@ -116,20 +155,25 @@ pub(crate) fn agent_vm_smoke(
         }
     };
 
-    let encoded_token = token.expose_hex();
     let mut command = Command::new(executable);
     command
         .arg(WORKER_COMMAND)
-        .arg("--rootfs")
-        .arg(&rootfs)
+        .arg("--system-image-manifest")
+        .arg(system_image_manifest)
+        .arg("--runtime-share")
+        .arg(&runtime_share)
+        .arg("--guest-token-file")
+        .arg(guest_token_file)
         .arg("--console")
         .arg(&console)
         .arg("--socket-path")
         .arg(&socket)
         .env_remove(AGENT_TRANSPORT_QUALIFICATION_ENV)
-        .env(AGENT_SESSION_TOKEN_ENV, encoded_token.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    if let Some(path) = guest_recovery_report {
+        command.arg("--guest-recovery-report").arg(path);
+    }
     let encoded_qualification = match transport_qualification
         .map(AgentTransportQualificationRequest::to_json)
         .transpose()
@@ -153,7 +197,6 @@ pub(crate) fn agent_vm_smoke(
         }
     };
     drop(command);
-    drop(encoded_token);
 
     let output_reader = child.stdout.take().map(|stdout| {
         thread::spawn(move || read_bounded_worker_output(stdout, MAX_WORKER_OUTPUT_BYTES))
@@ -179,6 +222,8 @@ pub(crate) fn agent_vm_smoke(
             report.context_created = evidence.context_created;
             report.vm_configured = evidence.vm_configured;
             report.rootfs_configured = evidence.rootfs_configured;
+            report.runtime_share_configured = evidence.runtime_share_configured;
+            report.macos_boot_assets = evidence.macos_boot_assets.clone();
             report.agent_binary_present = evidence.agent_binary_present;
             report.agent_vsock_configured = evidence.agent_vsock_configured;
             report.workload_configured = evidence.workload_configured;
@@ -234,6 +279,11 @@ pub(crate) fn agent_vm_smoke(
         && report.context_created
         && report.vm_configured
         && report.rootfs_configured
+        && report.runtime_share_configured
+        && report
+            .macos_boot_assets
+            .as_ref()
+            .is_some_and(MacosBootAssetsEvidence::is_success)
         && report.agent_binary_present
         && report.agent_vsock_configured
         && report.workload_configured
@@ -251,18 +301,17 @@ pub(crate) fn agent_vm_smoke(
 }
 
 pub(crate) fn run_worker(
-    rootfs: &Path,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    guest_token_file: &str,
     console: &Path,
     socket: &Path,
-    token: &SessionToken,
+    guest_recovery_report: Option<&str>,
     transport_qualification: Option<&AgentTransportQualificationRequest>,
 ) -> bool {
     let mut evidence = WorkerEvidence::initial();
-    let rootfs = match resolve_rootfs(rootfs) {
-        Ok(rootfs) => {
-            evidence.agent_binary_present = true;
-            rootfs
-        }
+    let runtime_share = match canonical_runtime_share(runtime_share) {
+        Ok(runtime_share) => runtime_share,
         Err(reason) => return fail_worker(&mut evidence, reason),
     };
     let console = match resolve_console(console) {
@@ -281,6 +330,24 @@ pub(crate) fn run_worker(
         }
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
+    let system_image = match MacosSystemImage::load(system_image_manifest, api.runtime_provenance())
+    {
+        Ok(system_image) => system_image,
+        Err(error) => return fail_worker(&mut evidence, error.to_string()),
+    };
+    if system_image.image_path().starts_with(&runtime_share)
+        || runtime_share.starts_with(system_image.image_path())
+        || system_image.manifest_path().starts_with(&runtime_share)
+        || runtime_share.starts_with(system_image.manifest_path())
+    {
+        return fail_worker(
+            &mut evidence,
+            "immutable system image, manifest, and writable runtime share must be disjoint"
+                .to_string(),
+        );
+    }
+    evidence.agent_binary_present = true;
+    evidence.macos_boot_assets = Some(system_image.evidence(true));
     let config = crate::fallback_config();
     let mut context = match KrunContext::create(api) {
         Ok(context) => {
@@ -293,10 +360,14 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.vm_configured = true;
-    if let Err(error) = context.set_root(&rootfs) {
+    if let Err(error) = context.set_read_only_system_image(system_image) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.rootfs_configured = true;
+    if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, &runtime_share) {
+        return fail_worker(&mut evidence, error.to_string());
+    }
+    evidence.runtime_share_configured = true;
     if let Err(error) = context.set_agent_vsock(&socket, AGENT_VSOCK_PORT) {
         return fail_worker(&mut evidence, error.to_string());
     }
@@ -305,11 +376,19 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
 
-    let token_hex = token.expose_hex();
-    let mut environment = vec![(
-        AGENT_SESSION_TOKEN_ENV.to_string(),
-        token_hex.as_str().to_string(),
-    )];
+    let mut environment = vec![
+        (
+            AGENT_SESSION_TOKEN_FILE_ENV.to_string(),
+            guest_token_file.to_string(),
+        ),
+        (
+            AGENT_RUNTIME_SHARE_ENV.to_string(),
+            AGENT_RUNTIME_SHARE_TAG.to_string(),
+        ),
+    ];
+    if let Some(path) = guest_recovery_report {
+        environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));
+    }
     if let Some(request) = transport_qualification {
         let encoded = match request.to_json() {
             Ok(encoded) => encoded,
@@ -317,7 +396,6 @@ pub(crate) fn run_worker(
         };
         environment.push((AGENT_TRANSPORT_QUALIFICATION_ENV.to_string(), encoded));
     }
-    let environment = Zeroizing::new(environment);
     if let Err(error) = context.set_exec(AGENT_GUEST_PATH, &[], &environment) {
         return fail_worker(&mut evidence, error.to_string());
     }
@@ -341,10 +419,25 @@ pub(crate) fn run_worker(
     }
 }
 
-fn resolve_rootfs(rootfs: &Path) -> Result<std::path::PathBuf, String> {
-    let rootfs = canonical_rootfs(rootfs)?;
-    resolve_guest_regular_file(&rootfs, Path::new(AGENT_GUEST_PATH), "fixed guest agent")?;
-    Ok(rootfs)
+fn canonical_runtime_share(path: &Path) -> Result<std::path::PathBuf, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect writable runtime share {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(format!(
+            "writable runtime share must be a real directory, not a symlink: {}",
+            path.display()
+        ));
+    }
+    path.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize writable runtime share {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn collect_worker_evidence(

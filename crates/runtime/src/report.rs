@@ -17,7 +17,7 @@ pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v12";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-rootless-smoke.v1";
+    "a3s.oci.native-linux-rootless-smoke.v3";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -630,6 +630,27 @@ pub struct NativeLinuxRootlessSmokeReport {
     pub gid_map_verified: bool,
     /// Whether the created namespace exposed `setgroups=deny`.
     pub setgroups_denied: bool,
+    /// Whether the submitted bundle requested cgroup-v2 delegation.
+    pub cgroup_delegation_requested: bool,
+    /// Whether an explicit rootless cgroup-v2 delegation was exercised.
+    pub cgroup_delegation_verified: bool,
+    /// Whether live cgroup resource updates replayed exactly.
+    pub resources_updated: bool,
+    /// Whether normalized cgroup statistics matched the updated profile.
+    pub stats_verified: bool,
+    /// Whether pause and resume reached and replayed their exact freezer states.
+    pub freezer_verified: bool,
+    /// Progress observed immediately before the workload was frozen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_before_pause: Option<u64>,
+    /// Progress observed after a bounded interval while frozen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_while_paused: Option<u64>,
+    /// Progress observed after the workload was resumed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_after_resume: Option<u64>,
+    /// Whether shutdown removed every runtime-owned cgroup below the delegation.
+    pub cgroup_delegation_clean: bool,
     /// Whether start ran the rootless ownership and credential assertions.
     pub workload_verified: bool,
     /// Whether exec create and replay remained exact.
@@ -678,6 +699,15 @@ impl NativeLinuxRootlessSmokeReport {
             uid_map_verified: false,
             gid_map_verified: false,
             setgroups_denied: false,
+            cgroup_delegation_requested: false,
+            cgroup_delegation_verified: false,
+            resources_updated: false,
+            stats_verified: false,
+            freezer_verified: false,
+            progress_before_pause: None,
+            progress_while_paused: None,
+            progress_after_resume: None,
+            cgroup_delegation_clean: false,
             workload_verified: false,
             exec_replayed: false,
             exec_signal_replayed: false,
@@ -750,6 +780,12 @@ impl NativeLinuxRootlessSmokeReport {
             && self.uid_map_verified
             && self.gid_map_verified
             && self.setgroups_denied
+            && (!self.cgroup_delegation_requested
+                || (self.cgroup_delegation_verified
+                    && self.resources_updated
+                    && self.stats_verified
+                    && self.freezer_verified
+                    && self.cgroup_delegation_clean))
             && self.workload_verified
             && self.exec_replayed
             && self.exec_signal_replayed

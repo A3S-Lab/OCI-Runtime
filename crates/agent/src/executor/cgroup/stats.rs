@@ -296,6 +296,9 @@ mod tests {
             leaf: directory.path().to_path_buf(),
             init_procs: procs,
             control_workload: None,
+            devices: crate::executor::device::DevicePlan::default(),
+            device_filter_path: directory.path().to_path_buf(),
+            device_filter: None,
         };
         let target = ContainerTarget::exact(
             ContainerId::new("stats-fixture").expect("container ID"),

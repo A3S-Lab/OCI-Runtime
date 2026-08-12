@@ -17,9 +17,13 @@ mod ffi;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_agent_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_assets;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_context;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_process;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_system_image;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_vm_smoke;
 mod report;
@@ -30,7 +34,7 @@ use a3s_oci_core::HostPlatform;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 pub use agent_smoke::{agent_vm_smoke, AgentVmHandoff};
 pub use report::{
-    KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunVmSmokeReport,
+    KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunVmSmokeReport, MacosBootAssetsEvidence,
     KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,
     KRUN_VM_SMOKE_SCHEMA_VERSION,
 };
@@ -264,7 +268,12 @@ const fn fallback_context_config() -> VmConfig {
 /// consumes the process-local libkrun context and must never run inside an SDK
 /// client process.
 #[must_use]
-pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
+pub fn vm_smoke(
+    rootfs: &Path,
+    system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
+    console: &Path,
+) -> KrunVmSmokeReport {
     let config = match VmConfig::new(1, 512) {
         Ok(config) => config,
         Err(error) => {
@@ -281,7 +290,20 @@ pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        macos_vm_smoke::vm_smoke(rootfs, console, config)
+        let Some(system_image_manifest) = system_image_manifest else {
+            let mut report = KrunVmSmokeReport::initial(HostPlatform::Macos, config);
+            report.reason =
+                Some("macOS VM smoke requires an explicit system-image manifest".into());
+            return report;
+        };
+        let Some(runtime_share) = runtime_share else {
+            let mut report = KrunVmSmokeReport::initial(HostPlatform::Macos, config);
+            report.reason =
+                Some("macOS VM smoke requires a separate writable runtime share".into());
+            return report;
+        };
+        let _ = rootfs;
+        macos_vm_smoke::vm_smoke(system_image_manifest, runtime_share, console, config)
     }
 
     #[cfg(not(any(
@@ -289,7 +311,7 @@ pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (rootfs, console);
+        let _ = (rootfs, system_image_manifest, runtime_share, console);
         KrunVmSmokeReport::unsupported(HostPlatform::current(), config)
     }
 }
@@ -301,8 +323,13 @@ pub fn vm_smoke(rootfs: &Path, console: &Path) -> KrunVmSmokeReport {
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[doc(hidden)]
 #[must_use]
-pub fn run_macos_vm_smoke_worker(rootfs: &Path, console: &Path, marker_name: &str) -> bool {
-    macos_vm_smoke::run_worker(rootfs, console, marker_name)
+pub fn run_macos_vm_smoke_worker(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    console: &Path,
+    marker_name: &str,
+) -> bool {
+    macos_vm_smoke::run_worker(system_image_manifest, runtime_share, console, marker_name)
 }
 
 /// Run the private macOS guest-agent VM worker.
@@ -312,13 +339,23 @@ pub fn run_macos_vm_smoke_worker(rootfs: &Path, console: &Path, marker_name: &st
 #[doc(hidden)]
 #[must_use]
 pub fn run_macos_agent_vm_worker(
-    rootfs: &Path,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    guest_token_file: &str,
     console: &Path,
     socket: &Path,
-    token: &a3s_oci_agent_protocol::SessionToken,
+    guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
-    macos_agent_smoke::run_worker(rootfs, console, socket, token, transport_qualification)
+    macos_agent_smoke::run_worker(
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+    )
 }
 
 pub(crate) fn fallback_config() -> VmConfig {

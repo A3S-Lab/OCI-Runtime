@@ -54,6 +54,7 @@ impl<'a> AgentVmHandoff<'a> {
 #[must_use]
 pub fn agent_vm_smoke(
     rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     console: &Path,
     endpoint: &AgentVsockEndpoint,
     socket_path: Option<&Path>,
@@ -72,31 +73,47 @@ pub fn agent_vm_smoke(
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        let _ = (socket_path, token);
+        let _ = (system_image_manifest, socket_path, token);
         agent_vm_smoke_windows(rootfs, console, endpoint, handoff, config)
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        let _ = (
-            handoff.runtime_share,
-            handoff.guest_token_file,
-            handoff.guest_recovery_report,
-        );
+        let Some(system_image_manifest) = system_image_manifest else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
+            report.reason =
+                Some("the macOS guest-agent bridge requires a system-image manifest".into());
+            return report;
+        };
+        let Some(runtime_share) = handoff.runtime_share else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
+            report.reason =
+                Some("the macOS guest-agent bridge requires a writable runtime share".into());
+            return report;
+        };
+        let Some(guest_token_file) = handoff.guest_token_file else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
+            report.reason =
+                Some("the macOS guest-agent bridge requires a protected guest token file".into());
+            return report;
+        };
+        let _ = (rootfs, token);
         let Some(socket_path) = socket_path else {
             let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
             report.reason = Some("the macOS guest-agent bridge requires a Unix socket path".into());
             return report;
         };
-        crate::macos_agent_smoke::agent_vm_smoke(
-            rootfs,
+        crate::macos_agent_smoke::agent_vm_smoke(crate::macos_agent_smoke::MacosAgentVmConfig {
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
             console,
             endpoint,
-            socket_path,
-            token,
-            handoff.transport_qualification,
-            config,
-        )
+            socket: socket_path,
+            guest_recovery_report: handoff.guest_recovery_report,
+            transport_qualification: handoff.transport_qualification,
+            vm: config,
+        })
     }
 
     #[cfg(not(any(
@@ -106,6 +123,7 @@ pub fn agent_vm_smoke(
     {
         let _ = (
             rootfs,
+            system_image_manifest,
             console,
             endpoint,
             socket_path,

@@ -13,6 +13,8 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_agent_protocol::{AGENT_SESSION_TOKEN_DIRECTORY_PREFIX, AGENT_SESSION_TOKEN_FILE_NAME};
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde_json::Value;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use sha2::{Digest, Sha256};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use tokio::net::windows::named_pipe::NamedPipeServer;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -31,7 +33,7 @@ use crate::report::AgentVmSmokeReport;
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DIAGNOSTIC_CHARS: usize = 2_048;
-const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v2";
+const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v3";
 const SHIM_TRUE_FIELDS: &[&str] = &[
     "runtime_bundle_loaded",
     "context_created",
@@ -56,6 +58,7 @@ pub(crate) struct AgentVmSession {
     running: RunningShim,
     console: PathBuf,
     runtime_share_required: bool,
+    expected_macos_manifest_sha256: Option<String>,
 }
 
 /// Shareable guest client with single-owner, idempotent VM shutdown.
@@ -73,13 +76,50 @@ struct UtilityVmSessionState {
     completed: Option<AgentVmSmokeReport>,
 }
 
+struct AgentVmConnectOptions<'a> {
+    system_image_manifest: Option<&'a Path>,
+    runtime_share: Option<&'a Path>,
+    recovery_report: Option<&'a Path>,
+    faults: Arc<dyn AgentTransportFaultInjector>,
+    guest_qualification: Option<&'a AgentTransportQualificationRequest>,
+}
+
 impl UtilityVmSession {
     pub(crate) async fn connect(
         shim: &Path,
         rootfs: &Path,
+        system_image_manifest: Option<&Path>,
         console: &Path,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let owner = AgentVmSession::connect(shim, rootfs, None, console, None).await?;
+        let owner =
+            AgentVmSession::connect(shim, rootfs, system_image_manifest, None, console, None)
+                .await?;
+        Ok(Self {
+            client: owner.client().clone(),
+            state: Mutex::new(UtilityVmSessionState {
+                owner: Some(owner),
+                completed: None,
+            }),
+        })
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub(crate) async fn connect_with_runtime_share(
+        shim: &Path,
+        system_image_manifest: &Path,
+        runtime_share: &Path,
+        console: &Path,
+        recovery_report: Option<&Path>,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let owner = AgentVmSession::connect(
+            shim,
+            runtime_share,
+            Some(system_image_manifest),
+            Some(runtime_share),
+            console,
+            recovery_report,
+        )
+        .await?;
         Ok(Self {
             client: owner.client().clone(),
             state: Mutex::new(UtilityVmSessionState {
@@ -92,11 +132,18 @@ impl UtilityVmSession {
     pub(crate) async fn connect_with_host_fault_injector(
         shim: &Path,
         rootfs: &Path,
+        system_image_manifest: Option<&Path>,
         console: &Path,
         faults: Arc<dyn AgentTransportFaultInjector>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let owner =
-            AgentVmSession::connect_with_fault_injector(shim, rootfs, console, faults).await?;
+        let owner = AgentVmSession::connect_with_fault_injector(
+            shim,
+            rootfs,
+            system_image_manifest,
+            console,
+            faults,
+        )
+        .await?;
         Ok(Self {
             client: owner.client().clone(),
             state: Mutex::new(UtilityVmSessionState {
@@ -109,12 +156,18 @@ impl UtilityVmSession {
     pub(crate) async fn connect_with_guest_qualification(
         shim: &Path,
         rootfs: &Path,
+        system_image_manifest: Option<&Path>,
         console: &Path,
         qualification: &AgentTransportQualificationRequest,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let owner =
-            AgentVmSession::connect_with_guest_qualification(shim, rootfs, console, qualification)
-                .await?;
+        let owner = AgentVmSession::connect_with_guest_qualification(
+            shim,
+            rootfs,
+            system_image_manifest,
+            console,
+            qualification,
+        )
+        .await?;
         Ok(Self {
             client: owner.client().clone(),
             state: Mutex::new(UtilityVmSessionState {
@@ -135,6 +188,7 @@ impl UtilityVmSession {
         let owner = AgentVmSession::connect(
             shim,
             rootfs,
+            None,
             Some(runtime_share),
             console,
             Some(recovery_report),
@@ -190,6 +244,7 @@ impl AgentVmSession {
     pub(crate) async fn connect(
         shim: &Path,
         rootfs: &Path,
+        system_image_manifest: Option<&Path>,
         runtime_share: Option<&Path>,
         console: &Path,
         recovery_report: Option<&Path>,
@@ -197,11 +252,14 @@ impl AgentVmSession {
         Self::connect_inner(
             shim,
             rootfs,
-            runtime_share,
             console,
-            recovery_report,
-            Arc::new(NoAgentTransportFaultInjector),
-            None,
+            AgentVmConnectOptions {
+                system_image_manifest,
+                runtime_share,
+                recovery_report,
+                faults: Arc::new(NoAgentTransportFaultInjector),
+                guest_qualification: None,
+            },
         )
         .await
     }
@@ -209,26 +267,43 @@ impl AgentVmSession {
     async fn connect_with_fault_injector(
         shim: &Path,
         rootfs: &Path,
+        system_image_manifest: Option<&Path>,
         console: &Path,
         faults: Arc<dyn AgentTransportFaultInjector>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        Self::connect_inner(shim, rootfs, None, console, None, faults, None).await
+        Self::connect_inner(
+            shim,
+            rootfs,
+            console,
+            AgentVmConnectOptions {
+                system_image_manifest,
+                runtime_share: None,
+                recovery_report: None,
+                faults,
+                guest_qualification: None,
+            },
+        )
+        .await
     }
 
     async fn connect_with_guest_qualification(
         shim: &Path,
         rootfs: &Path,
+        system_image_manifest: Option<&Path>,
         console: &Path,
         qualification: &AgentTransportQualificationRequest,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
         Self::connect_inner(
             shim,
             rootfs,
-            None,
             console,
-            None,
-            Arc::new(NoAgentTransportFaultInjector),
-            Some(qualification),
+            AgentVmConnectOptions {
+                system_image_manifest,
+                runtime_share: None,
+                recovery_report: None,
+                faults: Arc::new(NoAgentTransportFaultInjector),
+                guest_qualification: Some(qualification),
+            },
         )
         .await
     }
@@ -236,12 +311,16 @@ impl AgentVmSession {
     async fn connect_inner(
         shim: &Path,
         rootfs: &Path,
-        runtime_share: Option<&Path>,
         console: &Path,
-        recovery_report: Option<&Path>,
-        faults: Arc<dyn AgentTransportFaultInjector>,
-        guest_qualification: Option<&AgentTransportQualificationRequest>,
+        options: AgentVmConnectOptions<'_>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let AgentVmConnectOptions {
+            system_image_manifest,
+            runtime_share,
+            recovery_report,
+            faults,
+            guest_qualification,
+        } = options;
         let platform = HostPlatform::current();
         let mut report = AgentVmSmokeReport::initial(platform);
         let shim = match canonical_file(shim, "libkrun shim").await {
@@ -251,6 +330,35 @@ impl AgentVmSession {
         let rootfs = match canonical_directory(rootfs, "guest rootfs").await {
             Ok(path) => path,
             Err(reason) => return Err(failed(report, reason)),
+        };
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let (system_image_manifest, expected_macos_manifest_sha256) = {
+            let Some(path) = system_image_manifest else {
+                return Err(failed(
+                    report,
+                    "macOS utility-VM sessions require an explicit system-image manifest",
+                ));
+            };
+            let path = match canonical_file(path, "system-image manifest").await {
+                Ok(path) => path,
+                Err(reason) => return Err(failed(report, reason)),
+            };
+            if path.starts_with(&rootfs) || rootfs.starts_with(&path) {
+                return Err(failed(
+                    report,
+                    "system-image manifest and writable runtime share must be disjoint",
+                ));
+            }
+            let digest = match sha256_path(&path).await {
+                Ok(digest) => digest,
+                Err(reason) => return Err(failed(report, reason)),
+            };
+            (Some(path), Some(digest))
+        };
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        let (system_image_manifest, expected_macos_manifest_sha256) = {
+            let _ = system_image_manifest;
+            (None::<PathBuf>, None::<String>)
         };
         let console = match prepare_console_path(console).await {
             Ok(path) => path,
@@ -264,9 +372,32 @@ impl AgentVmSession {
             },
             None => None,
         };
-        #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let runtime_share =
+            match prepare_macos_runtime_share(runtime_share.unwrap_or(&rootfs)).await {
+                Ok(path) => Some(path),
+                Err(reason) => return Err(failed(report, reason)),
+            };
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        if system_image_manifest.as_ref().is_some_and(|manifest| {
+            runtime_share
+                .as_ref()
+                .is_some_and(|share| manifest.starts_with(share) || share.starts_with(manifest))
+        }) {
+            return Err(failed(
+                report,
+                "system-image manifest and writable runtime share must be disjoint",
+            ));
+        }
+        #[cfg(not(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        )))]
         let _ = runtime_share;
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        #[cfg(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        ))]
         let recovery_report = match recovery_report {
             Some(path) => match prepare_recovery_report_path(path).await {
                 Ok(path) => Some(path),
@@ -274,7 +405,10 @@ impl AgentVmSession {
             },
             None => None,
         };
-        #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+        #[cfg(not(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        )))]
         let _ = recovery_report;
 
         let endpoint = match AgentVsockEndpoint::generate() {
@@ -324,7 +458,20 @@ impl AgentVmSession {
             .arg("--pipe-name")
             .arg(endpoint.pipe_name());
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        command.arg("--socket-path").arg(listener.socket_path());
+        {
+            command
+                .arg("--system-image-manifest")
+                .arg(system_image_manifest.as_ref().expect("validated manifest"))
+                .arg("--runtime-share")
+                .arg(runtime_share.as_ref().expect("validated runtime share"))
+                .arg("--socket-path")
+                .arg(listener.socket_path())
+                .arg("--owner-pid")
+                .arg(std::process::id().to_string());
+            if let Some(path) = recovery_report {
+                command.arg("--recovery-report").arg(path);
+            }
+        }
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         {
             command
@@ -456,15 +603,22 @@ impl AgentVmSession {
             running,
             console,
             runtime_share_required: {
-                #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+                #[cfg(any(
+                    all(target_os = "windows", target_arch = "x86_64"),
+                    all(target_os = "macos", target_arch = "aarch64")
+                ))]
                 {
                     runtime_share.is_some()
                 }
-                #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+                #[cfg(not(any(
+                    all(target_os = "windows", target_arch = "x86_64"),
+                    all(target_os = "macos", target_arch = "aarch64")
+                )))]
                 {
                     false
                 }
             },
+            expected_macos_manifest_sha256,
         };
         if let Some(reason) = session.contract_failure() {
             return Err(session.finish_with_failure(reason).await);
@@ -512,6 +666,7 @@ impl AgentVmSession {
             running,
             console,
             runtime_share_required,
+            expected_macos_manifest_sha256,
         } = self;
         let close_error = client.close().await.err();
         drop(client);
@@ -531,11 +686,15 @@ impl AgentVmSession {
                 &completed,
             );
         }
-        let shim_report =
-            match parse_shim_report(&completed.stdout, report.platform, runtime_share_required) {
-                Ok(shim_report) => shim_report,
-                Err(reason) => return failed_with_output(report, &reason, &completed),
-            };
+        let shim_report = match parse_shim_report(
+            &completed.stdout,
+            report.platform,
+            runtime_share_required,
+            expected_macos_manifest_sha256.as_deref(),
+        ) {
+            Ok(shim_report) => shim_report,
+            Err(reason) => return failed_with_output(report, &reason, &completed),
+        };
         report.shim_report_verified = true;
         report.shim_report = Some(shim_report);
         report.console_created = tokio::fs::metadata(&console)
@@ -643,6 +802,24 @@ async fn canonical_path(
     description: &str,
     require_file: bool,
 ) -> Result<PathBuf, String> {
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        format!(
+            "failed to inspect {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    let expected_kind = if require_file { "file" } else { "directory" };
+    let kind_matches = if require_file {
+        metadata.file_type().is_file()
+    } else {
+        metadata.file_type().is_dir()
+    };
+    if metadata.file_type().is_symlink() || !kind_matches {
+        return Err(format!(
+            "{description} must be a real {expected_kind}, not a symlink: {}",
+            path.display()
+        ));
+    }
     let canonical = tokio::fs::canonicalize(path).await.map_err(|error| {
         format!(
             "failed to resolve {description} {}: {error}",
@@ -655,7 +832,6 @@ async fn canonical_path(
             canonical.display()
         )
     })?;
-    let expected_kind = if require_file { "file" } else { "directory" };
     let kind_matches = if require_file {
         metadata.is_file()
     } else {
@@ -713,7 +889,10 @@ async fn prepare_console_path(path: &Path) -> Result<PathBuf, String> {
     Ok(console)
 }
 
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 async fn prepare_recovery_report_path(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(format!(
@@ -770,6 +949,7 @@ fn parse_shim_report(
     output: &BoundedOutput,
     platform: HostPlatform,
     runtime_share_required: bool,
+    expected_macos_manifest_sha256: Option<&str>,
 ) -> Result<Value, String> {
     if output.truncated {
         return Err(format!(
@@ -812,6 +992,54 @@ fn parse_shim_report(
             "libkrun shim did not configure the required per-generation runtime share".into(),
         );
     }
+    if matches!(platform, HostPlatform::Macos) {
+        let expected = expected_macos_manifest_sha256.ok_or_else(|| {
+            "host did not retain the required macOS system-image manifest digest".to_string()
+        })?;
+        let assets = object
+            .get("macos_boot_assets")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                "libkrun shim did not retain macOS immutable boot-asset evidence".to_string()
+            })?;
+        if assets.get("manifest_sha256").and_then(Value::as_str) != Some(expected) {
+            return Err(
+                "libkrun shim system-image manifest digest does not match the host digest".into(),
+            );
+        }
+        for field in ["root_disk_read_only", "runtime_share_separate"] {
+            if assets.get(field).and_then(Value::as_bool) != Some(true) {
+                return Err(format!(
+                    "libkrun shim macOS boot-asset field `{field}` is not true"
+                ));
+            }
+        }
+        for field in [
+            "system_image_sha256",
+            "runtime_archive_sha256",
+            "libkrun_sha256",
+            "firmware_sha256",
+            "kernel_bundle_sha256",
+        ] {
+            let digest = assets.get(field).and_then(Value::as_str).ok_or_else(|| {
+                format!("libkrun shim macOS boot-asset field `{field}` is missing")
+            })?;
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(format!(
+                    "libkrun shim macOS boot-asset field `{field}` is not a canonical SHA-256"
+                ));
+            }
+        }
+        if assets.get("system_image_size").and_then(Value::as_u64) != Some(67_108_864)
+            || assets.get("kernel_bundle_size").and_then(Value::as_u64) != Some(22_740_992)
+        {
+            return Err("libkrun shim macOS boot-asset sizes are unexpected".into());
+        }
+    }
     if object.get("guest_exit_code").and_then(Value::as_i64) != Some(0) {
         return Err("libkrun shim did not report a zero guest-agent exit code".into());
     }
@@ -824,6 +1052,100 @@ fn parse_shim_report(
         return Err("libkrun shim evidence has unexpected VM resources".into());
     }
     Ok(report)
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+async fn prepare_macos_runtime_share(path: &Path) -> Result<PathBuf, String> {
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        format!(
+            "failed to inspect writable runtime share {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(format!(
+            "writable runtime share must be a real directory, not a symlink: {}",
+            path.display()
+        ));
+    }
+    let path = tokio::fs::canonicalize(path).await.map_err(|error| {
+        format!(
+            "failed to canonicalize writable runtime share {}: {error}",
+            path.display()
+        )
+    })?;
+    let state = path.join("run");
+    match tokio::fs::symlink_metadata(&state).await {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(format!(
+                "runtime-state path must be a real directory inside the writable share: {}",
+                state.display()
+            ))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            tokio::fs::create_dir(&state).await.map_err(|error| {
+                format!(
+                    "failed to create runtime-state directory {}: {error}",
+                    state.display()
+                )
+            })?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect runtime-state directory {}: {error}",
+                state.display()
+            ))
+        }
+    }
+    Ok(path)
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+async fn sha256_path(path: &Path) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        format!(
+            "failed to inspect system-image manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(format!(
+            "system-image manifest must be a real regular file, not a symlink: {}",
+            path.display()
+        ));
+    }
+    let mut file = tokio::fs::File::open(path).await.map_err(|error| {
+        format!(
+            "failed to open system-image manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut size = 0_u64;
+    loop {
+        let read = file.read(&mut buffer).await.map_err(|error| {
+            format!(
+                "failed to read system-image manifest {}: {error}",
+                path.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        size += read as u64;
+        if size > 64 * 1024 {
+            return Err(format!(
+                "system-image manifest exceeds 65536 bytes: {}",
+                path.display()
+            ));
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn expected_operations() -> Vec<AgentOperation> {

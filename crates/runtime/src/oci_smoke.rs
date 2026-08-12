@@ -26,6 +26,7 @@ pub(crate) mod utility_vm;
 pub async fn oci_vm_smoke(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle: &Path,
     console: &Path,
 ) -> OciVmSmokeReport {
@@ -34,7 +35,7 @@ pub async fn oci_vm_smoke(
         all(target_os = "macos", target_arch = "aarch64")
     ))]
     {
-        utility_vm::run(shim, vm_rootfs, bundle, console).await
+        utility_vm::run(shim, vm_rootfs, system_image_manifest, bundle, console).await
     }
 
     #[cfg(not(any(
@@ -42,7 +43,7 @@ pub async fn oci_vm_smoke(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, vm_rootfs, bundle, console);
+        let _ = (shim, vm_rootfs, system_image_manifest, bundle, console);
         OciVmSmokeReport::unsupported(HostPlatform::current())
     }
 }
@@ -54,6 +55,7 @@ pub async fn oci_vm_smoke(
 pub async fn oci_vm_multi_container_smoke(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
@@ -63,7 +65,15 @@ pub async fn oci_vm_multi_container_smoke(
         all(target_os = "macos", target_arch = "aarch64")
     ))]
     {
-        utility_vm::run_multi_container(shim, vm_rootfs, bundle_a, bundle_b, console).await
+        utility_vm::run_multi_container(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle_a,
+            bundle_b,
+            console,
+        )
+        .await
     }
 
     #[cfg(not(any(
@@ -71,7 +81,14 @@ pub async fn oci_vm_multi_container_smoke(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, vm_rootfs, bundle_a, bundle_b, console);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle_a,
+            bundle_b,
+            console,
+        );
         OciVmMultiContainerSmokeReport::unsupported(HostPlatform::current())
     }
 }
@@ -87,6 +104,7 @@ pub async fn oci_vm_multi_container_smoke(
 pub async fn macos_hvf_soak(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_a: &Path,
     bundle_b: &Path,
     console_directory: &Path,
@@ -97,6 +115,7 @@ pub async fn macos_hvf_soak(
         utility_vm::run_macos_hvf_soak(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle_a,
             bundle_b,
             console_directory,
@@ -107,7 +126,14 @@ pub async fn macos_hvf_soak(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle_a, bundle_b, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle_a,
+            bundle_b,
+            console_directory,
+        );
         MacosHvfSoakReport::unsupported(HostPlatform::current(), configuration)
     }
 }
@@ -145,6 +171,7 @@ pub async fn windows_oci_vm_multi_container_smoke(
 pub async fn oci_vm_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle: &Path,
     console: &Path,
     fault: LifecycleFaultPoint,
@@ -154,7 +181,15 @@ pub async fn oci_vm_fault_cleanup(
         all(target_os = "macos", target_arch = "aarch64")
     ))]
     {
-        utility_vm::run_fault_cleanup(shim, vm_rootfs, bundle, console, fault).await
+        utility_vm::run_fault_cleanup(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console,
+            fault,
+        )
+        .await
     }
 
     #[cfg(not(any(
@@ -162,7 +197,7 @@ pub async fn oci_vm_fault_cleanup(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, vm_rootfs, bundle, console);
+        let _ = (shim, vm_rootfs, system_image_manifest, bundle, console);
         OciVmFaultCleanupReport::unsupported(HostPlatform::current(), fault)
     }
 }
@@ -176,6 +211,7 @@ pub async fn oci_vm_fault_cleanup(
 pub async fn oci_vm_transport_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle: &Path,
     console: &Path,
     stage: impl Into<AgentTransportFaultStage>,
@@ -186,7 +222,15 @@ pub async fn oci_vm_transport_fault_cleanup(
         all(target_os = "macos", target_arch = "aarch64")
     ))]
     {
-        utility_vm::run_transport_fault_cleanup(shim, vm_rootfs, bundle, console, stage).await
+        utility_vm::run_transport_fault_cleanup(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(any(
@@ -194,7 +238,7 @@ pub async fn oci_vm_transport_fault_cleanup(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, vm_rootfs, bundle, console);
+        let _ = (shim, vm_rootfs, system_image_manifest, bundle, console);
         OciVmTransportFaultCleanupReport::unsupported(HostPlatform::current(), stage)
     }
 }
@@ -209,12 +253,14 @@ pub async fn oci_vm_transport_fault_cleanup(
 pub async fn oci_vm_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
 ) -> OciVmReopenReplacementReport {
     oci_vm_reopen_replacement_at(
         shim,
         vm_rootfs,
+        system_image_manifest,
         bundle,
         console_directory,
         AgentTransportOperationStage::HostBeforeRequestWrite,
@@ -231,18 +277,33 @@ pub async fn oci_vm_reopen_replacement(
 pub async fn oci_vm_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage).await
+        utility_vm::run_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmReopenReplacementReport::unsupported(HostPlatform::current(), stage)
     }
 }
@@ -257,19 +318,33 @@ pub async fn oci_vm_reopen_replacement_at(
 pub async fn oci_vm_state_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_state_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_state_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_state(HostPlatform::current(), stage)
     }
 }
@@ -283,19 +358,33 @@ pub async fn oci_vm_state_reopen_replacement_at(
 pub async fn oci_vm_start_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_start_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_start_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_start(HostPlatform::current(), stage)
     }
 }
@@ -309,19 +398,33 @@ pub async fn oci_vm_start_reopen_replacement_at(
 pub async fn oci_vm_kill_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_kill_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_kill_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_kill(HostPlatform::current(), stage)
     }
 }
@@ -336,19 +439,33 @@ pub async fn oci_vm_kill_reopen_replacement_at(
 pub async fn oci_vm_delete_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_delete_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_delete_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_delete(HostPlatform::current(), stage)
     }
 }
@@ -363,19 +480,33 @@ pub async fn oci_vm_delete_reopen_replacement_at(
 pub async fn oci_vm_wait_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_wait_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_wait_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_wait(HostPlatform::current(), stage)
     }
 }
@@ -390,19 +521,33 @@ pub async fn oci_vm_wait_reopen_replacement_at(
 pub async fn oci_vm_exec_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_exec_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_exec_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_exec(HostPlatform::current(), stage)
     }
 }
@@ -416,6 +561,7 @@ pub async fn oci_vm_exec_reopen_replacement_at(
 pub async fn oci_vm_signal_process_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -425,6 +571,7 @@ pub async fn oci_vm_signal_process_reopen_replacement_at(
         utility_vm::run_signal_process_reopen_replacement(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console_directory,
             stage,
@@ -434,7 +581,13 @@ pub async fn oci_vm_signal_process_reopen_replacement_at(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_signal_process(
             HostPlatform::current(),
             stage,
@@ -451,6 +604,7 @@ pub async fn oci_vm_signal_process_reopen_replacement_at(
 pub async fn oci_vm_wait_process_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -460,6 +614,7 @@ pub async fn oci_vm_wait_process_reopen_replacement_at(
         utility_vm::run_wait_process_reopen_replacement(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console_directory,
             stage,
@@ -469,7 +624,13 @@ pub async fn oci_vm_wait_process_reopen_replacement_at(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_wait_process(
             HostPlatform::current(),
             stage,
@@ -487,19 +648,33 @@ pub async fn oci_vm_wait_process_reopen_replacement_at(
 pub async fn oci_vm_pause_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_pause_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_pause_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_pause(HostPlatform::current(), stage)
     }
 }
@@ -513,6 +688,7 @@ pub async fn oci_vm_pause_reopen_replacement_at(
 pub async fn oci_vm_processes_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -522,6 +698,7 @@ pub async fn oci_vm_processes_reopen_replacement_at(
         utility_vm::run_processes_reopen_replacement(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console_directory,
             stage,
@@ -531,7 +708,13 @@ pub async fn oci_vm_processes_reopen_replacement_at(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_processes(HostPlatform::current(), stage)
     }
 }
@@ -545,6 +728,7 @@ pub async fn oci_vm_processes_reopen_replacement_at(
 pub async fn oci_vm_read_output_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -554,6 +738,7 @@ pub async fn oci_vm_read_output_reopen_replacement_at(
         utility_vm::run_read_output_reopen_replacement(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console_directory,
             stage,
@@ -563,7 +748,13 @@ pub async fn oci_vm_read_output_reopen_replacement_at(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_read_output(
             HostPlatform::current(),
             stage,
@@ -580,6 +771,7 @@ pub async fn oci_vm_read_output_reopen_replacement_at(
 pub async fn oci_vm_write_stdin_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -589,6 +781,7 @@ pub async fn oci_vm_write_stdin_reopen_replacement_at(
         utility_vm::run_write_stdin_reopen_replacement(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console_directory,
             stage,
@@ -598,7 +791,13 @@ pub async fn oci_vm_write_stdin_reopen_replacement_at(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_write_stdin(
             HostPlatform::current(),
             stage,
@@ -615,6 +814,7 @@ pub async fn oci_vm_write_stdin_reopen_replacement_at(
 pub async fn oci_vm_close_stdin_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -624,6 +824,7 @@ pub async fn oci_vm_close_stdin_reopen_replacement_at(
         utility_vm::run_close_stdin_reopen_replacement(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console_directory,
             stage,
@@ -633,7 +834,13 @@ pub async fn oci_vm_close_stdin_reopen_replacement_at(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_close_stdin(
             HostPlatform::current(),
             stage,
@@ -650,19 +857,33 @@ pub async fn oci_vm_close_stdin_reopen_replacement_at(
 pub async fn oci_vm_resize_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_resize_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_resize_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_resize(HostPlatform::current(), stage)
     }
 }
@@ -676,19 +897,33 @@ pub async fn oci_vm_resize_reopen_replacement_at(
 pub async fn oci_vm_file_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_file_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_file_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_file(HostPlatform::current(), stage)
     }
 }
@@ -702,6 +937,7 @@ pub async fn oci_vm_file_reopen_replacement_at(
 pub async fn oci_vm_filesystem_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
@@ -711,6 +947,7 @@ pub async fn oci_vm_filesystem_reopen_replacement_at(
         utility_vm::run_filesystem_reopen_replacement(
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console_directory,
             stage,
@@ -720,7 +957,13 @@ pub async fn oci_vm_filesystem_reopen_replacement_at(
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_filesystem(
             HostPlatform::current(),
             stage,
@@ -737,19 +980,33 @@ pub async fn oci_vm_filesystem_reopen_replacement_at(
 pub async fn oci_vm_resume_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_resume_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_resume_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_resume(HostPlatform::current(), stage)
     }
 }
@@ -763,19 +1020,33 @@ pub async fn oci_vm_resume_reopen_replacement_at(
 pub async fn oci_vm_stats_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_stats_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_stats_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_stats(HostPlatform::current(), stage)
     }
 }
@@ -790,19 +1061,33 @@ pub async fn oci_vm_stats_reopen_replacement_at(
 pub async fn oci_vm_update_reopen_replacement_at(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     console_directory: &Path,
     stage: AgentTransportOperationStage,
 ) -> OciVmOperationReopenReplacementReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        utility_vm::run_update_reopen_replacement(shim, vm_rootfs, bundle, console_directory, stage)
-            .await
+        utility_vm::run_update_reopen_replacement(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+            stage,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
-        let _ = (shim, vm_rootfs, bundle, console_directory);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            console_directory,
+        );
         OciVmOperationReopenReplacementReport::unsupported_update(HostPlatform::current(), stage)
     }
 }

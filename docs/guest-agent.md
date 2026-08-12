@@ -288,6 +288,14 @@ The executor creates one private controller-enabled cgroup-v2 root. The
 default layout places init and exec in one owned leaf, which permits a later
 update even when create supplied no initial limits.
 
+A non-root native executor may instead receive one explicit delegated root at
+open time. The root must be a canonical empty cgroup-v2 directory owned by the
+executor's effective UID/GID with `cpu`, `cpuset`, `memory`, and `pids`
+already enabled. The executor pins its filesystem device and inode, rechecks
+ownership and controller state before first use, and creates the same private
+manager layout beneath that root. A rootless `linux.cgroupsPath` without this
+authority fails before container state or filesystem mutation.
+
 A trusted in-container control plane can opt in to the versioned
 `control-workload-v1` layout with these OCI annotations:
 
@@ -586,7 +594,8 @@ The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,
 unsupported cgroup I/O, hugetlb, RDMA, and unified resources, and every other
-unimplemented OCI property. Rootless cgroup-v2 and device delegation, hook
+unimplemented OCI property. Rootless cgroup-v2 real-host qualification and
+device-policy delegation, hook
 rollback/recovery, security-negative, and soak certification remain release
 blockers rather than silently accepted compatibility gaps.
 

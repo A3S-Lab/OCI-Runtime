@@ -1,6 +1,5 @@
 use std::ffi::c_char;
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -11,12 +10,19 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::ffi::{path_to_cstring, value_to_cstring, FfiStringArray};
+use crate::macos_assets::{
+    sha256_file, MacosRuntimeProvenance, KERNEL_BUNDLE_SHA256, KERNEL_BUNDLE_SIZE,
+    KERNEL_ENTRY_ADDRESS, KERNEL_GUEST_LOAD_ADDRESS, LIBKRUNFW_NAME, LIBKRUNFW_SHA256,
+    LIBKRUN_NAME, LIBKRUN_SHA256,
+};
+use crate::macos_system_image::MacosSystemImage;
 use crate::VmConfig;
 
-const LIBKRUN_NAME: &str = "libkrun.1.17.0.dylib";
-const LIBKRUN_SHA256: &str = "c5353f9cbd91564ce26eceaf1bdc33341097b43280fe029203ccca02807c082d";
-const LIBKRUNFW_NAME: &str = "libkrunfw.5.dylib";
-const LIBKRUNFW_SHA256: &str = "841bc9d5eecbc2aeeb6098fbc75d484427680d7503f5ed9bcdfe9d072a9420d4";
+const KRUN_DISK_FORMAT_RAW: u32 = 0;
+const SYSTEM_DISK_ID: &str = "a3s-oci-system";
+const ROOT_DISK_DEVICE: &str = "/dev/vda";
+const ROOT_DISK_FILESYSTEM: &str = "ext4";
+const ROOT_DISK_OPTIONS: &str = "ro";
 
 type KrunCreateCtx = unsafe extern "C" fn() -> i32;
 type KrunFreeCtx = unsafe extern "C" fn(u32) -> i32;
@@ -24,12 +30,16 @@ type KrunSetVmConfig = unsafe extern "C" fn(u32, u8, u32) -> i32;
 type KrunDisableImplicitVsock = unsafe extern "C" fn(u32) -> i32;
 type KrunAddVsock = unsafe extern "C" fn(u32, u32) -> i32;
 type KrunAddVsockPort = unsafe extern "C" fn(u32, u32, *const c_char, bool) -> i32;
-type KrunSetRoot = unsafe extern "C" fn(u32, *const c_char) -> i32;
+type KrunAddDisk = unsafe extern "C" fn(u32, *const c_char, *const c_char, u32, bool) -> i32;
+type KrunSetRootDiskRemount =
+    unsafe extern "C" fn(u32, *const c_char, *const c_char, *const c_char) -> i32;
+type KrunAddVirtiofs = unsafe extern "C" fn(u32, *const c_char, *const c_char) -> i32;
 type KrunSetWorkdir = unsafe extern "C" fn(u32, *const c_char) -> i32;
 type KrunSetExec =
     unsafe extern "C" fn(u32, *const c_char, *const *const c_char, *const *const c_char) -> i32;
 type KrunSetConsoleOutput = unsafe extern "C" fn(u32, *const c_char) -> i32;
 type KrunStartEnter = unsafe extern "C" fn(u32) -> i32;
+type KrunfwGetKernel = unsafe extern "C" fn(*mut u64, *mut u64, *mut usize) -> *const c_char;
 
 /// Exact, process-local API loaded from the checksum-verified runtime bundle.
 pub(crate) struct MacosKrunApi {
@@ -39,11 +49,16 @@ pub(crate) struct MacosKrunApi {
     disable_implicit_vsock: KrunDisableImplicitVsock,
     add_vsock: KrunAddVsock,
     add_vsock_port: KrunAddVsockPort,
-    set_root: KrunSetRoot,
+    add_disk: KrunAddDisk,
+    set_root_disk_remount: KrunSetRootDiskRemount,
+    add_virtiofs: KrunAddVirtiofs,
     set_workdir: KrunSetWorkdir,
     set_exec: KrunSetExec,
     set_console_output: KrunSetConsoleOutput,
     start_enter: KrunStartEnter,
+    get_kernel: KrunfwGetKernel,
+    runtime_dir: PathBuf,
+    runtime_provenance: MacosRuntimeProvenance,
     // Drop libkrun before its firmware provider.
     _krun: Library,
     _firmware: Library,
@@ -83,6 +98,8 @@ impl MacosKrunApi {
                 )
             })?;
 
+        let get_kernel = load_symbol(&firmware, b"krunfw_get_kernel\0", "krunfw_get_kernel")?;
+        let runtime_provenance = verify_exported_kernel(get_kernel)?;
         let create_ctx = load_symbol(&krun, b"krun_create_ctx\0", "krun_create_ctx")?;
         let free_ctx = load_symbol(&krun, b"krun_free_ctx\0", "krun_free_ctx")?;
         let set_vm_config = load_symbol(&krun, b"krun_set_vm_config\0", "krun_set_vm_config")?;
@@ -93,7 +110,13 @@ impl MacosKrunApi {
         )?;
         let add_vsock = load_symbol(&krun, b"krun_add_vsock\0", "krun_add_vsock")?;
         let add_vsock_port = load_symbol(&krun, b"krun_add_vsock_port2\0", "krun_add_vsock_port2")?;
-        let set_root = load_symbol(&krun, b"krun_set_root\0", "krun_set_root")?;
+        let add_disk = load_symbol(&krun, b"krun_add_disk2\0", "krun_add_disk2")?;
+        let set_root_disk_remount = load_symbol(
+            &krun,
+            b"krun_set_root_disk_remount\0",
+            "krun_set_root_disk_remount",
+        )?;
+        let add_virtiofs = load_symbol(&krun, b"krun_add_virtiofs\0", "krun_add_virtiofs")?;
         let set_workdir = load_symbol(&krun, b"krun_set_workdir\0", "krun_set_workdir")?;
         let set_exec = load_symbol(&krun, b"krun_set_exec\0", "krun_set_exec")?;
         let set_console_output = load_symbol(
@@ -110,14 +133,36 @@ impl MacosKrunApi {
             disable_implicit_vsock,
             add_vsock,
             add_vsock_port,
-            set_root,
+            add_disk,
+            set_root_disk_remount,
+            add_virtiofs,
             set_workdir,
             set_exec,
             set_console_output,
             start_enter,
+            get_kernel,
+            runtime_dir,
+            runtime_provenance,
             _krun: krun,
             _firmware: firmware,
         })
+    }
+
+    pub(crate) fn runtime_provenance(&self) -> &MacosRuntimeProvenance {
+        &self.runtime_provenance
+    }
+
+    fn reverify_runtime(&self) -> Result<MacosRuntimeProvenance> {
+        verify_runtime_file(&self.runtime_dir.join(LIBKRUN_NAME), LIBKRUN_SHA256)?;
+        verify_runtime_file(&self.runtime_dir.join(LIBKRUNFW_NAME), LIBKRUNFW_SHA256)?;
+        let provenance = verify_exported_kernel(self.get_kernel)?;
+        if provenance != self.runtime_provenance {
+            return Err(runtime_error(
+                "reverify-macos-libkrun-runtime",
+                "loaded macOS runtime provenance changed before VM entry".to_string(),
+            ));
+        }
+        Ok(provenance)
     }
 }
 
@@ -125,6 +170,7 @@ impl MacosKrunApi {
 pub(crate) struct KrunContext {
     id: Option<u32>,
     api: MacosKrunApi,
+    system_image: Option<MacosSystemImage>,
     not_thread_safe: PhantomData<Rc<()>>,
 }
 
@@ -144,8 +190,88 @@ impl KrunContext {
         Ok(Self {
             id: Some(id),
             api,
+            system_image: None,
             not_thread_safe: PhantomData,
         })
+    }
+
+    pub(crate) fn set_read_only_system_image(
+        &mut self,
+        system_image: MacosSystemImage,
+    ) -> Result<()> {
+        let id = self.active_id("configure-macos-system-image")?;
+        if self.system_image.is_some() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "macOS system image has already been configured",
+            )
+            .for_operation("configure-macos-system-image"));
+        }
+        let disk_id = value_to_cstring("krun_add_disk2", "block identifier", SYSTEM_DISK_ID)?;
+        let image_path = path_to_cstring("krun_add_disk2", system_image.image_path())?;
+        // SAFETY: all strings remain live for the call. The manifest-bound raw
+        // image was verified as a regular file and is explicitly read-only.
+        let status = unsafe {
+            (self.api.add_disk)(
+                id,
+                disk_id.as_ptr(),
+                image_path.as_ptr(),
+                KRUN_DISK_FORMAT_RAW,
+                true,
+            )
+        };
+        check_status(
+            "krun_add_disk2",
+            status,
+            "failed to attach the immutable macOS system image read-only",
+        )?;
+
+        let device = value_to_cstring(
+            "krun_set_root_disk_remount",
+            "root disk device",
+            ROOT_DISK_DEVICE,
+        )?;
+        let filesystem = value_to_cstring(
+            "krun_set_root_disk_remount",
+            "root disk filesystem",
+            ROOT_DISK_FILESYSTEM,
+        )?;
+        let options = value_to_cstring(
+            "krun_set_root_disk_remount",
+            "root disk mount options",
+            ROOT_DISK_OPTIONS,
+        )?;
+        // SAFETY: the exact block disk was added above, and all fixed strings
+        // are NUL-terminated for the duration of this call.
+        let status = unsafe {
+            (self.api.set_root_disk_remount)(
+                id,
+                device.as_ptr(),
+                filesystem.as_ptr(),
+                options.as_ptr(),
+            )
+        };
+        check_status(
+            "krun_set_root_disk_remount",
+            status,
+            "failed to select the immutable ext4 block root read-only",
+        )?;
+        self.system_image = Some(system_image);
+        Ok(())
+    }
+
+    pub(crate) fn add_virtiofs(&mut self, tag: &str, host_path: &Path) -> Result<()> {
+        let id = self.active_id("krun_add_virtiofs")?;
+        let tag = value_to_cstring("krun_add_virtiofs", "virtio-fs tag", tag)?;
+        let host_path = path_to_cstring("krun_add_virtiofs", host_path)?;
+        // SAFETY: both strings remain live for the call, and this context is
+        // exclusively owned by `self`.
+        let status = unsafe { (self.api.add_virtiofs)(id, tag.as_ptr(), host_path.as_ptr()) };
+        check_status(
+            "krun_add_virtiofs",
+            status,
+            "failed to attach the writable macOS runtime share",
+        )
     }
 
     pub(crate) fn set_vm_config(&mut self, config: VmConfig) -> Result<()> {
@@ -190,19 +316,6 @@ impl KrunContext {
             "krun_add_vsock_port2",
             status,
             "failed to map the guest agent port to a macOS Unix socket",
-        )
-    }
-
-    pub(crate) fn set_root(&mut self, root: &Path) -> Result<()> {
-        let id = self.active_id("krun_set_root")?;
-        let root = path_to_cstring("krun_set_root", root)?;
-        // SAFETY: the context remains exclusively owned by `self`, and the
-        // verified path is NUL-terminated for the duration of this call.
-        let status = unsafe { (self.api.set_root)(id, root.as_ptr()) };
-        check_status(
-            "krun_set_root",
-            status,
-            "failed to configure the macOS libkrun root filesystem",
         )
     }
 
@@ -268,6 +381,15 @@ impl KrunContext {
     }
 
     pub(crate) fn start_enter(mut self) -> Result<i32> {
+        let runtime = self.api.reverify_runtime()?;
+        let system_image = self.system_image.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "macOS VM entry requires a manifest-bound immutable system image",
+            )
+            .for_operation("krun_start_enter")
+        })?;
+        system_image.reverify(&runtime)?;
         let id = self.id.take().ok_or_else(|| {
             Error::new(
                 ErrorCode::FailedPrecondition,
@@ -406,43 +528,7 @@ fn verify_runtime_dir(runtime_dir: &Path) -> Result<PathBuf> {
 }
 
 fn verify_runtime_file(path: &Path, expected: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        runtime_error(
-            "verify-macos-libkrun-runtime",
-            format!("failed to inspect runtime file {}: {error}", path.display()),
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(runtime_error(
-            "verify-macos-libkrun-runtime",
-            format!(
-                "runtime asset must be a real regular file, not a symlink: {}",
-                path.display()
-            ),
-        ));
-    }
-
-    let mut file = File::open(path).map_err(|error| {
-        runtime_error(
-            "verify-macos-libkrun-runtime",
-            format!("failed to open runtime file {}: {error}", path.display()),
-        )
-    })?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).map_err(|error| {
-            runtime_error(
-                "verify-macos-libkrun-runtime",
-                format!("failed to read runtime file {}: {error}", path.display()),
-            )
-        })?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    let actual = format!("{:x}", hasher.finalize());
+    let (actual, _) = sha256_file(path, "verify-macos-libkrun-runtime")?;
     if actual != expected {
         return Err(runtime_error(
             "verify-macos-libkrun-runtime",
@@ -453,6 +539,45 @@ fn verify_runtime_file(path: &Path, expected: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn verify_exported_kernel(get_kernel: KrunfwGetKernel) -> Result<MacosRuntimeProvenance> {
+    let mut guest_load_address = 0_u64;
+    let mut entry_address = 0_u64;
+    let mut size = 0_usize;
+    // SAFETY: all output pointers are valid, aligned stack values. The symbol
+    // is loaded from the checksum-verified firmware library and owns the
+    // returned immutable buffer for the process lifetime.
+    let bytes = unsafe { get_kernel(&mut guest_load_address, &mut entry_address, &mut size) };
+    if bytes.is_null() || size != KERNEL_BUNDLE_SIZE {
+        return Err(runtime_error(
+            "verify-macos-libkrun-kernel",
+            format!(
+                "firmware exported an unexpected kernel bundle size: expected {KERNEL_BUNDLE_SIZE}, found {size}"
+            ),
+        ));
+    }
+    if guest_load_address != KERNEL_GUEST_LOAD_ADDRESS || entry_address != KERNEL_ENTRY_ADDRESS {
+        return Err(runtime_error(
+            "verify-macos-libkrun-kernel",
+            format!(
+                "firmware exported unexpected kernel addresses: load=0x{guest_load_address:016x}, entry=0x{entry_address:016x}"
+            ),
+        ));
+    }
+    // SAFETY: the firmware returned a non-null buffer with the exact bounded
+    // size above and retains ownership for the process lifetime.
+    let bytes = unsafe { std::slice::from_raw_parts(bytes.cast::<u8>(), size) };
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    if digest != KERNEL_BUNDLE_SHA256 {
+        return Err(runtime_error(
+            "verify-macos-libkrun-kernel",
+            format!(
+                "firmware kernel SHA-256 mismatch: expected {KERNEL_BUNDLE_SHA256}, found {digest}"
+            ),
+        ));
+    }
+    Ok(MacosRuntimeProvenance::pinned(digest))
 }
 
 fn load_symbol<T: Copy>(

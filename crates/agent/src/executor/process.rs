@@ -76,6 +76,7 @@ impl PreparedProcess {
             rootfs_scope,
             user_mapping_runtime,
         } = context;
+        let rootless = user_mapping_runtime.is_rootless();
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
         let process_group = ProcessGroupLease::open_for_snapshot(config_snapshot).await?;
         if plan.cgroup.uses_control_workload_layout() {
@@ -105,6 +106,7 @@ impl PreparedProcess {
             .arg(hook_state.id())
             .arg(rootfs_scope.internal_argument())
             .arg(expected_owner_pid.to_string())
+            .arg(if rootless { "rootless" } else { "privileged" })
             .env_clear()
             .kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
@@ -559,9 +561,9 @@ impl PreparedProcess {
             .await
     }
 
-    pub(super) async fn update_resources(&self, resources: &LinuxResources) -> Result<()> {
+    pub(super) async fn update_resources(&mut self, resources: &LinuxResources) -> Result<()> {
         self.cgroup
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| {
                 process_error(
                     ErrorCode::Unsupported,

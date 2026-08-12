@@ -57,21 +57,77 @@ pub async fn native_linux_service_smoke(
 
 /// Exercise the native Linux core lifecycle as an unprivileged host user.
 ///
-/// The diagnostic requires helper-backed subordinate UID/GID mappings and a
-/// bundle without a cgroup path. It fails closed when invoked as host root.
+/// The diagnostic requires helper-backed subordinate UID/GID mappings. A
+/// bundle with `linux.cgroupsPath` additionally requires an explicit delegated
+/// cgroup-v2 root. It fails closed when invoked as host root.
 pub async fn native_linux_rootless_smoke(
     init_executable: &Path,
     bundle: &Path,
     work_parent: &Path,
 ) -> NativeLinuxRootlessSmokeReport {
+    native_linux_rootless_smoke_with_cgroup_delegation(init_executable, bundle, work_parent, None)
+        .await
+}
+
+/// Exercise rootless native Linux with an explicit cgroup-v2 delegation.
+///
+/// The delegated root is required when the bundle contains
+/// `linux.cgroupsPath` and rejected otherwise.
+pub async fn native_linux_rootless_smoke_with_cgroup_delegation(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    delegated_cgroup_root: Option<&Path>,
+) -> NativeLinuxRootlessSmokeReport {
+    native_linux_rootless_smoke_with_cgroup_delegation_barrier(
+        init_executable,
+        bundle,
+        work_parent,
+        delegated_cgroup_root,
+        None,
+        None,
+    )
+    .await
+}
+
+/// Exercise rootless native Linux with a qualification-only post-open barrier.
+///
+/// Supplying both marker paths publishes `ready_file` after the executor has
+/// retained the delegation identity, then waits for `continue_file` before the
+/// first runtime mutation. This is reserved for deterministic real-host drift
+/// tests and has no effect on ordinary callers.
+#[doc(hidden)]
+pub async fn native_linux_rootless_smoke_with_cgroup_delegation_barrier(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    delegated_cgroup_root: Option<&Path>,
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
+) -> NativeLinuxRootlessSmokeReport {
     #[cfg(target_os = "linux")]
     {
-        linux::run_rootless(init_executable, bundle, work_parent).await
+        linux::run_rootless(
+            init_executable,
+            bundle,
+            work_parent,
+            delegated_cgroup_root,
+            ready_file,
+            continue_file,
+        )
+        .await
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (init_executable, bundle, work_parent);
+        let _ = (
+            init_executable,
+            bundle,
+            work_parent,
+            delegated_cgroup_root,
+            ready_file,
+            continue_file,
+        );
         NativeLinuxRootlessSmokeReport::unsupported(HostPlatform::current())
     }
 }

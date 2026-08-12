@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
+use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -28,9 +31,78 @@ const SUPPORTED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
+const CGROUP2_SUPER_MAGIC: u64 = 0x6367_7270;
+
+#[derive(Debug, Clone)]
+pub(super) struct RootlessCgroupDelegation {
+    root: PathBuf,
+    effective_uid: u32,
+    effective_gid: u32,
+    device: u64,
+    inode: u64,
+}
+
+impl RootlessCgroupDelegation {
+    pub(super) fn open(
+        root: impl AsRef<Path>,
+        effective_uid: u32,
+        effective_gid: u32,
+    ) -> Result<Self> {
+        let root = validate_delegated_root_path(root.as_ref())?;
+        let metadata = verify_delegated_root(&root, effective_uid, effective_gid)?;
+        required_delegated_controllers(&root)?;
+        verify_delegated_owner_membership(&root)?;
+        Ok(Self {
+            root,
+            effective_uid,
+            effective_gid,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    fn verify(&self) -> Result<BTreeSet<&'static str>> {
+        let metadata = verify_delegated_root(&self.root, self.effective_uid, self.effective_gid)?;
+        if !self.identity_matches(&metadata) {
+            return Err(cgroup_error(
+                ErrorCode::Conflict,
+                format!(
+                    "rootless cgroup delegation changed after executor open: {}",
+                    self.root.display()
+                ),
+            ));
+        }
+        verify_delegated_owner_membership(&self.root)?;
+        required_delegated_controllers(&self.root)
+    }
+
+    fn identity_matches(&self, metadata: &std::fs::Metadata) -> bool {
+        metadata.dev() == self.device && metadata.ino() == self.inode
+    }
+}
+
+#[cfg(test)]
+impl RootlessCgroupDelegation {
+    fn fixture(
+        root: PathBuf,
+        effective_uid: u32,
+        effective_gid: u32,
+        device: u64,
+        inode: u64,
+    ) -> Self {
+        Self {
+            root,
+            effective_uid,
+            effective_gid,
+            device,
+            inode,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct CgroupManager {
+    authority_root: PathBuf,
     root: PathBuf,
     controllers: BTreeSet<&'static str>,
 }
@@ -64,6 +136,16 @@ impl CgroupManager {
         }
         enable_controllers(&mountpoint, &controllers)?;
 
+        Self::create_below(mountpoint, controllers)
+    }
+
+    pub(super) fn create_delegated(delegation: &RootlessCgroupDelegation) -> Result<Self> {
+        let controllers = delegation.verify()?;
+        Self::create_below(delegation.root.clone(), controllers)
+    }
+
+    fn create_below(authority_root: PathBuf, controllers: BTreeSet<&'static str>) -> Result<Self> {
+        ensure_real_directory(&authority_root)?;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| {
@@ -73,7 +155,7 @@ impl CgroupManager {
                 )
             })?
             .as_nanos();
-        let root = mountpoint.join(format!("a3s-oci-{}-{timestamp:032x}", std::process::id()));
+        let root = authority_root.join(format!("a3s-oci-{}-{timestamp:032x}", std::process::id()));
         std::fs::create_dir(&root).map_err(|error| {
             cgroup_error(
                 if error.kind() == io::ErrorKind::AlreadyExists {
@@ -105,7 +187,11 @@ impl CgroupManager {
             let _ = std::fs::remove_dir(&root);
             return Err(error);
         }
-        Ok(Self { root, controllers })
+        Ok(Self {
+            authority_root,
+            root,
+            controllers,
+        })
     }
 
     pub(super) fn remove(self) -> Result<()> {
@@ -115,6 +201,10 @@ impl CgroupManager {
     pub(super) fn root(&self) -> &Path {
         &self.root
     }
+
+    pub(super) fn authority_root(&self) -> &Path {
+        &self.authority_root
+    }
 }
 
 #[derive(Debug)]
@@ -123,6 +213,9 @@ pub(super) struct CgroupHandle {
     leaf: PathBuf,
     init_procs: File,
     control_workload: Option<ControlWorkloadCgroup>,
+    devices: DevicePlan,
+    device_filter_path: PathBuf,
+    device_filter: Option<OwnedFd>,
 }
 
 #[derive(Debug)]
@@ -193,11 +286,11 @@ impl CgroupHandle {
         }
         let configured = (|| {
             initialize_cpuset(&current)?;
-            devices.install_cgroup_device_filter(&current)?;
+            let device_filter = devices.install_cgroup_device_filter(&current)?;
             let Some(headroom) = plan.control_headroom() else {
                 apply_settings(&current, &plan.settings())?;
                 let init_procs = open_cgroup_procs(&current)?;
-                return Ok((current.clone(), init_procs, None));
+                return Ok((current.clone(), init_procs, None, device_filter));
             };
 
             // Keep the OCI leaf free of delegated controllers until init has
@@ -224,14 +317,22 @@ impl CgroupHandle {
                 control_procs: membership.control_procs,
                 workload_procs: membership.workload_procs,
             };
-            Ok((workload, membership.init_procs, Some(control_workload)))
+            Ok((
+                workload,
+                membership.init_procs,
+                Some(control_workload),
+                device_filter,
+            ))
         })();
         match configured {
-            Ok((leaf, init_procs, control_workload)) => Ok(Some(Self {
+            Ok((leaf, init_procs, control_workload, device_filter)) => Ok(Some(Self {
                 created,
                 leaf,
                 init_procs,
                 control_workload,
+                devices: devices.clone(),
+                device_filter_path: current,
+                device_filter,
             })),
             Err(error) => {
                 cleanup_directories(&created);
@@ -361,6 +462,11 @@ impl CgroupHandle {
 
 impl Drop for CgroupHandle {
     fn drop(&mut self) {
+        if let Some(device_filter) = &self.device_filter {
+            let _ = self
+                .devices
+                .detach_loaded_cgroup_device_program(&self.device_filter_path, device_filter);
+        }
         cleanup_directories(&self.created);
     }
 }
@@ -636,6 +742,252 @@ fn cgroup2_mountpoint(mountinfo: &str) -> Option<PathBuf> {
     })
 }
 
+fn validate_delegated_root_path(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute()
+        || path.as_os_str().as_bytes().contains(&0)
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err(cgroup_error(
+            ErrorCode::InvalidArgument,
+            format!(
+                "rootless cgroup delegation must be an absolute normalized path: {}",
+                path.display()
+            ),
+        ));
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to resolve rootless cgroup delegation {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if canonical.as_os_str() != path.as_os_str() {
+        return Err(cgroup_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "rootless cgroup delegation must already be canonical: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn verify_delegated_root(
+    root: &Path,
+    effective_uid: u32,
+    effective_gid: u32,
+) -> Result<std::fs::Metadata> {
+    let metadata = std::fs::symlink_metadata(root).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect rootless cgroup delegation {}: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != effective_uid
+        || metadata.gid() != effective_gid
+    {
+        return Err(cgroup_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "rootless cgroup delegation must be a real directory owned by {effective_uid}:{effective_gid}: {}",
+                root.display()
+            ),
+        ));
+    }
+    let path = CString::new(root.as_os_str().as_bytes()).map_err(|error| {
+        cgroup_error(
+            ErrorCode::InvalidArgument,
+            format!("rootless cgroup delegation contains NUL: {error}"),
+        )
+    })?;
+    let mut filesystem = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and `filesystem` points to writable
+    // storage for one `statfs` result.
+    if unsafe { libc::statfs(path.as_ptr(), filesystem.as_mut_ptr()) } != 0 {
+        return Err(cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect rootless cgroup delegation filesystem {}: {}",
+                root.display(),
+                io::Error::last_os_error()
+            ),
+        ));
+    }
+    // SAFETY: `statfs` succeeded and initialized the structure.
+    let filesystem = unsafe { filesystem.assume_init() };
+    if u64::try_from(filesystem.f_type).ok() != Some(CGROUP2_SUPER_MAGIC) {
+        return Err(cgroup_error(
+            ErrorCode::Unsupported,
+            format!(
+                "rootless cgroup delegation is not on a cgroup v2 filesystem: {}",
+                root.display()
+            ),
+        ));
+    }
+    let procs = std::fs::read_to_string(root.join(CGROUP_PROCS)).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect rootless cgroup delegation membership {}: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    if !procs.trim().is_empty() {
+        return Err(cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "rootless cgroup delegation must not contain processes: {}",
+                root.display()
+            ),
+        ));
+    }
+    let procs_metadata = std::fs::symlink_metadata(root.join(CGROUP_PROCS)).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect rootless cgroup delegation control ownership {}: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    if !procs_metadata.is_file()
+        || procs_metadata.file_type().is_symlink()
+        || procs_metadata.uid() != effective_uid
+        || procs_metadata.gid() != effective_gid
+        || procs_metadata.mode() & 0o200 == 0
+    {
+        return Err(cgroup_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "rootless cgroup delegation cgroup.procs must be writable and owned by {effective_uid}:{effective_gid}: {}",
+                root.display()
+            ),
+        ));
+    }
+    Ok(metadata)
+}
+
+fn verify_delegated_owner_membership(root: &Path) -> Result<()> {
+    let membership = std::fs::read_to_string("/proc/self/cgroup").map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!("failed to inspect rootless executor cgroup membership: {error}"),
+        )
+    })?;
+    let relative = unified_cgroup_membership(&membership)?;
+    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!("failed to inspect rootless executor cgroup topology: {error}"),
+        )
+    })?;
+    let mountpoint = cgroup2_mountpoint(&mountinfo).ok_or_else(|| {
+        cgroup_error(
+            ErrorCode::Unsupported,
+            "rootless cgroup delegation requires a visible cgroup v2 mount",
+        )
+    })?;
+    let current = mountpoint.join(relative.strip_prefix("/").unwrap_or(relative));
+    let current = std::fs::canonicalize(&current).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to resolve rootless executor cgroup membership {}: {error}",
+                current.display()
+            ),
+        )
+    })?;
+    if current == root || !current.starts_with(root) {
+        return Err(cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "rootless executor must run in a host-owned child below its empty cgroup delegation: executor {}; delegation {}",
+                current.display(),
+                root.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn unified_cgroup_membership(contents: &str) -> Result<&Path> {
+    let mut unified = contents.lines().filter_map(|line| {
+        let (hierarchy, remainder) = line.split_once(':')?;
+        let (controllers, path) = remainder.split_once(':')?;
+        (hierarchy == "0" && controllers.is_empty()).then_some(Path::new(path))
+    });
+    let path = unified.next().ok_or_else(|| {
+        cgroup_error(
+            ErrorCode::Unsupported,
+            "rootless executor has no unified cgroup v2 membership",
+        )
+    })?;
+    if unified.next().is_some()
+        || !path.is_absolute()
+        || path.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+    {
+        return Err(cgroup_error(
+            ErrorCode::FailedPrecondition,
+            "rootless executor has an invalid unified cgroup v2 membership",
+        ));
+    }
+    Ok(path)
+}
+
+fn required_delegated_controllers(root: &Path) -> Result<BTreeSet<&'static str>> {
+    let controllers = available_supported_controllers(root)?;
+    if let Some(missing) = SUPPORTED_CONTROLLERS
+        .iter()
+        .find(|controller| !controllers.contains(**controller))
+    {
+        return Err(cgroup_error(
+            ErrorCode::Unsupported,
+            format!("rootless cgroup delegation does not expose required controller `{missing}`"),
+        ));
+    }
+    let enabled_path = root.join("cgroup.subtree_control");
+    let enabled = std::fs::read_to_string(&enabled_path).map_err(|error| {
+        cgroup_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect rootless delegated controller state {}: {error}",
+                enabled_path.display()
+            ),
+        )
+    })?;
+    let enabled = enabled.split_ascii_whitespace().collect::<BTreeSet<_>>();
+    if let Some(missing) = SUPPORTED_CONTROLLERS
+        .iter()
+        .find(|controller| !enabled.contains(**controller))
+    {
+        return Err(cgroup_error(
+            ErrorCode::Unsupported,
+            format!("rootless cgroup delegation has not enabled required controller `{missing}`"),
+        ));
+    }
+    Ok(controllers)
+}
+
 fn normalize_cgroup_value(value: &str) -> String {
     value.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -744,6 +1096,7 @@ fn stats_error(message: impl Into<String>) -> Error {
 mod tests {
     use std::collections::BTreeSet;
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -752,7 +1105,8 @@ mod tests {
     use super::{
         cgroup2_mountpoint, cgroup_event_value, enable_controllers,
         install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
-        open_control_workload_membership,
+        open_control_workload_membership, required_delegated_controllers,
+        validate_delegated_root_path, RootlessCgroupDelegation,
     };
 
     #[test]
@@ -834,6 +1188,60 @@ mod tests {
         assert_eq!(
             cgroup2_mountpoint(mountinfo).as_deref(),
             Some(std::path::Path::new("/sys/fs/cgroup"))
+        );
+    }
+
+    #[test]
+    fn rootless_delegation_path_must_be_absolute_normalized_and_canonical() {
+        let directory = tempfile::tempdir().expect("temporary delegation path");
+        assert_eq!(
+            validate_delegated_root_path(directory.path()).expect("canonical path"),
+            directory.path()
+        );
+        assert!(validate_delegated_root_path(std::path::Path::new("relative")).is_err());
+        assert!(validate_delegated_root_path(&directory.path().join(".")).is_err());
+    }
+
+    #[test]
+    fn rootless_delegation_identity_is_inode_bound() {
+        let directory = tempfile::tempdir().expect("temporary delegation identity");
+        let metadata = std::fs::metadata(directory.path()).expect("delegation metadata");
+        let delegation = RootlessCgroupDelegation::fixture(
+            directory.path().to_path_buf(),
+            metadata.uid(),
+            metadata.gid(),
+            metadata.dev(),
+            metadata.ino().saturating_add(1),
+        );
+        assert!(!delegation.identity_matches(&metadata));
+    }
+
+    #[test]
+    fn rootless_delegation_requires_all_enabled_controllers() {
+        let directory = tempfile::tempdir().expect("temporary delegation controller root");
+        std::fs::write(
+            directory.path().join("cgroup.controllers"),
+            "cpu cpuset memory pids",
+        )
+        .expect("available controllers");
+        std::fs::write(
+            directory.path().join("cgroup.subtree_control"),
+            "cpu cpuset memory",
+        )
+        .expect("enabled controllers");
+        let error = required_delegated_controllers(directory.path())
+            .expect_err("missing enabled controller must fail");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains("required controller `pids`"));
+
+        std::fs::write(
+            directory.path().join("cgroup.subtree_control"),
+            "cpu cpuset memory pids",
+        )
+        .expect("all enabled controllers");
+        assert_eq!(
+            required_delegated_controllers(directory.path()).expect("delegated controllers"),
+            BTreeSet::from(["cpu", "cpuset", "memory", "pids"])
         );
     }
 

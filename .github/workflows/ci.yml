@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   test:
+    needs: guest-agent-musl
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +23,27 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'macOS'
+        name: Download immutable macOS system image
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-system-image
+          path: ${{ runner.temp }}/a3s-oci-macos-system-image
+      - if: runner.os == 'macOS'
+        name: Pin immutable macOS system-image path
+        shell: bash
+        run: |
+          system_image_dir="$RUNNER_TEMP/a3s-oci-macos-system-image"
+          manifest="$system_image_dir/system-image.json"
+          image="$system_image_dir/a3s-oci-system.ext4"
+          archive="$system_image_dir/a3s-oci-system.ext4.xz"
+          test -f "$manifest"
+          test -f "$image"
+          test -f "$archive"
+          test "$(jq --raw-output '.image.sha256' "$manifest")" = "$(shasum -a 256 "$image" | awk '{print $1}')"
+          test "$(jq --raw-output '.image.archive_sha256' "$manifest")" = "$(shasum -a 256 "$archive" | awk '{print $1}')"
+          chmod 0444 "$manifest" "$image" "$archive"
+          printf 'A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST=%s\n' "$manifest" >> "$GITHUB_ENV"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Exhaustive durable-state and host-driver fault matrix
@@ -112,7 +134,8 @@ jobs:
           rootfs_archive="$RUNNER_TEMP/alpine-minirootfs-3.22.5-aarch64.tar.gz"
           smoke_dir="$RUNNER_TEMP/a3s-oci-krun-vm"
           console="$RUNNER_TEMP/a3s-oci-krun-vm-console.log"
-          mkdir -p "$rootfs_dir" "$smoke_dir"
+          system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
+          mkdir -p "$rootfs_dir/run" "$smoke_dir"
 
           curl --fail --location --retry 3 \
             --output "$rootfs_archive" \
@@ -120,7 +143,6 @@ jobs:
           printf '%s  %s\n' \
             '3fbc6285032ed46821b511292633d7b2a6306a2e254f590e92bdafff56cf2f70' \
             "$rootfs_archive" | shasum -a 256 --check
-          tar -xzf "$rootfs_archive" -C "$rootfs_dir"
 
           cp target/debug/a3s-oci-krun-shim "$smoke_dir/"
           cp -R target/debug/a3s-oci-krun-runtime "$smoke_dir/"
@@ -133,6 +155,8 @@ jobs:
           output="$(
             "$smoke_dir/a3s-oci-krun-shim" vm-smoke \
               --rootfs "$rootfs_dir" \
+              --system-image-manifest "$system_image_manifest" \
+              --runtime-share "$rootfs_dir" \
               --console "$console"
           )"
           status=$?
@@ -140,12 +164,17 @@ jobs:
           printf '%s\n' "$output"
 
           support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+          manifest_sha256="$(shasum -a 256 "$system_image_manifest" | awk '{print $1}')"
           if [[ "$support" == "1" ]]; then
             test "$status" -eq 0
-            jq --exit-status \
+            jq --exit-status --arg manifest_sha256 "$manifest_sha256" \
               '.platform == "macos" and .status == "available"
                and .runtime_bundle_loaded and .context_created
                and .vm_configured and .rootfs_configured
+               and .runtime_share_configured
+               and .macos_boot_assets.manifest_sha256 == $manifest_sha256
+               and .macos_boot_assets.root_disk_read_only
+               and .macos_boot_assets.runtime_share_separate
                and .workload_configured and .console_configured
                and .vm_entered and .guest_exit_code == 0
                and .marker_verified and .marker_removed
@@ -179,26 +208,14 @@ jobs:
           unsigned_dir="$RUNNER_TEMP/a3s-oci-agent-vm-unsigned"
           signed_console="$RUNNER_TEMP/a3s-oci-agent-vm-signed.log"
           unsigned_console="$RUNNER_TEMP/a3s-oci-agent-vm-unsigned.log"
-          mkdir -p "$rootfs_dir/usr/bin" "$signed_dir" "$unsigned_dir"
+          system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
+          mkdir -p "$rootfs_dir/run" "$signed_dir" "$unsigned_dir"
 
-          rustup target add aarch64-unknown-linux-musl
-          host_triple="$(rustc -vV | sed -n 's/^host: //p')"
-          rust_lld="$(
-            rustc --print sysroot
-          )/lib/rustlib/$host_triple/bin/rust-lld"
-          test -x "$rust_lld"
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld" \
-            cargo build -p a3s-oci-agent --release \
-              --target aarch64-unknown-linux-musl
-          agent=target/aarch64-unknown-linux-musl/release/a3s-oci-agent
           agent_version="$(
             cargo metadata --no-deps --format-version 1 |
               jq --raw-output \
                 '.packages[] | select(.name == "a3s-oci-agent") | .version'
           )"
-          file "$agent"
-          cp "$agent" "$rootfs_dir/usr/bin/a3s-oci-agent"
-          chmod 0755 "$rootfs_dir/usr/bin/a3s-oci-agent"
 
           cp target/debug/a3s-oci-krun-shim "$signed_dir/"
           cp -R target/debug/a3s-oci-krun-runtime "$signed_dir/"
@@ -216,6 +233,7 @@ jobs:
             target/debug/a3s-oci agent-vm-smoke \
               --shim "$signed_dir/a3s-oci-krun-shim" \
               --rootfs "$rootfs_dir" \
+              --system-image-manifest "$system_image_manifest" \
               --console "$signed_console"
           )"
           status=$?
@@ -284,6 +302,7 @@ jobs:
             target/debug/a3s-oci agent-vm-smoke \
               --shim "$unsigned_dir/a3s-oci-krun-shim" \
               --rootfs "$rootfs_dir" \
+              --system-image-manifest "$system_image_manifest" \
               --console "$unsigned_console"
           )"
           unsigned_status=$?
@@ -326,10 +345,11 @@ jobs:
           marker="$container_rootfs/.a3s-oci-create-start-smoke"
           console="$RUNNER_TEMP/a3s-oci-fixed-lifecycle.log"
           unsigned_console="$RUNNER_TEMP/a3s-oci-fixed-lifecycle-unsigned.log"
-          mkdir -p "$container_rootfs"
-          cp fixtures/utility-vm/config.json "$bundle_dir/config.json"
-          tar -xzf "$rootfs_archive" -C "$container_rootfs"
-          sudo chown -R 0:0 "$container_rootfs"
+          system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
+          scripts/prepare-macos-utility-vm-bundle.sh \
+            --alpine-archive "$rootfs_archive" \
+            --config fixtures/utility-vm/config.json \
+            --bundle "$bundle_dir"
 
           endpoint_baseline="$(
             find /private/tmp -maxdepth 1 \
@@ -340,6 +360,7 @@ jobs:
             target/debug/a3s-oci oci-vm-smoke \
               --shim "$signed_dir/a3s-oci-krun-shim" \
               --vm-rootfs "$rootfs_dir" \
+              --system-image-manifest "$system_image_manifest" \
               --bundle "$bundle_dir" \
               --console "$console"
           )"
@@ -434,6 +455,7 @@ jobs:
             target/debug/a3s-oci oci-vm-smoke \
               --shim "$unsigned_dir/a3s-oci-krun-shim" \
               --vm-rootfs "$rootfs_dir" \
+              --system-image-manifest "$system_image_manifest" \
               --bundle "$bundle_dir" \
               --console "$unsigned_console"
           )"
@@ -482,13 +504,12 @@ jobs:
           marker_a="$bundle_a/rootfs/.a3s-oci-create-start-smoke"
           marker_b="$bundle_b/rootfs/.a3s-oci-create-start-smoke"
           console="$RUNNER_TEMP/a3s-oci-multi-container.log"
-          mkdir -p "$bundle_b/rootfs"
-          cp fixtures/utility-vm/config.json "$bundle_b/config.json"
-          jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
-            "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
-          mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
-          tar -xzf "$rootfs_archive" -C "$bundle_b/rootfs"
-          sudo chown -R 0:0 "$bundle_b/rootfs"
+          system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
+          scripts/prepare-macos-utility-vm-bundle.sh \
+            --alpine-archive "$rootfs_archive" \
+            --config fixtures/utility-vm/config.json \
+            --bundle "$bundle_b" \
+            --cgroups-path a3s-oci-smoke-b
 
           endpoint_baseline="$(
             find /private/tmp -maxdepth 1 \
@@ -503,6 +524,7 @@ jobs:
             target/debug/a3s-oci oci-vm-multi-container-smoke \
               --shim "$signed_dir/a3s-oci-krun-shim" \
               --vm-rootfs "$rootfs_dir" \
+              --system-image-manifest "$system_image_manifest" \
               --bundle-a "$bundle_a" \
               --bundle-b "$bundle_b" \
               --console "$console"
@@ -654,6 +676,7 @@ jobs:
           marker_b="$bundle_b/rootfs/.a3s-oci-create-start-smoke"
           console_dir="$RUNNER_TEMP/a3s-oci-macos-hvf-soak-consoles"
           report="$RUNNER_TEMP/a3s-oci-macos-hvf-soak.json"
+          system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
           iterations=25
           mkdir -p "$console_dir"
 
@@ -670,6 +693,7 @@ jobs:
             target/debug/a3s-oci macos-hvf-soak \
               --shim "$signed_dir/a3s-oci-krun-shim" \
               --vm-rootfs "$rootfs_dir" \
+              --system-image-manifest "$system_image_manifest" \
               --bundle-a "$bundle_a" \
               --bundle-b "$bundle_b" \
               --console-dir "$console_dir" \
@@ -871,7 +895,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          binutils e2fsprogs file jq musl-tools xz-utils
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
@@ -905,6 +931,28 @@ jobs:
               exit 1
             fi
           done
+      - name: Build reproducible immutable macOS system image
+        shell: bash
+        run: |
+          alpine="$RUNNER_TEMP/alpine-minirootfs-3.22.5-aarch64.tar.gz"
+          output="$RUNNER_TEMP/a3s-oci-macos-system-image"
+          curl --fail --location --retry 3 \
+            --output "$alpine" \
+            https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.5-aarch64.tar.gz
+          bash scripts/build-macos-system-image.sh \
+            --alpine-archive "$alpine" \
+            --agent target/aarch64-unknown-linux-musl/release/a3s-oci-agent \
+            --output-dir "$output" \
+            --reproducibility-delay 1
+          test "$(jq --raw-output '.image.sha256' "$output/system-image.json")" = "$(sha256sum "$output/a3s-oci-system.ext4" | cut -d ' ' -f 1)"
+          test "$(jq --raw-output '.image.archive_sha256' "$output/system-image.json")" = "$(sha256sum "$output/a3s-oci-system.ext4.xz" | cut -d ' ' -f 1)"
+      - name: Upload immutable macOS system image
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-system-image
+          path: ${{ runner.temp }}/a3s-oci-macos-system-image
+          if-no-files-found: error
+          retention-days: 14
       - name: Stage static guest qualification artifacts
         shell: bash
         env:

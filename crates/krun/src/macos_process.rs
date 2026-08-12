@@ -1,9 +1,7 @@
-use std::collections::VecDeque;
-use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,36 +14,6 @@ const PRIVATE_SOCKET_MODE: u32 = 0o600;
 pub(crate) struct WorkerExit {
     pub(crate) status: ExitStatus,
     pub(crate) timed_out: bool,
-}
-
-pub(crate) fn canonical_rootfs(rootfs: &Path) -> Result<PathBuf, String> {
-    let rootfs = rootfs
-        .canonicalize()
-        .map_err(|error| format!("failed to resolve rootfs {}: {error}", rootfs.display()))?;
-    if !rootfs.is_dir() {
-        return Err(format!("rootfs is not a directory: {}", rootfs.display()));
-    }
-    Ok(rootfs)
-}
-
-pub(crate) fn resolve_guest_regular_file(
-    rootfs: &Path,
-    guest_path: &Path,
-    description: &str,
-) -> Result<PathBuf, String> {
-    let resolved = resolve_guest_path(rootfs, guest_path).map_err(|reason| {
-        format!(
-            "{description} {guest_path:?} is unavailable below {}: {reason}",
-            rootfs.display()
-        )
-    })?;
-    if !fs::symlink_metadata(&resolved).is_ok_and(|metadata| metadata.file_type().is_file()) {
-        return Err(format!(
-            "{description} {guest_path:?} must resolve to a regular file inside {}",
-            rootfs.display()
-        ));
-    }
-    Ok(resolved)
 }
 
 pub(crate) fn resolve_console(console: &Path) -> Result<PathBuf, String> {
@@ -213,87 +181,6 @@ pub(crate) fn read_bounded_worker_output(mut input: impl Read, limit: u64) -> io
         ));
     }
     Ok(output)
-}
-
-#[derive(Debug)]
-enum GuestComponent {
-    Parent,
-    Normal(OsString),
-}
-
-fn resolve_guest_path(rootfs: &Path, guest_path: &Path) -> Result<PathBuf, String> {
-    let mut pending = VecDeque::new();
-    prepend_guest_components(guest_path, &mut pending)?;
-    let mut resolved = PathBuf::new();
-    let mut followed_links = 0_u8;
-
-    while let Some(component) = pending.pop_front() {
-        match component {
-            GuestComponent::Parent => {
-                if !resolved.pop() {
-                    return Err(format!(
-                        "guest path escapes the root filesystem: {}",
-                        guest_path.display()
-                    ));
-                }
-            }
-            GuestComponent::Normal(component) => {
-                let candidate = rootfs.join(&resolved).join(&component);
-                let metadata = fs::symlink_metadata(&candidate).map_err(|error| {
-                    format!("failed to inspect {}: {error}", candidate.display())
-                })?;
-                if metadata.file_type().is_symlink() {
-                    followed_links = followed_links.saturating_add(1);
-                    if followed_links > 40 {
-                        return Err(format!(
-                            "guest path contains too many symbolic links: {}",
-                            guest_path.display()
-                        ));
-                    }
-                    let target = fs::read_link(&candidate).map_err(|error| {
-                        format!(
-                            "failed to read symbolic link {}: {error}",
-                            candidate.display()
-                        )
-                    })?;
-                    if target.is_absolute() {
-                        resolved.clear();
-                    }
-                    prepend_guest_components(&target, &mut pending)?;
-                } else {
-                    resolved.push(component);
-                }
-            }
-        }
-    }
-
-    Ok(rootfs.join(resolved))
-}
-
-fn prepend_guest_components(
-    path: &Path,
-    pending: &mut VecDeque<GuestComponent>,
-) -> Result<(), String> {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::ParentDir => components.push(GuestComponent::Parent),
-            Component::Normal(component) => {
-                components.push(GuestComponent::Normal(component.to_os_string()));
-            }
-            Component::Prefix(_) => {
-                return Err(format!(
-                    "guest path contains a host path prefix: {}",
-                    path.display()
-                ));
-            }
-        }
-    }
-    for component in components.into_iter().rev() {
-        pending.push_front(component);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

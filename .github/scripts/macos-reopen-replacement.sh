@@ -3,6 +3,7 @@ set -euo pipefail
 
 rootfs_dir="$RUNNER_TEMP/a3s-oci-alpine-aarch64"
 signed_dir="$RUNNER_TEMP/a3s-oci-agent-vm-signed"
+system_image_manifest="${A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST:?macOS system-image manifest is required}"
 bundle_dir="$rootfs_dir/var/lib/a3s-oci-smoke/bundle"
 marker="$bundle_dir/rootfs/.a3s-oci-create-start-smoke"
 exec_marker="$bundle_dir/rootfs/.a3s-oci-exec-reopen-smoke"
@@ -13,6 +14,7 @@ close_stdin_marker="$bundle_dir/rootfs/.a3s-oci-close-stdin-reopen-smoke"
 resize_marker="$bundle_dir/rootfs/.a3s-oci-resize-reopen-smoke"
 console_root="$RUNNER_TEMP/a3s-oci-reopen-replacement"
 support="$(sysctl -n kern.hv_support 2>/dev/null || printf unavailable)"
+test -f "$system_image_manifest"
 mkdir -p \
   "$console_root/create" \
   "$console_root/delete" \
@@ -105,6 +107,7 @@ run_create_stage() {
       --operation create \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console-dir "$stage_console_dir" \
       --fault-at "$fault_stage"
@@ -225,6 +228,7 @@ run_state_stage() {
       --operation state \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console-dir "$stage_console_dir" \
       --fault-at "$fault_stage"
@@ -341,6 +345,7 @@ run_start_stage() {
       --operation start \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console-dir "$stage_console_dir" \
       --fault-at "$fault_stage"
@@ -470,6 +475,7 @@ run_kill_stage() {
       --operation kill \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console-dir "$stage_console_dir" \
       --fault-at "$fault_stage"
@@ -610,6 +616,7 @@ run_delete_stage() {
       --operation delete \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console-dir "$stage_console_dir" \
       --fault-at "$fault_stage"
@@ -765,6 +772,7 @@ run_wait_stage() {
       --operation wait \
       --shim "$signed_dir/a3s-oci-krun-shim" \
       --vm-rootfs "$rootfs_dir" \
+      --system-image-manifest "$system_image_manifest" \
       --bundle "$bundle_dir" \
       --console-dir "$stage_console_dir" \
       --fault-at "$fault_stage"

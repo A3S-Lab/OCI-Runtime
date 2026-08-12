@@ -1,5 +1,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +12,13 @@ use a3s_oci_agent_protocol::{
     AGENT_RECOVERY_REPORT_MAX_BYTES, AGENT_RECOVERY_REPORT_PENDING_SUFFIX,
     AGENT_RUNTIME_SHARE_GUEST_ROOT,
 };
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const PRIVATE_FILE_MODE: u32 = 0o600;
 
 pub(crate) struct RecoveryReportHandoff {
     paths: RecoveryCleanupPaths,
@@ -40,19 +49,15 @@ impl RecoveryReportHandoff {
         }
 
         let pending = pending_path(&destination);
-        let pending_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&pending)
-            .map_err(|error| {
-                contextual(
-                    error,
-                    format!(
-                        "failed to create trusted recovery pending marker {}",
-                        pending.display()
-                    ),
-                )
-            })?;
+        let pending_file = private_new_file(&pending).map_err(|error| {
+            contextual(
+                error,
+                format!(
+                    "failed to create trusted recovery pending marker {}",
+                    pending.display()
+                ),
+            )
+        })?;
         if let Err(error) = pending_file.sync_all() {
             drop(pending_file);
             let _ = fs::remove_file(&pending);
@@ -77,6 +82,21 @@ impl RecoveryReportHandoff {
                 error,
                 format!(
                     "failed to create one-time guest recovery directory {}",
+                    directory.display()
+                ),
+            ));
+        }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        if let Err(error) = fs::set_permissions(
+            &directory,
+            fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
+        ) {
+            let _ = fs::remove_dir(&directory);
+            let _ = fs::remove_file(&pending);
+            return Err(contextual(
+                error,
+                format!(
+                    "failed to protect one-time guest recovery directory {}",
                     directory.display()
                 ),
             ));
@@ -127,10 +147,7 @@ impl RecoveryReportHandoff {
                 ),
             )
         })?;
-        if !metadata.is_file()
-            || metadata.file_type().is_symlink()
-            || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            || metadata.len() > AGENT_RECOVERY_REPORT_MAX_BYTES as u64
+        if !plain_private_file(&metadata) || metadata.len() > AGENT_RECOVERY_REPORT_MAX_BYTES as u64
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -302,10 +319,7 @@ fn canonical_plain_directory(path: &Path, label: &str) -> io::Result<PathBuf> {
             format!("failed to inspect {label} {}", path.display()),
         )
     })?;
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    {
+    if !plain_private_directory(&metadata) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("{label} must be a plain directory: {}", path.display()),
@@ -317,6 +331,47 @@ fn canonical_plain_directory(path: &Path, label: &str) -> io::Result<PathBuf> {
             format!("failed to resolve {label} {}", path.display()),
         )
     })
+}
+
+fn plain_private_directory(metadata: &fs::Metadata) -> bool {
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        // SAFETY: geteuid has no preconditions or failure return.
+        metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o777 == PRIVATE_DIRECTORY_MODE
+    }
+}
+
+fn plain_private_file(metadata: &fs::Metadata) -> bool {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        // SAFETY: geteuid has no preconditions or failure return.
+        metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o777 == PRIVATE_FILE_MODE
+    }
+}
+
+fn private_new_file(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    options
+        .mode(PRIVATE_FILE_MODE)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    options.open(path)
 }
 
 fn atomic_write(destination: &Path, encoded: &[u8]) -> io::Result<()> {
@@ -331,19 +386,15 @@ fn atomic_write(destination: &Path, encoded: &[u8]) -> io::Result<()> {
         file_name.to_string_lossy(),
         std::process::id()
     ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|error| {
-            contextual(
-                error,
-                format!(
-                    "failed to create temporary trusted recovery report {}",
-                    temporary.display()
-                ),
-            )
-        })?;
+    let mut file = private_new_file(&temporary).map_err(|error| {
+        contextual(
+            error,
+            format!(
+                "failed to create temporary trusted recovery report {}",
+                temporary.display()
+            ),
+        )
+    })?;
     let write_result = file.write_all(encoded).and_then(|()| file.sync_all());
     drop(file);
     if let Err(error) = write_result {
@@ -365,6 +416,9 @@ fn atomic_write(destination: &Path, encoded: &[u8]) -> io::Result<()> {
                 destination.display()
             ),
         ));
+    }
+    if let Some(parent) = destination.parent() {
+        File::open(parent)?.sync_all()?;
     }
     Ok(())
 }
@@ -408,6 +462,8 @@ fn contextual(error: io::Error, context: String) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use a3s_oci_agent_protocol::{
         AgentRecoveryRecord, AgentRecoveryReport, AgentVsockEndpoint,
         AuthenticatedAgentRecoveryReport, SessionToken,
@@ -415,6 +471,28 @@ mod tests {
     use a3s_oci_sdk::{ContainerId, ContainerTarget, ExitStatus, Generation};
 
     use super::{pending_path, RecoveryReportHandoff};
+
+    fn create_private_directory(path: &Path) {
+        std::fs::create_dir(path).expect("create private test directory");
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+                .expect("protect private test directory");
+        }
+    }
+
+    fn write_private_file(path: &Path, contents: &[u8]) {
+        std::fs::write(path, contents).expect("write private test file");
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .expect("protect private test file");
+        }
+    }
 
     fn token(byte: u8) -> SessionToken {
         SessionToken::from_bytes([byte; 32]).expect("nonzero token")
@@ -435,8 +513,8 @@ mod tests {
         let base = tempfile::tempdir().expect("temporary base");
         let rootfs = base.path().join("rootfs");
         let trusted = base.path().join("trusted");
-        std::fs::create_dir(&rootfs).unwrap();
-        std::fs::create_dir(&trusted).unwrap();
+        create_private_directory(&rootfs);
+        create_private_directory(&trusted);
         let destination = trusted.join("box-7.json");
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-recovery-test").unwrap();
         let handoff =
@@ -444,7 +522,7 @@ mod tests {
         assert!(pending_path(&destination).is_file());
         let guest_path = rootfs.join(handoff.guest_path().trim_start_matches('/'));
         let encoded = report().authenticate(&token(4)).unwrap().to_json().unwrap();
-        std::fs::write(&guest_path, encoded).unwrap();
+        write_private_file(&guest_path, &encoded);
 
         let verified = handoff.persist(&token(4)).expect("persist report");
         assert_eq!(verified, report());
@@ -462,8 +540,8 @@ mod tests {
         let base = tempfile::tempdir().expect("temporary base");
         let rootfs = base.path().join("rootfs");
         let trusted = base.path().join("trusted");
-        std::fs::create_dir(&rootfs).unwrap();
-        std::fs::create_dir(&trusted).unwrap();
+        create_private_directory(&rootfs);
+        create_private_directory(&trusted);
         let destination = trusted.join("box-7.json");
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-tamper-test").unwrap();
         let handoff =
@@ -472,7 +550,7 @@ mod tests {
         let encoded = report().authenticate(&token(4)).unwrap().to_json().unwrap();
         let mut value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         value["report"]["records"][0]["initExitStatus"]["exit_code"] = 24.into();
-        std::fs::write(&guest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+        write_private_file(&guest_path, &serde_json::to_vec(&value).unwrap());
 
         assert!(handoff.persist(&token(4)).is_err());
         assert!(!destination.exists());
@@ -484,7 +562,7 @@ mod tests {
     fn refuses_to_copy_trusted_evidence_into_the_guest_root() {
         let base = tempfile::tempdir().expect("temporary base");
         let rootfs = base.path().join("rootfs");
-        std::fs::create_dir(&rootfs).unwrap();
+        create_private_directory(&rootfs);
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-path-test").unwrap();
         assert!(
             RecoveryReportHandoff::create(&rootfs, "/", &endpoint, &rootfs.join("box-7.json"),)
@@ -497,8 +575,8 @@ mod tests {
         let base = tempfile::tempdir().expect("temporary base");
         let rootfs = base.path().join("rootfs");
         let trusted = base.path().join("trusted");
-        std::fs::create_dir(&rootfs).unwrap();
-        std::fs::create_dir(&trusted).unwrap();
+        create_private_directory(&rootfs);
+        create_private_directory(&trusted);
         let destination = trusted.join("box-7.json");
         let endpoint = AgentVsockEndpoint::new("a3s-oci-agent-drop-test").unwrap();
         let handoff =

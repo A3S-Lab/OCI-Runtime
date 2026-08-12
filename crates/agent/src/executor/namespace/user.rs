@@ -50,6 +50,17 @@ impl UserMappingRuntime {
     pub(in crate::executor) const fn is_rootless(&self) -> bool {
         matches!(self, Self::Rootless { .. })
     }
+
+    pub(in crate::executor) const fn effective_ids(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::Privileged => None,
+            Self::Rootless {
+                effective_uid,
+                effective_gid,
+                ..
+            } => Some((*effective_uid, *effective_gid)),
+        }
+    }
 }
 
 pub(in crate::executor) async fn install_user_mappings(

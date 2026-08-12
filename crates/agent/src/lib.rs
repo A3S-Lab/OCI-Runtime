@@ -21,7 +21,10 @@ use a3s_oci_agent_protocol::{
     AGENT_SESSION_TOKEN_FILE_NAME,
 };
 #[cfg(target_os = "linux")]
-use a3s_oci_agent_protocol::{AgentRecoveryRecord, AgentRecoveryReport, AGENT_RECOVERY_REPORT_ENV};
+use a3s_oci_agent_protocol::{
+    AgentRecoveryRecord, AgentRecoveryReport, AGENT_RECOVERY_REPORT_ENV,
+    AGENT_RUNTIME_SHARE_STATE_GUEST_ROOT,
+};
 #[cfg(any(target_os = "linux", test))]
 use a3s_oci_agent_protocol::{
     AGENT_RECOVERY_REPORT_DIRECTORY_PREFIX, AGENT_RECOVERY_REPORT_FILE_NAME,
@@ -54,9 +57,9 @@ pub const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// device. Missing or altered mount configuration fails before token access or
 /// host connection.
 #[cfg(target_os = "linux")]
-pub fn mount_runtime_share_if_requested() -> Result<()> {
+pub fn mount_runtime_share_if_requested() -> Result<Option<PathBuf>> {
     let Some(value) = std::env::var_os(AGENT_RUNTIME_SHARE_ENV) else {
-        return Ok(());
+        return Ok(None);
     };
     std::env::remove_var(AGENT_RUNTIME_SHARE_ENV);
     if value != AGENT_RUNTIME_SHARE_TAG {
@@ -105,14 +108,27 @@ pub fn mount_runtime_share_if_requested() -> Result<()> {
             std::io::Error::last_os_error()
         )));
     }
-    Ok(())
+    let runtime_parent = PathBuf::from(AGENT_RUNTIME_SHARE_STATE_GUEST_ROOT);
+    let metadata = std::fs::symlink_metadata(&runtime_parent).map_err(|error| {
+        runtime_share_error(format!(
+            "failed to inspect mounted runtime-state directory {}: {error}",
+            runtime_parent.display()
+        ))
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(runtime_share_error(format!(
+            "runtime-state path must be a real directory inside the mounted share: {}",
+            runtime_parent.display()
+        )));
+    }
+    Ok(Some(runtime_parent))
 }
 
 /// Non-Linux builds can parse the shared crate but cannot mount virtio-fs.
 #[cfg(not(target_os = "linux"))]
-pub fn mount_runtime_share_if_requested() -> Result<()> {
+pub fn mount_runtime_share_if_requested() -> Result<Option<PathBuf>> {
     match std::env::var_os(AGENT_RUNTIME_SHARE_ENV) {
-        None => Ok(()),
+        None => Ok(None),
         Some(_) => {
             std::env::remove_var(AGENT_RUNTIME_SHARE_ENV);
             Err(runtime_share_error(
@@ -346,8 +362,8 @@ fn invalid_token_path() -> Error {
 
 /// Connect to the host bridge and serve the fail-closed Linux executor.
 #[cfg(target_os = "linux")]
-pub fn run(token: SessionToken) -> Result<()> {
-    run_linux(token, None)
+pub fn run(token: SessionToken, runtime_parent: Option<PathBuf>) -> Result<()> {
+    run_linux(token, None, runtime_parent)
 }
 
 /// Run one explicitly armed real-VM guest transport qualification session.
@@ -355,14 +371,16 @@ pub fn run(token: SessionToken) -> Result<()> {
 pub fn run_transport_qualification(
     token: SessionToken,
     request: AgentTransportQualificationRequest,
+    runtime_parent: Option<PathBuf>,
 ) -> Result<()> {
-    run_linux(token, Some(request))
+    run_linux(token, Some(request), runtime_parent)
 }
 
 #[cfg(target_os = "linux")]
 fn run_linux(
     token: SessionToken,
     qualification: Option<AgentTransportQualificationRequest>,
+    runtime_parent: Option<PathBuf>,
 ) -> Result<()> {
     let recovery_path = take_recovery_report_path()?;
     let recovery_token = token.clone();
@@ -386,7 +404,10 @@ fn run_linux(
             )
             .for_operation("run-guest-agent")
         })?;
-        let service = Arc::new(LinuxExecutor::new().await?);
+        let service = Arc::new(match runtime_parent {
+            Some(runtime_parent) => LinuxExecutor::new_utility_vm(runtime_parent).await?,
+            None => LinuxExecutor::new().await?,
+        });
         let protocol_service: Arc<dyn GuestAgentService> = service.clone();
         let (serve_result, qualification_fault) = match qualification {
             Some(request) => {
@@ -573,7 +594,7 @@ fn recovery_io_error(message: impl Into<String>, code: ErrorCode) -> Error {
 
 /// Report that the guest binary cannot run on a non-Linux target.
 #[cfg(not(target_os = "linux"))]
-pub fn run(_token: SessionToken) -> Result<()> {
+pub fn run(_token: SessionToken, _runtime_parent: Option<PathBuf>) -> Result<()> {
     Err(Error::new(
         ErrorCode::Unsupported,
         "the OCI guest agent requires Linux AF_VSOCK",
@@ -586,6 +607,7 @@ pub fn run(_token: SessionToken) -> Result<()> {
 pub fn run_transport_qualification(
     _token: SessionToken,
     _request: AgentTransportQualificationRequest,
+    _runtime_parent: Option<PathBuf>,
 ) -> Result<()> {
     Err(Error::new(
         ErrorCode::Unsupported,

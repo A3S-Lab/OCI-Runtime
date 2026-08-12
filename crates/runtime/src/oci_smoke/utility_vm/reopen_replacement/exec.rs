@@ -15,6 +15,7 @@ pub(super) const EXEC_MARKER_NAME: &str = ".a3s-oci-exec-reopen-smoke";
 struct Qualification {
     shim: PathBuf,
     vm_rootfs: PathBuf,
+    system_image_manifest: PathBuf,
     state_root: PathBuf,
     first_console: PathBuf,
     replacement_console: PathBuf,

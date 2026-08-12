@@ -51,6 +51,25 @@ enum Command {
         /// Existing user-owned directory beneath which smoke state is created.
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
+        /// Explicit user-owned cgroup-v2 delegation for bundles with cgroupsPath.
+        #[arg(long, value_name = "DIR")]
+        delegated_cgroup_root: Option<PathBuf>,
+        /// Publish after delegation open and pause before the first mutation.
+        #[arg(
+            long,
+            value_name = "FILE",
+            hide = true,
+            requires = "post_open_continue_file"
+        )]
+        post_open_ready_file: Option<PathBuf>,
+        /// Continue a qualification paused by --post-open-ready-file.
+        #[arg(
+            long,
+            value_name = "FILE",
+            hide = true,
+            requires = "post_open_ready_file"
+        )]
+        post_open_continue_file: Option<PathBuf>,
     },
     /// Serve multiple native Linux containers through one durable SDK owner.
     #[cfg(target_os = "linux")]
@@ -179,6 +198,9 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         rootfs: PathBuf,
+        /// Immutable system-image manifest required by macOS HVF.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: Option<PathBuf>,
         /// New host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
@@ -191,6 +213,9 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        /// Immutable system-image manifest required by macOS HVF.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: Option<PathBuf>,
         /// OCI bundle contained by the VM root filesystem.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
@@ -284,6 +309,9 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        /// Immutable system-image manifest required by macOS HVF.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: Option<PathBuf>,
         /// First OCI bundle contained by the VM root filesystem.
         #[arg(long, value_name = "DIR")]
         bundle_a: PathBuf,
@@ -302,6 +330,9 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        /// Immutable system-image manifest bound to every soak wave.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         /// First OCI bundle contained by the VM root filesystem.
         #[arg(long, value_name = "DIR")]
         bundle_a: PathBuf,
@@ -341,6 +372,9 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        /// Immutable system-image manifest required by macOS HVF.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: Option<PathBuf>,
         /// OCI bundle contained by the VM root filesystem.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
@@ -359,6 +393,9 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        /// Immutable system-image manifest required by macOS HVF.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: Option<PathBuf>,
         /// OCI bundle contained by the VM root filesystem.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
@@ -530,9 +567,20 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
             agent,
             bundle,
             work_parent,
+            delegated_cgroup_root,
+            post_open_ready_file,
+            post_open_continue_file,
         } => {
             let report =
-                a3s_oci_runtime::native_linux_rootless_smoke(&agent, &bundle, &work_parent).await;
+                a3s_oci_runtime::native_linux_rootless_smoke_with_cgroup_delegation_barrier(
+                    &agent,
+                    &bundle,
+                    &work_parent,
+                    delegated_cgroup_root.as_deref(),
+                    post_open_ready_file.as_deref(),
+                    post_open_continue_file.as_deref(),
+                )
+                .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {
@@ -681,9 +729,16 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         Command::AgentVmSmoke {
             shim,
             rootfs,
+            system_image_manifest,
             console,
         } => {
-            let report = a3s_oci_runtime::agent_vm_smoke(&shim, &rootfs, &console).await;
+            let report = a3s_oci_runtime::agent_vm_smoke(
+                &shim,
+                &rootfs,
+                system_image_manifest.as_deref(),
+                &console,
+            )
+            .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {
@@ -695,10 +750,18 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         Command::OciVmSmoke {
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console,
         } => {
-            let report = a3s_oci_runtime::oci_vm_smoke(&shim, &vm_rootfs, &bundle, &console).await;
+            let report = a3s_oci_runtime::oci_vm_smoke(
+                &shim,
+                &vm_rootfs,
+                system_image_manifest.as_deref(),
+                &bundle,
+                &console,
+            )
+            .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {
@@ -813,12 +876,18 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         Command::OciVmMultiContainerSmoke {
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle_a,
             bundle_b,
             console,
         } => {
             let report = a3s_oci_runtime::oci_vm_multi_container_smoke(
-                &shim, &vm_rootfs, &bundle_a, &bundle_b, &console,
+                &shim,
+                &vm_rootfs,
+                system_image_manifest.as_deref(),
+                &bundle_a,
+                &bundle_b,
+                &console,
             )
             .await;
             let succeeded = report.is_success();
@@ -832,6 +901,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         Command::MacosHvfSoak {
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle_a,
             bundle_b,
             console_dir,
@@ -840,6 +910,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
             let report = a3s_oci_runtime::macos_hvf_soak(
                 &shim,
                 &vm_rootfs,
+                &system_image_manifest,
                 &bundle_a,
                 &bundle_b,
                 &console_dir,
@@ -876,6 +947,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         Command::OciVmFaultCleanup {
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console,
             fault_after,
@@ -883,6 +955,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
             let report = a3s_oci_runtime::oci_vm_fault_cleanup(
                 &shim,
                 &vm_rootfs,
+                system_image_manifest.as_deref(),
                 &bundle,
                 &console,
                 fault_after.into(),
@@ -899,6 +972,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         Command::OciVmTransportFaultCleanup {
             shim,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             console,
             fault_at,
@@ -906,6 +980,7 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
             let report = a3s_oci_runtime::oci_vm_transport_fault_cleanup(
                 &shim,
                 &vm_rootfs,
+                system_image_manifest.as_deref(),
                 &bundle,
                 &console,
                 a3s_oci_runtime::AgentTransportFaultStage::from(fault_at),

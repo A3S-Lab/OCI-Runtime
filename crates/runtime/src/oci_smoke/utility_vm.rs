@@ -28,105 +28,186 @@ use lifecycle::{best_effort_delete, exercise};
 pub(super) async fn run_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
     fault: crate::LifecycleFaultPoint,
 ) -> crate::OciVmFaultCleanupReport {
-    fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, fault).await
+    fault_cleanup::run(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console,
+        fault,
+    )
+    .await
 }
 
 pub(super) async fn run_transport_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportFaultStage,
 ) -> crate::OciVmTransportFaultCleanupReport {
-    transport_fault_cleanup::run(shim, vm_rootfs, bundle_directory, console, stage).await
+    transport_fault_cleanup::run(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmReopenReplacementReport {
-    reopen_replacement::run(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_state_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_state(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_state(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_start_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_start(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_start(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_kill_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_kill(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_kill(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_delete_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_delete(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_delete(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_wait_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_wait(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_wait(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_exec_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_exec(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_exec(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_signal_process_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
@@ -134,6 +215,7 @@ pub(super) async fn run_signal_process_reopen_replacement(
     reopen_replacement::run_signal_process(
         shim,
         vm_rootfs,
+        system_image_manifest,
         bundle_directory,
         console_directory,
         stage,
@@ -145,6 +227,7 @@ pub(super) async fn run_signal_process_reopen_replacement(
 pub(super) async fn run_wait_process_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
@@ -152,6 +235,7 @@ pub(super) async fn run_wait_process_reopen_replacement(
     reopen_replacement::run_wait_process(
         shim,
         vm_rootfs,
+        system_image_manifest,
         bundle_directory,
         console_directory,
         stage,
@@ -163,145 +247,246 @@ pub(super) async fn run_wait_process_reopen_replacement(
 pub(super) async fn run_pause_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_pause(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_pause(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_processes_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_processes(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_processes(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_read_output_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_read_output(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_read_output(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_close_stdin_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_close_stdin(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_close_stdin(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_resize_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_resize(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_resize(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_file_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_file(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_file(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_filesystem_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_filesystem(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_filesystem(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_write_stdin_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_write_stdin(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_write_stdin(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_resume_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_resume(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_resume(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_stats_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_stats(shim, vm_rootfs, bundle_directory, console_directory, stage).await
+    reopen_replacement::run_stats(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_update_reopen_replacement(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_directory: &Path,
     console_directory: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportOperationStage,
 ) -> crate::OciVmOperationReopenReplacementReport {
-    reopen_replacement::run_update(shim, vm_rootfs, bundle_directory, console_directory, stage)
-        .await
+    reopen_replacement::run_update(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_directory,
+        console_directory,
+        stage,
+    )
+    .await
 }
 
 pub(super) async fn run_multi_container(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
 ) -> crate::OciVmMultiContainerSmokeReport {
-    multi_container::run(shim, vm_rootfs, bundle_a, bundle_b, console).await
+    multi_container::run(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        bundle_a,
+        bundle_b,
+        console,
+    )
+    .await
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) async fn run_macos_hvf_soak(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle_a: &Path,
     bundle_b: &Path,
     console_directory: &Path,
@@ -310,6 +495,7 @@ pub(super) async fn run_macos_hvf_soak(
     soak::run(
         shim,
         vm_rootfs,
+        system_image_manifest,
         bundle_a,
         bundle_b,
         console_directory,
@@ -332,6 +518,7 @@ pub(super) async fn run_windows_multi_container(
 pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
 ) -> OciVmSmokeReport {
@@ -408,20 +595,21 @@ pub(super) async fn run(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let session = match UtilityVmSession::connect(shim, &vm_rootfs, console).await {
-        Ok(session) => session,
-        Err(bridge) => {
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            let bridge = {
-                let mut bridge = bridge;
-                cleanup.apply(&mut bridge).await;
-                bridge
-            };
-            report.reason = bridge.reason.clone();
-            report.bridge = bridge;
-            return report;
-        }
-    };
+    let session =
+        match UtilityVmSession::connect(shim, &vm_rootfs, system_image_manifest, console).await {
+            Ok(session) => session,
+            Err(bridge) => {
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                let bridge = {
+                    let mut bridge = bridge;
+                    cleanup.apply(&mut bridge).await;
+                    bridge
+                };
+                report.reason = bridge.reason.clone();
+                report.bridge = bridge;
+                return report;
+            }
+        };
 
     let client = session.client();
     let exercise = exercise(
@@ -554,8 +742,15 @@ fn guest_path(vm_rootfs: &Path, bundle: &Path) -> Result<GuestPath, String> {
     if components.is_empty() {
         return Err("OCI bundle cannot be the VM rootfs itself".into());
     }
-    GuestPath::new(format!("/{}", components.join("/")))
-        .map_err(|error| format!("failed to construct guest bundle path: {error}"))
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let path = format!(
+        "{}/{}",
+        a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT,
+        components.join("/")
+    );
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let path = format!("/{}", components.join("/"));
+    GuestPath::new(path).map_err(|error| format!("failed to construct guest bundle path: {error}"))
 }
 
 fn target(nonce: &str) -> Result<ContainerTarget, String> {
