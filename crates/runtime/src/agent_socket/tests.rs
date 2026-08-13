@@ -89,7 +89,7 @@ fn listener_is_send_sync() {
 }
 
 #[tokio::test]
-async fn direct_child_negotiates_the_exact_authenticated_core_protocol() {
+async fn authenticated_connection_survives_consumed_endpoint_cleanup() {
     let listener = unique_listener();
     let directory = listener.directory().to_path_buf();
     let socket_path = listener.socket_path().to_path_buf();
@@ -108,6 +108,8 @@ async fn direct_child_negotiates_the_exact_authenticated_core_protocol() {
     let client = AgentClient::connect(stream, token)
         .await
         .expect("authenticate direct child agent");
+    assert!(!socket_path.exists());
+    assert!(!directory.exists());
     assert_eq!(
         client.hello().selected_version(),
         AGENT_PROTOCOL_VERSION_MAX

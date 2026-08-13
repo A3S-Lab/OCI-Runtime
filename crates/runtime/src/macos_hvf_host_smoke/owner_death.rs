@@ -177,8 +177,12 @@ async fn run_first_owner(
         );
     }
     evidence.live_vm_processes = descendants;
-    if host::endpoint_inventory()? == *endpoint_baseline {
-        return Err("live owner-death generation did not publish a guest-agent endpoint".into());
+    evidence.authenticated_endpoint_consumed =
+        wait_for_endpoint_baseline(endpoint_baseline).await?;
+    if !evidence.authenticated_endpoint_consumed {
+        return Err(
+            "authenticated live owner-death generation retained its guest-agent endpoint".into(),
+        );
     }
     drop(client);
     Ok(())

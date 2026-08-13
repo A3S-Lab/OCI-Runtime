@@ -172,6 +172,9 @@ pub struct MacosHvfOwnerDeathEvidence {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_config_digest: Option<String>,
     pub live_vm_processes: Vec<MacosProcessIdentity>,
+    /// The authenticated live session consumed and removed its listener path.
+    #[serde(default)]
+    pub authenticated_endpoint_consumed: bool,
     pub host_service_sigkill_delivered: bool,
     pub first_host_service_reaped: bool,
     pub stale_socket_retained: bool,
@@ -209,6 +212,7 @@ impl MacosHvfOwnerDeathEvidence {
                 .as_deref()
                 .is_some_and(canonical_sha256_digest)
             && self.live_vm_processes.len() >= 2
+            && self.authenticated_endpoint_consumed
             && self.host_service_sigkill_delivered
             && self.first_host_service_reaped
             && self.stale_socket_retained
@@ -370,7 +374,12 @@ fn canonical_sha256_digest(value: &str) -> bool {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{canonical_git_revision, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeReport};
+    use a3s_oci_sdk::{ContainerId, ContainerTarget, ExitStatus, Generation};
+
+    use super::{
+        canonical_git_revision, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeReport,
+        MacosHvfOwnerDeathEvidence, MacosProcessIdentity,
+    };
 
     fn complete_artifacts() -> MacosHvfArtifactEvidence {
         MacosHvfArtifactEvidence {
@@ -383,6 +392,58 @@ mod tests {
             source_bundle: PathBuf::from("/tmp/bundle"),
             source_bundle_config_digest: format!("sha256:{}", "4".repeat(64)),
             source_revision: "5".repeat(40),
+        }
+    }
+
+    fn complete_owner_death_evidence() -> MacosHvfOwnerDeathEvidence {
+        MacosHvfOwnerDeathEvidence {
+            first_host_service_pid: Some(101),
+            target: Some(ContainerTarget::exact(
+                ContainerId::new("owner-death-test").expect("container ID"),
+                Generation(7),
+            )),
+            created_config_digest: Some(format!("sha256:{}", "a".repeat(64))),
+            live_vm_processes: vec![
+                MacosProcessIdentity {
+                    pid: 102,
+                    parent_pid: 101,
+                    process_group_id: 102,
+                    start_time_unix_us: 1,
+                    command: "a3s-oci-krun-shim".to_string(),
+                },
+                MacosProcessIdentity {
+                    pid: 103,
+                    parent_pid: 102,
+                    process_group_id: 102,
+                    start_time_unix_us: 2,
+                    command: "a3s-oci-krun-worker".to_string(),
+                },
+            ],
+            authenticated_endpoint_consumed: true,
+            host_service_sigkill_delivered: true,
+            first_host_service_reaped: true,
+            stale_socket_retained: true,
+            live_vm_processes_reaped: true,
+            endpoint_inventory_restored: true,
+            authenticated_recovery_report_retained: true,
+            replacement_host_service_pid: Some(104),
+            replacement_socket_new_inode: true,
+            replacement_connected: true,
+            exact_stopped_state_recovered: true,
+            process_inventory_empty: true,
+            recovered_wait_status: ExitStatus::signaled(libc::SIGKILL, false).ok(),
+            recovered_wait_replayed: true,
+            stopped_delete_succeeded: true,
+            durable_state_removed: true,
+            replacement_descriptor_inventory_restored: true,
+            open_descriptors_before: Some(13),
+            open_descriptors_after: Some(13),
+            bundle_handoffs_clean: true,
+            runtime_shares_clean: true,
+            recovery_reports_clean: true,
+            replacement_socket_removed: true,
+            replacement_exit_success: true,
+            reason: None,
         }
     }
 
@@ -425,5 +486,19 @@ mod tests {
         assert!(!report.artifacts.is_complete());
         report.schema_version = "a3s.oci.macos-hvf-host-service-smoke.unknown".into();
         assert!(!report.is_success());
+    }
+
+    #[test]
+    fn owner_death_requires_endpoint_consumption_and_post_death_zero_residue() {
+        let complete = complete_owner_death_evidence();
+        assert!(complete.is_success());
+
+        let mut endpoint_still_published = complete.clone();
+        endpoint_still_published.authenticated_endpoint_consumed = false;
+        assert!(!endpoint_still_published.is_success());
+
+        let mut endpoint_leaked_after_owner_death = complete;
+        endpoint_leaked_after_owner_death.endpoint_inventory_restored = false;
+        assert!(!endpoint_leaked_after_owner_death.is_success());
     }
 }
