@@ -16,9 +16,10 @@ mod fault_cleanup;
 mod filesystem;
 mod lifecycle;
 mod multi_container;
-mod process;
 mod rootless;
 mod soak;
+
+use crate::runtime_client_process_smoke as process;
 
 use control_descriptors::{enable_workload_verification, ControlDescriptorFixture};
 use filesystem::{

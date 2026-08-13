@@ -161,13 +161,24 @@ fn endpoint_directory(report: &AgentVmSmokeReport) -> Result<Option<PathBuf>, St
     Ok(Some(Path::new(PRIVATE_TMP_ROOT).join(endpoint.pipe_name())))
 }
 
-fn open_descriptor_inventory() -> Result<BTreeSet<(i32, u32)>, String> {
+pub(crate) fn open_descriptor_inventory() -> Result<BTreeSet<(i32, u32)>, String> {
     // SAFETY: `getpid` has no preconditions.
     let process_id = unsafe { libc::getpid() };
+    open_descriptor_inventory_for_pid(process_id)
+}
+
+pub(crate) fn open_descriptor_inventory_for_pid(
+    process_id: libc::pid_t,
+) -> Result<BTreeSet<(i32, u32)>, String> {
+    if process_id <= 0 {
+        return Err(format!(
+            "invalid process ID {process_id} for descriptor inventory"
+        ));
+    }
     // SAFETY: a null output buffer and zero size request the byte count needed
     // for `PROC_PIDLISTFDS`; no memory is read or written.
     let bytes = unsafe { libc::proc_pidinfo(process_id, libc::PROC_PIDLISTFDS, 0, null_mut(), 0) };
-    if bytes < 0 {
+    if bytes <= 0 {
         return Err(format!(
             "failed to count open descriptors for PID {process_id}: {}",
             io::Error::last_os_error()
@@ -201,7 +212,7 @@ fn open_descriptor_inventory() -> Result<BTreeSet<(i32, u32)>, String> {
             buffer_bytes,
         )
     };
-    if bytes_read < 0 {
+    if bytes_read <= 0 {
         return Err(format!(
             "failed to read open descriptors for PID {process_id}: {}",
             io::Error::last_os_error()
@@ -287,7 +298,7 @@ mod tests {
     use a3s_oci_agent_protocol::AgentVsockEndpoint;
     use a3s_oci_core::HostPlatform;
 
-    use super::{endpoint_directory, MacosHostCleanupTracker};
+    use super::{endpoint_directory, open_descriptor_inventory_for_pid, MacosHostCleanupTracker};
     use crate::agent_socket::PRIVATE_TMP_ROOT;
     use crate::{AgentVmSmokeReport, MacosAgentSocketListener};
 
@@ -318,6 +329,16 @@ mod tests {
         let error = endpoint_directory(&report)
             .expect_err("bound endpoint without its exact name must not pass verification");
         assert!(error.contains("no exact endpoint name"), "{error}");
+    }
+
+    #[test]
+    fn descriptor_inventory_rejects_a_missing_process() {
+        let error = open_descriptor_inventory_for_pid(libc::pid_t::MAX)
+            .expect_err("a missing process must not look like an empty descriptor inventory");
+        assert!(
+            error.contains("failed to count open descriptors"),
+            "{error}"
+        );
     }
 
     #[test]

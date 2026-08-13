@@ -209,6 +209,41 @@ fn macos_hvf_host_service_requires_all_owner_paths_without_creating_root() {
     assert!(!std::path::Path::new(&root).exists());
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn macos_hvf_host_service_smoke_fails_closed_without_creating_evidence() {
+    let missing_parent = format!(
+        "/tmp/a3s-oci-cli-hvf-host-smoke-missing-{}",
+        std::process::id()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "macos-hvf-host-service-smoke",
+            "--shim",
+            "/tmp/missing-a3s-oci-hvf-shim",
+            "--system-image-manifest",
+            "/tmp/missing-a3s-oci-system-image.json",
+            "--bundle",
+            "/tmp/missing-a3s-oci-bundle",
+            "--work-parent",
+            &missing_parent,
+            "--source-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+        .output()
+        .expect("macOS HVF Host Service smoke command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("Host Service smoke output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.macos-hvf-host-service-smoke.v1"
+    );
+    assert_ne!(report["status"], "available");
+    assert!(!std::path::Path::new(&missing_parent).exists());
+}
+
 #[test]
 fn native_linux_service_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))

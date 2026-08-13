@@ -2,6 +2,7 @@ use std::future::Future;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use a3s_oci_sdk::{serve_transport_connection, Error, ErrorCode, OciRuntimeService, Result};
 use tokio::net::{UnixListener, UnixStream};
@@ -12,6 +13,7 @@ pub(crate) const SERVICE_SOCKET_NAME: &str = "runtime.sock";
 const MAX_CLIENT_CONNECTIONS: usize = 32;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_SOCKET_MODE: u32 = 0o600;
+const STALE_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// One inode-pinned, same-UID Unix SDK endpoint.
 ///
@@ -24,6 +26,7 @@ pub(crate) struct UnixServiceEndpoint {
 }
 
 impl UnixServiceEndpoint {
+    #[cfg(any(test, target_os = "linux"))]
     pub(crate) async fn bind(path: &Path) -> Result<Self> {
         validate_absolute_normalized_path(path, "Unix SDK service socket")?;
         match tokio::fs::symlink_metadata(path).await {
@@ -47,6 +50,21 @@ impl UnixServiceEndpoint {
             }
         }
 
+        Self::bind_absent(path).await
+    }
+
+    /// Bind after recovering only a verified, unreachable socket inode.
+    ///
+    /// The caller must already own the durable service-state lock. That lock
+    /// is the race boundary proving that another legitimate service owner
+    /// cannot publish this endpoint while stale-path recovery is in progress.
+    pub(crate) async fn bind_recovering_stale(path: &Path) -> Result<Self> {
+        validate_absolute_normalized_path(path, "Unix SDK service socket")?;
+        recover_stale_socket(path).await?;
+        Self::bind_absent(path).await
+    }
+
+    async fn bind_absent(path: &Path) -> Result<Self> {
         let listener = UnixListener::bind(path).map_err(|error| {
             service_error(
                 ErrorCode::Unavailable,
@@ -140,6 +158,118 @@ impl UnixServiceEndpoint {
         )
         .await
     }
+}
+
+async fn recover_stale_socket(path: &Path) -> Result<()> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(service_error(
+                ErrorCode::PermissionDenied,
+                "recover-unix-sdk-service-socket",
+                format!(
+                    "failed to inspect Unix SDK service socket {}: {error}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(metadata) => metadata,
+    };
+    // SAFETY: geteuid has no preconditions or failure result.
+    let effective_uid = unsafe { libc::geteuid() };
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o777 != PRIVATE_SOCKET_MODE
+    {
+        return Err(service_error(
+            ErrorCode::PermissionDenied,
+            "recover-unix-sdk-service-socket",
+            format!(
+                "refusing to replace Unix SDK service path {}; expected a same-UID mode-0600 socket",
+                path.display()
+            ),
+        ));
+    }
+    let expected_device = metadata.dev();
+    let expected_inode = metadata.ino();
+
+    match tokio::time::timeout(STALE_SOCKET_PROBE_TIMEOUT, UnixStream::connect(path)).await {
+        Ok(Ok(stream)) => {
+            drop(stream);
+            return Err(service_error(
+                ErrorCode::Conflict,
+                "recover-unix-sdk-service-socket",
+                format!(
+                    "Unix SDK service socket still has a live listener: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+        Ok(Err(error)) => {
+            return Err(service_error(
+                ErrorCode::Unavailable,
+                "recover-unix-sdk-service-socket",
+                format!(
+                    "could not prove Unix SDK service socket {} is stale: {error}",
+                    path.display()
+                ),
+            )
+            .retryable(true));
+        }
+        Err(_) => {
+            return Err(service_error(
+                ErrorCode::Unavailable,
+                "recover-unix-sdk-service-socket",
+                format!(
+                    "timed out probing existing Unix SDK service socket {}",
+                    path.display()
+                ),
+            )
+            .retryable(true));
+        }
+    }
+
+    let current = match tokio::fs::symlink_metadata(path).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(service_error(
+                ErrorCode::PermissionDenied,
+                "recover-unix-sdk-service-socket",
+                format!(
+                    "failed to re-inspect stale Unix SDK service socket {}: {error}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(metadata) => metadata,
+    };
+    if !current.file_type().is_socket()
+        || current.uid() != effective_uid
+        || current.mode() & 0o777 != PRIVATE_SOCKET_MODE
+        || current.dev() != expected_device
+        || current.ino() != expected_inode
+    {
+        return Err(service_error(
+            ErrorCode::Conflict,
+            "recover-unix-sdk-service-socket",
+            format!(
+                "Unix SDK service socket changed during stale-path recovery: {}",
+                path.display()
+            ),
+        ));
+    }
+    tokio::fs::remove_file(path).await.map_err(|error| {
+        service_error(
+            ErrorCode::PermissionDenied,
+            "recover-unix-sdk-service-socket",
+            format!(
+                "failed to remove verified stale Unix SDK service socket {}: {error}",
+                path.display()
+            ),
+        )
+    })
 }
 
 pub(crate) fn validate_absolute_normalized_path(path: &Path, label: &str) -> Result<()> {
@@ -441,6 +571,103 @@ mod tests {
             .expect("bind another owned socket");
         drop(endpoint);
         assert!(!socket_path.exists());
+    }
+
+    #[tokio::test]
+    async fn replacement_bind_recovers_only_an_unreachable_private_socket() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = canonical_temporary_root(&temporary).join("service");
+        prepare_private_directory(&root, "test root")
+            .await
+            .expect("private root");
+        let socket_path = root.join(SERVICE_SOCKET_NAME);
+
+        let stale =
+            std::os::unix::net::UnixListener::bind(&socket_path).expect("bind predecessor socket");
+        std::fs::set_permissions(
+            &socket_path,
+            std::fs::Permissions::from_mode(PRIVATE_SOCKET_MODE),
+        )
+        .expect("protect predecessor socket");
+        let stale_metadata =
+            std::fs::symlink_metadata(&socket_path).expect("predecessor socket metadata");
+        drop(stale);
+
+        let endpoint = UnixServiceEndpoint::bind_recovering_stale(&socket_path)
+            .await
+            .expect("recover stale predecessor socket");
+        let replacement_metadata =
+            std::fs::symlink_metadata(&socket_path).expect("replacement socket metadata");
+        assert_ne!(replacement_metadata.ino(), stale_metadata.ino());
+        assert_eq!(replacement_metadata.mode() & 0o777, PRIVATE_SOCKET_MODE);
+        drop(endpoint);
+        assert!(!socket_path.exists());
+    }
+
+    #[tokio::test]
+    async fn replacement_bind_refuses_a_live_listener() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = canonical_temporary_root(&temporary).join("service");
+        prepare_private_directory(&root, "test root")
+            .await
+            .expect("private root");
+        let socket_path = root.join(SERVICE_SOCKET_NAME);
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+            .expect("bind live predecessor socket");
+        std::fs::set_permissions(
+            &socket_path,
+            std::fs::Permissions::from_mode(PRIVATE_SOCKET_MODE),
+        )
+        .expect("protect live predecessor socket");
+        let metadata = std::fs::symlink_metadata(&socket_path).expect("live predecessor metadata");
+
+        let error = match UnixServiceEndpoint::bind_recovering_stale(&socket_path).await {
+            Ok(_) => panic!("live listener must not be replaced"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ErrorCode::Conflict);
+        let retained = std::fs::symlink_metadata(&socket_path).expect("retained live socket");
+        assert_eq!(retained.ino(), metadata.ino());
+        drop(listener);
+        std::fs::remove_file(&socket_path).expect("remove test socket");
+    }
+
+    #[tokio::test]
+    async fn replacement_bind_refuses_unprotected_or_non_socket_paths() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = canonical_temporary_root(&temporary).join("service");
+        prepare_private_directory(&root, "test root")
+            .await
+            .expect("private root");
+        let socket_path = root.join(SERVICE_SOCKET_NAME);
+
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+            .expect("bind permissive predecessor socket");
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666))
+            .expect("make predecessor socket permissive");
+        drop(listener);
+        let error = match UnixServiceEndpoint::bind_recovering_stale(&socket_path).await {
+            Ok(_) => panic!("permissive socket must not be replaced"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        std::fs::remove_file(&socket_path).expect("remove permissive socket");
+
+        std::fs::write(&socket_path, b"not a socket").expect("ordinary file");
+        std::fs::set_permissions(
+            &socket_path,
+            std::fs::Permissions::from_mode(PRIVATE_SOCKET_MODE),
+        )
+        .expect("protect ordinary file");
+        let error = match UnixServiceEndpoint::bind_recovering_stale(&socket_path).await {
+            Ok(_) => panic!("ordinary file must not be replaced"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            std::fs::read(&socket_path).expect("retained ordinary file"),
+            b"not a socket"
+        );
     }
 
     #[tokio::test]

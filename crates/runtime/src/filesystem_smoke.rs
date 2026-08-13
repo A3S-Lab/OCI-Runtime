@@ -5,7 +5,7 @@ use std::time::Duration;
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 use a3s_oci_agent_protocol::AgentClient;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
 use a3s_oci_sdk::RuntimeClient;
 use a3s_oci_sdk::{
     async_trait, ContainerTarget, ErrorCode, FileOp, FileRequest, FileResponse, FilesystemEntry,
@@ -30,7 +30,7 @@ trait FilesystemSmokeClient: Sync {
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse>;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
 #[async_trait]
 impl FilesystemSmokeClient for RuntimeClient {
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
@@ -60,7 +60,7 @@ where
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
 pub(crate) async fn exercise_runtime(
     client: &RuntimeClient,
     target: &ContainerTarget,

@@ -13,7 +13,7 @@ use tokio::time::{timeout, Instant};
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 const LIFECYCLE_TIMEOUT_MS: u64 = 15_000;
 
-pub(super) async fn exercise_process_io(
+pub(crate) async fn exercise_process_io(
     client: &RuntimeClient,
     target: &ContainerTarget,
     nonce: &str,
@@ -123,7 +123,7 @@ pub(super) async fn exercise_process_io(
     }
 }
 
-pub(super) async fn exercise_terminal_io(
+pub(crate) async fn exercise_terminal_io(
     client: &RuntimeClient,
     target: &ContainerTarget,
     nonce: &str,
@@ -386,7 +386,7 @@ async fn collect_output(
     Ok((stdout, stderr))
 }
 
-pub(super) async fn exercise_before_init_exit(
+pub(crate) async fn exercise_before_init_exit(
     client: &RuntimeClient,
     target: &ContainerTarget,
     nonce: &str,
@@ -488,7 +488,7 @@ pub(super) async fn exercise_before_init_exit(
     Ok(cleanup_target)
 }
 
-pub(super) async fn verify_after_init_exit(
+pub(crate) async fn verify_after_init_exit(
     client: &RuntimeClient,
     target: &ContainerTarget,
     cleanup_process: ProcessTarget,

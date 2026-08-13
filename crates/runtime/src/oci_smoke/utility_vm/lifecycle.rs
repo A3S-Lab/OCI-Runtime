@@ -737,7 +737,7 @@ pub(crate) fn resource_stats_snapshot_is_exact(
         && stats.metrics.contains_key("pids.events.max")
 }
 
-fn process_inventory_is_exact(
+pub(crate) fn process_inventory_is_exact(
     processes: &[a3s_oci_sdk::ProcessRecord],
     target: &ContainerTarget,
     worker: &ProcessTarget,

@@ -96,6 +96,28 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         system_image_manifest: PathBuf,
     },
+    /// Qualify the complete public Apple Silicon HVF Host Service product path.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    MacosHvfHostServiceSmoke {
+        /// Absolute entitlement-signed isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable macOS utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// OCI bundle copied into a private runtime-owned handoff for every generation.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing private directory that retains report.json and all phase evidence.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Number of sequential fresh-VM generations in the final public-service soak.
+        #[arg(long, default_value_t = 25)]
+        iterations: u32,
+        /// Source revision embedded in qualification provenance.
+        #[arg(long, value_name = "REVISION")]
+        source_revision: String,
+    },
     /// Hold one real Native Linux workload for owner-death qualification.
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
@@ -517,6 +539,8 @@ enum CliError {
     Runtime(#[from] a3s_oci_sdk::Error),
     #[error("failed to serialize command output: {0}")]
     Serialize(#[from] serde_json::Error),
+    #[error("failed to resolve the current a3s-oci executable: {0}")]
+    CurrentExecutable(std::io::Error),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -617,6 +641,36 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
         } => {
             macos_hvf_service::run(root, shim, system_image_manifest).await?;
             Ok(ExitCode::SUCCESS)
+        }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        Command::MacosHvfHostServiceSmoke {
+            shim,
+            system_image_manifest,
+            bundle,
+            work_parent,
+            iterations,
+            source_revision,
+        } => {
+            let executable = std::env::current_exe().map_err(CliError::CurrentExecutable)?;
+            let report = a3s_oci_runtime::macos_hvf_host_service_smoke(
+                a3s_oci_runtime::MacosHvfHostServiceSmokeConfig {
+                    host_service_executable: executable,
+                    shim,
+                    system_image_manifest,
+                    bundle,
+                    work_parent,
+                    iterations,
+                    source_revision: Some(source_revision),
+                },
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
         }
         #[cfg(target_os = "linux")]
         Command::NativeLinuxRecoveryOwner {

@@ -36,6 +36,8 @@ mod host_cleanup;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf_driver;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos_hvf_host_smoke;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_hvf_service;
 mod marker;
 mod multi_container_report;
@@ -55,6 +57,8 @@ mod platform;
 mod reopen_replacement_report;
 mod report;
 mod rootfs_enforcement;
+#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
+mod runtime_client_process_smoke;
 mod service;
 mod soak_report;
 mod state;
@@ -95,6 +99,13 @@ pub use driver::{
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use hvf_driver::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub use macos_hvf_host_smoke::{
+    macos_hvf_host_service_smoke, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeConfig,
+    MacosHvfHostServiceSmokeReport, MacosHvfOwnerDeathEvidence, MacosHvfPublicLifecycleEvidence,
+    MacosHvfPublicSoakEvidence, MacosProcessIdentity, MACOS_HVF_HOST_SERVICE_SMOKE_SCHEMA_VERSION,
+    MAX_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS, MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS,
+};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use macos_hvf_service::{MacosHvfHostService, MacosHvfHostServiceConfig};
 pub use multi_container_report::{

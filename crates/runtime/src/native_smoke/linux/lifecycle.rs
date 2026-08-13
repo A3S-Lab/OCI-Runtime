@@ -319,7 +319,7 @@ async fn exercise_client(
     Ok(())
 }
 
-async fn verify_runtime_events(
+pub(crate) async fn verify_runtime_events(
     client: &RuntimeClient,
     target: &ContainerTarget,
 ) -> Result<bool, String> {

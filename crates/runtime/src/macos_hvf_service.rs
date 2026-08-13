@@ -133,7 +133,12 @@ impl MacosHvfHostService {
                 return Err(error);
             }
         };
-        let endpoint = match UnixServiceEndpoint::bind(&config.socket_path()).await {
+        // HostRuntimeService owns the durable state lock at this point. A
+        // replacement owner may therefore recover the private socket inode
+        // left behind by an ungracefully terminated predecessor without ever
+        // racing another legitimate owner.
+        let endpoint = match UnixServiceEndpoint::bind_recovering_stale(&config.socket_path()).await
+        {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 let _ = driver.shutdown().await;
