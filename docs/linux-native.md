@@ -348,9 +348,12 @@ the protected cgroups are recovered and removed.
 GitHub Actions prepares a dedicated cgroup-v2 subtree and runs these gates as
 the dedicated user on both x86_64 and aarch64. The jobs retain the rootless
 device-policy report separately and also run the owner-death recovery gate
-described below. The device-policy claim stays provisional until both new
-real-host reports pass; broader controller and security profiles remain
-promotion gates.
+described below. Runtime commit `bed43d2` passed both real-host lanes in CI run
+`31714178349`. The retained v4 reports record `available`, exact UID/GID 20000,
+verified helper, nodes, live policy updates, durable events, delete replay, and
+complete cgroup, runtime, session, and marker cleanup. This qualifies the exact
+six-device profile; broader unadvertised controller and security profiles
+remain promotion gates.
 
 ## Multi-container generation gate
 
@@ -596,8 +599,8 @@ This evidence proves rootful and core rootless bootstrap profiles, not general
 OCI support. The default driver must remain `probe-only` until at least the
 following pass:
 
-- retained passing x86_64 and aarch64 evidence for the bounded rootless
-  device-policy helper, plus broader real-host controller/profile qualification;
+- real-host qualification before any broader rootless device or controller
+  profile is advertised;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
 - remaining mount and credential controls, broader cgroup v2 policies,

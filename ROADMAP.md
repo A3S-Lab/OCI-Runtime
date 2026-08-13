@@ -1299,7 +1299,7 @@ leak. Only then may KVM become `experimental`.
     requests with exact read-back and rollback.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
-  - [ ] Qualify the rootless delegation model and device support for every
+  - [x] Qualify the rootless delegation model and device support for every
     advertised profile on real hosts. The v4 rootless gate retains an exact
     user-owned cgroup-v2 descriptor, starts a parent-bound privileged helper
     before Tokio, permanently drops the owner to its real UID/GID, and accepts
@@ -1307,9 +1307,12 @@ leak. Only then may KVM become `experimental`.
     The first bounded profile is the exact six-device A3S Box fixture. Its smoke
     verifies retained device-node mounts, read-only replacement, failed-update
     rollback, disable/re-enable, durable events, helper shutdown, and complete
-    cgroup/runtime cleanup. Keep this item open until the new report passes and
-    is retained from both x86_64 and aarch64 real-host lanes; broader rootless
-    device and controller profiles are still outside the advertised boundary.
+    cgroup/runtime cleanup. Runtime commit `bed43d2` passed both x86_64 and
+    aarch64 real-host lanes in CI run `31714178349`. Both retained v4 reports
+    record `available`, UID/GID 20000, verified helper, nodes, updates, events,
+    deletion replay, durable-state removal, and empty cgroup, runtime, session,
+    and marker cleanup. This is the only advertised rootless device profile;
+    broader device and controller profiles remain outside that boundary.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
     for every newly advertised controller on x86_64 and aarch64.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
