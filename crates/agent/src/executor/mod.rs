@@ -1407,7 +1407,7 @@ mod rootless_device_tests {
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error
             .message
-            .contains("linux.devices or linux.resources.devices"));
+            .contains("linux.devices and linux.resources.devices"));
     }
 
     #[tokio::test]

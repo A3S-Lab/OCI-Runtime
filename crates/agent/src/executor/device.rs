@@ -2279,48 +2279,41 @@ fn attach_device_mount(source: &OwnedFd, target: &Path, container_path: &Path) -
 }
 
 fn attach_retained_device(source: &OwnedFd, target: &Path, container_path: &Path) -> Result<()> {
-    let source_path = path_cstring(
-        &Path::new("/proc/self/fd").join(source.as_raw_fd().to_string()),
-        "retained rootless device source",
-    )?;
-    let target_path = path_cstring(target, "OCI device bind target")?;
-    let null = std::ptr::null::<libc::c_char>();
-    let null_data = std::ptr::null::<libc::c_void>();
-    // SAFETY: the source path addresses the retained O_PATH descriptor through
-    // procfs and the target is the newly created placeholder in the private
-    // mount namespace.
-    if unsafe {
-        libc::mount(
-            source_path.as_ptr(),
-            target_path.as_ptr(),
-            null,
-            libc::MS_BIND,
-            null_data,
+    let empty_path_flag = u32::try_from(libc::AT_EMPTY_PATH).map_err(|error| {
+        device_error(
+            ErrorCode::Internal,
+            format!("AT_EMPTY_PATH does not fit the open_tree flags ABI: {error}"),
         )
-    } != 0
-    {
+    })?;
+    // Clone the exact pre-namespace O_PATH reference after the launcher has
+    // entered its private user and mount namespaces. Operating on the FD
+    // directly avoids both host-path re-resolution and procfs magic-link bind
+    // behavior, while OPEN_TREE_CLONE produces the detached mount required by
+    // move_mount below.
+    let empty = c"";
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_open_tree,
+            source.as_raw_fd(),
+            empty.as_ptr(),
+            libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC | empty_path_flag,
+        )
+    };
+    if descriptor < 0 {
         return Err(last_os_error(format!(
-            "bind retained OCI device {}",
+            "clone retained OCI device {} mount",
             container_path.display()
         )));
     }
-    // SAFETY: the bind target was mounted by this function and remains live.
-    if unsafe {
-        libc::mount(
-            null,
-            target_path.as_ptr(),
-            null,
-            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_NOSUID | libc::MS_NOEXEC,
-            null_data,
+    let descriptor = libc::c_int::try_from(descriptor).map_err(|error| {
+        device_error(
+            ErrorCode::Internal,
+            format!("open_tree returned an invalid retained device descriptor: {error}"),
         )
-    } != 0
-    {
-        return Err(last_os_error(format!(
-            "apply safe bind flags to OCI device {}",
-            container_path.display()
-        )));
-    }
-    Ok(())
+    })?;
+    // SAFETY: open_tree returned a fresh detached mount descriptor.
+    let detached = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    attach_device_mount(&detached, target, container_path)
 }
 
 fn open_path_descriptor(path: &Path) -> Result<OwnedFd> {
