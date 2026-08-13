@@ -31,7 +31,7 @@ const SUPPORTED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
-const CGROUP2_SUPER_MAGIC: u64 = 0x6367_7270;
+const CGROUP2_SUPER_MAGIC: i128 = 0x6367_7270;
 
 #[derive(Debug, Clone)]
 pub(super) struct RootlessCgroupDelegation {
@@ -829,7 +829,9 @@ fn verify_delegated_root(
     }
     // SAFETY: `statfs` succeeded and initialized the structure.
     let filesystem = unsafe { filesystem.assume_init() };
-    if u64::try_from(filesystem.f_type).ok() != Some(CGROUP2_SUPER_MAGIC) {
+    // glibc exposes f_type as a signed fsword while musl uses an unsigned
+    // word. Compare the kernel magic as a common bit pattern on both ABIs.
+    if i128::from(filesystem.f_type) != CGROUP2_SUPER_MAGIC {
         return Err(cgroup_error(
             ErrorCode::Unsupported,
             format!(
