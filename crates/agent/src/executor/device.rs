@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::ffi::CString;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -41,6 +41,7 @@ pub(super) struct PreparedDeviceSources {
     mounts: Option<Vec<OwnedFd>>,
     verify_ownership: bool,
     manifest: Mutex<Option<DeviceTargetManifest>>,
+    manifest_file: Mutex<Option<File>>,
     manifest_path: Option<PathBuf>,
 }
 
@@ -299,6 +300,7 @@ impl DevicePlan {
                 mounts: None,
                 verify_ownership: true,
                 manifest: Mutex::new(None),
+                manifest_file: Mutex::new(None),
                 manifest_path: None,
             });
         }
@@ -313,6 +315,7 @@ impl DevicePlan {
                 mounts: Some(Vec::new()),
                 verify_ownership: !rootless,
                 manifest: Mutex::new(None),
+                manifest_file: Mutex::new(None),
                 manifest_path: None,
             });
         }
@@ -328,6 +331,7 @@ impl DevicePlan {
                 mounts: Some(mounts),
                 verify_ownership: false,
                 manifest: Mutex::new(None),
+                manifest_file: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
             });
         }
@@ -356,6 +360,7 @@ impl DevicePlan {
                 mounts: Some(mounts),
                 verify_ownership: true,
                 manifest: Mutex::new(None),
+                manifest_file: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
             }),
             Err(error) => {
@@ -498,6 +503,31 @@ impl PreparedDeviceSources {
                 "prepared device target rootfs was already bound",
             ));
         }
+        let manifest_path = self.manifest_path.as_ref().ok_or_else(|| {
+            device_error(
+                ErrorCode::Internal,
+                "prepared device target manifest path was not retained",
+            )
+        })?;
+        write_device_target_manifest(manifest_path, &manifest)?;
+        let manifest_file = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(manifest_path)
+            .map_err(|error| manifest_persistence_error(manifest_path, error))?;
+        let mut retained_file = self.manifest_file.lock().map_err(|_| {
+            device_error(
+                ErrorCode::Internal,
+                "prepared device target manifest file state was poisoned",
+            )
+        })?;
+        if retained_file.is_some() {
+            return Err(device_error(
+                ErrorCode::Conflict,
+                "prepared device target manifest file was already opened",
+            ));
+        }
+        *retained_file = Some(manifest_file);
         *retained = Some(manifest);
         Ok(())
     }
@@ -535,7 +565,24 @@ impl PreparedDeviceSources {
             ));
         }
         manifest.targets.push(record.clone());
-        if let Err(error) = write_device_target_manifest(manifest_path, manifest) {
+        let write_result = self
+            .manifest_file
+            .lock()
+            .map_err(|_| {
+                device_error(
+                    ErrorCode::Internal,
+                    "prepared device target manifest file state was poisoned",
+                )
+            })?
+            .as_mut()
+            .ok_or_else(|| {
+                device_error(
+                    ErrorCode::Internal,
+                    "prepared device target manifest file was not opened",
+                )
+            })
+            .and_then(|file| overwrite_device_target_manifest(file, manifest_path, manifest));
+        if let Err(error) = write_result {
             let removed = manifest.targets.pop();
             if removed.as_ref() != Some(&record) {
                 return Err(device_error(
@@ -613,20 +660,7 @@ fn load_device_target_manifest_from(path: &Path) -> Result<Option<DeviceTargetMa
 }
 
 fn write_device_target_manifest(path: &Path, manifest: &DeviceTargetManifest) -> Result<()> {
-    validate_device_target_manifest(manifest)?;
-    let mut encoded = serde_json::to_vec_pretty(manifest).map_err(|error| {
-        device_error(
-            ErrorCode::Internal,
-            format!("failed to encode prepared OCI device target manifest: {error}"),
-        )
-    })?;
-    encoded.push(b'\n');
-    if encoded.len() as u64 > MAX_DEVICE_TARGETS_RECORD_BYTES {
-        return Err(device_error(
-            ErrorCode::ResourceExhausted,
-            "prepared OCI device target manifest exceeds its bounded size",
-        ));
-    }
+    let encoded = encode_device_target_manifest(manifest)?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -662,19 +696,59 @@ fn write_device_target_manifest(path: &Path, manifest: &DeviceTargetManifest) ->
     })();
     if let Err(error) = result {
         let _ = fs::remove_file(&pending);
-        return Err(device_error(
-            match error.kind() {
-                io::ErrorKind::PermissionDenied => ErrorCode::PermissionDenied,
-                io::ErrorKind::AlreadyExists => ErrorCode::Conflict,
-                _ => ErrorCode::Internal,
-            },
-            format!(
-                "failed to persist prepared OCI device target manifest {}: {error}",
-                path.display()
-            ),
-        ));
+        return Err(manifest_persistence_error(path, error));
     }
     Ok(())
+}
+
+fn overwrite_device_target_manifest(
+    file: &mut File,
+    path: &Path,
+    manifest: &DeviceTargetManifest,
+) -> Result<()> {
+    let encoded = encode_device_target_manifest(manifest)?;
+    // The trusted launcher opens this supervisor-owned record before entering
+    // a mapped user namespace. Updating through that retained descriptor keeps
+    // the private runtime directory inaccessible to container credentials.
+    let result = (|| -> io::Result<()> {
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&encoded)?;
+        file.set_len(encoded.len() as u64)?;
+        file.sync_all()
+    })();
+    result.map_err(|error| manifest_persistence_error(path, error))
+}
+
+fn encode_device_target_manifest(manifest: &DeviceTargetManifest) -> Result<Vec<u8>> {
+    validate_device_target_manifest(manifest)?;
+    let mut encoded = serde_json::to_vec_pretty(manifest).map_err(|error| {
+        device_error(
+            ErrorCode::Internal,
+            format!("failed to encode prepared OCI device target manifest: {error}"),
+        )
+    })?;
+    encoded.push(b'\n');
+    if encoded.len() as u64 > MAX_DEVICE_TARGETS_RECORD_BYTES {
+        return Err(device_error(
+            ErrorCode::ResourceExhausted,
+            "prepared OCI device target manifest exceeds its bounded size",
+        ));
+    }
+    Ok(encoded)
+}
+
+fn manifest_persistence_error(path: &Path, error: io::Error) -> Error {
+    device_error(
+        match error.kind() {
+            io::ErrorKind::PermissionDenied => ErrorCode::PermissionDenied,
+            io::ErrorKind::AlreadyExists => ErrorCode::Conflict,
+            _ => ErrorCode::Internal,
+        },
+        format!(
+            "failed to persist prepared OCI device target manifest {}: {error}",
+            path.display()
+        ),
+    )
 }
 
 fn validate_device_target_manifest(manifest: &DeviceTargetManifest) -> Result<()> {
@@ -2132,7 +2206,7 @@ mod tests {
         build_cgroup_device_program, cleanup_device_target_manifest, load_device_target_manifest,
         load_device_target_manifest_from, write_device_target_manifest, DeviceKind, DeviceNode,
         DevicePlan, DeviceTargetManifest, DeviceTargetRecord, PreparedDeviceSources, BPF_ALU64,
-        BPF_DEVCG_ACC_READ, BPF_MOV, DEVICE_TARGETS_SCHEMA_VERSION,
+        BPF_DEVCG_ACC_READ, BPF_MOV, DEVICE_TARGETS_RECORD_NAME, DEVICE_TARGETS_SCHEMA_VERSION,
     };
     use crate::executor::mount;
     use crate::executor::namespace::NamespacePlan;
@@ -2285,11 +2359,50 @@ mod tests {
             mounts: Some(Vec::new()),
             verify_ownership: true,
             manifest: std::sync::Mutex::new(None),
+            manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(runtime_directory.join("device-targets.json")),
         };
 
         prepared.bind_rootfs(&rootfs).expect("bind rootfs once");
         assert!(prepared.bind_rootfs(&rootfs).is_err());
+    }
+
+    #[test]
+    fn retained_manifest_descriptor_survives_private_path_becoming_unresolvable() {
+        let temporary = tempdir().expect("temporary plan workspace");
+        let runtime_directory = temporary.path().join("runtime");
+        let retained_directory = temporary.path().join("runtime-retained");
+        let rootfs = temporary.path().join("rootfs");
+        std::fs::create_dir(&runtime_directory).expect("runtime directory");
+        std::fs::create_dir(&rootfs).expect("rootfs directory");
+        let target = rootfs.join("null");
+        std::fs::write(&target, b"placeholder").expect("placeholder file");
+        let metadata = std::fs::symlink_metadata(&target).expect("placeholder metadata");
+        let record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
+            .expect("capture target");
+        let prepared = PreparedDeviceSources {
+            mounts: Some(Vec::new()),
+            verify_ownership: false,
+            manifest: std::sync::Mutex::new(None),
+            manifest_file: std::sync::Mutex::new(None),
+            manifest_path: Some(runtime_directory.join("device-targets.json")),
+        };
+        prepared.bind_rootfs(&rootfs).expect("bind rootfs");
+
+        std::fs::rename(&runtime_directory, &retained_directory)
+            .expect("hide the supervisor runtime directory path");
+        std::fs::write(&runtime_directory, b"not a directory")
+            .expect("block path-based manifest reopening");
+        prepared
+            .record_device_target(record.clone())
+            .expect("update through the retained manifest descriptor");
+
+        let loaded =
+            load_device_target_manifest_from(&retained_directory.join(DEVICE_TARGETS_RECORD_NAME))
+                .expect("load retained manifest")
+                .expect("retained manifest");
+        assert_eq!(loaded.targets, vec![record]);
+        std::fs::remove_file(runtime_directory).expect("remove blocking path");
     }
 
     #[test]
@@ -2301,14 +2414,19 @@ mod tests {
         std::fs::create_dir(&rootfs).expect("rootfs directory");
         std::fs::create_dir(rootfs.join("dev")).expect("device directory");
         let manifest_path = runtime_directory.join("device-targets.json");
-        std::fs::create_dir(&manifest_path).expect("blocking manifest directory");
         let prepared = PreparedDeviceSources {
             mounts: Some(Vec::new()),
             verify_ownership: false,
             manifest: std::sync::Mutex::new(None),
+            manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(manifest_path.clone()),
         };
         prepared.bind_rootfs(&rootfs).expect("bind rootfs");
+        prepared
+            .manifest_file
+            .lock()
+            .expect("manifest file state")
+            .take();
         let node = DeviceNode {
             path: std::path::PathBuf::from("/dev/null"),
             kind: DeviceKind::Character,
@@ -2325,9 +2443,9 @@ mod tests {
         let error = node
             .bind_source(&rootfs, &source, false, &prepared)
             .expect_err("manifest persistence must fail");
-        assert!(error.message.contains("failed to persist"));
+        assert!(error.message.contains("manifest file was not opened"));
         assert!(!rootfs.join("dev/null").exists());
-        assert!(manifest_path.is_dir());
+        assert!(manifest_path.is_file());
         assert!(!runtime_directory.join(".device-targets.json.next").exists());
         assert!(prepared
             .manifest

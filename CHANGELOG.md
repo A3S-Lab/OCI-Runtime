@@ -198,6 +198,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   validates all lifecycle, owner-death, and soak endpoint paths before creating
   its evidence root, so the documented `/private/tmp` command reaches every
   real-host phase on macOS rather than failing at the longer owner-death path.
+- Prepared device cleanup manifests are now published and opened while the
+  trusted Linux launcher still owns its private runtime directory. Device
+  placeholders created after entering a mapped user namespace update that
+  supervisor-owned record only through the retained `CLOEXEC` descriptor, so
+  root-mapped containers no longer fail OCI create with `EACCES` and never
+  gain path-based write access to recovery state.
 - Newly created Linux network namespaces now activate their loopback interface
   before the OCI create-hook barrier. Loopback-only Sandbox services are
   therefore reachable inside their private namespace without requiring a host
