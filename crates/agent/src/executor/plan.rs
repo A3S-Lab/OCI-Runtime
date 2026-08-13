@@ -432,6 +432,14 @@ fn validate_profile(raw: &Value) -> Result<()> {
             }
         }
     }
+    if let Some(resources) = linux.get("resources") {
+        let resources = object(resources, "linux.resources")?;
+        reject_unimplemented_keys(
+            resources,
+            "linux.resources",
+            &["devices", "memory", "cpu", "pids"],
+        )?;
+    }
     reject_unimplemented_keys(
         linux,
         "linux",
