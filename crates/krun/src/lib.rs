@@ -285,6 +285,7 @@ pub fn vm_smoke(
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
+        let _ = (system_image_manifest, runtime_share);
         vm_smoke_windows(rootfs, console, config)
     }
 

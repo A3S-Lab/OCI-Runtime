@@ -356,9 +356,9 @@ impl AgentVmSession {
             (Some(path), Some(digest))
         };
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-        let (system_image_manifest, expected_macos_manifest_sha256) = {
+        let expected_macos_manifest_sha256 = {
             let _ = system_image_manifest;
-            (None::<PathBuf>, None::<String>)
+            None::<String>
         };
         let console = match prepare_console_path(console).await {
             Ok(path) => path,

@@ -1,7 +1,9 @@
 use a3s_oci_core::HostPlatform;
 use serde_json::{json, Value};
 
-use super::{canonical_file, parse_shim_report, BoundedOutput};
+#[cfg(unix)]
+use super::canonical_file;
+use super::{parse_shim_report, BoundedOutput};
 
 fn valid_output(platform: &str) -> BoundedOutput {
     BoundedOutput {
