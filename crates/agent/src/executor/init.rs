@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
 use super::control::{
-    write_create_hooks_ready, write_ready, write_rejection, CREATE_CONTINUE_BYTE, START_BYTE,
+    receive_device_mounts, write_create_hooks_ready, write_ready, write_rejection,
+    CREATE_CONTINUE_BYTE, START_BYTE,
 };
 use super::device::{DevicePlan, PreparedDeviceSources};
 use super::hook::{HookPhase, HookStateTemplate};
@@ -154,14 +155,22 @@ fn run_container_init(
             Ok(prepared) => prepared,
             Err(error) => return reject_before_ready(&mut control, error),
         };
-    let prepared_devices =
-        match plan
-            .devices
-            .prepare_sources(&plan.namespaces, &runtime_directory, rootless)
-        {
-            Ok(prepared) => prepared,
+    let expected_device_mount_count = usize::from(rootless && plan.devices.requires_setup())
+        * super::device::ROOTLESS_DEVICE_MOUNT_COUNT;
+    let rootless_device_mount_descriptors =
+        match receive_device_mounts(&control, expected_device_mount_count) {
+            Ok(descriptors) => descriptors,
             Err(error) => return reject_before_ready(&mut control, error),
         };
+    let prepared_devices = match plan.devices.prepare_sources(
+        &plan.namespaces,
+        &runtime_directory,
+        rootless,
+        &rootless_device_mount_descriptors,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
     if let Err(error) = prepared_devices.bind_rootfs(&rootfs) {
         return reject_before_ready(&mut control, error);
     }

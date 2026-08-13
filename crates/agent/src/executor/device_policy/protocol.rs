@@ -1,11 +1,17 @@
 use std::io::{ErrorKind, Read, Write};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{policy_error, DevicePlan, MAX_DEVICE_POLICY_MESSAGE_BYTES};
+use super::super::device_mount_transport;
+use super::{
+    policy_error, DevicePlan, MAX_DEVICE_POLICY_MESSAGE_BYTES, ROOTLESS_DEVICE_MOUNT_COUNT,
+};
+
+pub(super) const DEVICE_MOUNT_FRAME_MARKER: u8 = 0x4d;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "operation", deny_unknown_fields)]
@@ -26,6 +32,7 @@ pub(super) enum DevicePolicyRequest {
     Remove {
         key: String,
     },
+    PrepareMounts,
     Shutdown,
 }
 
@@ -38,6 +45,7 @@ pub(super) enum DevicePolicyRequest {
 )]
 pub(super) enum DevicePolicyResponse {
     Applied,
+    MountsPrepared { count: usize },
     Rejected(Error),
 }
 
@@ -112,5 +120,50 @@ pub(super) fn read_message<T: for<'de> Deserialize<'de>>(transport: &mut UnixStr
             ErrorCode::PermissionDenied,
             format!("rootless device-policy message is invalid: {error}"),
         )
+    })
+}
+
+pub(super) fn send_device_mounts(transport: &UnixStream, mounts: &[OwnedFd]) -> Result<()> {
+    if mounts.len() != ROOTLESS_DEVICE_MOUNT_COUNT {
+        return Err(policy_error(
+            ErrorCode::Internal,
+            format!(
+                "rootless device-policy helper prepared {} mount descriptors; expected {ROOTLESS_DEVICE_MOUNT_COUNT}",
+                mounts.len()
+            ),
+        ));
+    }
+    let descriptors = mounts.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
+    device_mount_transport::send_descriptor_frame(
+        transport.as_raw_fd(),
+        DEVICE_MOUNT_FRAME_MARKER,
+        &descriptors,
+    )
+    .map_err(|error| {
+        policy_error(
+            ErrorCode::Unavailable,
+            format!("failed to send rootless device mount descriptors: {error}"),
+        )
+        .retryable(true)
+    })
+}
+
+pub(super) fn receive_device_mounts(transport: &UnixStream) -> Result<Vec<OwnedFd>> {
+    device_mount_transport::receive_descriptor_frame(
+        transport.as_raw_fd(),
+        DEVICE_MOUNT_FRAME_MARKER,
+        ROOTLESS_DEVICE_MOUNT_COUNT,
+    )
+    .map_err(|error| {
+        let code = if error.kind() == ErrorKind::InvalidData {
+            ErrorCode::PermissionDenied
+        } else {
+            ErrorCode::Unavailable
+        };
+        policy_error(
+            code,
+            format!("failed to receive rootless device mount descriptors: {error}"),
+        )
+        .retryable(code == ErrorCode::Unavailable)
     })
 }

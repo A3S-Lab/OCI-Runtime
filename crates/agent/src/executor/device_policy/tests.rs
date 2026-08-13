@@ -1,10 +1,12 @@
 use std::io::Write;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
 use a3s_oci_sdk::ErrorCode;
 
+use super::mount::verify_prepared_device_mounts;
+use super::protocol::{send_device_mounts, DEVICE_MOUNT_FRAME_MARKER};
 use super::{
     apply_request, read_message, validate_hello, validate_key, validate_relative_cgroup,
     write_message, DevicePolicyAuthority, DevicePolicyRequest, DevicePolicyResponse,
@@ -141,6 +143,135 @@ fn authority_rejects_a_forged_response_and_stays_unavailable() {
 }
 
 #[test]
+fn authority_accepts_multiple_valid_device_mount_preparations() {
+    let (root, mut peer) = UnixStream::pair().expect("helper channel");
+    let authority = DevicePolicyAuthority::from_transport(root);
+    let helper = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let request: DevicePolicyRequest = read_message(&mut peer).expect("prepare request");
+            assert!(matches!(request, DevicePolicyRequest::PrepareMounts));
+            let mounts = open_fixed_devices();
+            write_message(
+                &mut peer,
+                &DevicePolicyResponse::MountsPrepared {
+                    count: mounts.len(),
+                },
+            )
+            .expect("prepare response");
+            send_device_mounts(&peer, &mounts).expect("send device descriptors");
+        }
+    });
+
+    for _ in 0..2 {
+        let mounts = authority
+            .prepare_device_mounts()
+            .expect("prepare fixed device mounts");
+        assert_eq!(mounts.len(), 6);
+    }
+    helper.join().expect("helper thread");
+}
+
+#[test]
+fn authority_rejects_invalid_mount_frame_and_stays_unavailable() {
+    let (root, mut peer) = UnixStream::pair().expect("helper channel");
+    let authority = DevicePolicyAuthority::from_transport(root);
+    let helper = std::thread::spawn(move || {
+        let request: DevicePolicyRequest = read_message(&mut peer).expect("prepare request");
+        assert!(matches!(request, DevicePolicyRequest::PrepareMounts));
+        let mounts = open_fixed_devices();
+        write_message(
+            &mut peer,
+            &DevicePolicyResponse::MountsPrepared {
+                count: mounts.len(),
+            },
+        )
+        .expect("prepare response");
+        let descriptors = mounts.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
+        crate::executor::device_mount_transport::send_descriptor_frame(
+            peer.as_raw_fd(),
+            DEVICE_MOUNT_FRAME_MARKER ^ 0xff,
+            &descriptors,
+        )
+        .expect("send forged mount frame");
+    });
+
+    let error = authority
+        .prepare_device_mounts()
+        .expect_err("forged mount frame must fail");
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    let repeated = authority
+        .prepare_device_mounts()
+        .expect_err("authority must stay unavailable");
+    assert_eq!(repeated.code, ErrorCode::Unavailable);
+    helper.join().expect("helper thread");
+}
+
+#[test]
+fn authority_rejects_mount_response_count_mismatch_and_stays_unavailable() {
+    let (root, mut peer) = UnixStream::pair().expect("helper channel");
+    let authority = DevicePolicyAuthority::from_transport(root);
+    let helper = std::thread::spawn(move || {
+        let request: DevicePolicyRequest = read_message(&mut peer).expect("prepare request");
+        assert!(matches!(request, DevicePolicyRequest::PrepareMounts));
+        write_message(
+            &mut peer,
+            &DevicePolicyResponse::MountsPrepared { count: 1 },
+        )
+        .expect("forged prepare response");
+    });
+
+    let error = authority
+        .prepare_device_mounts()
+        .expect_err("wrong response count must fail");
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    let repeated = authority
+        .prepare_device_mounts()
+        .expect_err("authority must stay unavailable");
+    assert_eq!(repeated.code, ErrorCode::Unavailable);
+    helper.join().expect("helper thread");
+}
+
+#[test]
+fn authority_treats_mount_preparation_rejection_as_permanent() {
+    let (root, mut peer) = UnixStream::pair().expect("helper channel");
+    let authority = DevicePolicyAuthority::from_transport(root);
+    let helper = std::thread::spawn(move || {
+        let request: DevicePolicyRequest = read_message(&mut peer).expect("prepare request");
+        assert!(matches!(request, DevicePolicyRequest::PrepareMounts));
+        write_message(
+            &mut peer,
+            &DevicePolicyResponse::Rejected(a3s_oci_sdk::Error::new(
+                ErrorCode::PermissionDenied,
+                "mount cloning failed",
+            )),
+        )
+        .expect("rejected prepare response");
+    });
+
+    let error = authority
+        .prepare_device_mounts()
+        .expect_err("helper rejection must fail closed");
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    let repeated = authority
+        .prepare_device_mounts()
+        .expect_err("authority must stay unavailable");
+    assert_eq!(repeated.code, ErrorCode::Unavailable);
+    helper.join().expect("helper thread");
+}
+
+#[test]
+fn fixed_device_verification_rejects_forged_descriptor_metadata() {
+    let mut mounts = open_fixed_devices();
+    mounts[0] = std::fs::File::open("/dev/zero")
+        .expect("forged device descriptor")
+        .into();
+
+    let error =
+        verify_prepared_device_mounts(&mounts).expect_err("wrong major/minor slot must fail");
+    assert_eq!(error.code, ErrorCode::PermissionDenied);
+}
+
+#[test]
 fn normal_shutdown_is_explicit_and_idempotent() {
     let (root, mut peer) = UnixStream::pair().expect("helper channel");
     let authority = DevicePolicyAuthority::from_transport(root);
@@ -200,4 +331,45 @@ fn invalid_descriptor() -> OwnedFd {
     std::fs::File::open("/")
         .expect("open stable invalid cgroup descriptor")
         .into()
+}
+
+fn open_fixed_devices() -> Vec<OwnedFd> {
+    [
+        "/dev/null",
+        "/dev/zero",
+        "/dev/full",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/tty",
+    ]
+    .into_iter()
+    .map(|path| {
+        let path = std::ffi::CString::new(path).expect("fixed device path");
+        let descriptor = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        assert!(
+            descriptor >= 0,
+            "retain fixed device: {}",
+            std::io::Error::last_os_error()
+        );
+        let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+        let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe {
+                libc::fcntl(
+                    descriptor.as_raw_fd(),
+                    libc::F_SETFD,
+                    flags | libc::FD_CLOEXEC,
+                )
+            },
+            0
+        );
+        descriptor
+    })
+    .collect()
 }

@@ -2,6 +2,7 @@ mod capability;
 mod cgroup;
 mod control;
 mod device;
+mod device_mount_transport;
 mod device_policy;
 mod exec;
 mod exec_process;
@@ -601,6 +602,29 @@ impl LinuxExecutor {
             let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
             return Err(error);
         }
+        let rootless_device_mounts =
+            if self.user_mapping_runtime.is_rootless() && plan.devices.requires_setup() {
+                match self
+                    .rootless_cgroup_delegation
+                    .as_ref()
+                    .ok_or_else(|| {
+                        executor_error(
+                        ErrorCode::Internal,
+                        "rootless device-policy delegation disappeared before mount preparation",
+                    )
+                    })
+                    .and_then(RootlessCgroupDelegation::prepare_device_mounts)
+                {
+                    Ok(mounts) => mounts,
+                    Err(error) => {
+                        let _ = remove_container_directory(&self.runtime_root, &runtime_directory)
+                            .await;
+                        return Err(error);
+                    }
+                }
+            } else {
+                Vec::new()
+            };
         let mut process = match PreparedProcess::spawn(
             &plan,
             &config_snapshot,
@@ -610,6 +634,7 @@ impl LinuxExecutor {
             &hook_state,
             ProcessSpawnContext {
                 inherited_descriptors,
+                rootless_device_mounts,
                 rootfs_scope: self.rootfs_scope,
                 user_mapping_runtime: &self.user_mapping_runtime,
             },

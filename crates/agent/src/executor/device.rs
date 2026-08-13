@@ -28,7 +28,8 @@ const DEVICE_TARGETS_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-device-targ
 const MAX_DEVICE_TARGETS_RECORD_BYTES: u64 = 64 * 1024;
 const DEVICE_TARGET_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEVICE_TARGET_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const ROOTLESS_SAFE_DEVICES: [(&str, DeviceKind, u32, u32); 6] = [
+pub(super) const ROOTLESS_DEVICE_MOUNT_COUNT: usize = 6;
+const ROOTLESS_SAFE_DEVICES: [(&str, DeviceKind, u32, u32); ROOTLESS_DEVICE_MOUNT_COUNT] = [
     ("/dev/null", DeviceKind::Character, 1, 3),
     ("/dev/zero", DeviceKind::Character, 1, 5),
     ("/dev/full", DeviceKind::Character, 1, 7),
@@ -60,7 +61,6 @@ pub(super) struct PreparedDeviceSources {
 #[derive(Debug)]
 enum PreparedDeviceSource {
     DetachedMount(OwnedFd),
-    RetainedNode(OwnedFd),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,8 +315,30 @@ impl DevicePlan {
         namespaces: &NamespacePlan,
         runtime_directory: &Path,
         rootless: bool,
+        rootless_mount_descriptors: &[OwnedFd],
     ) -> Result<PreparedDeviceSources> {
+        if !rootless && !rootless_mount_descriptors.is_empty() {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                "privileged device preparation received rootless mount descriptors",
+            ));
+        }
+        if rootless && rootless_mount_descriptors.len() > ROOTLESS_DEVICE_MOUNT_COUNT {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "rootless device preparation received {} mount descriptors; maximum is {ROOTLESS_DEVICE_MOUNT_COUNT}",
+                    rootless_mount_descriptors.len()
+                ),
+            ));
+        }
         if !namespaces.has_user() {
+            if !rootless_mount_descriptors.is_empty() {
+                return Err(device_error(
+                    ErrorCode::PermissionDenied,
+                    "device mount descriptors were supplied without a user namespace",
+                ));
+            }
             return Ok(PreparedDeviceSources {
                 sources: None,
                 verify_ownership: true,
@@ -332,6 +354,12 @@ impl DevicePlan {
             ));
         }
         if self.nodes.is_empty() {
+            if !rootless_mount_descriptors.is_empty() {
+                return Err(device_error(
+                    ErrorCode::PermissionDenied,
+                    "rootless device mount descriptors were supplied without device nodes",
+                ));
+            }
             return Ok(PreparedDeviceSources {
                 sources: Some(Vec::new()),
                 verify_ownership: !rootless,
@@ -342,12 +370,7 @@ impl DevicePlan {
         }
 
         if rootless {
-            let mounts = self
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(index, node)| node.prepare_rootless_source(index))
-                .collect::<Result<Vec<_>>>()?;
+            let mounts = self.prepare_rootless_sources(rootless_mount_descriptors)?;
             return Ok(PreparedDeviceSources {
                 sources: Some(mounts),
                 verify_ownership: false,
@@ -500,6 +523,31 @@ impl DevicePlan {
         } else {
             Ok(())
         }
+    }
+
+    fn prepare_rootless_sources(
+        &self,
+        descriptors: &[OwnedFd],
+    ) -> Result<Vec<PreparedDeviceSource>> {
+        self.validate_rootless_device_set()?;
+        if descriptors.len() != self.nodes.len() {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "rootless device mount descriptor count {} does not match the fixed device set {}",
+                    descriptors.len(),
+                    self.nodes.len()
+                ),
+            ));
+        }
+        self.nodes
+            .iter()
+            .zip(descriptors)
+            .enumerate()
+            .map(|(index, (node, descriptor))| {
+                node.prepare_inherited_rootless_source(index, descriptor.as_raw_fd())
+            })
+            .collect()
     }
 
     pub(super) fn attach_loaded_cgroup_device_program(
@@ -1345,40 +1393,45 @@ impl DeviceNode {
         clone_device_mount(&path).map(PreparedDeviceSource::DetachedMount)
     }
 
-    fn prepare_rootless_source(&self, index: usize) -> Result<PreparedDeviceSource> {
+    fn prepare_inherited_rootless_source(
+        &self,
+        index: usize,
+        descriptor: RawFd,
+    ) -> Result<PreparedDeviceSource> {
         if !is_rootless_safe_device(self) {
             return Err(unsupported(
                 &format!("linux.devices[{index}].path"),
                 "rootless device profiles support only the fixed A3S Box safe-device set",
             ));
         }
-        let path = path_cstring(&self.path, "rootless device source")?;
-        // SAFETY: path is NUL-terminated. O_PATH retains the exact node
-        // identity without requiring read or write access.
-        let descriptor = unsafe {
-            libc::open(
-                path.as_ptr(),
-                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
         if descriptor < 0 {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!("rootless device mount slot {index} has an invalid descriptor"),
+            ));
+        }
+        // The fixed descriptor is owned by container-init. Duplicate it so
+        // PreparedDeviceSources owns a close-on-exec copy with ordinary Rust
+        // lifetime semantics, without consuming or mutating the inherited slot.
+        let duplicated = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
+        if duplicated < 0 {
             return Err(last_os_error(format!(
-                "retain rootless device source {}",
+                "duplicate inherited rootless device mount {}",
                 self.path.display()
             )));
         }
-        // SAFETY: open returned a fresh owned descriptor.
-        let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
-        if !self.matches_source_metadata(&metadata_for_fd(&descriptor)?) {
+        // SAFETY: F_DUPFD_CLOEXEC returned a new owned descriptor.
+        let duplicated = unsafe { OwnedFd::from_raw_fd(duplicated) };
+        if !self.matches_source_metadata(&metadata_for_fd(&duplicated)?) {
             return Err(device_error(
-                ErrorCode::FailedPrecondition,
+                ErrorCode::PermissionDenied,
                 format!(
-                    "rootless device source {} does not match the requested device",
+                    "inherited rootless device mount {} does not match the fixed device slot",
                     self.path.display()
                 ),
             ));
         }
-        Ok(PreparedDeviceSource::RetainedNode(descriptor))
+        Ok(PreparedDeviceSource::DetachedMount(duplicated))
     }
 
     fn bind_source(
@@ -1457,14 +1510,8 @@ impl DeviceNode {
             return Err(error);
         }
 
-        match source {
-            PreparedDeviceSource::DetachedMount(source) => {
-                attach_device_mount(source, &target, &self.path)?;
-            }
-            PreparedDeviceSource::RetainedNode(source) => {
-                attach_retained_device(source, &target, &self.path)?;
-            }
-        }
+        let PreparedDeviceSource::DetachedMount(source) = source;
+        attach_device_mount(source, &target, &self.path)?;
         if verify_ownership {
             self.verify_at(&target, self.uid, self.gid)
         } else {
@@ -2278,44 +2325,6 @@ fn attach_device_mount(source: &OwnedFd, target: &Path, container_path: &Path) -
     Ok(())
 }
 
-fn attach_retained_device(source: &OwnedFd, target: &Path, container_path: &Path) -> Result<()> {
-    let empty_path_flag = u32::try_from(libc::AT_EMPTY_PATH).map_err(|error| {
-        device_error(
-            ErrorCode::Internal,
-            format!("AT_EMPTY_PATH does not fit the open_tree flags ABI: {error}"),
-        )
-    })?;
-    // Clone the exact pre-namespace O_PATH reference after the launcher has
-    // entered its private user and mount namespaces. Operating on the FD
-    // directly avoids both host-path re-resolution and procfs magic-link bind
-    // behavior, while OPEN_TREE_CLONE produces the detached mount required by
-    // move_mount below.
-    let empty = c"";
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_open_tree,
-            source.as_raw_fd(),
-            empty.as_ptr(),
-            libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC | empty_path_flag,
-        )
-    };
-    if descriptor < 0 {
-        return Err(last_os_error(format!(
-            "clone retained OCI device {} mount",
-            container_path.display()
-        )));
-    }
-    let descriptor = libc::c_int::try_from(descriptor).map_err(|error| {
-        device_error(
-            ErrorCode::Internal,
-            format!("open_tree returned an invalid retained device descriptor: {error}"),
-        )
-    })?;
-    // SAFETY: open_tree returned a fresh detached mount descriptor.
-    let detached = unsafe { OwnedFd::from_raw_fd(descriptor) };
-    attach_device_mount(&detached, target, container_path)
-}
-
 fn open_path_descriptor(path: &Path) -> Result<OwnedFd> {
     let path = path_cstring(path, "OCI device bind target")?;
     // SAFETY: the target is NUL-terminated and open does not retain it.
@@ -2388,7 +2397,6 @@ fn device_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::OwnedFd;
     use std::os::unix::fs::PermissionsExt;
 
     use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
@@ -2628,10 +2636,11 @@ mod tests {
             uid: 0,
             gid: 0,
         };
-        let source: OwnedFd = std::fs::File::open("/dev/null")
-            .expect("device source")
-            .into();
-        let source = super::PreparedDeviceSource::RetainedNode(source);
+        let source = super::PreparedDeviceSource::DetachedMount(
+            std::fs::File::open("/dev/null")
+                .expect("device source")
+                .into(),
+        );
 
         let error = node
             .bind_source(&rootfs, &source, false, &prepared)

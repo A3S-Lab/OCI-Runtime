@@ -155,6 +155,18 @@ impl RootlessCgroupDelegation {
             Ok(())
         }
     }
+
+    pub(super) fn prepare_device_mounts(&self) -> Result<Vec<OwnedFd>> {
+        self.device_policy_authority
+            .as_ref()
+            .ok_or_else(|| {
+                cgroup_error(
+                    ErrorCode::Unsupported,
+                    "rootless device mount preparation requires a device-policy authority",
+                )
+            })?
+            .prepare_device_mounts()
+    }
 }
 
 #[cfg(test)]

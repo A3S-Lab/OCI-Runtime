@@ -9,13 +9,18 @@ use std::time::{Duration, Instant};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
-use super::device::{DevicePlan, LoadedDeviceProgram};
+use super::device::{DevicePlan, LoadedDeviceProgram, ROOTLESS_DEVICE_MOUNT_COUNT};
 use super::pidfd::PidFd;
-use protocol::{read_message, write_message, DevicePolicyRequest, DevicePolicyResponse};
+use mount::{open_rootless_device_sources, prepare_device_mounts, verify_prepared_device_mounts};
+use protocol::{
+    read_message, receive_device_mounts, send_device_mounts, write_message, DevicePolicyRequest,
+    DevicePolicyResponse,
+};
 
+mod mount;
 mod protocol;
 
-const DEVICE_POLICY_SCHEMA_VERSION: &str = "a3s.oci.rootless-device-policy.v1";
+const DEVICE_POLICY_SCHEMA_VERSION: &str = "a3s.oci.rootless-device-policy.v2";
 const MAX_DEVICE_POLICY_MESSAGE_BYTES: usize = 64 * 1024;
 const MAX_DEVICE_POLICY_KEY_BYTES: usize = 512;
 const MAX_DEVICE_POLICY_PATH_BYTES: usize = 4_096;
@@ -246,6 +251,60 @@ impl DevicePolicyAuthority {
         })
     }
 
+    pub(super) fn prepare_device_mounts(&self) -> Result<Vec<OwnedFd>> {
+        if !self.inner.available.load(Ordering::Acquire) {
+            return Err(self.unavailable_error());
+        }
+        let mut transport = self.inner.transport.lock().map_err(|_| {
+            self.inner.available.store(false, Ordering::Release);
+            self.unavailable_error()
+        })?;
+        let Some(transport) = transport.as_mut() else {
+            self.inner.available.store(false, Ordering::Release);
+            return Err(self.unavailable_error());
+        };
+        if let Err(error) = write_message(transport, &DevicePolicyRequest::PrepareMounts) {
+            self.inner.available.store(false, Ordering::Release);
+            return Err(self.transport_failure(error));
+        }
+        let response: DevicePolicyResponse = match read_message(transport) {
+            Ok(response) => response,
+            Err(error) => {
+                self.inner.available.store(false, Ordering::Release);
+                return Err(self.transport_failure(error));
+            }
+        };
+        match response {
+            DevicePolicyResponse::MountsPrepared { count }
+                if count == ROOTLESS_DEVICE_MOUNT_COUNT => {}
+            DevicePolicyResponse::Rejected(error) => {
+                self.inner.available.store(false, Ordering::Release);
+                return Err(self.transport_failure(error));
+            }
+            response => {
+                self.inner.available.store(false, Ordering::Release);
+                return Err(self.transport_failure(policy_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "rootless device-policy helper returned an invalid mount response: {response:?}"
+                    ),
+                )));
+            }
+        }
+        let mounts = match receive_device_mounts(transport) {
+            Ok(mounts) => mounts,
+            Err(error) => {
+                self.inner.available.store(false, Ordering::Release);
+                return Err(self.transport_failure(error));
+            }
+        };
+        if let Err(error) = verify_prepared_device_mounts(&mounts) {
+            self.inner.available.store(false, Ordering::Release);
+            return Err(self.transport_failure(error));
+        }
+        Ok(mounts)
+    }
+
     fn exchange(&self, request: DevicePolicyRequest) -> Result<()> {
         if !self.inner.available.load(Ordering::Acquire) {
             return Err(self.unavailable_error());
@@ -271,6 +330,13 @@ impl DevicePolicyAuthority {
         };
         match response {
             DevicePolicyResponse::Applied => Ok(()),
+            DevicePolicyResponse::MountsPrepared { .. } => {
+                self.inner.available.store(false, Ordering::Release);
+                Err(self.transport_failure(policy_error(
+                    ErrorCode::PermissionDenied,
+                    "rootless device-policy helper returned mount descriptors for a policy mutation",
+                )))
+            }
             DevicePolicyResponse::Rejected(error) => Err(error),
         }
     }
@@ -501,6 +567,7 @@ fn run_helper(
     verify_parent_identity(expected_parent)?;
     verify_privileged_helper_identity()?;
     verify_cgroup2_descriptor(&delegated_root)?;
+    let device_sources = open_rootless_device_sources()?;
 
     let actual_pid = i32::try_from(std::process::id()).map_err(|error| {
         policy_error(
@@ -545,6 +612,30 @@ fn run_helper(
                 };
                 write_message(&mut transport, &response)?;
                 return cleanup;
+            }
+            if matches!(&request, DevicePolicyRequest::PrepareMounts) {
+                let result = prepare_device_mounts(&device_sources);
+                match result {
+                    Ok(mounts) => {
+                        write_message(
+                            &mut transport,
+                            &DevicePolicyResponse::MountsPrepared {
+                                count: mounts.len(),
+                            },
+                        )?;
+                        send_device_mounts(&transport, &mounts)?;
+                    }
+                    Err(error) => {
+                        write_message(&mut transport, &DevicePolicyResponse::Rejected(error))?;
+                    }
+                }
+                transport.set_nonblocking(true).map_err(|error| {
+                    policy_error(
+                        ErrorCode::Internal,
+                        format!("failed to resume rootless device-policy monitoring: {error}"),
+                    )
+                })?;
+                continue;
             }
             let result = apply_request(&delegated_root, &mut policies, request);
             let response = match result {
@@ -722,6 +813,10 @@ fn apply_request(
             policies.remove(&key);
             Ok(())
         }
+        DevicePolicyRequest::PrepareMounts => Err(policy_error(
+            ErrorCode::PermissionDenied,
+            "rootless device mount preparation must be handled by the authenticated service loop",
+        )),
         DevicePolicyRequest::Shutdown => Err(policy_error(
             ErrorCode::PermissionDenied,
             "rootless device-policy shutdown must be handled by the authenticated service loop",
