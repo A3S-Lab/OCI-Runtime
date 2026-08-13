@@ -363,7 +363,8 @@ The Linux smoke now prepares an explicit user-owned cgroup-v2 subtree for the
 rootless v3 gate. The gate covers create, live update/stats, workload-proven
 pause/resume, an exact lifecycle event sequence, and cleanup without allowing
 the runtime to guess or take over a host cgroup. Rootless device-policy
-enforcement and owner-death cgroup recovery remain separate promotion work.
+enforcement and broader delegated controller/profile qualification remain
+separate promotion work.
 
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.

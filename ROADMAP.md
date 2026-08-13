@@ -1364,9 +1364,12 @@ and recovery suites in the Windows guest and on native Linux.
 - [x] Prove the helper-backed non-root core lifecycle with subordinate
   UID/GID ownership and `setgroups=deny` on x86_64 and aarch64.
 - [ ] Qualify explicit rootless cgroup-v2 delegation on x86_64 and aarch64.
-  The v2 gate is implemented for create, update, stats, pause/resume, replay,
-  events, and runtime-owned subtree cleanup; real-host evidence and
-  owner-death recovery remain required before promotion.
+  The v3 lifecycle gate covers create, update, stats, pause/resume, replay,
+  events, and runtime-owned subtree cleanup on both architectures. A separate
+  owner-`SIGKILL` gate now reopens the exact delegation as the same non-root
+  UID/GID and requires stopped-only recovery plus complete cgroup cleanup.
+  Retained passing evidence from both real-host CI architectures is required
+  before this item is checked.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [x] Add the Sandbox-scoped native runtime owner, bind its protected Unix SDK

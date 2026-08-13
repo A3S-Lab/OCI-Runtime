@@ -132,6 +132,9 @@ enum Command {
         container_id: a3s_oci_sdk::ContainerId,
         #[arg(long, value_name = "FILE")]
         ready_file: PathBuf,
+        /// Explicit user-owned cgroup-v2 delegation for rootless recovery.
+        #[arg(long, value_name = "DIR")]
+        delegated_cgroup_root: Option<PathBuf>,
     },
     /// Reopen a killed Native Linux owner and emit safe-recovery evidence.
     #[cfg(target_os = "linux")]
@@ -147,6 +150,9 @@ enum Command {
         container_id: a3s_oci_sdk::ContainerId,
         #[arg(long)]
         generation: u64,
+        /// Exact cgroup-v2 delegation used by the killed rootless owner.
+        #[arg(long, value_name = "DIR")]
+        delegated_cgroup_root: Option<PathBuf>,
     },
     /// Own one A3S Box container through the native Linux SDK service.
     #[cfg(target_os = "linux")]
@@ -680,13 +686,15 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
             bundle,
             container_id,
             ready_file,
+            delegated_cgroup_root,
         } => {
-            a3s_oci_runtime::native_linux_recovery_owner(
+            a3s_oci_runtime::native_linux_recovery_owner_with_cgroup_delegation(
                 &agent,
                 &root,
                 &bundle,
                 container_id,
                 &ready_file,
+                delegated_cgroup_root.as_deref(),
             )
             .await?;
             Ok(ExitCode::SUCCESS)
@@ -698,11 +706,18 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
             bundle,
             container_id,
             generation,
+            delegated_cgroup_root,
         } => {
             let generation = a3s_oci_sdk::Generation(generation);
             let target = a3s_oci_sdk::ContainerTarget::exact(container_id, generation);
-            let report =
-                a3s_oci_runtime::native_linux_recovery_resume(&agent, &root, &bundle, target).await;
+            let report = a3s_oci_runtime::native_linux_recovery_resume_with_cgroup_delegation(
+                &agent,
+                &root,
+                &bundle,
+                target,
+                delegated_cgroup_root.as_deref(),
+            )
+            .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

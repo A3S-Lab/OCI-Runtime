@@ -20,10 +20,10 @@ use crate::{DriverKillRequest, HostRuntimeService, NativeLinuxDriver, RuntimeDri
 
 /// Versioned readiness handoff written by the live Native Linux owner.
 pub const NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-recovery-owner-ready.v1";
+    "a3s.oci.native-linux-recovery-owner-ready.v2";
 /// Versioned evidence emitted after real owner death and driver reopen.
 pub const NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-recovery-smoke.v1";
+    "a3s.oci.native-linux-recovery-smoke.v2";
 
 const OWNER_MAX_LIFETIME: Duration = Duration::from_secs(300);
 const LINUX_SIGKILL: i32 = 9;
@@ -38,6 +38,10 @@ pub struct NativeLinuxRecoveryOwnerReady {
     pub config_digest: String,
     pub owner_pid: u32,
     pub init_pid: i32,
+    pub effective_uid: u32,
+    pub effective_gid: u32,
+    pub cgroup_delegation_requested: bool,
+    pub cgroup_delegation_verified: bool,
     pub running_observed: bool,
 }
 
@@ -49,8 +53,13 @@ pub struct NativeLinuxRecoverySmokeReport {
     pub platform: HostPlatform,
     pub target: ContainerTarget,
     pub replacement_owner_pid: u32,
+    pub replacement_effective_uid: u32,
+    pub replacement_effective_gid: u32,
+    pub cgroup_delegation_requested: bool,
+    pub cgroup_delegation_verified: bool,
     pub bundle_loaded: bool,
     pub host_service_reopened: bool,
+    pub recorded_workload_terminated: bool,
     pub stopped_observed: bool,
     pub process_inventory_empty: bool,
     pub kill_idempotent: bool,
@@ -59,20 +68,29 @@ pub struct NativeLinuxRecoverySmokeReport {
     pub durable_record_removed: bool,
     pub current_driver_shutdown: bool,
     pub executor_transients_clean: bool,
+    pub cgroup_delegation_clean: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
 impl NativeLinuxRecoverySmokeReport {
-    fn initial(target: ContainerTarget) -> Self {
+    fn initial(target: ContainerTarget, cgroup_delegation_requested: bool) -> Self {
+        // SAFETY: these credential queries have no pointer arguments or failure
+        // return values.
+        let (effective_uid, effective_gid) = unsafe { (libc::geteuid(), libc::getegid()) };
         Self {
             schema_version: NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION.to_string(),
             status: CapabilityStatus::Unavailable,
             platform: HostPlatform::Linux,
             target,
             replacement_owner_pid: std::process::id(),
+            replacement_effective_uid: effective_uid,
+            replacement_effective_gid: effective_gid,
+            cgroup_delegation_requested,
+            cgroup_delegation_verified: false,
             bundle_loaded: false,
             host_service_reopened: false,
+            recorded_workload_terminated: false,
             stopped_observed: false,
             process_inventory_empty: false,
             kill_idempotent: false,
@@ -81,6 +99,7 @@ impl NativeLinuxRecoverySmokeReport {
             durable_record_removed: false,
             current_driver_shutdown: false,
             executor_transients_clean: false,
+            cgroup_delegation_clean: false,
             reason: None,
         }
     }
@@ -88,6 +107,7 @@ impl NativeLinuxRecoverySmokeReport {
     fn contract_complete(&self) -> bool {
         self.bundle_loaded
             && self.host_service_reopened
+            && self.recorded_workload_terminated
             && self.stopped_observed
             && self.process_inventory_empty
             && self.kill_idempotent
@@ -96,6 +116,8 @@ impl NativeLinuxRecoverySmokeReport {
             && self.durable_record_removed
             && self.current_driver_shutdown
             && self.executor_transients_clean
+            && self.cgroup_delegation_clean
+            && self.cgroup_delegation_requested == self.cgroup_delegation_verified
             && self.reason.is_none()
     }
 
@@ -115,10 +137,30 @@ pub async fn native_linux_recovery_owner(
     container_id: ContainerId,
     ready_file: &Path,
 ) -> Result<()> {
+    native_linux_recovery_owner_with_cgroup_delegation(
+        agent,
+        root,
+        bundle_directory,
+        container_id,
+        ready_file,
+        None,
+    )
+    .await
+}
+
+/// Run the owner-death qualification owner with an optional explicit
+/// rootless cgroup-v2 delegation.
+pub async fn native_linux_recovery_owner_with_cgroup_delegation(
+    agent: &Path,
+    root: &Path,
+    bundle_directory: &Path,
+    container_id: ContainerId,
+    ready_file: &Path,
+    delegated_cgroup_root: Option<&Path>,
+) -> Result<()> {
     prepare_layout(root).await?;
     let bundle = OciBundle::load(bundle_directory).await?;
-    let driver =
-        Arc::new(NativeLinuxDriver::open_experimental(root.join("executor"), agent).await?);
+    let driver = open_driver(root, agent, delegated_cgroup_root).await?;
     let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
     let service = HostRuntimeService::open(root.join("state"), runtime_driver).await?;
     let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())?;
@@ -162,6 +204,13 @@ pub async fn native_linux_recovery_owner(
             config_digest: created.config_digest,
             owner_pid: std::process::id(),
             init_pid,
+            // SAFETY: these credential queries have no pointer arguments or
+            // failure return values.
+            effective_uid: unsafe { libc::geteuid() },
+            // SAFETY: see the effective UID query above.
+            effective_gid: unsafe { libc::getegid() },
+            cgroup_delegation_requested: delegated_cgroup_root.is_some(),
+            cgroup_delegation_verified: delegated_cgroup_root.is_some(),
             running_observed: true,
         },
     )?;
@@ -199,7 +248,22 @@ pub async fn native_linux_recovery_resume(
     bundle_directory: &Path,
     target: ContainerTarget,
 ) -> NativeLinuxRecoverySmokeReport {
-    let mut report = NativeLinuxRecoverySmokeReport::initial(target.clone());
+    native_linux_recovery_resume_with_cgroup_delegation(agent, root, bundle_directory, target, None)
+        .await
+}
+
+/// Reopen an owner-death generation with an optional explicit rootless
+/// cgroup-v2 delegation and retain exact cleanup evidence.
+#[must_use]
+pub async fn native_linux_recovery_resume_with_cgroup_delegation(
+    agent: &Path,
+    root: &Path,
+    bundle_directory: &Path,
+    target: ContainerTarget,
+    delegated_cgroup_root: Option<&Path>,
+) -> NativeLinuxRecoverySmokeReport {
+    let mut report =
+        NativeLinuxRecoverySmokeReport::initial(target.clone(), delegated_cgroup_root.is_some());
     let bundle = match OciBundle::load(bundle_directory).await {
         Ok(bundle) => bundle,
         Err(error) => return failed(report, format!("failed to reload recovery bundle: {error}")),
@@ -208,8 +272,11 @@ pub async fn native_linux_recovery_resume(
     if let Err(error) = prepare_layout(root).await {
         return failed(report, format!("failed to reopen recovery layout: {error}"));
     }
-    let driver = match NativeLinuxDriver::open_experimental(root.join("executor"), agent).await {
-        Ok(driver) => Arc::new(driver),
+    let driver = match open_driver(root, agent, delegated_cgroup_root).await {
+        Ok(driver) => {
+            report.cgroup_delegation_verified = delegated_cgroup_root.is_some();
+            driver
+        }
         Err(error) => return failed(report, format!("failed to reopen native driver: {error}")),
     };
     let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
@@ -224,6 +291,10 @@ pub async fn native_linux_recovery_resume(
         }
     };
     report.host_service_reopened = true;
+    // HostRuntimeService::open cannot return until NativeLinuxDriver::recover
+    // has authenticated the stale owner record and observed the exact recorded
+    // launcher and init identities as terminated.
+    report.recorded_workload_terminated = true;
 
     match service
         .state(StateRequest {
@@ -342,9 +413,20 @@ pub async fn native_linux_recovery_resume(
             false
         }
     };
+    report.cgroup_delegation_clean = match delegated_cgroup_root {
+        Some(root) => match delegated_cgroup_has_no_runtime_children(root) {
+            Ok(clean) => clean,
+            Err(error) => {
+                append_reason(&mut report, error);
+                false
+            }
+        },
+        None => true,
+    };
     if report.reason.is_none()
         && report.bundle_loaded
         && report.host_service_reopened
+        && report.recorded_workload_terminated
         && report.stopped_observed
         && report.process_inventory_empty
         && report.kill_idempotent
@@ -353,10 +435,31 @@ pub async fn native_linux_recovery_resume(
         && report.durable_record_removed
         && report.current_driver_shutdown
         && report.executor_transients_clean
+        && report.cgroup_delegation_clean
+        && report.cgroup_delegation_requested == report.cgroup_delegation_verified
     {
         report.status = CapabilityStatus::Available;
     }
     report
+}
+
+async fn open_driver(
+    root: &Path,
+    agent: &Path,
+    delegated_cgroup_root: Option<&Path>,
+) -> Result<Arc<NativeLinuxDriver>> {
+    let driver = match delegated_cgroup_root {
+        Some(delegation) => {
+            NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
+                root.join("executor"),
+                agent,
+                delegation,
+            )
+            .await?
+        }
+        None => NativeLinuxDriver::open_experimental(root.join("executor"), agent).await?,
+    };
+    Ok(Arc::new(driver))
 }
 
 async fn prepare_layout(root: &Path) -> Result<()> {
@@ -458,6 +561,38 @@ fn directory_is_empty(path: &Path) -> std::result::Result<bool, String> {
     Ok(entries.next().is_none())
 }
 
+fn delegated_cgroup_has_no_runtime_children(root: &Path) -> std::result::Result<bool, String> {
+    let entries = std::fs::read_dir(root).map_err(|error| {
+        format!(
+            "failed to inspect recovered cgroup delegation {}: {error}",
+            root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to enumerate recovered cgroup delegation {}: {error}",
+                root.display()
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "failed to inspect recovered cgroup delegation entry {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        if file_type.is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| name.starts_with("a3s-oci-"))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn operation(id: &str) -> Result<OperationContext> {
     OperationId::new(id).map(OperationContext::new)
 }
@@ -493,11 +628,12 @@ mod tests {
             ContainerId::new("native-recovery-report").expect("container ID"),
             a3s_oci_sdk::Generation(1),
         );
-        let mut report = NativeLinuxRecoverySmokeReport::initial(target);
+        let mut report = NativeLinuxRecoverySmokeReport::initial(target, false);
         assert!(!report.is_success());
         report.status = CapabilityStatus::Available;
         report.bundle_loaded = true;
         report.host_service_reopened = true;
+        report.recorded_workload_terminated = true;
         report.stopped_observed = true;
         report.process_inventory_empty = true;
         report.kill_idempotent = true;
@@ -506,8 +642,35 @@ mod tests {
         report.durable_record_removed = true;
         report.current_driver_shutdown = true;
         report.executor_transients_clean = true;
+        report.cgroup_delegation_clean = true;
         assert!(report.is_success());
         report.exact_wait_evidence_refused = false;
         assert!(!report.is_success());
+    }
+
+    #[test]
+    fn delegated_report_requires_verified_and_clean_delegation() {
+        let target = ContainerTarget::exact(
+            ContainerId::new("native-rootless-recovery-report").expect("container ID"),
+            a3s_oci_sdk::Generation(1),
+        );
+        let mut report = NativeLinuxRecoverySmokeReport::initial(target, true);
+        report.status = CapabilityStatus::Available;
+        report.bundle_loaded = true;
+        report.host_service_reopened = true;
+        report.recorded_workload_terminated = true;
+        report.stopped_observed = true;
+        report.process_inventory_empty = true;
+        report.kill_idempotent = true;
+        report.exact_wait_evidence_refused = true;
+        report.stopped_delete_succeeded = true;
+        report.durable_record_removed = true;
+        report.current_driver_shutdown = true;
+        report.executor_transients_clean = true;
+        assert!(!report.is_success());
+        report.cgroup_delegation_verified = true;
+        assert!(!report.is_success());
+        report.cgroup_delegation_clean = true;
+        assert!(report.is_success());
     }
 }

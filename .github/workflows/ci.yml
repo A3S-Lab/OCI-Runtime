@@ -831,6 +831,7 @@ jobs:
         env:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
           A3S_OCI_NATIVE_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-recovery.json
+          A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
         run: bash .github/scripts/native-linux-smoke.sh
       - if: runner.os == 'Linux' && always()
         name: Upload native Linux soak evidence
@@ -840,6 +841,7 @@ jobs:
           path: |
             ${{ runner.temp }}/a3s-oci-native-soak.json
             ${{ runner.temp }}/a3s-oci-native-recovery.json
+            ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
@@ -916,6 +918,7 @@ jobs:
         env:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
           A3S_OCI_NATIVE_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-recovery.json
+          A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
         run: bash .github/scripts/native-linux-smoke.sh
       - if: always()
         name: Upload native Linux soak evidence
@@ -925,6 +928,7 @@ jobs:
           path: |
             ${{ runner.temp }}/a3s-oci-native-soak.json
             ${{ runner.temp }}/a3s-oci-native-recovery.json
+            ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
           if-no-files-found: warn
           retention-days: 14
 

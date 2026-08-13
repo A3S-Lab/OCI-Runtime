@@ -328,10 +328,9 @@ must appear as 1:1 inside the workload. The versioned
    of every process, marker, executor root, and durable session directory.
 
 GitHub Actions prepares a dedicated cgroup-v2 subtree and runs this gate as the
-dedicated user on both x86_64 and aarch64. Real-host results are still required
-for the v3 schema before marking the delegation gate complete. Rootless device
-policy, owner-death cgroup recovery, and broader security policy remain
-promotion gates.
+dedicated user on both x86_64 and aarch64. The same jobs also run the rootless
+owner-death recovery gate described below. Rootless device policy and broader
+controller and security profiles remain promotion gates.
 
 ## Multi-container generation gate
 
@@ -506,9 +505,9 @@ PID equality alone is never accepted.
 
 `.github/scripts/native-linux-smoke.sh` starts the hidden
 `native-linux-recovery-owner` command with a real long-running bundle, waits for
-`a3s.oci.native-linux-recovery-owner-ready.v1`, and sends `SIGKILL` to that exact
+`a3s.oci.native-linux-recovery-owner-ready.v2`, and sends `SIGKILL` to that exact
 owner. A distinct `native-linux-recovery-resume` process then opens the same
-durable state. Its `a3s.oci.native-linux-recovery-smoke.v1` report requires:
+durable state. Its `a3s.oci.native-linux-recovery-smoke.v2` report requires:
 
 1. the replacement host service opens only after the exact old workload has
    disappeared;
@@ -519,13 +518,20 @@ durable state. Its `a3s.oci.native-linux-recovery-smoke.v1` report requires:
    exact exit result, rather than inventing signal 9;
 5. stopped-only delete removes the durable record, exact executor slot, and
    runtime-created cgroups;
-6. replacement-driver shutdown leaves the executor parent empty.
+6. replacement-driver shutdown leaves the executor parent empty;
+7. the report binds both owner processes to their effective UID/GID and records
+   whether an explicit cgroup-v2 delegation was requested and verified;
+8. a delegated run removes every runtime-created `a3s-oci-*` cgroup below the
+   exact user-owned authority root while preserving its host-owned control
+   child.
 
-Both x86_64 and aarch64 Linux CI retain this report beside the soak report via
-`A3S_OCI_NATIVE_RECOVERY_REPORT`. This gate proves safe termination and exact
-cleanup. It deliberately does not claim live process-I/O session reattachment;
-that requires a persistent authenticated supervisor and remains a promotion
-gate.
+Both x86_64 and aarch64 Linux CI run the gate twice. The rootful report is
+retained via `A3S_OCI_NATIVE_RECOVERY_REPORT`; the non-root UID/GID 20000 run
+reopens the same explicit delegation in a distinct non-root process and is
+retained via `A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT`. These gates prove safe
+termination and exact cleanup. They deliberately do not claim live process-I/O
+session reattachment; that requires a persistent authenticated supervisor and
+remains a promotion gate.
 
 ## Fault-injected shutdown cleanup
 
@@ -564,8 +570,8 @@ This evidence proves rootful and core rootless bootstrap profiles, not general
 OCI support. The default driver must remain `probe-only` until at least the
 following pass:
 
-- real-host rootless cgroup-v2 delegation/recovery evidence and an
-  authenticated privileged helper for rootless device policy;
+- an authenticated privileged helper for rootless device policy and broader
+  real-host controller/profile qualification;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
 - remaining mount and credential controls, broader cgroup v2 policies,

@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Rootless Native Linux owner-death recovery qualification. The hidden owner
+  and replacement commands now accept the same explicit user-owned cgroup-v2
+  delegation and record effective credentials, verified delegation use,
+  authenticated workload termination, stopped-only reconciliation, and exact
+  delegated subtree cleanup in report v2. The x86_64 and aarch64 Linux lanes
+  kill the non-root owner with `SIGKILL`, reopen the durable generation as the
+  same UID/GID, refuse invented exit evidence, and retain a separate JSON
+  report. Rootless device-policy privilege separation and broader controller
+  profiles remain open.
 - Real utility-VM transport interruption evidence for all nine Host/Guest
   protocol-v9 `create` transitions and both explicit Host shutdown stages. The
   `oci-vm-transport-fault-cleanup` command injects one exact negotiated point
@@ -39,7 +48,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
   disappeared and all recovery evidence revalidates; it exposes idempotent
   kill, empty process inventory, explicit refusal to invent an exit status,
   and stopped-only delete with bounded executor/cgroup cleanup. The new
-  `a3s.oci.native-linux-recovery-smoke.v1` real-process gate kills the owner
+  `a3s.oci.native-linux-recovery-smoke.v2` real-process gate kills the owner
   with `SIGKILL`, reopens durable state in a distinct process, verifies those
   semantics, and is retained by x86_64 and aarch64 Linux CI. Live process-I/O
   session reattachment remains a separate promotion gate.

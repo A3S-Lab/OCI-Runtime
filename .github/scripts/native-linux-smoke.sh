@@ -1197,11 +1197,14 @@ run_owner_death_recovery() {
   test "$(sudo stat --format '%u:%g:%a' "$ready_file")" = '0:0:600'
   ready_json="$(sudo cat -- "$ready_file")"
   jq --exit-status \
-    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v1"
+    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v2"
      and .status == "available" and .platform == "linux"
      and .target.id == "native-owner-recovery"
      and .target.generation == 1
      and (.owner_pid > 0) and (.init_pid > 0)
+     and .effective_uid == 0 and .effective_gid == 0
+     and (.cgroup_delegation_requested | not)
+     and (.cgroup_delegation_verified | not)
      and .running_observed' \
     <<<"$ready_json" >/dev/null
   ready_owner_pid="$(jq --raw-output '.owner_pid' <<<"$ready_json")"
@@ -1251,13 +1254,18 @@ run_owner_death_recovery() {
   fi
   jq --exit-status \
     --argjson killed_owner "$ready_owner_pid" \
-    '.schema_version == "a3s.oci.native-linux-recovery-smoke.v1"
+    '.schema_version == "a3s.oci.native-linux-recovery-smoke.v2"
      and .status == "available" and .platform == "linux"
      and .target.id == "native-owner-recovery"
      and .target.generation == 1
      and .replacement_owner_pid != $killed_owner
+     and .replacement_effective_uid == 0
+     and .replacement_effective_gid == 0
+     and (.cgroup_delegation_requested | not)
+     and (.cgroup_delegation_verified | not)
      and .bundle_loaded
      and .host_service_reopened
+     and .recorded_workload_terminated
      and .stopped_observed
      and .process_inventory_empty
      and .kill_idempotent
@@ -1266,12 +1274,190 @@ run_owner_death_recovery() {
      and .durable_record_removed
      and .current_driver_shutdown
      and .executor_transients_clean
+     and .cgroup_delegation_clean
      and (.reason == null)' \
     <<<"$output" >/dev/null
   sudo test ! -e "/proc/$init_pid/stat"
   sudo rm -f "$recovery_bundle/rootfs/.a3s-oci-native-smoke"
   sudo test ! -e "$recovery_bundle/rootfs/.a3s-oci-native-smoke"
   test -z "$(sudo find "$recovery_root/executor" -mindepth 1 -print -quit)"
+}
+
+run_rootless_owner_death_recovery() {
+  local recovery_root="$rootless_work_parent/native-owner-recovery"
+  local ready_file="$rootless_work_parent/native-owner-recovery-ready.json"
+  local owner_log="$qualification_root/rootless-owner-recovery-owner.log"
+  local output
+  local status
+  local generation
+  local ready_json
+  local ready_owner_pid
+  local init_pid
+  local deadline
+
+  sudo rm -f \
+    "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke" \
+    "$rootless_bundle/rootfs/.a3s-oci-rootless-progress" \
+    "$rootless_bundle/rootfs/.a3s-oci-rootless-progress.next"
+  sudo sh -c '
+      control=$1
+      uid=$2
+      gid=$3
+      shift 3
+      printf 0 > "$control/cgroup.procs"
+      exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+    ' sh \
+      "$rootless_cgroup_host_control" \
+      "$rootless_uid" \
+      "$rootless_gid" \
+      "$rootless_bin/a3s-oci" native-linux-recovery-owner \
+      --agent "$rootless_bin/a3s-oci-agent" \
+      --root "$recovery_root" \
+      --bundle "$rootless_bundle" \
+      --container-id native-rootless-owner-recovery \
+      --ready-file "$ready_file" \
+      --delegated-cgroup-root "$rootless_cgroup_parent" \
+      >"$owner_log" 2>&1 &
+  recovery_owner_pid=$!
+
+  deadline=$((SECONDS + 30))
+  while ! sudo test -f "$ready_file"; do
+    if ! kill -0 "$recovery_owner_pid" 2>/dev/null; then
+      wait "$recovery_owner_pid" || true
+      cat "$owner_log" >&2
+      printf '%s\n' 'Rootless recovery owner exited before readiness' >&2
+      return 1
+    fi
+    if ((SECONDS >= deadline)); then
+      cat "$owner_log" >&2
+      printf '%s\n' 'Timed out waiting for rootless recovery readiness' >&2
+      return 1
+    fi
+    sleep 0.025
+  done
+
+  test "$(sudo stat --format '%u:%g:%a' "$ready_file")" \
+    = "$rootless_uid:$rootless_gid:600"
+  ready_json="$(sudo cat -- "$ready_file")"
+  jq --exit-status \
+    --argjson uid "$rootless_uid" \
+    --argjson gid "$rootless_gid" \
+    '.schema_version == "a3s.oci.native-linux-recovery-owner-ready.v2"
+     and .status == "available" and .platform == "linux"
+     and .target.id == "native-rootless-owner-recovery"
+     and .target.generation == 1
+     and (.owner_pid > 0) and (.init_pid > 0)
+     and .effective_uid == $uid and .effective_gid == $gid
+     and .cgroup_delegation_requested
+     and .cgroup_delegation_verified
+     and .running_observed' \
+    <<<"$ready_json" >/dev/null
+  ready_owner_pid="$(jq --raw-output '.owner_pid' <<<"$ready_json")"
+  recovery_runtime_owner_pid="$ready_owner_pid"
+  init_pid="$(jq --raw-output '.init_pid' <<<"$ready_json")"
+  generation="$(jq --raw-output '.target.generation' <<<"$ready_json")"
+  sudo test -e "/proc/$init_pid/stat"
+
+  deadline=$((SECONDS + 10))
+  while ! sudo grep --fixed-strings --line-regexp \
+      'a3s-oci-rootless-mapping-v1' \
+      "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke" >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+      cat "$owner_log" >&2
+      printf '%s\n' 'Rootless recovery workload did not publish its marker' >&2
+      return 1
+    fi
+    sleep 0.025
+  done
+
+  sudo kill -KILL "$ready_owner_pid"
+  set +e
+  wait "$recovery_owner_pid"
+  status=$?
+  set -e
+  recovery_owner_pid=""
+  recovery_runtime_owner_pid=""
+  if ((status == 0)); then
+    cat "$owner_log" >&2
+    printf '%s\n' \
+      'Rootless recovery owner unexpectedly exited cleanly after SIGKILL' >&2
+    return 1
+  fi
+
+  if output="$(sudo sh -c '
+      control=$1
+      uid=$2
+      gid=$3
+      shift 3
+      printf 0 > "$control/cgroup.procs"
+      exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+    ' sh \
+      "$rootless_cgroup_host_control" \
+      "$rootless_uid" \
+      "$rootless_gid" \
+      "$rootless_bin/a3s-oci" native-linux-recovery-resume \
+      --agent "$rootless_bin/a3s-oci-agent" \
+      --root "$recovery_root" \
+      --bundle "$rootless_bundle" \
+      --container-id native-rootless-owner-recovery \
+      --generation "$generation" \
+      --delegated-cgroup-root "$rootless_cgroup_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if [[ -n "${A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT:-}" ]]; then
+    mkdir -p "$(dirname "$A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT")"
+    printf '%s\n' "$output" >"$A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT"
+  fi
+  if ((status != 0)); then
+    cat "$owner_log" >&2
+    report_native_failure "$rootless_bundle/rootfs"
+    return "$status"
+  fi
+  jq --exit-status \
+    --argjson killed_owner "$ready_owner_pid" \
+    --argjson uid "$rootless_uid" \
+    --argjson gid "$rootless_gid" \
+    '.schema_version == "a3s.oci.native-linux-recovery-smoke.v2"
+     and .status == "available" and .platform == "linux"
+     and .target.id == "native-rootless-owner-recovery"
+     and .target.generation == 1
+     and .replacement_owner_pid != $killed_owner
+     and .replacement_effective_uid == $uid
+     and .replacement_effective_gid == $gid
+     and .cgroup_delegation_requested
+     and .cgroup_delegation_verified
+     and .bundle_loaded
+     and .host_service_reopened
+     and .recorded_workload_terminated
+     and .stopped_observed
+     and .process_inventory_empty
+     and .kill_idempotent
+     and .exact_wait_evidence_refused
+     and .stopped_delete_succeeded
+     and .durable_record_removed
+     and .current_driver_shutdown
+     and .executor_transients_clean
+     and .cgroup_delegation_clean
+     and (.reason == null)' \
+    <<<"$output" >/dev/null
+  sudo test ! -e "/proc/$init_pid/stat"
+  sudo test -z "$(sudo cat "$rootless_cgroup_host_control/cgroup.procs")"
+  test -z "$(sudo find "$rootless_cgroup_parent" -mindepth 1 -maxdepth 1 \
+    -type d ! -name a3s-host-control -print -quit)"
+  sudo test -z "$(sudo find "$recovery_root/executor" -mindepth 1 -print -quit)"
+  sudo rm -f \
+    "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke" \
+    "$rootless_bundle/rootfs/.a3s-oci-rootless-progress" \
+    "$rootless_bundle/rootfs/.a3s-oci-rootless-progress.next"
+  sudo test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke"
+  sudo -u "$rootless_user" rm -f -- "$ready_file"
+  sudo -u "$rootless_user" rm -rf --one-file-system -- "$recovery_root"
+  sudo test ! -e "$ready_file"
+  sudo test ! -e "$recovery_root"
+  test -z "$(sudo find "$rootless_work_parent" -mindepth 1 -print -quit)"
 }
 
 run_service_signal_cleanup() {
@@ -1467,6 +1653,7 @@ run_rootless_post_open_negative_smoke \
   controller-drift \
   "has not enabled required controller"
 
+run_rootless_owner_death_recovery
 run_rootless_smoke
 run_smoke false
 run_smoke false "$control_bundle" "$control_hook_trace"
