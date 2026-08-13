@@ -539,6 +539,7 @@ enum CliError {
     Runtime(#[from] a3s_oci_sdk::Error),
     #[error("failed to serialize command output: {0}")]
     Serialize(#[from] serde_json::Error),
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[error("failed to resolve the current a3s-oci executable: {0}")]
     CurrentExecutable(std::io::Error),
 }
