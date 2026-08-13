@@ -1048,7 +1048,7 @@ stale-generation rejection, replacement Stat, explicit Remove, and cleanup
 passed all nine stages on Apple Silicon. The real-HVF replacement matrix now
 covers all 180 operation-stage paths across all 20 protocol-v9 operations.
 
-## Qualification result and remaining product-path gates
+## Qualification result
 
 R2M is 15/15. The August 13, 2026 Apple Silicon qualification used one exact
 immutable system-image manifest across direct VM entry, authenticated agent,
@@ -1058,22 +1058,54 @@ authentication cases, and 25/25 fresh-VM soak waves. The soak completed 75
 primary generations with unique endpoints and a stable descriptor count of
 10. The HVF capability therefore reports `experimental`.
 
-Those results qualify the historical direct R2M harness. They predate the
-public `macos-hvf-host-service` entry point and therefore do not by themselves
-prove that the current product path is 100% complete. The service
-implementation, same-UID socket contract, public SDK feature negotiation,
-20-operation advertisement, bundle-handoff capability, exact-generation VM
-factory, interrupted-create resume, and graceful one-time reap now have local
-tests. Current-code real-host evidence is still required for:
+Those results qualify the historical direct R2M harness. A separate August 13,
+2026 run closed the public `macos-hvf-host-service` product-path gates. It used
+signed Apple Silicon executables built from source revision
+`414af625c5efaab1e8d8a4ffe44c570249b145b5` and produced
+`a3s.oci.macos-hvf-host-service-smoke.v1` evidence with these results:
 
-1. a lifecycle initiated only through public `RuntimeClient` connections;
-2. Host Service `SIGKILL`, authenticated recovery publication, replacement
-   service reopen, exact exit or Creating-resume behavior, and cleanup;
-3. a new 25/25 fresh-VM soak through the public service with no socket,
-   process, descriptor, share, or runtime-root leaks.
+- public `RuntimeClient` connections exercised `features`, `list`, `events`,
+  and all 20 advertised driver operations against real protocol-v9 guests;
+- Box-style bundle handoff was staged, consumed, digest-bound, and cleaned;
+- a real Host Service received `SIGKILL` while its generation was live, both
+  shim and worker exited, and the authenticated recovery report exposed exact
+  `signal=9, oom_killed=false` state through a replacement service;
+- the replacement socket was accepted only after its macOS kernel peer PID was
+  the newly launched service rather than the retained stale socket owner;
+- the 25/25 soak booted a fresh VM each time, used 50 unique shim/worker process
+  identities, replayed create/kill/wait/delete 25/25, and rejected every stale
+  generation; and
+- lifecycle, owner-death, and soak phases restored the 13-descriptor baseline
+  and left no endpoint, bundle handoff, runtime share, recovery report, service
+  socket, shim, or worker behind.
 
-Until those three gates pass, documentation must not call the public macOS
-product path 100% complete. Signed release-artifact qualification, upstream
-OCI conformance, adversarial security review, upgrade and rollback
-compatibility, and broader long-duration testing also remain before
-`supported`.
+The first closing report SHA-256 is
+`c5a61def476669881cc4fc29eeba9d2ec1ea7df4ae45f3f37507d3f6c13305c3`.
+Its lifecycle, owner-death, and soak reports are respectively
+`0aad9a8afa7a8ca3effbec8d89687d520f1ad880c22132aadc8ffa8e9ab4fd65`,
+`c6d221176d2c8e0309d2343b174fa8c7de83819ac811b298e453e0d692fa30ef`,
+and `58063ba32ff1e6f1cdb9a5590ab3cbe11ddbe3e6c3289712bacc95b840fcac0a`.
+The report binds the Host Service and shim SHA-256 values, immutable system
+image manifest, source bundle digest, and full source revision.
+
+After building and signing both executables as described above, reproduce the
+complete gate with:
+
+```bash
+work_parent="$(mktemp -d /private/tmp/a3s-oci-hvf-host.XXXXXX)"
+chmod 700 "$work_parent"
+
+target/debug/a3s-oci macos-hvf-host-service-smoke \
+  --shim "$PWD/target/debug/a3s-oci-krun-shim" \
+  --system-image-manifest /absolute/path/to/system-image.json \
+  --bundle /absolute/path/to/oci-bundle \
+  --work-parent "$work_parent" \
+  --iterations 25 \
+  --source-revision "$(git rev-parse HEAD)"
+```
+
+Every currently advertised public macOS/HVF function is now implemented, so
+the public product path is 100% function-complete and remains `experimental`.
+This is not a `supported` release claim. Signed release-package qualification,
+upstream OCI conformance, adversarial security review, upgrade and rollback
+compatibility, and broader long-duration testing remain promotion gates.

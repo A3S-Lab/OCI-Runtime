@@ -1132,16 +1132,23 @@ then may WHPX become `experimental`.
   failure reaps the VM and removes runtime-owned handoff state.
 - [x] Advertise only `DedicatedVm` from both the macOS probe and the public HVF
   driver until trust-domain-aware shared-guest pooling exists.
-- [ ] Requalify the current public Host Service through `RuntimeClient` on the
-  signed Apple Silicon build, including all 20 operations and Box-style bundle
-  handoff without invoking a qualification-only lifecycle entry point.
-- [ ] Kill the public Host Service while a real generation is live, require
+- [x] Requalify the current public Host Service through `RuntimeClient` on the
+  signed Apple Silicon build, including all 20 driver operations, public
+  `features`/`list`/`events`, and Box-style bundle handoff without invoking a
+  qualification-only lifecycle entry point. The August 13 closing run
+  exercised all 23 advertised operations and consumed the exact staged bundle.
+- [x] Kill the public Host Service while a real generation is live, require
   exact shim/worker owner-death cleanup and authenticated recovery evidence,
   reopen a replacement service, resume Creating or expose exact stopped/exit
   state, and prove no socket, process, descriptor, share, or runtime-root leak.
-- [ ] Run a new 25/25 fresh-VM soak through the current public Host Service and
-  retain current-commit evidence. Do not use the historical 15/15 harness or
-  August 13 soak alone to claim the public product path is 100% complete.
+  The replacement was accepted only after its kernel peer PID differed from the
+  killed service; it recovered exact `signal=9, oom_killed=false` state and
+  restored the service descriptor inventory from 13 descriptors to 13.
+- [x] Run a new 25/25 fresh-VM soak through the current public Host Service and
+  retain current-commit evidence. Every wave used distinct shim/worker process
+  identities, replayed create/kill/wait/delete exactly once, rejected stale
+  generations, restored the 13-descriptor baseline, and left no endpoint,
+  bundle handoff, runtime share, recovery report, socket, or process behind.
 
 Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
 fixed OCI lifecycle through the authenticated guest agent, validates negative
@@ -1152,9 +1159,13 @@ no-delete cleanup points, all 11 transport fault points, all 180 operation
 replacement paths, the asset/authentication/entitlement negatives, and 25/25
 fresh-VM soak waves with 75 primary generations and a stable 10-descriptor
 baseline. The built-in HVF capability is therefore `experimental`.
-That evidence qualifies the historical R2M harness. The public Host Service
-product path remains below 100% until its three unchecked real-host gates above
-pass against the current signed artifacts.
+That evidence qualifies the historical R2M harness. A separate August 13,
+2026 closing run through the public Host Service passed the three real-host
+gates above against signed Apple Silicon artifacts. The currently advertised
+macOS/HVF public product path is therefore 100% function-complete and remains
+`experimental`. Signed release-package qualification, upstream OCI
+conformance, adversarial security review, upgrade and rollback compatibility,
+and longer release soak remain promotion gates before `supported`.
 
 ### R2L — Linux KVM Utility VM
 
