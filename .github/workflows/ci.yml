@@ -60,6 +60,11 @@ jobs:
         run: |
           test_log="$RUNNER_TEMP/a3s-oci-workspace-tests.log"
           if [[ -f "$test_log" ]]; then
+            excerpt="$(tail -n 80 "$test_log")"
+            excerpt="${excerpt//'%'/'%25'}"
+            excerpt="${excerpt//$'\r'/'%0D'}"
+            excerpt="${excerpt//$'\n'/'%0A'}"
+            printf '::error title=Workspace tests failed::%s\n' "$excerpt"
             {
               echo '### Workspace test failure'
               echo
@@ -71,6 +76,14 @@ jobs:
               echo '</details>'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+      - if: failure()
+        name: Upload workspace test failure
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-failure-${{ runner.os }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/a3s-oci-workspace-tests.log
+          if-no-files-found: ignore
+          retention-days: 14
       - run: cargo run -p a3s-oci-cli -- features
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
