@@ -53,6 +53,16 @@ impl LocalIpcEndpoint {
             )
             .for_operation("sdk-connect"));
         }
+        std::os::unix::net::SocketAddr::from_pathname(&path).map_err(|error| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "SDK Unix socket path cannot be represented by this platform; shorten its parent directory: {}: {error}",
+                    path.display()
+                ),
+            )
+            .for_operation("sdk-connect")
+        })?;
         Ok(Self {
             kind: LocalIpcEndpointKind::UnixSocket(path),
         })
@@ -339,6 +349,13 @@ mod tests {
     fn unix_endpoint_requires_an_absolute_path() {
         assert!(LocalIpcEndpoint::unix_socket("/run/a3s/oci.sock").is_ok());
         assert!(LocalIpcEndpoint::unix_socket("oci.sock").is_err());
+        let too_long = std::path::Path::new("/private/tmp")
+            .join("x".repeat(256))
+            .join("runtime.sock");
+        let error = LocalIpcEndpoint::unix_socket(too_long)
+            .expect_err("an unrepresentable Unix endpoint must fail during configuration");
+        assert_eq!(error.code, crate::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("shorten its parent directory"));
     }
 
     #[cfg(unix)]

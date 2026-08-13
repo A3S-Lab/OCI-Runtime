@@ -28,7 +28,7 @@ pub(crate) struct UnixServiceEndpoint {
 impl UnixServiceEndpoint {
     #[cfg(any(test, target_os = "linux"))]
     pub(crate) async fn bind(path: &Path) -> Result<Self> {
-        validate_absolute_normalized_path(path, "Unix SDK service socket")?;
+        validate_unix_socket_path(path, "Unix SDK service socket")?;
         match tokio::fs::symlink_metadata(path).await {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -59,7 +59,7 @@ impl UnixServiceEndpoint {
     /// is the race boundary proving that another legitimate service owner
     /// cannot publish this endpoint while stale-path recovery is in progress.
     pub(crate) async fn bind_recovering_stale(path: &Path) -> Result<Self> {
-        validate_absolute_normalized_path(path, "Unix SDK service socket")?;
+        validate_unix_socket_path(path, "Unix SDK service socket")?;
         recover_stale_socket(path).await?;
         Self::bind_absent(path).await
     }
@@ -287,6 +287,21 @@ pub(crate) fn validate_absolute_normalized_path(path: &Path, label: &str) -> Res
             ),
         ));
     }
+    Ok(())
+}
+
+pub(crate) fn validate_unix_socket_path(path: &Path, label: &str) -> Result<()> {
+    validate_absolute_normalized_path(path, label)?;
+    std::os::unix::net::SocketAddr::from_pathname(path).map_err(|error| {
+        service_error(
+            ErrorCode::InvalidArgument,
+            "configure-unix-sdk-service",
+            format!(
+                "{label} Unix socket path cannot be represented by this platform; shorten its parent directory: {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
     Ok(())
 }
 
@@ -541,6 +556,17 @@ mod tests {
     fn rejects_relative_and_ambiguous_paths() {
         assert!(validate_absolute_normalized_path(Path::new("relative"), "test path").is_err());
         assert!(validate_absolute_normalized_path(Path::new("/tmp/a/../b"), "test path").is_err());
+    }
+
+    #[test]
+    fn rejects_unrepresentable_unix_socket_paths_before_bind() {
+        let path = Path::new("/private/tmp")
+            .join("x".repeat(256))
+            .join(SERVICE_SOCKET_NAME);
+        let error = validate_unix_socket_path(&path, "test endpoint")
+            .expect_err("an unrepresentable Unix socket path must fail validation");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("shorten its parent directory"));
     }
 
     #[tokio::test]

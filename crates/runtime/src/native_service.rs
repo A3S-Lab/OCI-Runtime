@@ -6,7 +6,7 @@ use a3s_oci_sdk::{ContainerId, Result};
 
 use crate::unix_service::{
     combine_service_and_cleanup, prepare_private_directory, validate_absolute_normalized_path,
-    UnixServiceEndpoint, SERVICE_SOCKET_NAME,
+    validate_unix_socket_path, UnixServiceEndpoint, SERVICE_SOCKET_NAME,
 };
 use crate::{HostRuntimeService, NativeControlDescriptors, NativeLinuxDriver, RuntimeDriver};
 
@@ -33,6 +33,10 @@ impl NativeLinuxHostServiceConfig {
     pub fn new(root: impl Into<PathBuf>, init_executable: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         validate_absolute_normalized_path(&root, "native host service root")?;
+        validate_unix_socket_path(
+            &root.join(SERVICE_SOCKET_NAME),
+            "native Host Service endpoint",
+        )?;
         let init_executable = init_executable.into();
         validate_absolute_normalized_path(&init_executable, "native init executable")?;
         Ok(Self {
@@ -71,6 +75,7 @@ impl NativeLinuxServiceConfig {
     ) -> Result<Self> {
         let root = root.into();
         validate_absolute_normalized_path(&root, "native service root")?;
+        validate_unix_socket_path(&root.join(SERVICE_SOCKET_NAME), "native service endpoint")?;
         let init_executable = init_executable.into();
         validate_absolute_normalized_path(&init_executable, "native init executable")?;
         Ok(Self {

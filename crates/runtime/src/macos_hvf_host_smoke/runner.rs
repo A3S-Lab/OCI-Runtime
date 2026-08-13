@@ -16,9 +16,12 @@ use super::report::{
     MacosHvfPublicLifecycleEvidence,
 };
 use super::soak::SoakConfig;
+use crate::unix_service::{validate_unix_socket_path, SERVICE_SOCKET_NAME};
 
 pub const MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS: u32 = 25;
 pub const MAX_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS: u32 = 1_000;
+const EVIDENCE_DIRECTORY_PREFIX: &str = "hvf-";
+const SERVICE_DIRECTORY_NAME: &str = "s";
 
 /// Inputs for one persistent public Host Service qualification run.
 #[derive(Debug, Clone)]
@@ -75,7 +78,7 @@ pub async fn run(config: MacosHvfHostServiceSmokeConfig) -> MacosHvfHostServiceS
     let owner_result = super::owner_death::run(
         OwnerDeathConfig {
             executable: &prepared.executable,
-            service_root: &owner_root.join("service"),
+            service_root: &owner_root.join(SERVICE_DIRECTORY_NAME),
             shim: &prepared.shim,
             manifest: &prepared.manifest,
             source_bundle: &prepared.bundle,
@@ -116,7 +119,7 @@ pub async fn run(config: MacosHvfHostServiceSmokeConfig) -> MacosHvfHostServiceS
     let soak_result = super::soak::run(
         SoakConfig {
             executable: &prepared.executable,
-            service_root: &soak_root.join("service"),
+            service_root: &soak_root.join(SERVICE_DIRECTORY_NAME),
             shim: &prepared.shim,
             manifest: &prepared.manifest,
             source_bundle: &prepared.bundle,
@@ -215,12 +218,13 @@ impl PreparedRun {
             source_revision,
         };
         let nonce = unique_nonce()?;
-        let evidence_root = work_parent.join(format!("a3s-oci-hvf-host-{nonce}"));
+        let evidence_root = qualification_evidence_root(&work_parent, &nonce);
+        validate_qualification_socket_paths(&evidence_root)?;
         create_private_directory(&evidence_root)?;
         for name in ["lifecycle", "owner-death", "soak"] {
             let phase = evidence_root.join(name);
             create_private_directory(&phase)?;
-            create_private_directory(&phase.join("service"))?;
+            create_private_directory(&phase.join(SERVICE_DIRECTORY_NAME))?;
         }
         Ok(Self {
             executable,
@@ -240,7 +244,7 @@ async fn run_lifecycle_phase(
     evidence: &mut MacosHvfPublicLifecycleEvidence,
 ) -> Result<(), String> {
     let phase_root = prepared.evidence_root.join("lifecycle");
-    let service_root = phase_root.join("service");
+    let service_root = phase_root.join(SERVICE_DIRECTORY_NAME);
     let runtime_root = service_root.join("runtime");
     let endpoint_baseline = host::endpoint_inventory()?;
     let mut service = HostServiceProcess::spawn(
@@ -491,13 +495,29 @@ fn unique_nonce() -> Result<String, String> {
     Ok(format!("{}-{nanos}", std::process::id()))
 }
 
+fn qualification_evidence_root(work_parent: &Path, nonce: &str) -> PathBuf {
+    work_parent.join(format!("{EVIDENCE_DIRECTORY_PREFIX}{nonce}"))
+}
+
+fn validate_qualification_socket_paths(evidence_root: &Path) -> Result<(), String> {
+    for phase in ["lifecycle", "owner-death", "soak"] {
+        let socket = evidence_root
+            .join(phase)
+            .join(SERVICE_DIRECTORY_NAME)
+            .join(SERVICE_SOCKET_NAME);
+        validate_unix_socket_path(&socket, "macOS HVF qualification Host Service endpoint")
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::{
-        validate_source_revision, MacosHvfHostServiceSmokeConfig, PreparedRun,
-        MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS,
+        qualification_evidence_root, validate_qualification_socket_paths, validate_source_revision,
+        MacosHvfHostServiceSmokeConfig, PreparedRun, MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS,
     };
 
     fn incomplete_config(work_parent: PathBuf) -> MacosHvfHostServiceSmokeConfig {
@@ -526,6 +546,16 @@ mod tests {
         ] {
             assert!(validate_source_revision(revision).is_err());
         }
+    }
+
+    #[test]
+    fn documented_work_parent_keeps_every_phase_socket_representable() {
+        let root = qualification_evidence_root(
+            PathBuf::from("/private/tmp/a3s-oci-hvf-host.XXXXXX").as_path(),
+            "4294967295-9999999999999999999",
+        );
+        validate_qualification_socket_paths(&root)
+            .expect("documented work parent must fit the longest generated socket path");
     }
 
     #[tokio::test]

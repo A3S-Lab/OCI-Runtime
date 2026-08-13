@@ -6,7 +6,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use crate::unix_service::{
     combine_service_and_cleanup, prepare_private_directory, validate_absolute_normalized_path,
-    UnixServiceEndpoint, SERVICE_SOCKET_NAME,
+    validate_unix_socket_path, UnixServiceEndpoint, SERVICE_SOCKET_NAME,
 };
 use crate::{HostRuntimeService, HvfRuntimeDriver, HvfRuntimeDriverConfig, RuntimeDriver};
 
@@ -30,6 +30,10 @@ impl MacosHvfHostServiceConfig {
     ) -> Result<Self> {
         let root = root.into();
         validate_absolute_normalized_path(&root, "macOS HVF host service root")?;
+        validate_unix_socket_path(
+            &root.join(SERVICE_SOCKET_NAME),
+            "macOS HVF Host Service endpoint",
+        )?;
         let shim = shim.into();
         validate_absolute_normalized_path(&shim, "macOS HVF libkrun shim")?;
         let system_image_manifest = system_image_manifest.into();
@@ -224,6 +228,19 @@ mod tests {
             "/tmp/owner/system-image.json"
         )
         .is_err());
+    }
+
+    #[test]
+    fn config_rejects_a_socket_path_that_cannot_fit_sockaddr_un() {
+        let root = Path::new("/private/tmp").join("x".repeat(104));
+        let error = MacosHvfHostServiceConfig::new(
+            root,
+            "/tmp/a3s-oci-hvf-shim",
+            "/tmp/a3s-oci-hvf-system-image.json",
+        )
+        .expect_err("an unbindable Host Service socket path must fail during configuration");
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("Unix socket path"), "{error}");
     }
 
     #[test]

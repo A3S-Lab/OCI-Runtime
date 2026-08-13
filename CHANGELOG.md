@@ -192,6 +192,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Reject unrepresentable Unix SDK socket paths during endpoint configuration
+  instead of after writable service state has been opened. The macOS HVF public
+  Host Service qualification now uses compact private service directories, and
+  validates all lifecycle, owner-death, and soak endpoint paths before creating
+  its evidence root, so the documented `/private/tmp` command reaches every
+  real-host phase on macOS rather than failing at the longer owner-death path.
 - Execute native Linux file transfer and descriptor-confined filesystem calls
   in a bounded parent-bound helper that enters the container's retained user
   and mount namespaces. Rootfs, bind, ID-mapped, and tmpfs paths now preserve
