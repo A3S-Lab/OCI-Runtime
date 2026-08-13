@@ -1079,7 +1079,7 @@ signed Apple Silicon executables built from source revision
   and left no endpoint, bundle handoff, runtime share, recovery report, service
   socket, shim, or worker behind.
 
-The first closing report SHA-256 is
+The initial closing report SHA-256 is
 `c5a61def476669881cc4fc29eeba9d2ec1ea7df4ae45f3f37507d3f6c13305c3`.
 Its lifecycle, owner-death, and soak reports are respectively
 `0aad9a8afa7a8ca3effbec8d89687d520f1ad880c22132aadc8ffa8e9ab4fd65`,
@@ -1087,6 +1087,24 @@ Its lifecycle, owner-death, and soak reports are respectively
 and `58063ba32ff1e6f1cdb9a5590ab3cbe11ddbe3e6c3289712bacc95b840fcac0a`.
 The report binds the Host Service and shim SHA-256 values, immutable system
 image manifest, source bundle digest, and full source revision.
+
+A post-fix closing run repeated the complete gate after Unix socket path
+capacity became a configuration-time invariant. It used source revision
+`fbf24f1fcabe9005bd6b33d11e21b2808452b7da`, Host Service SHA-256
+`80d0a55bdc8059ab150415886cb0af99ff009443fc1d8d63009c260add836583`,
+and shim SHA-256
+`f55f83865e326bc764f2b894355f81f773225ff8f3d253de1feb23e60dba9338`.
+The full report SHA-256 is
+`813a5208aebe78f6fc5de069015ac47668b3ac7b04b043c96854b5cacfd887fb`;
+its lifecycle, owner-death, and soak reports are respectively
+`c8de3613760fad8869ac40e85d011adbc22a69afd8fdb3b67bc32df8a3d6c5a4`,
+`07da5884c7c75f5a7feb7ed6d8e604eda6b516bd9a74f9b5ed66478800a43c25`,
+and `6c31a52cc7aa1d05532ff117cde3c2c02b2e131c2f7a6dd83a995fea273eb7ca`.
+That run again exercised all 23 operations, recovered exact signal 9 state,
+restored the 13-descriptor baseline, completed 25/25 fresh VMs with 50 unique
+shim/worker identities, and left no runtime transient behind. These hashes are
+audit anchors; each merge candidate still requires its own report with the
+exact candidate revision in `artifacts.source_revision`.
 
 After building and signing both executables as described above, reproduce the
 complete gate with:

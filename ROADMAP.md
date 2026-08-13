@@ -1159,13 +1159,15 @@ no-delete cleanup points, all 11 transport fault points, all 180 operation
 replacement paths, the asset/authentication/entitlement negatives, and 25/25
 fresh-VM soak waves with 75 primary generations and a stable 10-descriptor
 baseline. The built-in HVF capability is therefore `experimental`.
-That evidence qualifies the historical R2M harness. A separate August 13,
-2026 closing run through the public Host Service passed the three real-host
-gates above against signed Apple Silicon artifacts. The currently advertised
-macOS/HVF public product path is therefore 100% function-complete and remains
-`experimental`. Signed release-package qualification, upstream OCI
-conformance, adversarial security review, upgrade and rollback compatibility,
-and longer release soak remain promotion gates before `supported`.
+That evidence qualifies the historical R2M harness. Separate August 13, 2026
+closing runs through the public Host Service passed the three real-host gates
+above against signed Apple Silicon artifacts, including a complete post-fix
+rerun after Unix socket path capacity became a configuration-time invariant.
+The currently advertised macOS/HVF public product path is therefore 100%
+function-complete and remains `experimental`. Signed release-package
+qualification, upstream OCI conformance, adversarial security review, upgrade
+and rollback compatibility, and longer release soak remain promotion gates
+before `supported`.
 
 ### R2L — Linux KVM Utility VM
 
