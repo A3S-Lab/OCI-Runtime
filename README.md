@@ -360,11 +360,16 @@ Real execution gates require a prepared host and isolated runtime root.
 | Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` and `scripts/windows-whpx-recovery-smoke.ps1` with a verified rootfs archive | [Windows WHPX development](docs/windows-whpx.md) |
 
 The Linux smoke now prepares an explicit user-owned cgroup-v2 subtree for the
-rootless v3 gate. The gate covers create, live update/stats, workload-proven
-pause/resume, an exact lifecycle event sequence, and cleanup without allowing
-the runtime to guess or take over a host cgroup. Rootless device-policy
-enforcement and broader delegated controller/profile qualification remain
-separate promotion work.
+rootless v4 gate. The core gate covers create, live update/stats,
+workload-proven pause/resume, an exact lifecycle event sequence, and cleanup
+without allowing the runtime to guess or take over a host cgroup. A separate
+effective-root bootstrap gate exercises the exact six-node A3S Box device
+profile through a parent-bound helper, then drops the runtime owner permanently
+to its real identity. Runtime commit `bed43d2` passed that bounded profile on
+both x86_64 and aarch64 in CI run `31714178349`. The retained v4 reports verify
+the helper, all six nodes, policy replacement and rollback, durable events, and
+complete cgroup, runtime, session, and marker cleanup. Broader delegated
+profiles remain unadvertised promotion work.
 
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.

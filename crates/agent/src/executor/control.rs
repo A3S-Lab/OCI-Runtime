@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
@@ -12,6 +13,7 @@ pub(super) const CREATE_CONTINUE_BYTE: u8 = 0xC2;
 const USER_MAPPING_REQUIRED_BYTE: u8 = 0xB1;
 const USER_MAPPING_APPLIED_BYTE: u8 = 0xB2;
 const REJECTED_BYTE: u8 = 0xE1;
+const DEVICE_MOUNTS_BYTE: u8 = 0xD1;
 const MAX_REJECTION_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +28,43 @@ pub(super) enum InitOutcome {
         namespace_init_pid: Option<i32>,
     },
     Rejected(Error),
+}
+
+pub(super) fn receive_device_mounts(
+    stream: &StdUnixStream,
+    expected_count: usize,
+) -> Result<Vec<OwnedFd>> {
+    super::device_mount_transport::receive_descriptor_frame(
+        stream.as_raw_fd(),
+        DEVICE_MOUNTS_BYTE,
+        expected_count,
+    )
+    .map_err(|error| {
+        let code = if error.kind() == std::io::ErrorKind::InvalidData {
+            ErrorCode::PermissionDenied
+        } else {
+            ErrorCode::Unavailable
+        };
+        control_error(
+            code,
+            format!("failed to receive prepared rootless device mounts: {error}"),
+        )
+    })
+}
+
+pub(super) fn send_device_mounts(stream: &UnixStream, mounts: &[OwnedFd]) -> Result<()> {
+    let descriptors = mounts.iter().map(AsRawFd::as_raw_fd).collect::<Vec<_>>();
+    super::device_mount_transport::send_descriptor_frame(
+        stream.as_raw_fd(),
+        DEVICE_MOUNTS_BYTE,
+        &descriptors,
+    )
+    .map_err(|error| {
+        control_error(
+            ErrorCode::Unavailable,
+            format!("failed to send prepared rootless device mounts: {error}"),
+        )
+    })
 }
 
 pub(super) fn write_create_hooks_ready(
@@ -307,13 +346,14 @@ fn control_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::OwnedFd;
     use std::os::unix::net::UnixStream as StdUnixStream;
 
     use a3s_oci_sdk::{Error, ErrorCode};
 
     use super::{
         acknowledge_user_mapping, read_outcome, read_start_result, request_user_mapping,
-        write_create_hooks_ready, write_ready, write_rejection, InitOutcome,
+        send_device_mounts, write_create_hooks_ready, write_ready, write_rejection, InitOutcome,
     };
 
     #[tokio::test(flavor = "current_thread")]
@@ -337,6 +377,26 @@ mod tests {
             .await
             .expect("acknowledge mappings");
         child.await.expect("mapping child");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn parent_sends_device_mounts_over_the_authenticated_control_socket() {
+        let (child, parent) = StdUnixStream::pair().expect("create control socket pair");
+        parent
+            .set_nonblocking(true)
+            .expect("make control parent nonblocking");
+        let mounts = (0..super::super::device::ROOTLESS_DEVICE_MOUNT_COUNT)
+            .map(|_| {
+                let file = std::fs::File::open("/dev/null").expect("device fixture");
+                OwnedFd::from(file)
+            })
+            .collect::<Vec<_>>();
+        let parent = tokio::net::UnixStream::from_std(parent).expect("register control parent");
+        send_device_mounts(&parent, &mounts).expect("send prepared mounts");
+
+        let received =
+            super::receive_device_mounts(&child, mounts.len()).expect("receive prepared mounts");
+        assert_eq!(received.len(), mounts.len());
     }
 
     #[tokio::test(flavor = "current_thread")]

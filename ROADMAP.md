@@ -1299,13 +1299,20 @@ leak. Only then may KVM become `experimental`.
     requests with exact read-back and rollback.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
-  - [ ] Qualify the rootless delegation model and device support for every
-    advertised profile on real hosts. The v3 rootless smoke now requires an
-    explicit user-owned cgroup-v2 delegation and covers delegated create,
-    update, stats, workload-proven pause/resume, an exact event sequence, and
-    runtime-owned subtree cleanup. Recovery, x86_64/aarch64 host evidence, the exact a3s-box device
-    fixture, and a privileged authenticated device-policy helper remain open;
-    without that helper, rootless device policy continues to fail closed.
+  - [x] Qualify the rootless delegation model and device support for every
+    advertised profile on real hosts. The v4 rootless gate retains an exact
+    user-owned cgroup-v2 descriptor, starts a parent-bound privileged helper
+    before Tokio, permanently drops the owner to its real UID/GID, and accepts
+    only structured install/replace/remove requests for normalized descendants.
+    The first bounded profile is the exact six-device A3S Box fixture. Its smoke
+    verifies retained device-node mounts, read-only replacement, failed-update
+    rollback, disable/re-enable, durable events, helper shutdown, and complete
+    cgroup/runtime cleanup. Runtime commit `bed43d2` passed both x86_64 and
+    aarch64 real-host lanes in CI run `31714178349`. Both retained v4 reports
+    record `available`, UID/GID 20000, verified helper, nodes, updates, events,
+    deletion replay, durable-state removal, and empty cgroup, runtime, session,
+    and marker cleanup. This is the only advertised rootless device profile;
+    broader device and controller profiles remain outside that boundary.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
     for every newly advertised controller on x86_64 and aarch64.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate
@@ -1363,13 +1370,15 @@ and recovery suites in the Windows guest and on native Linux.
   aarch64.
 - [x] Prove the helper-backed non-root core lifecycle with subordinate
   UID/GID ownership and `setgroups=deny` on x86_64 and aarch64.
-- [ ] Qualify explicit rootless cgroup-v2 delegation on x86_64 and aarch64.
-  The v3 lifecycle gate covers create, update, stats, pause/resume, replay,
+- [x] Qualify explicit rootless cgroup-v2 delegation on x86_64 and aarch64.
+  The v4 lifecycle gate covers create, update, stats, pause/resume, replay,
   events, and runtime-owned subtree cleanup on both architectures. A separate
   owner-`SIGKILL` gate now reopens the exact delegation as the same non-root
   UID/GID and requires stopped-only recovery plus complete cgroup cleanup.
-  Retained passing evidence from both real-host CI architectures is required
-  before this item is checked.
+  Runtime commit `49cea11` passed both real-host lanes in CI run `31674526443`;
+  the retained x86_64 and aarch64 v2 recovery reports bind UID/GID 20000,
+  verified delegation use, workload termination, stopped-only deletion, and
+  an empty runtime-created cgroup subtree.
 - [x] Prove shutdown cleanup without delete after create, start, and kill on
   x86_64 and aarch64 without KVM.
 - [x] Add the Sandbox-scoped native runtime owner, bind its protected Unix SDK

@@ -39,7 +39,9 @@ mod transport_qualification;
 mod vsock;
 
 #[cfg(target_os = "linux")]
-pub use executor::{InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone};
+pub use executor::{
+    InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone, RootlessDevicePolicyBootstrap,
+};
 
 /// Verify that the Linux kernel supports PID-reuse-safe pidfd signaling.
 #[cfg(target_os = "linux")]

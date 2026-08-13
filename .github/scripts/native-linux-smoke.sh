@@ -891,7 +891,7 @@ run_rootless_smoke() {
   jq --exit-status \
     --argjson uid "$rootless_uid" \
     --argjson gid "$rootless_gid" \
-    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v3"
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v4"
      and .platform == "linux" and .status == "available"
      and .effective_uid == $uid and .effective_gid == $gid
      and .bundle_loaded
@@ -937,6 +937,84 @@ run_rootless_smoke() {
   test -z "$(sudo cat "$rootless_cgroup_host_control/cgroup.procs")"
   test -z "$(sudo find "$rootless_cgroup_parent" -mindepth 1 -maxdepth 1 \
     -type d ! -name a3s-host-control -print -quit)"
+}
+
+run_rootless_device_policy_smoke() {
+  local device_bundle="$qualification_root/rootless-device-bundle"
+  local output
+  local status
+  mkdir -p "$device_bundle/rootfs/dev"
+  cp -a --no-preserve=ownership \
+    "$rootless_bundle/rootfs/." "$device_bundle/rootfs/"
+  jq --slurpfile box fixtures/a3s-box/config.json '
+      .linux.devices = $box[0].linux.devices
+      | .linux.resources.devices = $box[0].linux.resources.devices
+      | .process.args[2] =
+          "set -eu; "
+          + "for spec in null:1:3 zero:1:5 full:1:7 random:1:8 urandom:1:9 tty:5:0; do "
+          + "name=${spec%%:*}; rest=${spec#*:}; major=${rest%%:*}; minor=${rest#*:}; "
+          + "test \"$(/bin/busybox stat -c %t:%T /dev/$name)\" = \"$(printf %x $major):$(printf %x $minor)\"; "
+          + "test \"$(/bin/busybox stat -c %a /dev/$name)\" = 666; done; "
+          + "printf probe > /dev/null; /bin/busybox head -c 1 /dev/zero > /dev/null; "
+          + "test \"$(/bin/busybox head -c 1 /dev/full | /bin/busybox wc -c)\" = 1; "
+          + "/bin/busybox head -c 1 /dev/random > /dev/null; "
+          + "/bin/busybox head -c 1 /dev/urandom > /dev/null; "
+          + .process.args[2]
+    ' "$rootless_bundle/config.json" > "$device_bundle/config.json"
+  sudo chown -R "$rootless_uid:$rootless_gid" "$device_bundle"
+  sudo chown 300000:400000 \
+    "$device_bundle/rootfs/.a3s-oci-rootless-subordinate"
+
+  if output="$(sudo sh -c '
+      control=$1
+      uid=$2
+      gid=$3
+      shift 3
+      printf 0 > "$control/cgroup.procs"
+      exec setpriv \
+        --ruid="$uid" --euid=0 \
+        --rgid="$gid" --egid=0 \
+        --clear-groups -- "$@"
+    ' sh \
+      "$rootless_cgroup_host_control" \
+      "$rootless_uid" \
+      "$rootless_gid" \
+      "$rootless_bin/a3s-oci" native-linux-rootless-device-policy-smoke \
+      --agent "$rootless_bin/a3s-oci-agent" \
+      --bundle "$device_bundle" \
+      --work-parent "$rootless_work_parent" \
+      --delegated-cgroup-root "$rootless_cgroup_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if [[ -n "${A3S_OCI_NATIVE_ROOTLESS_DEVICE_POLICY_REPORT:-}" ]]; then
+    mkdir -p "$(dirname "$A3S_OCI_NATIVE_ROOTLESS_DEVICE_POLICY_REPORT")"
+    printf '%s\n' "$output" >"$A3S_OCI_NATIVE_ROOTLESS_DEVICE_POLICY_REPORT"
+  fi
+  if ((status != 0)); then
+    report_native_failure "$device_bundle/rootfs"
+    return "$status"
+  fi
+  jq --exit-status \
+    --argjson uid "$rootless_uid" \
+    --argjson gid "$rootless_gid" \
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v4"
+     and .platform == "linux" and .status == "available"
+     and .effective_uid == $uid and .effective_gid == $gid
+     and .device_policy_helper_verified
+     and .device_nodes_verified
+     and .device_policy_updates_verified
+     and .cgroup_delegation_clean
+     and .executor_runtime_clean
+     and .session_root_clean
+     and (.reason == null)' <<<"$output" >/dev/null
+  test -z "$(sudo find "$rootless_work_parent" -mindepth 1 -print -quit)"
+  test -z "$(sudo cat "$rootless_cgroup_host_control/cgroup.procs")"
+  test -z "$(sudo find "$rootless_cgroup_parent" -mindepth 1 -maxdepth 1 \
+    -type d ! -name a3s-host-control -print -quit)"
+  sudo rm -rf --one-file-system -- "$device_bundle"
 }
 
 run_rootless_negative_smoke() {
@@ -990,7 +1068,7 @@ run_rootless_negative_smoke() {
   test "$status" -eq 2
   jq --exit-status \
     --arg reason "$expected_reason" \
-    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v3"
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v4"
      and .status != "available"
      and (.reason | contains($reason))
      and (.created_pid == null)' \
@@ -1135,7 +1213,7 @@ run_rootless_post_open_negative_smoke() {
   test "$status" -eq 2
   jq --exit-status \
     --arg reason "$expected_reason" \
-    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v3"
+    '.schema_version == "a3s.oci.native-linux-rootless-smoke.v4"
      and .status != "available"
      and (.reason | contains($reason))
      and (.created_pid == null)' \
@@ -1655,6 +1733,7 @@ run_rootless_post_open_negative_smoke \
 
 run_rootless_owner_death_recovery
 run_rootless_smoke
+run_rootless_device_policy_smoke
 run_smoke false
 run_smoke false "$control_bundle" "$control_hook_trace"
 run_service_smoke false

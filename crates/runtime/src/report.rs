@@ -17,7 +17,7 @@ pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v12";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-rootless-smoke.v3";
+    "a3s.oci.native-linux-rootless-smoke.v4";
 
 /// Result of querying WHPX and creating then deleting a partition object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -645,6 +645,12 @@ pub struct NativeLinuxRootlessSmokeReport {
     pub cgroup_delegation_requested: bool,
     /// Whether an explicit rootless cgroup-v2 delegation was exercised.
     pub cgroup_delegation_verified: bool,
+    /// Whether the synchronous effective-root helper bootstrap completed.
+    pub device_policy_helper_verified: bool,
+    /// Whether all six fixed A3S Box device nodes were available in-container.
+    pub device_nodes_verified: bool,
+    /// Whether policy replace, disable, and re-enable were exercised live.
+    pub device_policy_updates_verified: bool,
     /// Whether live cgroup resource updates replayed exactly.
     pub resources_updated: bool,
     /// Whether normalized cgroup statistics matched the updated profile.
@@ -712,6 +718,9 @@ impl NativeLinuxRootlessSmokeReport {
             setgroups_denied: false,
             cgroup_delegation_requested: false,
             cgroup_delegation_verified: false,
+            device_policy_helper_verified: false,
+            device_nodes_verified: false,
+            device_policy_updates_verified: false,
             resources_updated: false,
             stats_verified: false,
             freezer_verified: false,

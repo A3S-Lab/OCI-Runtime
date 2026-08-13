@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -28,8 +28,18 @@ const DEVICE_TARGETS_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-device-targ
 const MAX_DEVICE_TARGETS_RECORD_BYTES: u64 = 64 * 1024;
 const DEVICE_TARGET_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEVICE_TARGET_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(10);
+pub(super) const ROOTLESS_DEVICE_MOUNT_COUNT: usize = 6;
+const ROOTLESS_SAFE_DEVICES: [(&str, DeviceKind, u32, u32); ROOTLESS_DEVICE_MOUNT_COUNT] = [
+    ("/dev/null", DeviceKind::Character, 1, 3),
+    ("/dev/zero", DeviceKind::Character, 1, 5),
+    ("/dev/full", DeviceKind::Character, 1, 7),
+    ("/dev/random", DeviceKind::Character, 1, 8),
+    ("/dev/urandom", DeviceKind::Character, 1, 9),
+    ("/dev/tty", DeviceKind::Character, 5, 0),
+];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct DevicePlan {
     nodes: Vec<DeviceNode>,
     allow_access_masks: Vec<u8>,
@@ -37,12 +47,21 @@ pub(super) struct DevicePlan {
 }
 
 #[derive(Debug)]
+pub(super) struct LoadedDeviceProgram(OwnedFd);
+
+#[derive(Debug)]
 pub(super) struct PreparedDeviceSources {
-    mounts: Option<Vec<OwnedFd>>,
+    sources: Option<Vec<PreparedDeviceSource>>,
     verify_ownership: bool,
+    target_host_owner: Option<(u32, u32)>,
     manifest: Mutex<Option<DeviceTargetManifest>>,
     manifest_file: Mutex<Option<File>>,
     manifest_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+enum PreparedDeviceSource {
+    DetachedMount(OwnedFd),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +113,23 @@ impl DeviceTargetRecord {
         })
     }
 
+    fn capture_for_cleanup(
+        relative_path: &Path,
+        metadata: &fs::Metadata,
+        target_host_owner: Option<(u32, u32)>,
+    ) -> Result<Self> {
+        let mut record = Self::capture(relative_path, metadata)?;
+        if let Some((uid, gid)) = target_host_owner {
+            // The placeholder is created after entering the container user
+            // namespace, where its mapped ownership is reported as 0:0. The
+            // supervisor later performs cleanup in the initial user namespace
+            // and must compare against the corresponding host IDs.
+            record.uid = uid;
+            record.gid = gid;
+        }
+        Ok(record)
+    }
+
     fn matches(&self, metadata: &TargetMetadata) -> bool {
         metadata.file_type == libc::S_IFREG
             && metadata.dev == self.dev
@@ -137,13 +173,15 @@ impl DeviceRootfsRecord {
 struct TargetMetadata {
     file_type: u32,
     dev: u64,
+    rdev: u64,
     ino: u64,
     mode: u32,
     uid: u32,
     gid: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeviceNode {
     path: PathBuf,
     kind: DeviceKind,
@@ -154,7 +192,8 @@ struct DeviceNode {
     gid: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 enum DeviceKind {
     Block,
     Character,
@@ -294,11 +333,52 @@ impl DevicePlan {
         namespaces: &NamespacePlan,
         runtime_directory: &Path,
         rootless: bool,
+        rootless_mount_descriptors: &[OwnedFd],
     ) -> Result<PreparedDeviceSources> {
+        let target_host_owner = if namespaces.new_user() {
+            Some((
+                namespaces.host_uid(0).ok_or_else(|| {
+                    device_error(
+                        ErrorCode::InvalidArgument,
+                        "container root UID is not covered by linux.uidMappings",
+                    )
+                })?,
+                namespaces.host_gid(0).ok_or_else(|| {
+                    device_error(
+                        ErrorCode::InvalidArgument,
+                        "container root GID is not covered by linux.gidMappings",
+                    )
+                })?,
+            ))
+        } else {
+            None
+        };
+        if !rootless && !rootless_mount_descriptors.is_empty() {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                "privileged device preparation received rootless mount descriptors",
+            ));
+        }
+        if rootless && rootless_mount_descriptors.len() > ROOTLESS_DEVICE_MOUNT_COUNT {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "rootless device preparation received {} mount descriptors; maximum is {ROOTLESS_DEVICE_MOUNT_COUNT}",
+                    rootless_mount_descriptors.len()
+                ),
+            ));
+        }
         if !namespaces.has_user() {
+            if !rootless_mount_descriptors.is_empty() {
+                return Err(device_error(
+                    ErrorCode::PermissionDenied,
+                    "device mount descriptors were supplied without a user namespace",
+                ));
+            }
             return Ok(PreparedDeviceSources {
-                mounts: None,
+                sources: None,
                 verify_ownership: true,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: None,
@@ -311,9 +391,16 @@ impl DevicePlan {
             ));
         }
         if self.nodes.is_empty() {
+            if !rootless_mount_descriptors.is_empty() {
+                return Err(device_error(
+                    ErrorCode::PermissionDenied,
+                    "rootless device mount descriptors were supplied without device nodes",
+                ));
+            }
             return Ok(PreparedDeviceSources {
-                mounts: Some(Vec::new()),
+                sources: Some(Vec::new()),
                 verify_ownership: !rootless,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: None,
@@ -321,15 +408,11 @@ impl DevicePlan {
         }
 
         if rootless {
-            let mounts = self
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(index, node)| node.prepare_rootless_source(index))
-                .collect::<Result<Vec<_>>>()?;
+            let mounts = self.prepare_rootless_sources(rootless_mount_descriptors)?;
             return Ok(PreparedDeviceSources {
-                mounts: Some(mounts),
+                sources: Some(mounts),
                 verify_ownership: false,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
@@ -357,8 +440,9 @@ impl DevicePlan {
             .collect::<Result<Vec<_>>>();
         match prepared {
             Ok(mounts) => Ok(PreparedDeviceSources {
-                mounts: Some(mounts),
+                sources: Some(mounts),
                 verify_ownership: true,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
@@ -375,16 +459,16 @@ impl DevicePlan {
         rootfs: &Path,
         prepared: &PreparedDeviceSources,
     ) -> Result<()> {
-        let Some(mounts) = prepared.mounts.as_ref() else {
+        let Some(sources) = prepared.sources.as_ref() else {
             return Ok(());
         };
-        if mounts.len() != self.nodes.len() {
+        if sources.len() != self.nodes.len() {
             return Err(device_error(
                 ErrorCode::Internal,
                 "prepared device source count does not match the OCI device plan",
             ));
         }
-        for (node, source) in self.nodes.iter().zip(mounts) {
+        for (node, source) in self.nodes.iter().zip(sources) {
             node.bind_source(rootfs, source, prepared.verify_ownership, prepared)?;
         }
         Ok(())
@@ -398,7 +482,7 @@ impl DevicePlan {
     }
 
     pub(super) const fn uses_prepared_sources(prepared: &PreparedDeviceSources) -> bool {
-        prepared.mounts.is_some()
+        prepared.sources.is_some()
     }
 
     pub(super) fn requires_setup(&self) -> bool {
@@ -409,6 +493,13 @@ impl DevicePlan {
         let Some(rules) = resources.devices().as_deref() else {
             return Ok(None);
         };
+        if rules.is_empty() {
+            return Ok(Some(Self {
+                nodes: self.nodes.clone(),
+                allow_access_masks: Vec::new(),
+                enforce_allowlist: false,
+            }));
+        }
         let allow_access_masks = validate_device_policy(&self.nodes, Some(rules))?;
         Ok(Some(Self {
             nodes: self.nodes.clone(),
@@ -423,6 +514,80 @@ impl DevicePlan {
         }
         let program = build_cgroup_device_program(&self.nodes, &self.allow_access_masks)?;
         load_cgroup_device_program_fd(&program).map(Some)
+    }
+
+    pub(super) fn load_device_program(&self) -> Result<LoadedDeviceProgram> {
+        self.validate_serialized_policy()?;
+        let program = build_cgroup_device_program(&self.nodes, &self.allow_access_masks)?;
+        load_cgroup_device_program_fd(&program).map(LoadedDeviceProgram)
+    }
+
+    fn has_rootless_safe_nodes(&self) -> bool {
+        self.nodes.len() == ROOTLESS_SAFE_DEVICES.len()
+            && self.nodes.iter().zip(ROOTLESS_SAFE_DEVICES).all(
+                |(node, (path, kind, major, minor))| {
+                    node.path == Path::new(path)
+                        && node.kind == kind
+                        && node.major == major
+                        && node.minor == minor
+                        && node.mode == 0o666
+                        && node.uid == 0
+                        && node.gid == 0
+                },
+            )
+    }
+
+    fn validate_serialized_policy(&self) -> Result<()> {
+        if !self.enforce_allowlist
+            || !self.has_rootless_safe_nodes()
+            || self.nodes.len() != self.allow_access_masks.len()
+            || self
+                .allow_access_masks
+                .iter()
+                .any(|mask| *mask == 0 || *mask & !0b111 != 0)
+        {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                "serialized rootless device policy is not a bounded active allowlist",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_rootless_device_set(&self) -> Result<()> {
+        if !self.has_rootless_safe_nodes() {
+            Err(device_error(
+                ErrorCode::Unsupported,
+                "rootless device policy requires the exact six-node A3S Box safe-device profile",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn prepare_rootless_sources(
+        &self,
+        descriptors: &[OwnedFd],
+    ) -> Result<Vec<PreparedDeviceSource>> {
+        self.validate_rootless_device_set()?;
+        if descriptors.len() != self.nodes.len() {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "rootless device mount descriptor count {} does not match the fixed device set {}",
+                    descriptors.len(),
+                    self.nodes.len()
+                ),
+            ));
+        }
+        self.nodes
+            .iter()
+            .zip(descriptors)
+            .enumerate()
+            .map(|(index, (node, descriptor))| {
+                node.prepare_inherited_rootless_source(index, descriptor.as_raw_fd())
+            })
+            .collect()
     }
 
     pub(super) fn attach_loaded_cgroup_device_program(
@@ -470,11 +635,29 @@ impl DevicePlan {
     }
 }
 
+impl LoadedDeviceProgram {
+    pub(super) fn attach_to_fd(&self, cgroup: RawFd) -> Result<()> {
+        attach_cgroup_device_program_fd(cgroup, &self.0, None)
+    }
+
+    pub(super) fn replace_on_fd(
+        &self,
+        cgroup: RawFd,
+        replaced: &LoadedDeviceProgram,
+    ) -> Result<()> {
+        attach_cgroup_device_program_fd(cgroup, &self.0, Some(&replaced.0))
+    }
+
+    pub(super) fn detach_from_fd(&self, cgroup: RawFd) -> Result<()> {
+        detach_cgroup_device_program_fd(cgroup, &self.0)
+    }
+}
+
 impl PreparedDeviceSources {
     /// Bind the cleanup manifest to the exact retained rootfs before the
     /// supervised child enters its mount namespace.
     pub(super) fn bind_rootfs(&self, rootfs: &Path) -> Result<()> {
-        if self.mounts.is_none() || self.manifest_path.is_none() {
+        if self.sources.is_none() || self.manifest_path.is_none() {
             return Ok(());
         }
         let canonical_rootfs = rootfs.canonicalize().map_err(|error| {
@@ -1146,6 +1329,7 @@ fn target_metadata_from_stat(metadata: &libc::stat) -> TargetMetadata {
     TargetMetadata {
         file_type: metadata.st_mode & libc::S_IFMT,
         dev: metadata.st_dev,
+        rdev: metadata.st_rdev,
         ino: metadata.st_ino,
         mode: metadata.st_mode & 0o7777,
         uid: metadata.st_uid,
@@ -1203,7 +1387,7 @@ impl DeviceNode {
         index: usize,
         directory: &Path,
         namespaces: &NamespacePlan,
-    ) -> Result<OwnedFd> {
+    ) -> Result<PreparedDeviceSource> {
         let host_uid = namespaces.host_uid(self.uid).ok_or_else(|| {
             invalid(format!(
                 "linux.devices[{index}].uid {} is not covered by linux.uidMappings",
@@ -1246,51 +1430,54 @@ impl DeviceNode {
             )
         })?;
         self.verify_at(&path, host_uid, host_gid)?;
-        clone_device_mount(&path)
+        clone_device_mount(&path).map(PreparedDeviceSource::DetachedMount)
     }
 
-    fn prepare_rootless_source(&self, index: usize) -> Result<OwnedFd> {
-        if !self.path.starts_with("/dev") {
+    fn prepare_inherited_rootless_source(
+        &self,
+        index: usize,
+        descriptor: RawFd,
+    ) -> Result<PreparedDeviceSource> {
+        if !is_rootless_safe_device(self) {
             return Err(unsupported(
                 &format!("linux.devices[{index}].path"),
-                "rootless device profiles may only bind existing /dev nodes",
+                "rootless device profiles support only the fixed A3S Box safe-device set",
             ));
         }
-        let metadata = fs::symlink_metadata(&self.path).map_err(|error| {
-            device_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "rootless device source {} is unavailable: {error}",
-                    self.path.display()
-                ),
-            )
-        })?;
-        let file_type_matches = match self.kind {
-            DeviceKind::Block => metadata.file_type().is_block_device(),
-            DeviceKind::Character => metadata.file_type().is_char_device(),
-            DeviceKind::Fifo => metadata.file_type().is_fifo(),
-        };
-        if metadata.file_type().is_symlink()
-            || !file_type_matches
-            || libc::major(metadata.rdev()) != self.major
-            || libc::minor(metadata.rdev()) != self.minor
-            || metadata.mode() & 0o7777 != self.mode
-        {
+        if descriptor < 0 {
             return Err(device_error(
-                ErrorCode::FailedPrecondition,
+                ErrorCode::PermissionDenied,
+                format!("rootless device mount slot {index} has an invalid descriptor"),
+            ));
+        }
+        // The fixed descriptor is owned by container-init. Duplicate it so
+        // PreparedDeviceSources owns a close-on-exec copy with ordinary Rust
+        // lifetime semantics, without consuming or mutating the inherited slot.
+        let duplicated = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
+        if duplicated < 0 {
+            return Err(last_os_error(format!(
+                "duplicate inherited rootless device mount {}",
+                self.path.display()
+            )));
+        }
+        // SAFETY: F_DUPFD_CLOEXEC returned a new owned descriptor.
+        let duplicated = unsafe { OwnedFd::from_raw_fd(duplicated) };
+        if !self.matches_source_metadata(&metadata_for_fd(&duplicated)?) {
+            return Err(device_error(
+                ErrorCode::PermissionDenied,
                 format!(
-                    "rootless device source {} does not match the requested device",
+                    "inherited rootless device mount {} does not match the fixed device slot",
                     self.path.display()
                 ),
             ));
         }
-        clone_device_mount(&self.path)
+        Ok(PreparedDeviceSource::DetachedMount(duplicated))
     }
 
     fn bind_source(
         &self,
         rootfs: &Path,
-        source: &OwnedFd,
+        source: &PreparedDeviceSource,
         verify_ownership: bool,
         prepared: &PreparedDeviceSources,
     ) -> Result<()> {
@@ -1349,7 +1536,11 @@ impl DeviceNode {
                 ),
             )
         })?;
-        let record = DeviceTargetRecord::capture(relative, &metadata)?;
+        let record = DeviceTargetRecord::capture_for_cleanup(
+            relative,
+            &metadata,
+            prepared.target_host_owner,
+        )?;
         if let Err(error) = prepared.record_device_target(record) {
             if let Err(rollback) = fs::remove_file(&target) {
                 return Err(device_error(
@@ -1363,6 +1554,7 @@ impl DeviceNode {
             return Err(error);
         }
 
+        let PreparedDeviceSource::DetachedMount(source) = source;
         attach_device_mount(source, &target, &self.path)?;
         if verify_ownership {
             self.verify_at(&target, self.uid, self.gid)
@@ -1506,6 +1698,27 @@ impl DeviceNode {
         }
         Ok(())
     }
+
+    fn matches_source_metadata(&self, metadata: &TargetMetadata) -> bool {
+        metadata.file_type == self.file_type()
+            && libc::major(metadata.rdev) == self.major
+            && libc::minor(metadata.rdev) == self.minor
+            && metadata.mode == self.mode
+    }
+}
+
+fn is_rootless_safe_device(node: &DeviceNode) -> bool {
+    node.mode == 0o666
+        && node.uid == 0
+        && node.gid == 0
+        && ROOTLESS_SAFE_DEVICES
+            .iter()
+            .any(|(path, kind, major, minor)| {
+                node.path == Path::new(path)
+                    && node.kind == *kind
+                    && node.major == *major
+                    && node.minor == *minor
+            })
 }
 
 impl DeviceKind {
@@ -1690,8 +1903,27 @@ fn attach_cgroup_device_program(
     replaced: Option<&OwnedFd>,
 ) -> Result<()> {
     let cgroup = open_cgroup_descriptor(cgroup_path)?;
+    attach_cgroup_device_program_fd(cgroup.as_raw_fd(), loaded, replaced).map_err(|error| {
+        Error::new(
+            error.code,
+            format!(
+                "failed to attach cgroup device BPF program to {}: {}",
+                cgroup_path.display(),
+                error.message
+            ),
+        )
+        .for_operation("enforce-container-devices")
+        .retryable(error.retryable)
+    })
+}
+
+fn attach_cgroup_device_program_fd(
+    cgroup: RawFd,
+    loaded: &OwnedFd,
+    replaced: Option<&OwnedFd>,
+) -> Result<()> {
     let mut attr = BpfProgAttachAttr {
-        target_fd: cgroup.as_raw_fd() as u32,
+        target_fd: cgroup as u32,
         attach_bpf_fd: loaded.as_raw_fd() as u32,
         attach_type: BPF_CGROUP_DEVICE,
         attach_flags: BPF_F_ALLOW_MULTI | if replaced.is_some() { BPF_F_REPLACE } else { 0 },
@@ -1708,18 +1940,32 @@ fn attach_cgroup_device_program(
         )
     };
     if attached != 0 {
-        return Err(bpf_last_os_error(format!(
-            "failed to attach cgroup device BPF program to {}",
-            cgroup_path.display()
-        )));
+        return Err(bpf_last_os_error(
+            "failed to attach cgroup device BPF program",
+        ));
     }
     Ok(())
 }
 
 fn detach_loaded_cgroup_device_program(cgroup_path: &Path, attached: &OwnedFd) -> Result<()> {
     let cgroup = open_cgroup_descriptor(cgroup_path)?;
+    detach_cgroup_device_program_fd(cgroup.as_raw_fd(), attached).map_err(|error| {
+        Error::new(
+            error.code,
+            format!(
+                "failed to detach cgroup device BPF program from {}: {}",
+                cgroup_path.display(),
+                error.message
+            ),
+        )
+        .for_operation("enforce-container-devices")
+        .retryable(error.retryable)
+    })
+}
+
+fn detach_cgroup_device_program_fd(cgroup: RawFd, attached: &OwnedFd) -> Result<()> {
     let mut attr = BpfProgAttachAttr {
-        target_fd: cgroup.as_raw_fd() as u32,
+        target_fd: cgroup as u32,
         attach_bpf_fd: attached.as_raw_fd() as u32,
         attach_type: BPF_CGROUP_DEVICE,
         attach_flags: 0,
@@ -1736,10 +1982,9 @@ fn detach_loaded_cgroup_device_program(cgroup_path: &Path, attached: &OwnedFd) -
         )
     };
     if detached != 0 {
-        return Err(bpf_last_os_error(format!(
-            "failed to detach cgroup device BPF program from {}",
-            cgroup_path.display()
-        )));
+        return Err(bpf_last_os_error(
+            "failed to detach cgroup device BPF program",
+        ));
     }
     Ok(())
 }
@@ -2196,8 +2441,7 @@ fn device_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::OwnedFd;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
     use a3s_oci_sdk::ErrorCode;
@@ -2231,6 +2475,42 @@ mod tests {
         cleanup_device_target_manifest(&manifest).expect("cleanup exact placeholder");
 
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn cleanup_record_uses_host_owner_for_user_namespace_placeholder() {
+        let temporary = tempdir().expect("temporary device target directory");
+        let path = temporary.path().join("null");
+        std::fs::write(&path, b"placeholder").expect("placeholder file");
+        let metadata = std::fs::symlink_metadata(&path).expect("placeholder metadata");
+        let namespace_record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
+            .expect("capture namespace target");
+        let host_owner = (
+            namespace_record.uid.wrapping_add(1),
+            namespace_record.gid.wrapping_add(1),
+        );
+
+        let host_record = DeviceTargetRecord::capture_for_cleanup(
+            std::path::Path::new("null"),
+            &metadata,
+            Some(host_owner),
+        )
+        .expect("capture mapped target");
+        assert_eq!((host_record.uid, host_record.gid), host_owner);
+        // Model the initial-user-namespace view used by the supervisor after
+        // the container mount namespace has gone away.
+        let observed = super::TargetMetadata {
+            file_type: libc::S_IFREG,
+            dev: metadata.dev(),
+            rdev: metadata.rdev(),
+            ino: metadata.ino(),
+            mode: metadata.mode() & 0o7777,
+            uid: host_owner.0,
+            gid: host_owner.1,
+        };
+
+        assert!(!namespace_record.matches(&observed));
+        assert!(host_record.matches(&observed));
     }
 
     #[test]
@@ -2356,8 +2636,9 @@ mod tests {
         std::fs::create_dir_all(&runtime_directory).expect("runtime directory");
         std::fs::create_dir_all(&rootfs).expect("rootfs directory");
         let prepared = PreparedDeviceSources {
-            mounts: Some(Vec::new()),
+            sources: Some(Vec::new()),
             verify_ownership: true,
+            target_host_owner: None,
             manifest: std::sync::Mutex::new(None),
             manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(runtime_directory.join("device-targets.json")),
@@ -2381,8 +2662,9 @@ mod tests {
         let record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
             .expect("capture target");
         let prepared = PreparedDeviceSources {
-            mounts: Some(Vec::new()),
+            sources: Some(Vec::new()),
             verify_ownership: false,
+            target_host_owner: None,
             manifest: std::sync::Mutex::new(None),
             manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(runtime_directory.join("device-targets.json")),
@@ -2415,8 +2697,9 @@ mod tests {
         std::fs::create_dir(rootfs.join("dev")).expect("device directory");
         let manifest_path = runtime_directory.join("device-targets.json");
         let prepared = PreparedDeviceSources {
-            mounts: Some(Vec::new()),
+            sources: Some(Vec::new()),
             verify_ownership: false,
+            target_host_owner: None,
             manifest: std::sync::Mutex::new(None),
             manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(manifest_path.clone()),
@@ -2436,9 +2719,11 @@ mod tests {
             uid: 0,
             gid: 0,
         };
-        let source: OwnedFd = std::fs::File::open("/dev/null")
-            .expect("device source")
-            .into();
+        let source = super::PreparedDeviceSource::DetachedMount(
+            std::fs::File::open("/dev/null")
+                .expect("device source")
+                .into(),
+        );
 
         let error = node
             .bind_source(&rootfs, &source, false, &prepared)
@@ -2543,6 +2828,23 @@ mod tests {
         .expect("mount plan");
         let plan = DevicePlan::from_linux(Some(&linux), &mounts).expect("device plan");
         assert_eq!(plan.len(), 6);
+        plan.validate_rootless_device_set()
+            .expect("A3S Box fixture is the fixed rootless device set");
+    }
+
+    #[test]
+    fn rootless_policy_rejects_devices_outside_the_fixed_safe_set() {
+        let mut config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../fixtures/a3s-box/config.json"))
+                .expect("decode fixture");
+        config["linux"]["devices"][0]["path"] = serde_json::json!("/dev/sda");
+        let linux: Linux =
+            serde_json::from_value(config["linux"].clone()).expect("decode Linux config");
+        let plan = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
+        let error = plan
+            .validate_rootless_device_set()
+            .expect_err("device outside the fixed safe set must be rejected");
+        assert_eq!(error.code, ErrorCode::Unsupported);
     }
 
     #[test]
@@ -2633,6 +2935,33 @@ mod tests {
             .expect("cleared device policy should produce a new plan");
         assert_eq!(updated, DevicePlan::default());
         assert!(!updated.requires_setup());
+    }
+
+    #[test]
+    fn fixed_device_nodes_survive_disable_for_later_reenable() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../fixtures/a3s-box/config.json"))
+                .expect("decode fixture");
+        let linux: Linux =
+            serde_json::from_value(config["linux"].clone()).expect("decode Linux config");
+        let current = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
+        let disabled: LinuxResources =
+            serde_json::from_value(serde_json::json!({"devices": []})).expect("disabled policy");
+        let disabled = current
+            .update_from_resources(&disabled)
+            .expect("disable policy")
+            .expect("updated policy");
+        assert_eq!(disabled.nodes, current.nodes);
+        assert!(!disabled.requires_setup());
+
+        let resources = linux.resources().clone().expect("fixture resources");
+        let reenabled = disabled
+            .update_from_resources(&resources)
+            .expect("reenable policy")
+            .expect("updated policy");
+        assert_eq!(reenabled.nodes, current.nodes);
+        assert_eq!(reenabled.allow_access_masks, current.allow_access_masks);
+        assert!(reenabled.requires_setup());
     }
 
     #[test]

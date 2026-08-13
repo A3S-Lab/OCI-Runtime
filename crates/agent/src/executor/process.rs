@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io;
+use std::os::fd::OwnedFd;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixListener as StdUnixListener};
 use std::os::unix::process::ExitStatusExt;
@@ -21,8 +22,8 @@ use tokio::time::timeout;
 use super::capability::CapabilityPlan;
 use super::cgroup::{self, CgroupHandle, CgroupManager};
 use super::control::{
-    acknowledge_user_mapping, continue_create, read_outcome, read_start_result, InitOutcome,
-    START_BYTE,
+    acknowledge_user_mapping, continue_create, read_outcome, read_start_result, send_device_mounts,
+    InitOutcome, START_BYTE,
 };
 use super::hook::{HookPhase, HookSet, HookStateTemplate};
 use super::inherited_descriptor::InheritedDescriptorPlan;
@@ -57,6 +58,7 @@ pub(super) struct PreparedProcess {
 
 pub(super) struct ProcessSpawnContext<'a> {
     pub(super) inherited_descriptors: InheritedDescriptorPlan,
+    pub(super) rootless_device_mounts: Vec<OwnedFd>,
     pub(super) rootfs_scope: RootfsScope,
     pub(super) user_mapping_runtime: &'a UserMappingRuntime,
 }
@@ -73,6 +75,7 @@ impl PreparedProcess {
     ) -> Result<Self> {
         let ProcessSpawnContext {
             inherited_descriptors,
+            rootless_device_mounts,
             rootfs_scope,
             user_mapping_runtime,
         } = context;
@@ -83,6 +86,11 @@ impl PreparedProcess {
             inherited_descriptors
                 .ensure_targets_available(&[CONTROL_CGROUP_PROCS_FD, WORKLOAD_CGROUP_PROCS_FD])?;
         }
+        validate_rootless_device_mounts(
+            &rootless_device_mounts,
+            rootless,
+            plan.devices.requires_setup(),
+        )?;
         let mut cgroup = CgroupHandle::create(&plan.cgroup, &plan.devices, cgroup_manager)?;
         let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
         let control_workload_descriptors = cgroup
@@ -224,6 +232,11 @@ impl PreparedProcess {
                 ),
             ));
         }
+        if let Err(error) = send_device_mounts(&control, &rootless_device_mounts) {
+            terminate(&mut child).await;
+            return Err(error);
+        }
+        drop(rootless_device_mounts);
         let mut user_mapping_installed = false;
         let mut create_hooks_ready = None;
         let runtime_pid = loop {
@@ -632,6 +645,28 @@ impl PreparedProcess {
         self.exit_status = Some(status.clone());
         Ok(status)
     }
+}
+
+fn validate_rootless_device_mounts(
+    mounts: &[OwnedFd],
+    rootless: bool,
+    devices_required: bool,
+) -> Result<()> {
+    let expected = if rootless && devices_required {
+        super::device::ROOTLESS_DEVICE_MOUNT_COUNT
+    } else {
+        0
+    };
+    if mounts.len() != expected {
+        return Err(process_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "prepared rootless device mount count {} does not match expected {expected}",
+                mounts.len()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 async fn retain_original_rootfs(path: &Path) -> Result<File> {

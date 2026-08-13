@@ -142,7 +142,7 @@ fn native_linux_rootless_smoke_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("rootless smoke output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.native-linux-rootless-smoke.v3"
+        "a3s.oci.native-linux-rootless-smoke.v4"
     );
     assert_ne!(report["status"], "available");
 }
