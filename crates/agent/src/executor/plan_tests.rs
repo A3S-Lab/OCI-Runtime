@@ -426,7 +426,7 @@ fn rejects_unimplemented_cgroup_v2_resource_families() {
             "hugepageLimits",
             serde_json::json!([{"pageSize": "2MB", "limit": 1}]),
         ),
-        ("rdma", serde_json::json!({"mlx5_0": {}})),
+        ("rdma", serde_json::json!({"mlx5_0": {"hcaHandles": 1}})),
         ("unified", serde_json::json!({"memory.max": "1"})),
     ] {
         let mut config: serde_json::Value =
