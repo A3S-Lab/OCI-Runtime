@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::mem::{size_of, MaybeUninit};
+use std::os::macos::fs::MetadataExt as MacosMetadataExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use a3s_oci_sdk::{LocalIpcEndpoint, RuntimeClient};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, timeout, Instant};
 
-use super::report::MacosProcessIdentity;
+use super::report::{MacosProcessIdentity, MacosSocketIdentity};
 
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const STOP_TIMEOUT: Duration = Duration::from_secs(45);
@@ -189,7 +190,7 @@ fn create_private_log(path: &Path, label: &str) -> Result<std::fs::File, String>
         .map_err(|error| format!("failed to create {label} {}: {error}", path.display()))
 }
 
-pub(super) fn socket_identity(path: &Path) -> Result<(u64, u64), String> {
+pub(super) fn socket_identity(path: &Path) -> Result<MacosSocketIdentity, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         format!(
             "failed to inspect socket identity {}: {error}",
@@ -202,7 +203,13 @@ pub(super) fn socket_identity(path: &Path) -> Result<(u64, u64), String> {
             path.display()
         ));
     }
-    Ok((metadata.dev(), metadata.ino()))
+    Ok(MacosSocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        generation: MacosMetadataExt::st_gen(&metadata),
+        birth_time_unix_seconds: MacosMetadataExt::st_birthtime(&metadata),
+        birth_time_nanoseconds: MacosMetadataExt::st_birthtime_nsec(&metadata),
+    })
 }
 
 pub(super) fn process_descendants(root_pid: u32) -> Result<Vec<MacosProcessIdentity>, String> {
@@ -373,4 +380,48 @@ fn process_identity(pid: libc::pid_t) -> Option<MacosProcessIdentity> {
             .saturating_add(info.pbi_start_tvusec),
         command: name,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::socket_identity;
+
+    #[test]
+    fn socket_identity_changes_for_every_rebound_path() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket_path = temporary.path().join("runtime.sock");
+
+        for _ in 0..256 {
+            let first =
+                std::os::unix::net::UnixListener::bind(&socket_path).expect("bind first socket");
+            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+                .expect("protect first socket");
+            let first_identity = socket_identity(&socket_path).expect("first socket identity");
+            drop(first);
+            std::fs::remove_file(&socket_path).expect("remove first socket");
+
+            let replacement = std::os::unix::net::UnixListener::bind(&socket_path)
+                .expect("bind replacement socket");
+            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+                .expect("protect replacement socket");
+            let replacement_identity =
+                socket_identity(&socket_path).expect("replacement socket identity");
+            assert_ne!(first_identity, replacement_identity);
+            if first_identity.device == replacement_identity.device
+                && first_identity.inode == replacement_identity.inode
+            {
+                assert!(
+                    first_identity.generation != replacement_identity.generation
+                        || first_identity.birth_time_unix_seconds
+                            != replacement_identity.birth_time_unix_seconds
+                        || first_identity.birth_time_nanoseconds
+                            != replacement_identity.birth_time_nanoseconds
+                );
+            }
+            drop(replacement);
+            std::fs::remove_file(&socket_path).expect("remove replacement socket");
+        }
+    }
 }

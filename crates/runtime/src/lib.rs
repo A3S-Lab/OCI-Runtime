@@ -103,8 +103,9 @@ pub use hvf_driver::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
 pub use macos_hvf_host_smoke::{
     macos_hvf_host_service_smoke, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeConfig,
     MacosHvfHostServiceSmokeReport, MacosHvfOwnerDeathEvidence, MacosHvfPublicLifecycleEvidence,
-    MacosHvfPublicSoakEvidence, MacosProcessIdentity, MACOS_HVF_HOST_SERVICE_SMOKE_SCHEMA_VERSION,
-    MAX_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS, MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS,
+    MacosHvfPublicSoakEvidence, MacosProcessIdentity, MacosSocketIdentity,
+    MACOS_HVF_HOST_SERVICE_SMOKE_SCHEMA_VERSION, MAX_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS,
+    MIN_MACOS_HVF_HOST_SERVICE_SOAK_ITERATIONS,
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use macos_hvf_service::{MacosHvfHostService, MacosHvfHostServiceConfig};

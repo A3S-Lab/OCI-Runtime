@@ -17,6 +17,20 @@ pub struct MacosProcessIdentity {
     pub command: String,
 }
 
+/// Filesystem identity of one published macOS Unix-domain socket object.
+///
+/// APFS may immediately reuse a removed socket's device and inode pair. The
+/// generation and birth timestamp distinguish the replacement object without
+/// weakening the production endpoint's inode-scoped cleanup guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MacosSocketIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub generation: u32,
+    pub birth_time_unix_seconds: i64,
+    pub birth_time_nanoseconds: i64,
+}
+
 /// Immutable inputs and executable digests used by one public-path run.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MacosHvfArtifactEvidence {
@@ -167,6 +181,8 @@ impl MacosHvfPublicLifecycleEvidence {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MacosHvfOwnerDeathEvidence {
     pub first_host_service_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_socket_identity: Option<MacosSocketIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<ContainerTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +198,11 @@ pub struct MacosHvfOwnerDeathEvidence {
     pub endpoint_inventory_restored: bool,
     pub authenticated_recovery_report_retained: bool,
     pub replacement_host_service_pid: Option<u32>,
-    pub replacement_socket_new_inode: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_socket_identity: Option<MacosSocketIdentity>,
+    /// The replacement published a different socket object, even if APFS reused its inode.
+    #[serde(default, alias = "replacement_socket_new_inode")]
+    pub replacement_socket_new_identity: bool,
     pub replacement_connected: bool,
     pub exact_stopped_state_recovered: bool,
     pub process_inventory_empty: bool,
@@ -206,6 +226,7 @@ pub struct MacosHvfOwnerDeathEvidence {
 impl MacosHvfOwnerDeathEvidence {
     pub fn is_success(&self) -> bool {
         self.first_host_service_pid.is_some()
+            && self.first_socket_identity.is_some()
             && self.target.is_some()
             && self
                 .created_config_digest
@@ -220,7 +241,8 @@ impl MacosHvfOwnerDeathEvidence {
             && self.endpoint_inventory_restored
             && self.authenticated_recovery_report_retained
             && self.replacement_host_service_pid.is_some()
-            && self.replacement_socket_new_inode
+            && self.replacement_socket_identity.is_some()
+            && self.replacement_socket_new_identity
             && self.replacement_connected
             && self.exact_stopped_state_recovered
             && self.process_inventory_empty
@@ -378,7 +400,7 @@ mod tests {
 
     use super::{
         canonical_git_revision, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeReport,
-        MacosHvfOwnerDeathEvidence, MacosProcessIdentity,
+        MacosHvfOwnerDeathEvidence, MacosProcessIdentity, MacosSocketIdentity,
     };
 
     fn complete_artifacts() -> MacosHvfArtifactEvidence {
@@ -398,6 +420,13 @@ mod tests {
     fn complete_owner_death_evidence() -> MacosHvfOwnerDeathEvidence {
         MacosHvfOwnerDeathEvidence {
             first_host_service_pid: Some(101),
+            first_socket_identity: Some(MacosSocketIdentity {
+                device: 1,
+                inode: 9,
+                generation: 3,
+                birth_time_unix_seconds: 10,
+                birth_time_nanoseconds: 11,
+            }),
             target: Some(ContainerTarget::exact(
                 ContainerId::new("owner-death-test").expect("container ID"),
                 Generation(7),
@@ -427,7 +456,14 @@ mod tests {
             endpoint_inventory_restored: true,
             authenticated_recovery_report_retained: true,
             replacement_host_service_pid: Some(104),
-            replacement_socket_new_inode: true,
+            replacement_socket_identity: Some(MacosSocketIdentity {
+                device: 1,
+                inode: 9,
+                generation: 4,
+                birth_time_unix_seconds: 12,
+                birth_time_nanoseconds: 13,
+            }),
+            replacement_socket_new_identity: true,
             replacement_connected: true,
             exact_stopped_state_recovered: true,
             process_inventory_empty: true,
@@ -500,5 +536,25 @@ mod tests {
         let mut endpoint_leaked_after_owner_death = complete;
         endpoint_leaked_after_owner_death.endpoint_inventory_restored = false;
         assert!(!endpoint_leaked_after_owner_death.is_success());
+    }
+
+    #[test]
+    fn owner_death_accepts_inode_reuse_only_for_a_new_socket_identity() {
+        let complete = complete_owner_death_evidence();
+        let first = complete
+            .first_socket_identity
+            .expect("first socket identity");
+        let replacement = complete
+            .replacement_socket_identity
+            .expect("replacement socket identity");
+        assert_eq!(first.device, replacement.device);
+        assert_eq!(first.inode, replacement.inode);
+        assert_ne!(first, replacement);
+        assert!(complete.is_success());
+
+        let mut same_object = complete;
+        same_object.replacement_socket_identity = Some(first);
+        same_object.replacement_socket_new_identity = false;
+        assert!(!same_object.is_success());
     }
 }

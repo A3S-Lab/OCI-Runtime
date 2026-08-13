@@ -60,6 +60,7 @@ pub(super) async fn run(
     result?;
 
     let first_socket = host::socket_identity(first.socket_path())?;
+    evidence.first_socket_identity = Some(first_socket);
     first.sigkill().await?;
     evidence.host_service_sigkill_delivered = true;
     evidence.first_host_service_reaped = true;
@@ -192,16 +193,17 @@ async fn run_replacement(
     config: &OwnerDeathConfig<'_>,
     runtime_root: &Path,
     endpoint_baseline: &std::collections::BTreeSet<std::path::PathBuf>,
-    first_socket: (u64, u64),
+    first_socket: super::report::MacosSocketIdentity,
     replacement: &mut HostServiceProcess,
     evidence: &mut MacosHvfOwnerDeathEvidence,
 ) -> Result<(), String> {
     let replacement_pid = replacement.pid()?;
     evidence.replacement_host_service_pid = Some(replacement_pid);
-    evidence.replacement_socket_new_inode =
-        host::socket_identity(replacement.socket_path())? != first_socket;
-    if !evidence.replacement_socket_new_inode {
-        return Err("replacement Host Service reused the stale socket inode".into());
+    let replacement_socket = host::socket_identity(replacement.socket_path())?;
+    evidence.replacement_socket_identity = Some(replacement_socket);
+    evidence.replacement_socket_new_identity = replacement_socket != first_socket;
+    if !evidence.replacement_socket_new_identity {
+        return Err("replacement Host Service did not publish a new socket object".into());
     }
     let client = replacement.connect().await?;
     evidence.replacement_connected = true;
