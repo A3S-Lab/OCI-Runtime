@@ -406,7 +406,7 @@ The repository turns release claims into checked inventories:
 | Real HVF lifecycle/transport cleanup fault points | 14 / 14 |
 | Real HVF immutable-system-image soak | 25 / 25 fresh VMs (75 primary generations) |
 | macOS HVF R2M implementation gates | 15 / 15 |
-| Public macOS HVF Host Service implementation | Complete; current-code real-host requalification pending |
+| Public macOS HVF Host Service implementation | Complete; every merge candidate requires revision-bound real-host requalification |
 | Guest operations behind protocol v9 | 20 |
 
 The locks prove inventory and exercised boundaries, not full conformance by

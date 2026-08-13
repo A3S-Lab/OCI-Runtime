@@ -619,17 +619,23 @@ mod tests {
             std::fs::Permissions::from_mode(PRIVATE_SOCKET_MODE),
         )
         .expect("protect predecessor socket");
-        let stale_metadata =
-            std::fs::symlink_metadata(&socket_path).expect("predecessor socket metadata");
         drop(stale);
+        let stale_error = UnixStream::connect(&socket_path)
+            .await
+            .expect_err("closed predecessor socket must be unreachable");
+        assert_eq!(stale_error.kind(), std::io::ErrorKind::ConnectionRefused);
 
         let endpoint = UnixServiceEndpoint::bind_recovering_stale(&socket_path)
             .await
             .expect("recover stale predecessor socket");
         let replacement_metadata =
             std::fs::symlink_metadata(&socket_path).expect("replacement socket metadata");
-        assert_ne!(replacement_metadata.ino(), stale_metadata.ino());
+        assert!(replacement_metadata.file_type().is_socket());
         assert_eq!(replacement_metadata.mode() & 0o777, PRIVATE_SOCKET_MODE);
+        let replacement_connection = UnixStream::connect(&socket_path)
+            .await
+            .expect("replacement socket must accept connections");
+        drop(replacement_connection);
         drop(endpoint);
         assert!(!socket_path.exists());
     }
