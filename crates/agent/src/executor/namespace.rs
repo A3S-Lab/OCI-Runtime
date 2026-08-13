@@ -10,6 +10,7 @@ use super::control;
 
 mod join;
 mod mount_idmap;
+mod network;
 mod retained;
 mod time;
 mod user;
@@ -311,6 +312,9 @@ pub(super) fn enter_new_namespaces(plan: &NamespacePlan, control: &mut UnixStrea
         // been opened, written, and read back, then become namespace root
         // before any rootfs or mount mutation.
         become_user_namespace_root(if plan.new_user() { "new" } else { "joined" })?;
+    }
+    if plan.new_network() {
+        network::bring_loopback_up()?;
     }
     Ok(())
 }

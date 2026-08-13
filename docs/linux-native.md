@@ -389,7 +389,8 @@ The report compares network namespace device/inode identities rather than
 inferring behavior from accepted configuration. It requires the private donor
 to differ from `/proc/self/ns/net`, the joined workload to exactly match the
 donor, and a profile with the network entry omitted to exactly match the host.
-All three profiles must be unobservable after deletion.
+The private donor must also complete a real TCP connection over its activated
+loopback interface. All three profiles must be unobservable after deletion.
 
 The final enforcement workload must run as PID 2+ beneath a dedicated
 namespace PID 1, prove the launcher-to-PID-1-to-workload identity chain, leave

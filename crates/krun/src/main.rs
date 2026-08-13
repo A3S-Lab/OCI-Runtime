@@ -374,6 +374,20 @@ fn main() -> ExitCode {
                 owner_monitor.mark_vm_finished();
                 report
             };
+            #[cfg(not(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(target_os = "macos", target_arch = "aarch64")
+            )))]
+            let report = a3s_oci_krun::agent_vm_smoke(
+                &rootfs,
+                None,
+                &console,
+                &endpoint,
+                socket_path,
+                &token,
+                a3s_oci_krun::AgentVmHandoff::default()
+                    .with_transport_qualification(transport_qualification.as_ref()),
+            );
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
                 eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");
