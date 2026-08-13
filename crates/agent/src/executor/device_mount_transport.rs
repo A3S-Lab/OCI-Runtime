@@ -62,7 +62,10 @@ pub(super) fn send_descriptor_frame(
         // member spans the complete fixed control buffer.
         message.msg_control = std::ptr::addr_of_mut!(control.bytes).cast();
     }
-    message.msg_controllen = control_bytes;
+    // libc models these fields as size_t for glibc and socklen_t for musl.
+    // The frame is statically bounded to six descriptors, so it fits both
+    // Linux ABIs.
+    message.msg_controllen = control_bytes as _;
 
     if descriptor_bytes != 0 {
         // SAFETY: the aligned control buffer contains CMSG_SPACE bytes for
@@ -77,7 +80,7 @@ pub(super) fn send_descriptor_frame(
             }
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len = libc::CMSG_LEN(descriptor_bytes as libc::c_uint) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(descriptor_bytes as libc::c_uint) as _;
             std::ptr::copy_nonoverlapping(
                 descriptors.as_ptr().cast::<u8>(),
                 libc::CMSG_DATA(header),
@@ -140,7 +143,7 @@ pub(super) fn receive_descriptor_frame(
     // SAFETY: DeviceMountControlBuffer is aligned for cmsghdr and its byte
     // member spans the complete fixed control buffer.
     message.msg_control = std::ptr::addr_of_mut!(control.bytes).cast();
-    message.msg_controllen = DEVICE_MOUNT_CONTROL_BYTES;
+    message.msg_controllen = DEVICE_MOUNT_CONTROL_BYTES as _;
 
     let received = loop {
         // SAFETY: message references writable payload and control storage.
@@ -197,7 +200,7 @@ fn collect_received_descriptors(message: &libc::msghdr) -> io::Result<Vec<OwnedF
             (
                 (*header).cmsg_level,
                 (*header).cmsg_type,
-                (*header).cmsg_len,
+                (*header).cmsg_len as usize,
             )
         };
         let minimum = unsafe { libc::CMSG_LEN(0) as usize };
@@ -287,7 +290,7 @@ fn discard_received_descriptors(message: &libc::msghdr) {
             (
                 (*header).cmsg_level,
                 (*header).cmsg_type,
-                (*header).cmsg_len,
+                (*header).cmsg_len as usize,
             )
         };
         let minimum = unsafe { libc::CMSG_LEN(0) as usize };
@@ -444,12 +447,12 @@ mod tests {
         message.msg_iov = &mut payload_vector;
         message.msg_iovlen = 1;
         message.msg_control = aligned.cast();
-        message.msg_controllen = control_bytes;
+        message.msg_controllen = control_bytes as _;
         unsafe {
             let header = libc::CMSG_FIRSTHDR(&message);
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len = libc::CMSG_LEN(descriptor_bytes as libc::c_uint) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(descriptor_bytes as libc::c_uint) as _;
             std::ptr::copy_nonoverlapping(
                 expanded.as_ptr().cast::<u8>(),
                 libc::CMSG_DATA(header),

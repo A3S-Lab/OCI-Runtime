@@ -53,6 +53,7 @@ pub(super) struct LoadedDeviceProgram(OwnedFd);
 pub(super) struct PreparedDeviceSources {
     sources: Option<Vec<PreparedDeviceSource>>,
     verify_ownership: bool,
+    target_host_owner: Option<(u32, u32)>,
     manifest: Mutex<Option<DeviceTargetManifest>>,
     manifest_file: Mutex<Option<File>>,
     manifest_path: Option<PathBuf>,
@@ -110,6 +111,23 @@ impl DeviceTargetRecord {
             uid: metadata.uid(),
             gid: metadata.gid(),
         })
+    }
+
+    fn capture_for_cleanup(
+        relative_path: &Path,
+        metadata: &fs::Metadata,
+        target_host_owner: Option<(u32, u32)>,
+    ) -> Result<Self> {
+        let mut record = Self::capture(relative_path, metadata)?;
+        if let Some((uid, gid)) = target_host_owner {
+            // The placeholder is created after entering the container user
+            // namespace, where its mapped ownership is reported as 0:0. The
+            // supervisor later performs cleanup in the initial user namespace
+            // and must compare against the corresponding host IDs.
+            record.uid = uid;
+            record.gid = gid;
+        }
+        Ok(record)
     }
 
     fn matches(&self, metadata: &TargetMetadata) -> bool {
@@ -317,6 +335,24 @@ impl DevicePlan {
         rootless: bool,
         rootless_mount_descriptors: &[OwnedFd],
     ) -> Result<PreparedDeviceSources> {
+        let target_host_owner = if namespaces.new_user() {
+            Some((
+                namespaces.host_uid(0).ok_or_else(|| {
+                    device_error(
+                        ErrorCode::InvalidArgument,
+                        "container root UID is not covered by linux.uidMappings",
+                    )
+                })?,
+                namespaces.host_gid(0).ok_or_else(|| {
+                    device_error(
+                        ErrorCode::InvalidArgument,
+                        "container root GID is not covered by linux.gidMappings",
+                    )
+                })?,
+            ))
+        } else {
+            None
+        };
         if !rootless && !rootless_mount_descriptors.is_empty() {
             return Err(device_error(
                 ErrorCode::PermissionDenied,
@@ -342,6 +378,7 @@ impl DevicePlan {
             return Ok(PreparedDeviceSources {
                 sources: None,
                 verify_ownership: true,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: None,
@@ -363,6 +400,7 @@ impl DevicePlan {
             return Ok(PreparedDeviceSources {
                 sources: Some(Vec::new()),
                 verify_ownership: !rootless,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: None,
@@ -374,6 +412,7 @@ impl DevicePlan {
             return Ok(PreparedDeviceSources {
                 sources: Some(mounts),
                 verify_ownership: false,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
@@ -403,6 +442,7 @@ impl DevicePlan {
             Ok(mounts) => Ok(PreparedDeviceSources {
                 sources: Some(mounts),
                 verify_ownership: true,
+                target_host_owner,
                 manifest: Mutex::new(None),
                 manifest_file: Mutex::new(None),
                 manifest_path: Some(runtime_directory.join(DEVICE_TARGETS_RECORD_NAME)),
@@ -1496,7 +1536,11 @@ impl DeviceNode {
                 ),
             )
         })?;
-        let record = DeviceTargetRecord::capture(relative, &metadata)?;
+        let record = DeviceTargetRecord::capture_for_cleanup(
+            relative,
+            &metadata,
+            prepared.target_host_owner,
+        )?;
         if let Err(error) = prepared.record_device_target(record) {
             if let Err(rollback) = fs::remove_file(&target) {
                 return Err(device_error(
@@ -2397,7 +2441,7 @@ fn device_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
     use a3s_oci_sdk::ErrorCode;
@@ -2431,6 +2475,42 @@ mod tests {
         cleanup_device_target_manifest(&manifest).expect("cleanup exact placeholder");
 
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn cleanup_record_uses_host_owner_for_user_namespace_placeholder() {
+        let temporary = tempdir().expect("temporary device target directory");
+        let path = temporary.path().join("null");
+        std::fs::write(&path, b"placeholder").expect("placeholder file");
+        let metadata = std::fs::symlink_metadata(&path).expect("placeholder metadata");
+        let namespace_record = DeviceTargetRecord::capture(std::path::Path::new("null"), &metadata)
+            .expect("capture namespace target");
+        let host_owner = (
+            namespace_record.uid.wrapping_add(1),
+            namespace_record.gid.wrapping_add(1),
+        );
+
+        let host_record = DeviceTargetRecord::capture_for_cleanup(
+            std::path::Path::new("null"),
+            &metadata,
+            Some(host_owner),
+        )
+        .expect("capture mapped target");
+        assert_eq!((host_record.uid, host_record.gid), host_owner);
+        // Model the initial-user-namespace view used by the supervisor after
+        // the container mount namespace has gone away.
+        let observed = super::TargetMetadata {
+            file_type: libc::S_IFREG,
+            dev: metadata.dev(),
+            rdev: metadata.rdev(),
+            ino: metadata.ino(),
+            mode: metadata.mode() & 0o7777,
+            uid: host_owner.0,
+            gid: host_owner.1,
+        };
+
+        assert!(!namespace_record.matches(&observed));
+        assert!(host_record.matches(&observed));
     }
 
     #[test]
@@ -2558,6 +2638,7 @@ mod tests {
         let prepared = PreparedDeviceSources {
             sources: Some(Vec::new()),
             verify_ownership: true,
+            target_host_owner: None,
             manifest: std::sync::Mutex::new(None),
             manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(runtime_directory.join("device-targets.json")),
@@ -2583,6 +2664,7 @@ mod tests {
         let prepared = PreparedDeviceSources {
             sources: Some(Vec::new()),
             verify_ownership: false,
+            target_host_owner: None,
             manifest: std::sync::Mutex::new(None),
             manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(runtime_directory.join("device-targets.json")),
@@ -2617,6 +2699,7 @@ mod tests {
         let prepared = PreparedDeviceSources {
             sources: Some(Vec::new()),
             verify_ownership: false,
+            target_host_owner: None,
             manifest: std::sync::Mutex::new(None),
             manifest_file: std::sync::Mutex::new(None),
             manifest_path: Some(manifest_path.clone()),
