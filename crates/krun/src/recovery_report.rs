@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-use std::os::windows::fs::MetadataExt;
+use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Path, PathBuf};
 
 use a3s_oci_agent_protocol::{
@@ -13,7 +13,9 @@ use a3s_oci_agent_protocol::{
     AGENT_RUNTIME_SHARE_GUEST_ROOT,
 };
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+use windows_sys::Win32::Storage::FileSystem::{
+    MoveFileExW, FILE_ATTRIBUTE_REPARSE_POINT, MOVEFILE_WRITE_THROUGH,
+};
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
@@ -407,7 +409,7 @@ fn atomic_write(destination: &Path, encoded: &[u8]) -> io::Result<()> {
             ),
         ));
     }
-    if let Err(error) = fs::rename(&temporary, destination) {
+    if let Err(error) = commit_atomic_file(&temporary, destination) {
         let _ = fs::remove_file(&temporary);
         return Err(contextual(
             error,
@@ -417,6 +419,46 @@ fn atomic_write(destination: &Path, encoded: &[u8]) -> io::Result<()> {
             ),
         ));
     }
+    Ok(())
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn commit_atomic_file(temporary: &Path, destination: &Path) -> io::Result<()> {
+    let temporary = nul_terminated_path(temporary)?;
+    let destination = nul_terminated_path(destination)?;
+    // SAFETY: both UTF-16 paths are NUL-terminated and remain live for the
+    // call. Omitting MOVEFILE_REPLACE_EXISTING preserves the create-new fence;
+    // WRITE_THROUGH waits for the durable move before reporting success.
+    if unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn nul_terminated_path(path: &Path) -> io::Result<Vec<u16>> {
+    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("trusted recovery path contains NUL: {}", path.display()),
+        ));
+    }
+    encoded.push(0);
+    Ok(encoded)
+}
+
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+fn commit_atomic_file(temporary: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(temporary, destination)?;
     if let Some(parent) = destination.parent() {
         File::open(parent)?.sync_all()?;
     }
