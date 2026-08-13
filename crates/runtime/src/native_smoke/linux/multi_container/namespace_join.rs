@@ -51,6 +51,7 @@ pub(super) async fn exercise(
         report.network_modes.private_namespace_verified,
         "private-network donor inherited the host network namespace",
     )?;
+    verify_private_loopback(donor_pid)?;
 
     let bundles = build_bundles(joiner_bundle, donor_pid)?;
     let host_network =
@@ -166,6 +167,43 @@ pub(super) async fn exercise(
 async fn same_network_namespace_with_host(pid: i32) -> Result<bool, String> {
     let container = PathBuf::from(format!("/proc/{pid}/ns/net"));
     same_namespace_paths(Path::new("/proc/self/ns/net"), &container).await
+}
+
+fn verify_private_loopback(pid: i32) -> Result<(), String> {
+    let check = std::thread::Builder::new()
+        .name(format!("a3s-oci-loopback-{pid}"))
+        .spawn(move || {
+            use std::fs::File;
+            use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
+            use std::os::fd::AsRawFd;
+
+            let namespace_path = format!("/proc/{pid}/ns/net");
+            let namespace = File::open(&namespace_path).map_err(|error| {
+                format!("failed to open private network namespace {namespace_path}: {error}")
+            })?;
+            // SAFETY: namespace pins the exact network namespace descriptor,
+            // and this dedicated thread exits immediately after the probe.
+            if unsafe { libc::setns(namespace.as_raw_fd(), libc::CLONE_NEWNET) } != 0 {
+                return Err(format!(
+                    "failed to enter private network namespace {namespace_path}: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+                .map_err(|error| format!("failed to bind private loopback listener: {error}"))?;
+            let address = listener
+                .local_addr()
+                .map_err(|error| format!("failed to inspect private loopback listener: {error}"))?;
+            TcpStream::connect_timeout(&address, Duration::from_secs(1)).map_err(|error| {
+                format!("failed to connect through the private loopback interface: {error}")
+            })?;
+            Ok(())
+        })
+        .map_err(|error| format!("failed to start private loopback probe: {error}"))?;
+    check
+        .join()
+        .map_err(|_| "private loopback probe panicked".to_string())?
 }
 
 async fn same_network_namespace(first_pid: i32, second_pid: i32) -> Result<bool, String> {

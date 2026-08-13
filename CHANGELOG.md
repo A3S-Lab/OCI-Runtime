@@ -192,6 +192,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Newly created Linux network namespaces now activate their loopback interface
+  before the OCI create-hook barrier. Loopback-only Sandbox services are
+  therefore reachable inside their private namespace without requiring a host
+  networking helper, while inherited and donor-shared network namespaces are
+  left unchanged.
 - Execute native Linux file transfer and descriptor-confined filesystem calls
   in a bounded parent-bound helper that enters the container's retained user
   and mount namespaces. Rootfs, bind, ID-mapped, and tmpfs paths now preserve
