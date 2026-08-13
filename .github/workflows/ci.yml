@@ -48,7 +48,29 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Exhaustive durable-state and host-driver fault matrix
         run: cargo test -p a3s-oci-runtime fault_matrix
-      - run: cargo test --workspace --all-targets
+      - name: Workspace tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-targets 2>&1 \
+            | tee "$RUNNER_TEMP/a3s-oci-workspace-tests.log"
+      - if: failure()
+        name: Publish workspace test failure
+        shell: bash
+        run: |
+          test_log="$RUNNER_TEMP/a3s-oci-workspace-tests.log"
+          if [[ -f "$test_log" ]]; then
+            {
+              echo '### Workspace test failure'
+              echo
+              echo '<details open><summary>Last 240 log lines</summary>'
+              echo
+              echo '```text'
+              tail -n 240 "$test_log"
+              echo '```'
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - run: cargo run -p a3s-oci-cli -- features
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
