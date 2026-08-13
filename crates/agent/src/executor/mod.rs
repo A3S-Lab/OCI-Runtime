@@ -2,6 +2,7 @@ mod capability;
 mod cgroup;
 mod control;
 mod device;
+mod device_policy;
 mod exec;
 mod exec_process;
 mod filesystem;
@@ -75,6 +76,41 @@ use state::{
 pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
 pub use recovery::LinuxExecutorTombstone;
+
+/// One-shot rootless device-policy bootstrap completed before Tokio starts.
+#[derive(Debug)]
+pub struct RootlessDevicePolicyBootstrap {
+    delegation: RootlessCgroupDelegation,
+    uid: u32,
+    gid: u32,
+}
+
+impl RootlessDevicePolicyBootstrap {
+    /// Retain one exact cgroup delegation, fork its bounded policy helper, and
+    /// permanently drop the owner process to its non-root real identity.
+    pub fn start(delegated_cgroup_root: impl AsRef<Path>) -> Result<Self> {
+        let (uid, gid) = device_policy::DevicePolicyAuthority::bootstrap_identity()?;
+        let mut delegation = RootlessCgroupDelegation::open(delegated_cgroup_root, uid, gid)?;
+        let authority =
+            device_policy::DevicePolicyAuthority::spawn(delegation.open_root_descriptor()?)?;
+        if let Err(error) = device_policy::DevicePolicyAuthority::drop_to_identity(uid, gid) {
+            let _ = authority.shutdown();
+            return Err(error);
+        }
+        delegation.install_device_policy_authority(authority)?;
+        Ok(Self {
+            delegation,
+            uid,
+            gid,
+        })
+    }
+
+    /// Canonical delegation retained by this bootstrap.
+    #[must_use]
+    pub fn delegated_cgroup_root(&self) -> &Path {
+        self.delegation.root()
+    }
+}
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
@@ -221,6 +257,46 @@ impl LinuxExecutor {
         executor
             .install_rootless_cgroup_delegation(delegated_cgroup_root)
             .await
+    }
+
+    /// Open rootless native Linux with an inherited privileged device-policy authority.
+    ///
+    /// The constructor retains the verified delegation before the caller
+    /// drops privilege, starts one parent-bound helper, and never exposes a
+    /// global privileged executable or arbitrary BPF interface.
+    pub async fn open_native_with_rootless_cgroup_device_policy(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+        bootstrap: RootlessDevicePolicyBootstrap,
+    ) -> Result<Self> {
+        let mut executor = Self::open_with_rootfs_scope(
+            runtime_parent,
+            init_executable,
+            RootfsScope::NativeAbsolute,
+            RecoveryMode::DurableNative,
+        )
+        .await?;
+        let Some((effective_uid, effective_gid)) = executor.user_mapping_runtime.effective_ids()
+        else {
+            let _ = tokio::fs::remove_dir_all(&executor.runtime_root).await;
+            return Err(executor_error(
+                ErrorCode::InvalidArgument,
+                "rootless device-policy execution requires a non-root Linux executor",
+            ));
+        };
+        if (effective_uid, effective_gid) != (bootstrap.uid, bootstrap.gid) {
+            let _ = tokio::fs::remove_dir_all(&executor.runtime_root).await;
+            return Err(executor_error(
+                ErrorCode::Conflict,
+                "rootless device-policy executor identity differs from its synchronous bootstrap",
+            ));
+        }
+        if let Err(error) = bootstrap.delegation.verify() {
+            let _ = tokio::fs::remove_dir_all(&executor.runtime_root).await;
+            return Err(error);
+        }
+        executor.rootless_cgroup_delegation = Some(bootstrap.delegation);
+        Ok(executor)
     }
 
     async fn install_rootless_cgroup_delegation(
@@ -385,7 +461,13 @@ impl LinuxExecutor {
             poststop.push(record.process.poststop_plan());
         }
         state.containers.clear();
-        if let Some(manager) = state.cgroup_manager.take() {
+        let cgroup_manager = state.cgroup_manager.take();
+        if let Some(delegation) = &self.rootless_cgroup_delegation {
+            if let Err(error) = delegation.shutdown_device_policy_authority() {
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Some(manager) = cgroup_manager {
             if let Err(error) = manager.remove() {
                 first_error.get_or_insert(error);
             }
@@ -472,11 +554,23 @@ impl LinuxExecutor {
                     "rootless linux.cgroupsPath requires an explicit verified cgroup-v2 delegation",
                 ));
             }
-            if plan.devices.requires_setup() {
+            if plan.devices.requires_setup()
+                && self
+                    .rootless_cgroup_delegation
+                    .as_ref()
+                    .is_none_or(|delegation| !delegation.has_device_policy_authority())
+            {
                 return Err(executor_error(
                     ErrorCode::Unsupported,
-                    "rootless native execution does not yet support linux.devices or linux.resources.devices; omit the OCI device profile",
+                    "rootless linux.devices and linux.resources.devices require an authenticated delegated-cgroup device-policy authority",
                 ));
+            }
+            if self
+                .rootless_cgroup_delegation
+                .as_ref()
+                .is_some_and(RootlessCgroupDelegation::has_device_policy_authority)
+            {
+                plan.devices.validate_rootless_device_set()?;
             }
         }
         let hook_state = HookStateTemplate::new(

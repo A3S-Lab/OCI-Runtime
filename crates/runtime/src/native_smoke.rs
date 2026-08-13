@@ -132,6 +132,30 @@ pub async fn native_linux_rootless_smoke_with_cgroup_delegation_barrier(
     }
 }
 
+/// Exercise the rootless device-policy profile from an effective-root bootstrap.
+///
+/// The Linux implementation permanently drops the caller to its non-root real
+/// identity during driver construction. The process must therefore be a
+/// dedicated qualification or service owner.
+#[doc(hidden)]
+pub async fn native_linux_rootless_device_policy_smoke(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    bootstrap: crate::RootlessDevicePolicyBootstrap,
+) -> NativeLinuxRootlessSmokeReport {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_rootless_device_policy(init_executable, bundle, work_parent, bootstrap).await
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (init_executable, bundle, work_parent, bootstrap);
+        NativeLinuxRootlessSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
 /// Exercise two independently fenced containers through the native Rust SDK path.
 ///
 /// The diagnostic uses distinct bundles, retains both create barriers

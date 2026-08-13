@@ -53,10 +53,39 @@ pub(super) async fn run(
     ready_file: Option<&Path>,
     continue_file: Option<&Path>,
 ) -> NativeLinuxRootlessSmokeReport {
+    run_inner(
+        init_executable,
+        bundle_directory,
+        work_parent,
+        delegated_cgroup_root,
+        ready_file,
+        continue_file,
+        false,
+        None,
+    )
+    .await
+}
+
+async fn run_inner(
+    init_executable: &Path,
+    bundle_directory: &Path,
+    work_parent: &Path,
+    delegated_cgroup_root: Option<&Path>,
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
+    device_policy: bool,
+    device_policy_bootstrap: Option<a3s_oci_agent::RootlessDevicePolicyBootstrap>,
+) -> NativeLinuxRootlessSmokeReport {
     let mut report = NativeLinuxRootlessSmokeReport::initial(HostPlatform::Linux);
     // SAFETY: these credential queries have no pointer arguments or failure
     // return values.
-    let (effective_uid, effective_gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    let (effective_uid, effective_gid) = unsafe {
+        if device_policy {
+            (libc::getuid(), libc::getgid())
+        } else {
+            (libc::geteuid(), libc::getegid())
+        }
+    };
     report.effective_uid = Some(effective_uid);
     report.effective_gid = Some(effective_gid);
     if effective_uid == 0 || effective_gid == 0 {
@@ -157,8 +186,20 @@ pub(super) async fn run(
     if let Err(reason) = create_private_directory(&executor_parent).await {
         return cleanup_session(report, &session_root, reason).await;
     }
-    let driver = match match delegated_cgroup_root {
-        Some(root) => {
+    let driver = match match (
+        delegated_cgroup_root,
+        device_policy,
+        device_policy_bootstrap,
+    ) {
+        (Some(_), true, Some(bootstrap)) => {
+            NativeLinuxDriver::open_experimental_with_rootless_device_policy(
+                &executor_parent,
+                init_executable,
+                bootstrap,
+            )
+            .await
+        }
+        (Some(root), false, None) => {
             NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
                 &executor_parent,
                 init_executable,
@@ -166,7 +207,10 @@ pub(super) async fn run(
             )
             .await
         }
-        None => NativeLinuxDriver::open_experimental(&executor_parent, init_executable).await,
+        (None, false, None) => {
+            NativeLinuxDriver::open_experimental(&executor_parent, init_executable).await
+        }
+        _ => unreachable!("device-policy mode requires one synchronous bootstrap"),
     } {
         Ok(driver) => Arc::new(driver),
         Err(error) => {
@@ -178,6 +222,7 @@ pub(super) async fn run(
             .await;
         }
     };
+    report.device_policy_helper_verified = device_policy;
     let executor_root = driver.executor_root().to_path_buf();
     if let Err(reason) = qualification_barrier(ready_file, continue_file).await {
         cleanup_driver(
@@ -217,6 +262,7 @@ pub(super) async fn run(
         &nonce,
         &workload_files,
         &mut report,
+        device_policy,
     )
     .await;
     if exercise.is_err() {
@@ -242,6 +288,26 @@ pub(super) async fn run(
         report.reason = None;
     }
     report
+}
+
+pub(super) async fn run_device_policy(
+    init_executable: &Path,
+    bundle_directory: &Path,
+    work_parent: &Path,
+    bootstrap: a3s_oci_agent::RootlessDevicePolicyBootstrap,
+) -> NativeLinuxRootlessSmokeReport {
+    let delegated_cgroup_root = bootstrap.delegated_cgroup_root().to_path_buf();
+    run_inner(
+        init_executable,
+        bundle_directory,
+        work_parent,
+        Some(&delegated_cgroup_root),
+        None,
+        None,
+        true,
+        Some(bootstrap),
+    )
+    .await
 }
 
 async fn qualification_barrier(
@@ -318,6 +384,7 @@ async fn exercise(
     nonce: &str,
     workload_files: &WorkloadFiles,
     report: &mut NativeLinuxRootlessSmokeReport,
+    device_policy: bool,
 ) -> Result<(), String> {
     report.service_operations = call("rootless features", client.features())
         .await?
@@ -399,9 +466,20 @@ async fn exercise(
     }
     wait_for_marker(client, &target, &workload_files.marker).await?;
     report.workload_verified = true;
+    if device_policy {
+        report.device_nodes_verified = true;
+    }
 
     if matches!(cgroup_requirement, CgroupRequirement::ExplicitPath) {
-        exercise_cgroup_control(client, &target, nonce, &workload_files.progress, report).await?;
+        exercise_cgroup_control(
+            client,
+            &target,
+            nonce,
+            &workload_files.progress,
+            report,
+            device_policy,
+        )
+        .await?;
     }
 
     exercise_exec(client, &target, nonce, report).await?;
@@ -457,6 +535,7 @@ async fn exercise(
         client,
         &target,
         matches!(cgroup_requirement, CgroupRequirement::ExplicitPath),
+        device_policy,
     )
     .await?;
     report.events_verified = true;
@@ -550,6 +629,7 @@ async fn verify_events(
     client: &RuntimeClient,
     target: &ContainerTarget,
     delegated_cgroup: bool,
+    device_policy: bool,
 ) -> Result<(), String> {
     let batch = call(
         "rootless runtime events",
@@ -572,8 +652,27 @@ async fn verify_events(
         RuntimeEventKind::ContainerStarted,
     ];
     if delegated_cgroup {
+        expected.push(RuntimeEventKind::ResourcesUpdated);
+        if device_policy {
+            for _ in 0..2 {
+                expected.extend([
+                    RuntimeEventKind::ProcessCreated,
+                    RuntimeEventKind::ProcessStarted,
+                    RuntimeEventKind::ProcessExited,
+                ]);
+            }
+            expected.push(RuntimeEventKind::ResourcesUpdated);
+            expected.extend([
+                RuntimeEventKind::ProcessCreated,
+                RuntimeEventKind::ProcessStarted,
+                RuntimeEventKind::ProcessExited,
+                RuntimeEventKind::ResourcesUpdated,
+                RuntimeEventKind::ProcessCreated,
+                RuntimeEventKind::ProcessStarted,
+                RuntimeEventKind::ProcessExited,
+            ]);
+        }
         expected.extend([
-            RuntimeEventKind::ResourcesUpdated,
             RuntimeEventKind::ContainerPaused,
             RuntimeEventKind::ContainerResumed,
         ]);
@@ -621,8 +720,9 @@ async fn exercise_cgroup_control(
     nonce: &str,
     progress: &Path,
     report: &mut NativeLinuxRootlessSmokeReport,
+    device_policy: bool,
 ) -> Result<(), String> {
-    let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+    let mut resources = serde_json::json!({
         "memory": {
             "limit": UPDATED_MEMORY_LIMIT,
             "reservation": 32 * 1024 * 1024,
@@ -630,8 +730,20 @@ async fn exercise_cgroup_control(
         },
         "cpu": {"shares": 256, "quota": 40000, "period": 100000},
         "pids": {"limit": 48}
-    }))
-    .map_err(|error| format!("failed to construct rootless resource update: {error}"))?;
+    });
+    if device_policy {
+        resources["devices"] = serde_json::json!([
+            {"allow": false, "access": "rwm"},
+            {"allow": true, "type": "c", "major": 1, "minor": 3, "access": "r"},
+            {"allow": true, "type": "c", "major": 1, "minor": 5, "access": "rwm"},
+            {"allow": true, "type": "c", "major": 1, "minor": 7, "access": "rwm"},
+            {"allow": true, "type": "c", "major": 1, "minor": 8, "access": "rwm"},
+            {"allow": true, "type": "c", "major": 1, "minor": 9, "access": "rwm"},
+            {"allow": true, "type": "c", "major": 5, "minor": 0, "access": "rwm"}
+        ]);
+    }
+    let resources: LinuxResources = serde_json::from_value(resources)
+        .map_err(|error| format!("failed to construct rootless resource update: {error}"))?;
     let update = UpdateRequest {
         context: operation(nonce, "update")?,
         target: target.clone(),
@@ -643,6 +755,76 @@ async fn exercise_cgroup_control(
         && *updated.state.status() == ContainerState::Running;
     if !report.resources_updated {
         return Err("rootless cgroup update was not exact or replay-safe".into());
+    }
+    if device_policy {
+        let readonly_denied =
+            run_device_write_probe(client, target, nonce, "readonly", false).await?;
+        let invalid: LinuxResources = serde_json::from_value(serde_json::json!({
+            "devices": [
+                {"allow": false, "access": "rwm"},
+                {"allow": true, "type": "c", "major": 8, "minor": 0, "access": "rwm"}
+            ]
+        }))
+        .map_err(|error| format!("failed to construct invalid device update: {error}"))?;
+        let invalid_result = timeout(
+            CALL_TIMEOUT,
+            client.update(UpdateRequest {
+                context: operation(nonce, "update-device-invalid")?,
+                target: target.clone(),
+                resources: invalid,
+            }),
+        )
+        .await;
+        let invalid_rejected = matches!(invalid_result, Ok(Err(_)));
+        let old_policy_retained =
+            run_device_write_probe(client, target, nonce, "rollback", false).await?;
+
+        let disabled: LinuxResources =
+            serde_json::from_value(serde_json::json!({"devices": []}))
+                .map_err(|error| format!("failed to construct disabled device update: {error}"))?;
+        call(
+            "disable rootless device policy",
+            client.update(UpdateRequest {
+                context: operation(nonce, "update-device-disable")?,
+                target: target.clone(),
+                resources: disabled,
+            }),
+        )
+        .await?;
+        let disabled_allows_write =
+            run_device_write_probe(client, target, nonce, "disabled", true).await?;
+
+        let restored: LinuxResources = serde_json::from_value(serde_json::json!({
+            "devices": [
+                {"allow": false, "access": "rwm"},
+                {"allow": true, "type": "c", "major": 1, "minor": 3, "access": "rwm"},
+                {"allow": true, "type": "c", "major": 1, "minor": 5, "access": "rwm"},
+                {"allow": true, "type": "c", "major": 1, "minor": 7, "access": "rwm"},
+                {"allow": true, "type": "c", "major": 1, "minor": 8, "access": "rwm"},
+                {"allow": true, "type": "c", "major": 1, "minor": 9, "access": "rwm"},
+                {"allow": true, "type": "c", "major": 5, "minor": 0, "access": "rwm"}
+            ]
+        }))
+        .map_err(|error| format!("failed to construct restored device update: {error}"))?;
+        call(
+            "restore rootless device policy",
+            client.update(UpdateRequest {
+                context: operation(nonce, "update-device-restore")?,
+                target: target.clone(),
+                resources: restored,
+            }),
+        )
+        .await?;
+        let restored_allows_write =
+            run_device_write_probe(client, target, nonce, "restored", true).await?;
+        report.device_policy_updates_verified = readonly_denied
+            && invalid_rejected
+            && old_policy_retained
+            && disabled_allows_write
+            && restored_allows_write;
+        if !report.device_policy_updates_verified {
+            return Err("rootless device policy state-machine evidence was incomplete".into());
+        }
     }
 
     let first = call(
@@ -706,6 +888,59 @@ async fn exercise_cgroup_control(
     }
     report.cgroup_delegation_verified = true;
     Ok(())
+}
+
+async fn run_device_write_probe(
+    client: &RuntimeClient,
+    target: &ContainerTarget,
+    nonce: &str,
+    name: &str,
+    expect_success: bool,
+) -> Result<bool, String> {
+    let process: Process = serde_json::from_value(serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0, "umask": 18},
+        "args": ["/bin/sh", "-c", "printf probe > /dev/null"],
+        "env": ["PATH=/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    }))
+    .map_err(|error| format!("failed to construct {name} device probe: {error}"))?;
+    let process_id = ProcessId::new(format!("device-{name}-{nonce}"))
+        .map_err(|error| format!("failed to construct {name} device probe ID: {error}"))?;
+    let process_target = ProcessTarget {
+        container: target.clone(),
+        process_id: process_id.clone(),
+    };
+    call(
+        &format!("start {name} device probe"),
+        client.exec(ExecRequest {
+            context: operation(nonce, &format!("device-{name}-exec"))?,
+            container: target.clone(),
+            process_id,
+            process,
+            io: ProcessIo {
+                stdin: IoMode::Null,
+                stdout: IoMode::Null,
+                stderr: IoMode::Null,
+                terminal_size: None,
+            },
+        }),
+    )
+    .await?;
+    let status = call(
+        &format!("wait {name} device probe"),
+        client.wait_process(WaitProcessRequest {
+            process: process_target,
+            timeout_ms: Some(LIFECYCLE_TIMEOUT.as_millis() as u64),
+        }),
+    )
+    .await?;
+    Ok(if expect_success {
+        status.exit_code == Some(0)
+    } else {
+        status.exit_code.is_some_and(|code| code != 0) || status.signal.is_some()
+    })
 }
 
 async fn wait_for_progress(path: &Path, after: Option<u64>) -> Result<u64, String> {

@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use a3s_oci_agent::{InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone};
+use a3s_oci_agent::{
+    InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone, RootlessDevicePolicyBootstrap,
+};
 use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestAgentService, GuestPath};
 use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, IsolationClass};
 use a3s_oci_sdk::{
@@ -117,6 +119,63 @@ impl NativeLinuxDriver {
                 runtime_parent,
                 init_executable,
                 delegated_cgroup_root,
+            )
+            .await?,
+        );
+        let service: Arc<dyn GuestAgentService> = executor.clone();
+        Ok(Self {
+            capability,
+            executor,
+            client: AgentDriverClient::new(service, "native Linux executor", "native-linux"),
+            recovered: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    /// Open rootless native Linux from an effective-root bootstrap and retain
+    /// that privilege only inside a parent-bound delegated-cgroup policy helper.
+    ///
+    /// The process must have non-root real UID/GID and effective UID/GID zero.
+    /// Construction drops the caller permanently to its real identity before
+    /// returning; only the helper retains privilege for structured cgroup-device
+    /// install, replace, and remove requests below the exact delegation.
+    pub async fn open_experimental_with_rootless_device_policy(
+        runtime_parent: impl AsRef<Path>,
+        init_executable: impl AsRef<Path>,
+        bootstrap: RootlessDevicePolicyBootstrap,
+    ) -> Result<Self> {
+        let mut capability = crate::platform::native_driver_capability();
+        if capability.status != CapabilityStatus::Available {
+            return Err(Error::new(
+                ErrorCode::Unavailable,
+                capability
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "native Linux prerequisites are unavailable".to_string()),
+            )
+            .for_operation("open-native-linux-driver"));
+        }
+        capability.readiness = DriverReadiness::Experimental;
+        capability.evidence.insert(
+            "execution_path".to_string(),
+            "shared-linux-executor".to_string(),
+        );
+        capability
+            .evidence
+            .insert("kvm_required".to_string(), "false".to_string());
+        capability.evidence.insert(
+            "rootless_cgroup_delegation".to_string(),
+            "explicit-v1".to_string(),
+        );
+        capability.evidence.insert(
+            "rootless_device_policy".to_string(),
+            "parent-bound-helper-v1".to_string(),
+        );
+
+        let executor = Arc::new(
+            LinuxExecutor::open_native_with_rootless_cgroup_device_policy(
+                runtime_parent,
+                init_executable,
+                bootstrap,
             )
             .await?,
         );

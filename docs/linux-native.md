@@ -311,7 +311,7 @@ delegation.
 The CI fixture creates a dedicated UID/GID 20000 account with UID range
 300000:65536 and GID range 400000:65536. A host file owned by 300000:400000
 must appear as 1:1 inside the workload. The versioned
-`a3s.oci.native-linux-rootless-smoke.v3` report then requires:
+`a3s.oci.native-linux-rootless-smoke.v4` report then requires:
 
 1. exact create and replay behind the OCI `created` barrier;
 2. exact `/proc/<pid>/uid_map` and `gid_map` read-back plus
@@ -327,10 +327,30 @@ must appear as 1:1 inside the workload. The versioned
 8. stopped-only delete replay, post-delete `NotFound`, empty list, and removal
    of every process, marker, executor root, and durable session directory.
 
-GitHub Actions prepares a dedicated cgroup-v2 subtree and runs this gate as the
-dedicated user on both x86_64 and aarch64. The same jobs also run the rootless
-owner-death recovery gate described below. Rootless device policy and broader
-controller and security profiles remain promotion gates.
+The hidden `native-linux-rootless-device-policy-smoke` extends that gate for the
+exact A3S Box six-node device profile. It must be launched with non-root real
+UID/GID, effective UID/GID zero, and no supplementary groups. Before creating
+Tokio, the CLI retains the exact delegated cgroup descriptor, forks one
+parent-bound helper, then irreversibly drops all owner credentials to the real
+identity. The helper accepts only framed, versioned install, replace, remove,
+and explicit shutdown messages for normalized paths below that descriptor. It
+does not accept filesystem roots, raw BPF, arbitrary device nodes, or
+caller-supplied program descriptors.
+
+The v4 device-policy report verifies all six retained host nodes inside the
+container, read/write behavior for the common devices, a live read-only
+replacement, rejection with rollback for an out-of-profile update, disable and
+re-enable, the exact additional exec/update event sequence, helper shutdown,
+and an empty delegated subtree. Unexpected owner or channel loss closes the
+helper without detaching active filters, so policy remains fail-closed until
+the protected cgroups are recovered and removed.
+
+GitHub Actions prepares a dedicated cgroup-v2 subtree and runs these gates as
+the dedicated user on both x86_64 and aarch64. The jobs retain the rootless
+device-policy report separately and also run the owner-death recovery gate
+described below. The device-policy claim stays provisional until both new
+real-host reports pass; broader controller and security profiles remain
+promotion gates.
 
 ## Multi-container generation gate
 
@@ -533,6 +553,12 @@ termination and exact cleanup. They deliberately do not claim live process-I/O
 session reattachment; that requires a persistent authenticated supervisor and
 remains a promotion gate.
 
+Runtime commit `49cea11` passed both real-host lanes in CI run `31674526443`.
+The retained x86_64 and aarch64 rootless reports both record `available`, exact
+UID/GID 20000 replacement ownership, verified explicit delegation, authenticated
+workload termination, stopped-only deletion, and complete removal of every
+runtime-created cgroup directory.
+
 ## Fault-injected shutdown cleanup
 
 `native-linux-fault-cleanup` accepts exactly `after-create`, `after-start`, or
@@ -570,8 +596,8 @@ This evidence proves rootful and core rootless bootstrap profiles, not general
 OCI support. The default driver must remain `probe-only` until at least the
 following pass:
 
-- an authenticated privileged helper for rootless device policy and broader
-  real-host controller/profile qualification;
+- retained passing x86_64 and aarch64 evidence for the bounded rootless
+  device-policy helper, plus broader real-host controller/profile qualification;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
 - remaining mount and credential controls, broader cgroup v2 policies,

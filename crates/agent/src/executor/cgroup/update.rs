@@ -14,9 +14,13 @@ impl CgroupHandle {
     pub(in crate::executor) async fn update(&mut self, resources: &LinuxResources) -> Result<()> {
         let plan = CgroupUpdatePlan::from_resources(resources)?;
         let next_devices = self.devices.update_from_resources(resources)?;
-        let next_device_filter = match &next_devices {
-            Some(plan) => plan.load_cgroup_device_program()?,
-            None => None,
+        let next_device_filter = if self.delegated_device_filter.is_none() {
+            match &next_devices {
+                Some(plan) => plan.load_cgroup_device_program()?,
+                None => None,
+            }
+        } else {
+            None
         };
         let mut prepared = Vec::new();
         if let Some(layout) = &self.control_workload {
@@ -33,6 +37,27 @@ impl CgroupHandle {
         let Some(next_devices) = next_devices else {
             return Ok(());
         };
+        if let Some(device_filter) = &mut self.delegated_device_filter {
+            let next_active = next_devices.requires_setup();
+            let result = match (device_filter.active, next_active) {
+                (false, false) => Ok(()),
+                (false, true) => device_filter.authority.install(
+                    &device_filter.key,
+                    &device_filter.relative_cgroup,
+                    &next_devices,
+                ),
+                (true, true) => device_filter
+                    .authority
+                    .replace(&device_filter.key, &next_devices),
+                (true, false) => device_filter.authority.remove(&device_filter.key),
+            };
+            if let Err(error) = result {
+                return rollback_update(&applied, error).await;
+            }
+            self.devices = next_devices;
+            device_filter.active = next_active;
+            return Ok(());
+        }
         let device_update = match (&self.device_filter, &next_device_filter) {
             (Some(current), Some(next)) => next_devices.replace_loaded_cgroup_device_program(
                 &self.device_filter_path,
@@ -559,6 +584,7 @@ mod tests {
             devices: super::super::DevicePlan::default(),
             device_filter_path: management.clone(),
             device_filter: None,
+            delegated_device_filter: None,
         };
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "memory": {"limit": 268435456, "swap": 536870912},

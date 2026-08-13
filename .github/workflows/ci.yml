@@ -832,6 +832,7 @@ jobs:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
           A3S_OCI_NATIVE_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-recovery.json
           A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
+          A3S_OCI_NATIVE_ROOTLESS_DEVICE_POLICY_REPORT: ${{ runner.temp }}/a3s-oci-native-rootless-device-policy.json
         run: bash .github/scripts/native-linux-smoke.sh
       - if: runner.os == 'Linux' && always()
         name: Upload native Linux soak evidence
@@ -842,6 +843,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-native-soak.json
             ${{ runner.temp }}/a3s-oci-native-recovery.json
             ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
+            ${{ runner.temp }}/a3s-oci-native-rootless-device-policy.json
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
@@ -919,6 +921,7 @@ jobs:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
           A3S_OCI_NATIVE_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-recovery.json
           A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
+          A3S_OCI_NATIVE_ROOTLESS_DEVICE_POLICY_REPORT: ${{ runner.temp }}/a3s-oci-native-rootless-device-policy.json
         run: bash .github/scripts/native-linux-smoke.sh
       - if: always()
         name: Upload native Linux soak evidence
@@ -929,6 +932,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-native-soak.json
             ${{ runner.temp }}/a3s-oci-native-recovery.json
             ${{ runner.temp }}/a3s-oci-native-rootless-recovery.json
+            ${{ runner.temp }}/a3s-oci-native-rootless-device-policy.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -73,6 +73,23 @@ enum Command {
         )]
         post_open_continue_file: Option<PathBuf>,
     },
+    /// Qualify rootless cgroup-device policy through the parent-bound helper.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    NativeLinuxRootlessDevicePolicySmoke {
+        /// Matching a3s-oci-agent executable used for prepared init.
+        #[arg(long, value_name = "FILE")]
+        agent: PathBuf,
+        /// Rootless OCI bundle containing the bounded device profile.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing user-owned directory beneath which smoke state is created.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Exact user-owned cgroup-v2 delegation retained before privilege drop.
+        #[arg(long, value_name = "DIR")]
+        delegated_cgroup_root: PathBuf,
+    },
     /// Serve multiple native Linux containers through one durable SDK owner.
     #[cfg(target_os = "linux")]
     NativeLinuxHostService {
@@ -550,9 +567,33 @@ enum CliError {
     CurrentExecutable(std::io::Error),
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
-    match run(Cli::parse()).await {
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let rootless_device_policy_bootstrap = match &cli.command {
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxRootlessDevicePolicySmoke {
+            delegated_cgroup_root,
+            ..
+        } => match a3s_oci_runtime::RootlessDevicePolicyBootstrap::start(delegated_cgroup_root) {
+            Ok(bootstrap) => Some(bootstrap),
+            Err(error) => {
+                eprintln!("a3s-oci: runtime request failed: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => None,
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("a3s-oci: failed to create async runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(run(cli, rootless_device_policy_bootstrap)) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("a3s-oci: {error}");
@@ -563,11 +604,21 @@ async fn main() -> ExitCode {
 
 type CommandFuture = Pin<Box<dyn Future<Output = Result<ExitCode, CliError>>>>;
 
-fn run(cli: Cli) -> CommandFuture {
-    Box::pin(dispatch(cli))
+fn run(
+    cli: Cli,
+    rootless_device_policy_bootstrap: Option<a3s_oci_runtime::RootlessDevicePolicyBootstrap>,
+) -> CommandFuture {
+    Box::pin(dispatch(cli, rootless_device_policy_bootstrap))
 }
 
-async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
+async fn dispatch(
+    cli: Cli,
+    rootless_device_policy_bootstrap: Option<a3s_oci_runtime::RootlessDevicePolicyBootstrap>,
+) -> Result<ExitCode, CliError> {
+    #[cfg(target_os = "linux")]
+    let mut rootless_device_policy_bootstrap = rootless_device_policy_bootstrap;
+    #[cfg(not(target_os = "linux"))]
+    let _ = rootless_device_policy_bootstrap;
     match cli.command {
         Command::Features => {
             let client = RuntimeClient::new(a3s_oci_runtime::HostRuntimeService::new());
@@ -627,6 +678,35 @@ async fn dispatch(cli: Cli) -> Result<ExitCode, CliError> {
                     post_open_continue_file.as_deref(),
                 )
                 .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        #[cfg(target_os = "linux")]
+        Command::NativeLinuxRootlessDevicePolicySmoke {
+            agent,
+            bundle,
+            work_parent,
+            delegated_cgroup_root: _,
+        } => {
+            let bootstrap = rootless_device_policy_bootstrap.take().ok_or_else(|| {
+                a3s_oci_sdk::Error::new(
+                    a3s_oci_sdk::ErrorCode::FailedPrecondition,
+                    "rootless device-policy command did not complete synchronous bootstrap",
+                )
+                .for_operation("rootless-device-policy")
+            })?;
+            let report = a3s_oci_runtime::native_linux_rootless_device_policy_smoke(
+                &agent,
+                &bundle,
+                &work_parent,
+                bootstrap,
+            )
+            .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {
@@ -1106,9 +1186,12 @@ mod tests {
 
     #[test]
     fn command_dispatch_future_stays_heap_bounded() {
-        let future = run(Cli {
-            command: Command::Features,
-        });
+        let future = run(
+            Cli {
+                command: Command::Features,
+            },
+            None,
+        );
 
         assert_eq!(
             std::mem::size_of_val(&future),

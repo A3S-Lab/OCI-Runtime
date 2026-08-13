@@ -75,6 +75,13 @@ mod windows_security;
 #[cfg(windows)]
 mod windows_service;
 
+#[cfg(target_os = "linux")]
+pub use a3s_oci_agent::RootlessDevicePolicyBootstrap;
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug)]
+pub struct RootlessDevicePolicyBootstrap {
+    _private: (),
+}
 pub use a3s_oci_agent_protocol::{
     AgentTransportFaultStage, AgentTransportOperationStage, AgentTransportShutdownStage,
 };
@@ -133,7 +140,8 @@ pub use native_service::{
     NativeLinuxServiceConfig,
 };
 pub use native_smoke::{
-    native_linux_fault_cleanup, native_linux_multi_container_smoke, native_linux_rootless_smoke,
+    native_linux_fault_cleanup, native_linux_multi_container_smoke,
+    native_linux_rootless_device_policy_smoke, native_linux_rootless_smoke,
     native_linux_rootless_smoke_with_cgroup_delegation,
     native_linux_rootless_smoke_with_cgroup_delegation_barrier, native_linux_service_smoke,
     native_linux_smoke, native_linux_soak,

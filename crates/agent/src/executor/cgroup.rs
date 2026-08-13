@@ -14,6 +14,7 @@ use a3s_oci_sdk::{
 };
 
 use super::device::DevicePlan;
+use super::device_policy::DevicePolicyAuthority;
 
 mod plan;
 mod stats;
@@ -40,9 +41,14 @@ pub(super) struct RootlessCgroupDelegation {
     effective_gid: u32,
     device: u64,
     inode: u64,
+    device_policy_authority: Option<DevicePolicyAuthority>,
 }
 
 impl RootlessCgroupDelegation {
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(super) fn open(
         root: impl AsRef<Path>,
         effective_uid: u32,
@@ -58,10 +64,68 @@ impl RootlessCgroupDelegation {
             effective_gid,
             device: metadata.dev(),
             inode: metadata.ino(),
+            device_policy_authority: None,
         })
     }
 
-    fn verify(&self) -> Result<BTreeSet<&'static str>> {
+    pub(super) fn open_root_descriptor(&self) -> Result<OwnedFd> {
+        let root = CString::new(self.root.as_os_str().as_bytes()).map_err(|error| {
+            cgroup_error(
+                ErrorCode::InvalidArgument,
+                format!("rootless cgroup delegation path contains NUL: {error}"),
+            )
+        })?;
+        // SAFETY: the canonical delegation path is NUL-terminated and open
+        // returns a fresh descriptor without following a final symlink.
+        let descriptor = unsafe {
+            libc::open(
+                root.as_ptr(),
+                libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if descriptor < 0 {
+            return Err(cgroup_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to retain rootless cgroup delegation descriptor {}: {}",
+                    self.root.display(),
+                    io::Error::last_os_error()
+                ),
+            ));
+        }
+        // SAFETY: open returned a fresh owned descriptor.
+        let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+        let metadata = std::fs::metadata(format!("/proc/self/fd/{}", descriptor.as_raw_fd()))
+            .map_err(|error| {
+                cgroup_error(
+                    ErrorCode::FailedPrecondition,
+                    format!("failed to inspect retained cgroup descriptor: {error}"),
+                )
+            })?;
+        if !self.identity_matches(&metadata) {
+            return Err(cgroup_error(
+                ErrorCode::Conflict,
+                "rootless cgroup delegation changed while its descriptor was retained",
+            ));
+        }
+        Ok(descriptor)
+    }
+
+    pub(super) fn install_device_policy_authority(
+        &mut self,
+        authority: DevicePolicyAuthority,
+    ) -> Result<()> {
+        if self.device_policy_authority.is_some() {
+            return Err(cgroup_error(
+                ErrorCode::Conflict,
+                "rootless cgroup delegation already has a device-policy authority",
+            ));
+        }
+        self.device_policy_authority = Some(authority);
+        Ok(())
+    }
+
+    pub(super) fn verify(&self) -> Result<BTreeSet<&'static str>> {
         let metadata = verify_delegated_root(&self.root, self.effective_uid, self.effective_gid)?;
         if !self.identity_matches(&metadata) {
             return Err(cgroup_error(
@@ -78,6 +142,18 @@ impl RootlessCgroupDelegation {
 
     fn identity_matches(&self, metadata: &std::fs::Metadata) -> bool {
         metadata.dev() == self.device && metadata.ino() == self.inode
+    }
+
+    pub(super) fn has_device_policy_authority(&self) -> bool {
+        self.device_policy_authority.is_some()
+    }
+
+    pub(super) fn shutdown_device_policy_authority(&self) -> Result<()> {
+        if let Some(authority) = &self.device_policy_authority {
+            authority.shutdown()
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -96,6 +172,7 @@ impl RootlessCgroupDelegation {
             effective_gid,
             device,
             inode,
+            device_policy_authority: None,
         }
     }
 }
@@ -105,6 +182,8 @@ pub(super) struct CgroupManager {
     authority_root: PathBuf,
     root: PathBuf,
     controllers: BTreeSet<&'static str>,
+    device_policy_authority: Option<DevicePolicyAuthority>,
+    removed: bool,
 }
 
 impl CgroupManager {
@@ -136,15 +215,23 @@ impl CgroupManager {
         }
         enable_controllers(&mountpoint, &controllers)?;
 
-        Self::create_below(mountpoint, controllers)
+        Self::create_below(mountpoint, controllers, None)
     }
 
     pub(super) fn create_delegated(delegation: &RootlessCgroupDelegation) -> Result<Self> {
         let controllers = delegation.verify()?;
-        Self::create_below(delegation.root.clone(), controllers)
+        Self::create_below(
+            delegation.root.clone(),
+            controllers,
+            delegation.device_policy_authority.clone(),
+        )
     }
 
-    fn create_below(authority_root: PathBuf, controllers: BTreeSet<&'static str>) -> Result<Self> {
+    fn create_below(
+        authority_root: PathBuf,
+        controllers: BTreeSet<&'static str>,
+        device_policy_authority: Option<DevicePolicyAuthority>,
+    ) -> Result<Self> {
         ensure_real_directory(&authority_root)?;
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -191,11 +278,15 @@ impl CgroupManager {
             authority_root,
             root,
             controllers,
+            device_policy_authority,
+            removed: false,
         })
     }
 
-    pub(super) fn remove(self) -> Result<()> {
-        cleanup_cgroup_tree(&self.root)
+    pub(super) fn remove(mut self) -> Result<()> {
+        cleanup_cgroup_tree(&self.root)?;
+        self.removed = true;
+        Ok(())
     }
 
     pub(super) fn root(&self) -> &Path {
@@ -204,6 +295,35 @@ impl CgroupManager {
 
     pub(super) fn authority_root(&self) -> &Path {
         &self.authority_root
+    }
+
+    fn device_policy_authority(&self) -> Option<&DevicePolicyAuthority> {
+        self.device_policy_authority.as_ref()
+    }
+
+    fn relative_to_authority(&self, path: &Path) -> Result<PathBuf> {
+        path.strip_prefix(&self.authority_root)
+            .ok()
+            .filter(|relative| !relative.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                cgroup_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "container cgroup {} is outside the delegated authority {}",
+                        path.display(),
+                        self.authority_root.display()
+                    ),
+                )
+            })
+    }
+}
+
+impl Drop for CgroupManager {
+    fn drop(&mut self) {
+        if !self.removed {
+            let _ = cleanup_cgroup_tree(&self.root);
+        }
     }
 }
 
@@ -216,6 +336,24 @@ pub(super) struct CgroupHandle {
     devices: DevicePlan,
     device_filter_path: PathBuf,
     device_filter: Option<OwnedFd>,
+    delegated_device_filter: Option<DelegatedDeviceFilter>,
+}
+
+#[derive(Debug)]
+struct DelegatedDeviceFilter {
+    authority: DevicePolicyAuthority,
+    key: String,
+    relative_cgroup: PathBuf,
+    active: bool,
+}
+
+impl Drop for DelegatedDeviceFilter {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.authority.remove(&self.key);
+            self.active = false;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -286,11 +424,18 @@ impl CgroupHandle {
         }
         let configured = (|| {
             initialize_cpuset(&current)?;
-            let device_filter = devices.install_cgroup_device_filter(&current)?;
+            let (device_filter, delegated_device_filter) =
+                install_device_filter(devices, &current, manager)?;
             let Some(headroom) = plan.control_headroom() else {
                 apply_settings(&current, &plan.settings())?;
                 let init_procs = open_cgroup_procs(&current)?;
-                return Ok((current.clone(), init_procs, None, device_filter));
+                return Ok((
+                    current.clone(),
+                    init_procs,
+                    None,
+                    device_filter,
+                    delegated_device_filter,
+                ));
             };
 
             // Keep the OCI leaf free of delegated controllers until init has
@@ -322,18 +467,22 @@ impl CgroupHandle {
                 membership.init_procs,
                 Some(control_workload),
                 device_filter,
+                delegated_device_filter,
             ))
         })();
         match configured {
-            Ok((leaf, init_procs, control_workload, device_filter)) => Ok(Some(Self {
-                created,
-                leaf,
-                init_procs,
-                control_workload,
-                devices: devices.clone(),
-                device_filter_path: current,
-                device_filter,
-            })),
+            Ok((leaf, init_procs, control_workload, device_filter, delegated_device_filter)) => {
+                Ok(Some(Self {
+                    created,
+                    leaf,
+                    init_procs,
+                    control_workload,
+                    devices: devices.clone(),
+                    device_filter_path: current,
+                    device_filter,
+                    delegated_device_filter,
+                }))
+            }
             Err(error) => {
                 cleanup_directories(&created);
                 Err(error)
@@ -462,6 +611,7 @@ impl CgroupHandle {
 
 impl Drop for CgroupHandle {
     fn drop(&mut self) {
+        drop(self.delegated_device_filter.take());
         if let Some(device_filter) = &self.device_filter {
             let _ = self
                 .devices
@@ -469,6 +619,36 @@ impl Drop for CgroupHandle {
         }
         cleanup_directories(&self.created);
     }
+}
+
+fn install_device_filter(
+    devices: &DevicePlan,
+    cgroup: &Path,
+    manager: &CgroupManager,
+) -> Result<(Option<OwnedFd>, Option<DelegatedDeviceFilter>)> {
+    let Some(authority) = manager.device_policy_authority() else {
+        if !devices.requires_setup() {
+            return Ok((None, None));
+        }
+        return devices
+            .install_cgroup_device_filter(cgroup)
+            .map(|filter| (filter, None));
+    };
+    let relative = manager.relative_to_authority(cgroup)?;
+    let key = relative.to_string_lossy().into_owned();
+    let active = devices.requires_setup();
+    if active {
+        authority.install(&key, &relative, devices)?;
+    }
+    Ok((
+        None,
+        Some(DelegatedDeviceFilter {
+            authority: authority.clone(),
+            key,
+            relative_cgroup: relative,
+            active,
+        }),
+    ))
 }
 
 pub(super) fn join_current_process(descriptor: RawFd) -> io::Result<()> {
