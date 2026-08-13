@@ -60,7 +60,9 @@ jobs:
         run: |
           test_log="$RUNNER_TEMP/a3s-oci-workspace-tests.log"
           if [[ -f "$test_log" ]]; then
-            excerpt="$(tail -n 80 "$test_log")"
+            # GitHub truncates workflow-command annotations around 4 KiB.
+            # The final Cargo lines contain the panic and assertion context.
+            excerpt="$(tail -n 28 "$test_log")"
             excerpt="${excerpt//'%'/'%25'}"
             excerpt="${excerpt//$'\r'/'%0D'}"
             excerpt="${excerpt//$'\n'/'%0A'}"
