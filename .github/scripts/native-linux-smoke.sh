@@ -943,8 +943,9 @@ run_rootless_device_policy_smoke() {
   local device_bundle="$qualification_root/rootless-device-bundle"
   local output
   local status
-  sudo -u "$rootless_user" mkdir -p "$device_bundle/rootfs/dev"
-  sudo -u "$rootless_user" cp -a "$rootless_bundle/rootfs/." "$device_bundle/rootfs/"
+  mkdir -p "$device_bundle/rootfs/dev"
+  cp -a --no-preserve=ownership \
+    "$rootless_bundle/rootfs/." "$device_bundle/rootfs/"
   jq --slurpfile box fixtures/a3s-box/config.json '
       .linux.devices = $box[0].linux.devices
       | .linux.resources.devices = $box[0].linux.resources.devices
@@ -961,6 +962,8 @@ run_rootless_device_policy_smoke() {
           + .process.args[2]
     ' "$rootless_bundle/config.json" > "$device_bundle/config.json"
   sudo chown -R "$rootless_uid:$rootless_gid" "$device_bundle"
+  sudo chown 300000:400000 \
+    "$device_bundle/rootfs/.a3s-oci-rootless-subordinate"
 
   if output="$(sudo sh -c '
       control=$1

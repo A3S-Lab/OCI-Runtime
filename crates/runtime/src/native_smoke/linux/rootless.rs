@@ -45,6 +45,26 @@ struct WorkloadFiles {
     progress_pending: std::path::PathBuf,
 }
 
+struct RootlessRun<'a> {
+    init_executable: &'a Path,
+    bundle_directory: &'a Path,
+    work_parent: &'a Path,
+    delegated_cgroup_root: Option<&'a Path>,
+    ready_file: Option<&'a Path>,
+    continue_file: Option<&'a Path>,
+    device_policy_bootstrap: Option<a3s_oci_agent::RootlessDevicePolicyBootstrap>,
+}
+
+struct RootlessExercise<'a> {
+    client: &'a RuntimeClient,
+    bundle: &'a OciBundle,
+    mappings: &'a MappingPlan,
+    cgroup_requirement: CgroupRequirement,
+    nonce: &'a str,
+    workload_files: &'a WorkloadFiles,
+    device_policy: bool,
+}
+
 pub(super) async fn run(
     init_executable: &Path,
     bundle_directory: &Path,
@@ -53,29 +73,29 @@ pub(super) async fn run(
     ready_file: Option<&Path>,
     continue_file: Option<&Path>,
 ) -> NativeLinuxRootlessSmokeReport {
-    run_inner(
+    run_inner(RootlessRun {
         init_executable,
         bundle_directory,
         work_parent,
         delegated_cgroup_root,
         ready_file,
         continue_file,
-        false,
-        None,
-    )
+        device_policy_bootstrap: None,
+    })
     .await
 }
 
-async fn run_inner(
-    init_executable: &Path,
-    bundle_directory: &Path,
-    work_parent: &Path,
-    delegated_cgroup_root: Option<&Path>,
-    ready_file: Option<&Path>,
-    continue_file: Option<&Path>,
-    device_policy: bool,
-    device_policy_bootstrap: Option<a3s_oci_agent::RootlessDevicePolicyBootstrap>,
-) -> NativeLinuxRootlessSmokeReport {
+async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
+    let RootlessRun {
+        init_executable,
+        bundle_directory,
+        work_parent,
+        delegated_cgroup_root,
+        ready_file,
+        continue_file,
+        device_policy_bootstrap,
+    } = run;
+    let device_policy = device_policy_bootstrap.is_some();
     let mut report = NativeLinuxRootlessSmokeReport::initial(HostPlatform::Linux);
     // SAFETY: these credential queries have no pointer arguments or failure
     // return values.
@@ -255,14 +275,16 @@ async fn run_inner(
     };
     let client = RuntimeClient::new(service.clone());
     let exercise = exercise(
-        &client,
-        &bundle,
-        &mappings,
-        cgroup_requirement,
-        &nonce,
-        &workload_files,
+        RootlessExercise {
+            client: &client,
+            bundle: &bundle,
+            mappings: &mappings,
+            cgroup_requirement,
+            nonce: &nonce,
+            workload_files: &workload_files,
+            device_policy,
+        },
         &mut report,
-        device_policy,
     )
     .await;
     if exercise.is_err() {
@@ -297,16 +319,15 @@ pub(super) async fn run_device_policy(
     bootstrap: a3s_oci_agent::RootlessDevicePolicyBootstrap,
 ) -> NativeLinuxRootlessSmokeReport {
     let delegated_cgroup_root = bootstrap.delegated_cgroup_root().to_path_buf();
-    run_inner(
+    run_inner(RootlessRun {
         init_executable,
         bundle_directory,
         work_parent,
-        Some(&delegated_cgroup_root),
-        None,
-        None,
-        true,
-        Some(bootstrap),
-    )
+        delegated_cgroup_root: Some(&delegated_cgroup_root),
+        ready_file: None,
+        continue_file: None,
+        device_policy_bootstrap: Some(bootstrap),
+    })
     .await
 }
 
@@ -377,15 +398,19 @@ async fn qualification_barrier(
 }
 
 async fn exercise(
-    client: &RuntimeClient,
-    bundle: &OciBundle,
-    mappings: &MappingPlan,
-    cgroup_requirement: CgroupRequirement,
-    nonce: &str,
-    workload_files: &WorkloadFiles,
+    exercise: RootlessExercise<'_>,
     report: &mut NativeLinuxRootlessSmokeReport,
-    device_policy: bool,
 ) -> Result<(), String> {
+    let RootlessExercise {
+        client,
+        bundle,
+        mappings,
+        cgroup_requirement,
+        nonce,
+        workload_files,
+        device_policy,
+        ..
+    } = exercise;
     report.service_operations = call("rootless features", client.features())
         .await?
         .operations;
