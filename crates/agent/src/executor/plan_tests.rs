@@ -422,7 +422,10 @@ fn rejects_process_scheduler_io_priority_and_cpu_affinity() {
 fn rejects_unimplemented_cgroup_v2_resource_families() {
     for (field, value) in [
         ("blockIO", serde_json::json!({})),
-        ("hugepageLimits", serde_json::json!([{}])),
+        (
+            "hugepageLimits",
+            serde_json::json!([{"pageSize": "2MB", "limit": 1}]),
+        ),
         ("rdma", serde_json::json!({"mlx5_0": {}})),
         ("unified", serde_json::json!({"memory.max": "1"})),
     ] {
