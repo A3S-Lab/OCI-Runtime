@@ -287,6 +287,25 @@ impl AgentVmSmokeReport {
     /// Return whether host authentication, guest negotiation, and VM exit succeeded.
     #[must_use]
     pub fn is_success(&self) -> bool {
+        self.session_is_success()
+            && match self.platform {
+                HostPlatform::Macos => self
+                    .macos_cleanup
+                    .as_ref()
+                    .is_some_and(MacosHostCleanupEvidence::is_success),
+                _ => self.macos_cleanup.is_none(),
+            }
+    }
+
+    /// Return whether the owned VM session completed its authenticated contract.
+    ///
+    /// A long-lived Host Service can own multiple concurrent macOS sessions, so
+    /// one session cannot compare the process-wide descriptor inventory against
+    /// a baseline captured before every other session. Product owners use this
+    /// narrower result after reaping their exact shim and worker. Standalone
+    /// qualification must continue to use [`Self::is_success`], which also
+    /// requires endpoint, process, and descriptor cleanup evidence.
+    pub(crate) fn session_is_success(&self) -> bool {
         let process_identity_matches =
             match (self.platform, self.shim_process_id, self.bridge_process_id) {
                 (HostPlatform::Windows, Some(shim), Some(bridge)) => shim != 0 && bridge == shim,
@@ -299,13 +318,6 @@ impl AgentVmSmokeReport {
             HostPlatform::Windows => Some("x86_64"),
             HostPlatform::Macos => Some("aarch64"),
             _ => None,
-        };
-        let host_cleanup_matches = match self.platform {
-            HostPlatform::Macos => self
-                .macos_cleanup
-                .as_ref()
-                .is_some_and(MacosHostCleanupEvidence::is_success),
-            _ => self.macos_cleanup.is_none(),
         };
         matches!(self.status, CapabilityStatus::Available)
             && self.endpoint_bound
@@ -343,7 +355,6 @@ impl AgentVmSmokeReport {
             && self.shim_exit_code == Some(0)
             && self.console_created
             && self.shim_report.is_some()
-            && host_cleanup_matches
     }
 }
 
@@ -974,11 +985,34 @@ impl OciVmSmokeReport {
 
 #[cfg(test)]
 mod tests {
-    use super::MacosHostCleanupEvidence;
+    use a3s_oci_agent_protocol::{AgentOperation, AGENT_PROTOCOL_VERSION_MAX};
+    use a3s_oci_core::{CapabilityStatus, HostPlatform};
 
-    #[test]
-    fn macos_cleanup_requires_every_host_resource_to_return_to_baseline() {
-        let evidence = MacosHostCleanupEvidence {
+    use super::{AgentVmSmokeReport, MacosHostCleanupEvidence};
+
+    fn complete_macos_session() -> AgentVmSmokeReport {
+        let mut report = AgentVmSmokeReport::initial(HostPlatform::Macos);
+        report.status = CapabilityStatus::Available;
+        report.endpoint_bound = true;
+        report.endpoint_name = Some("a3s-oci-agent-00000000000000000000000000000000".into());
+        report.shim_spawned = true;
+        report.shim_process_id = Some(41);
+        report.bridge_process_id = Some(42);
+        report.shim_client_verified = true;
+        report.protocol_negotiated = true;
+        report.selected_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.agent_version = Some(env!("CARGO_PKG_VERSION").into());
+        report.guest_architecture = Some("aarch64".into());
+        report.advertised_operations = AgentOperation::ALL.to_vec();
+        report.shim_report_verified = true;
+        report.shim_exit_code = Some(0);
+        report.console_created = true;
+        report.shim_report = Some(serde_json::json!({"status": "available"}));
+        report
+    }
+
+    fn complete_macos_cleanup() -> MacosHostCleanupEvidence {
+        MacosHostCleanupEvidence {
             endpoint_removed: true,
             shim_reaped: true,
             bridge_reaped: true,
@@ -986,7 +1020,22 @@ mod tests {
             open_descriptors_after: Some(7),
             descriptor_inventory_restored: true,
             reason: None,
-        };
+        }
+    }
+
+    #[test]
+    fn macos_session_success_does_not_impersonate_full_cleanup_qualification() {
+        let mut report = complete_macos_session();
+        assert!(report.session_is_success());
+        assert!(!report.is_success());
+
+        report.macos_cleanup = Some(complete_macos_cleanup());
+        assert!(report.is_success());
+    }
+
+    #[test]
+    fn macos_cleanup_requires_every_host_resource_to_return_to_baseline() {
+        let evidence = complete_macos_cleanup();
         assert!(evidence.is_success());
 
         for incomplete in [

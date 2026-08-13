@@ -812,7 +812,7 @@ struct LiveHvfVmOwner {
 impl HvfVmOwner for LiveHvfVmOwner {
     async fn shutdown(&self) -> Result<()> {
         let report = self.session.shutdown().await;
-        if report.is_success() {
+        if report.session_is_success() {
             Ok(())
         } else {
             Err(vm_report_error("shutdown-hvf-utility-vm", report))
