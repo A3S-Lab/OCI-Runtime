@@ -60,7 +60,6 @@ pub(super) async fn run(
     result?;
 
     let first_socket = host::socket_identity(first.socket_path())?;
-    evidence.first_socket_identity = Some(first_socket);
     first.sigkill().await?;
     evidence.host_service_sigkill_delivered = true;
     evidence.first_host_service_reaped = true;
@@ -106,7 +105,6 @@ pub(super) async fn run(
         &config,
         &runtime_root,
         &endpoint_baseline,
-        first_socket,
         &mut replacement,
         evidence,
     )
@@ -126,6 +124,7 @@ async fn run_first_owner(
 ) -> Result<(), String> {
     let first_pid = first.pid()?;
     evidence.first_host_service_pid = Some(first_pid);
+    evidence.first_socket_peer = Some(first.socket_peer()?.clone());
     let client = first.connect().await?;
     let id = ContainerId::new(format!("hvf-owner-death-{}", config.nonce))
         .map_err(|error| format!("failed to construct owner-death container ID: {error}"))?;
@@ -193,17 +192,17 @@ async fn run_replacement(
     config: &OwnerDeathConfig<'_>,
     runtime_root: &Path,
     endpoint_baseline: &std::collections::BTreeSet<std::path::PathBuf>,
-    first_socket: super::report::MacosSocketIdentity,
     replacement: &mut HostServiceProcess,
     evidence: &mut MacosHvfOwnerDeathEvidence,
 ) -> Result<(), String> {
     let replacement_pid = replacement.pid()?;
     evidence.replacement_host_service_pid = Some(replacement_pid);
-    let replacement_socket = host::socket_identity(replacement.socket_path())?;
-    evidence.replacement_socket_identity = Some(replacement_socket);
-    evidence.replacement_socket_new_identity = replacement_socket != first_socket;
-    if !evidence.replacement_socket_new_identity {
-        return Err("replacement Host Service did not publish a new socket object".into());
+    let replacement_peer = replacement.socket_peer()?.clone();
+    evidence.replacement_socket_peer = Some(replacement_peer.clone());
+    evidence.replacement_socket_new_owner =
+        evidence.first_socket_peer.as_ref() != Some(&replacement_peer);
+    if !evidence.replacement_socket_new_owner {
+        return Err("replacement Host Service socket retained the first owner identity".into());
     }
     let client = replacement.connect().await?;
     evidence.replacement_connected = true;

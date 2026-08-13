@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::mem::{size_of, MaybeUninit};
-use std::os::macos::fs::MetadataExt as MacosMetadataExt;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use a3s_oci_sdk::{LocalIpcEndpoint, RuntimeClient};
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, timeout, Instant};
 
-use super::report::{MacosProcessIdentity, MacosSocketIdentity};
+use super::report::MacosProcessIdentity;
 
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const STOP_TIMEOUT: Duration = Duration::from_secs(45);
@@ -22,6 +22,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 pub(super) struct HostServiceProcess {
     child: Child,
     socket: PathBuf,
+    socket_peer: Option<MacosProcessIdentity>,
 }
 
 impl HostServiceProcess {
@@ -53,6 +54,7 @@ impl HostServiceProcess {
         let mut process = Self {
             child,
             socket: root.join("runtime.sock"),
+            socket_peer: None,
         };
         match process.wait_for_private_socket().await {
             Ok(()) => Ok(process),
@@ -71,6 +73,12 @@ impl HostServiceProcess {
 
     pub(super) fn socket_path(&self) -> &Path {
         &self.socket
+    }
+
+    pub(super) fn socket_peer(&self) -> Result<&MacosProcessIdentity, String> {
+        self.socket_peer
+            .as_ref()
+            .ok_or_else(|| "public macOS HVF Host Service socket peer was not retained".to_string())
     }
 
     pub(super) async fn connect(&self) -> Result<RuntimeClient, String> {
@@ -138,6 +146,7 @@ impl HostServiceProcess {
     }
 
     async fn wait_for_private_socket(&mut self) -> Result<(), String> {
+        let expected_process_id = self.pid()?;
         let deadline = Instant::now() + START_TIMEOUT;
         loop {
             if let Some(status) = self
@@ -157,12 +166,18 @@ impl HostServiceProcess {
                         && metadata.uid() == uid
                         && metadata.mode() & 0o777 == 0o600
                     {
-                        return Ok(());
+                        if let Some(peer) =
+                            connect_expected_socket_peer(&self.socket, expected_process_id).await?
+                        {
+                            self.socket_peer = Some(peer);
+                            return Ok(());
+                        }
+                    } else {
+                        return Err(format!(
+                            "public Host Service endpoint is not a same-UID mode-0600 socket: {}",
+                            self.socket.display()
+                        ));
                     }
-                    return Err(format!(
-                        "public Host Service endpoint is not a same-UID mode-0600 socket: {}",
-                        self.socket.display()
-                    ));
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => {
@@ -180,6 +195,73 @@ impl HostServiceProcess {
     }
 }
 
+async fn connect_expected_socket_peer(
+    path: &Path,
+    expected_process_id: u32,
+) -> Result<Option<MacosProcessIdentity>, String> {
+    let stream = match tokio::net::UnixStream::connect(path).await {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to probe public Host Service socket {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let peer_process_id = unix_peer_process_id(&stream)?;
+    if peer_process_id != expected_process_id {
+        return Err(format!(
+            "public Host Service socket peer PID {peer_process_id} does not match spawned PID \
+             {expected_process_id}: {}",
+            path.display()
+        ));
+    }
+    let peer_process_id = libc::pid_t::try_from(peer_process_id)
+        .map_err(|error| format!("Host Service socket peer PID is invalid: {error}"))?;
+    process_identity(peer_process_id)
+        .map(Some)
+        .ok_or_else(|| "failed to retain exact Host Service socket peer identity".to_string())
+}
+
+fn unix_peer_process_id(stream: &tokio::net::UnixStream) -> Result<u32, String> {
+    let mut peer_process_id: libc::pid_t = 0;
+    let mut value_length = libc::socklen_t::try_from(size_of::<libc::pid_t>())
+        .map_err(|error| format!("failed to represent LOCAL_PEERPID value size: {error}"))?;
+    // SAFETY: the stream owns a connected Unix descriptor and both output
+    // pointers remain valid for the duration of getsockopt.
+    let status = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&mut peer_process_id as *mut libc::pid_t).cast(),
+            &mut value_length,
+        )
+    };
+    if status != 0 {
+        return Err(format!(
+            "failed to identify public Host Service socket peer: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    if usize::try_from(value_length).ok() != Some(size_of::<libc::pid_t>()) {
+        return Err(format!(
+            "LOCAL_PEERPID returned {value_length} bytes, expected {}",
+            size_of::<libc::pid_t>()
+        ));
+    }
+    u32::try_from(peer_process_id)
+        .map_err(|_| format!("LOCAL_PEERPID returned invalid process ID {peer_process_id}"))
+}
+
 fn create_private_log(path: &Path, label: &str) -> Result<std::fs::File, String> {
     std::fs::OpenOptions::new()
         .write(true)
@@ -190,7 +272,7 @@ fn create_private_log(path: &Path, label: &str) -> Result<std::fs::File, String>
         .map_err(|error| format!("failed to create {label} {}: {error}", path.display()))
 }
 
-pub(super) fn socket_identity(path: &Path) -> Result<MacosSocketIdentity, String> {
+pub(super) fn socket_identity(path: &Path) -> Result<(u64, u64), String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         format!(
             "failed to inspect socket identity {}: {error}",
@@ -203,13 +285,7 @@ pub(super) fn socket_identity(path: &Path) -> Result<MacosSocketIdentity, String
             path.display()
         ));
     }
-    Ok(MacosSocketIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-        generation: MacosMetadataExt::st_gen(&metadata),
-        birth_time_unix_seconds: MacosMetadataExt::st_birthtime(&metadata),
-        birth_time_nanoseconds: MacosMetadataExt::st_birthtime_nsec(&metadata),
-    })
+    Ok((metadata.dev(), metadata.ino()))
 }
 
 pub(super) fn process_descendants(root_pid: u32) -> Result<Vec<MacosProcessIdentity>, String> {
@@ -386,42 +462,37 @@ fn process_identity(pid: libc::pid_t) -> Option<MacosProcessIdentity> {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
-    use super::socket_identity;
+    use super::connect_expected_socket_peer;
 
-    #[test]
-    fn socket_identity_changes_for_every_rebound_path() {
+    #[tokio::test]
+    async fn readiness_probe_requires_the_expected_live_socket_peer() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let socket_path = temporary.path().join("runtime.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("bind live socket");
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+            .expect("protect live socket");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept readiness probe");
+            drop(stream);
+        });
 
-        for _ in 0..256 {
-            let first =
-                std::os::unix::net::UnixListener::bind(&socket_path).expect("bind first socket");
-            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
-                .expect("protect first socket");
-            let first_identity = socket_identity(&socket_path).expect("first socket identity");
-            drop(first);
-            std::fs::remove_file(&socket_path).expect("remove first socket");
+        let peer = connect_expected_socket_peer(&socket_path, std::process::id())
+            .await
+            .expect("probe expected peer")
+            .expect("live peer");
+        assert_eq!(peer.pid, std::process::id());
+        server.await.expect("readiness server");
+        std::fs::remove_file(&socket_path).expect("remove live socket");
 
-            let replacement = std::os::unix::net::UnixListener::bind(&socket_path)
-                .expect("bind replacement socket");
-            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
-                .expect("protect replacement socket");
-            let replacement_identity =
-                socket_identity(&socket_path).expect("replacement socket identity");
-            assert_ne!(first_identity, replacement_identity);
-            if first_identity.device == replacement_identity.device
-                && first_identity.inode == replacement_identity.inode
-            {
-                assert!(
-                    first_identity.generation != replacement_identity.generation
-                        || first_identity.birth_time_unix_seconds
-                            != replacement_identity.birth_time_unix_seconds
-                        || first_identity.birth_time_nanoseconds
-                            != replacement_identity.birth_time_nanoseconds
-                );
-            }
-            drop(replacement);
-            std::fs::remove_file(&socket_path).expect("remove replacement socket");
-        }
+        let stale =
+            std::os::unix::net::UnixListener::bind(&socket_path).expect("bind stale socket path");
+        drop(stale);
+        assert!(
+            connect_expected_socket_peer(&socket_path, std::process::id())
+                .await
+                .expect("probe stale path")
+                .is_none()
+        );
+        std::fs::remove_file(&socket_path).expect("remove stale socket");
     }
 }

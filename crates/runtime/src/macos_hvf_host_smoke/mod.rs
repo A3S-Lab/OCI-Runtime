@@ -10,7 +10,7 @@ mod soak;
 pub use report::{
     MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeReport, MacosHvfOwnerDeathEvidence,
     MacosHvfPublicLifecycleEvidence, MacosHvfPublicSoakEvidence, MacosProcessIdentity,
-    MacosSocketIdentity, MACOS_HVF_HOST_SERVICE_SMOKE_SCHEMA_VERSION,
+    MACOS_HVF_HOST_SERVICE_SMOKE_SCHEMA_VERSION,
 };
 pub use runner::{
     run as macos_hvf_host_service_smoke, MacosHvfHostServiceSmokeConfig,
