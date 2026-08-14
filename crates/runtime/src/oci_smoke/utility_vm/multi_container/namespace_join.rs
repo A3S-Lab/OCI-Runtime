@@ -73,6 +73,7 @@ pub(super) async fn exercise<T: AgentStream>(
     )
     .await?;
     report.namespace_join.joined_pid_time_workload_verified = true;
+    report.namespace_join.joined_user_default_devices_verified = true;
 
     let mount_target = target(nonce, "namespace-mount", 1)?;
     let mount_create = create_request(

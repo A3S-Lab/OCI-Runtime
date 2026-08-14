@@ -394,6 +394,14 @@ durable events, all six nodes, exact policy updates where requested, and
 complete cgroup, runtime, session, and marker cleanup. Broader delegated
 profiles remain unadvertised promotion work.
 
+When a container creates a private mount namespace but joins an existing user
+namespace, the executor pins and type-checks that namespace, observes its real
+UID/GID maps through a short-lived namespace helper, and rechecks the namespace
+identity before entry. The same detached-mount path then supplies the six
+default devices with namespace-root ownership. Native Linux multi-container
+v16 and real Apple Silicon utility-VM multi-container v10 both verify the
+device type, major/minor number, mode, ownership, workload access, and cleanup.
+
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.
 Read the linked host guide before running them.
@@ -449,9 +457,6 @@ qualification must all pass before a driver becomes `supported`.
 ### Still intentionally open
 
 - complete review and enforcement of pending OCI normative entries;
-- default-device provisioning for a mount namespace joined to an externally
-  owned user namespace; the runtime currently avoids inventing unverifiable
-  mappings for that case;
 - real-host qualification of descriptor-confined filesystem sessions on each
   remaining utility-VM driver;
 - production-ready Native Linux and utility-VM drivers;

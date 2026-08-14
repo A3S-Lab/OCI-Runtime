@@ -230,7 +230,7 @@ impl InitPlan {
             spec.linux().as_ref(),
             &mounts,
             process_plan.terminal,
-            namespaces.new_mount() && (!namespaces.has_user() || namespaces.new_user()),
+            namespaces.new_mount(),
         )?;
         if !mounts.is_empty() && !namespaces.new_mount() {
             return Err(unsupported(

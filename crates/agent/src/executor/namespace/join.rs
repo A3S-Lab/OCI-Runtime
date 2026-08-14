@@ -85,6 +85,9 @@ fn open_all(plan: &NamespacePlan) -> Result<Vec<OpenNamespace>> {
         };
         let file = File::open(path).map_err(|error| open_error(name, path, error))?;
         validate_namespace_type(name, path, &file, namespace_type)?;
+        if namespace_type == libc::CLONE_NEWUSER {
+            plan.verify_joined_user_identity(path, &file)?;
+        }
         opened.push(OpenNamespace {
             name,
             path: path.to_path_buf(),

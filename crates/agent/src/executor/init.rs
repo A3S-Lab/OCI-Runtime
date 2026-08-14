@@ -453,7 +453,9 @@ fn prepare_container_init(
         .root()
         .as_ref()
         .is_some_and(|root| root.path().is_absolute());
-    let plan = InitPlan::from_bundle(&bundle, process_io)?;
+    let mut plan = InitPlan::from_bundle(&bundle, process_io)?;
+    plan.namespaces
+        .resolve_joined_user_mappings(plan.uid, plan.gid, &plan.additional_gids)?;
     let canonical_bundle = plan.bundle_directory.canonicalize().map_err(|error| {
         init_error(
             ErrorCode::InvalidArgument,

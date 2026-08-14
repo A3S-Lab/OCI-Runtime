@@ -87,6 +87,7 @@ pub(super) async fn exercise(
     let non_mount_target = ContainerTarget::exact(non_mount_id, non_mount.generation);
     run_joiner(client, nonce, "namespace-non-mount", &non_mount_target).await?;
     report.namespace_join.joined_pid_time_workload_verified = true;
+    report.namespace_join.joined_user_default_devices_verified = true;
 
     let mount_id = container_id(nonce, "namespace-mount")?;
     let mount_create = create_request(

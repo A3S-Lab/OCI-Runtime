@@ -604,7 +604,7 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v15"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v16"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -657,6 +657,7 @@ run_multi_container_smoke() {
      and .namespace_join.wrong_type_rejected_before_state
      and .namespace_join.joined_non_mount_namespaces
      and .namespace_join.joined_pid_time_workload_verified
+     and .namespace_join.joined_user_default_devices_verified
      and .namespace_join.joined_mount_namespace
      and .namespace_join.retained_rootfs_verified
      and .namespace_join.donor_unchanged_after_joins
@@ -1731,7 +1732,13 @@ run_rootless_negative_smoke \
   populated-delegation \
   "$rootless_cgroup_parent" \
   "must not contain processes"
-sudo kill -KILL "$rootless_cgroup_process_pid" 2>/dev/null || true
+if [[ -e "$rootless_cgroup_parent/cgroup.kill" ]]; then
+  sudo sh -c 'printf 1 > "$1/cgroup.kill"' sh "$rootless_cgroup_parent"
+else
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] || sudo kill -KILL "$pid" 2>/dev/null || true
+  done < <(sudo cat "$rootless_cgroup_parent/cgroup.procs")
+fi
 wait "$rootless_cgroup_process_launcher_pid" 2>/dev/null || true
 rootless_cgroup_process_pid=""
 rootless_cgroup_process_launcher_pid=""

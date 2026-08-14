@@ -6,9 +6,9 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v15";
+    "a3s.oci.native-linux-multi-container-smoke.v16";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v9";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v10";
 /// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.
 pub const WINDOWS_OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str =
     "a3s.oci.windows-oci-vm-multi-container-smoke.v1";
@@ -135,6 +135,10 @@ pub struct NamespaceJoinEvidence {
     /// Whether the joined PID/time workload crossed start, reached exec, and
     /// remained running for the bounded observation window.
     pub joined_pid_time_workload_verified: bool,
+    /// Whether a private mount namespace joined to the donor user namespace
+    /// received all six default devices with exact type, number, mode, and
+    /// namespace-root ownership.
+    pub joined_user_default_devices_verified: bool,
     /// Whether a second init joined the donor mount namespace.
     pub joined_mount_namespace: bool,
     /// Whether the rootfs retained before `setns` remained usable for exec
@@ -155,6 +159,7 @@ impl NamespaceJoinEvidence {
             && self.wrong_type_rejected_before_state
             && self.joined_non_mount_namespaces
             && self.joined_pid_time_workload_verified
+            && self.joined_user_default_devices_verified
             && self.joined_mount_namespace
             && self.retained_rootfs_verified
             && self.donor_unchanged_after_joins
@@ -743,6 +748,7 @@ mod tests {
             wrong_type_rejected_before_state: true,
             joined_non_mount_namespaces: true,
             joined_pid_time_workload_verified: true,
+            joined_user_default_devices_verified: true,
             joined_mount_namespace: true,
             retained_rootfs_verified: true,
             donor_unchanged_after_joins: true,

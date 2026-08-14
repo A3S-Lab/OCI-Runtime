@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
@@ -9,11 +10,16 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 use super::control;
 
 mod join;
+mod joined_user;
 mod mount_idmap;
 mod network;
 mod retained;
 mod time;
 mod user;
+
+#[cfg(test)]
+#[path = "namespace_tests.rs"]
+mod tests;
 
 pub(super) use mount_idmap::{IdmapNamespaceHandles, IdmapPlan};
 pub(super) use retained::{RetainedExecutionContext, RetainedNamespaceArgument};
@@ -82,6 +88,7 @@ pub(super) struct NamespacePlan {
     time: NamespaceAction,
     uid_mappings: Vec<IdMapping>,
     gid_mappings: Vec<IdMapping>,
+    joined_user_authority: Option<joined_user::JoinedUserNamespaceAuthority>,
     monotonic_offset: Option<TimeOffset>,
     boottime_offset: Option<TimeOffset>,
 }
@@ -261,6 +268,54 @@ impl NamespacePlan {
         mapped_host_id(container_id, &self.gid_mappings)
     }
 
+    pub(super) fn resolve_joined_user_mappings(
+        &mut self,
+        process_uid: u32,
+        process_gid: u32,
+        additional_gids: &[u32],
+    ) -> Result<()> {
+        let Some(path) = self.joined_user().map(Path::to_path_buf) else {
+            return Ok(());
+        };
+        if self.joined_user_authority.is_some()
+            || !self.uid_mappings.is_empty()
+            || !self.gid_mappings.is_empty()
+        {
+            return Err(namespace_error(
+                ErrorCode::Conflict,
+                "joined user namespace authority was already resolved",
+            ));
+        }
+        let observed = joined_user::observe(&path)?;
+        let uid_mappings = validate_observed_mappings("UID", observed.uid_mappings)?;
+        let gid_mappings = validate_observed_mappings("GID", observed.gid_mappings)?;
+        ensure_id_mapped("container root UID", 0, &uid_mappings)?;
+        ensure_id_mapped("container root GID", 0, &gid_mappings)?;
+        ensure_id_mapped("process.user.uid", process_uid, &uid_mappings)?;
+        ensure_id_mapped("process.user.gid", process_gid, &gid_mappings)?;
+        for (index, gid) in additional_gids.iter().copied().enumerate() {
+            ensure_id_mapped(
+                &format!("process.user.additionalGids[{index}]"),
+                gid,
+                &gid_mappings,
+            )?;
+        }
+        self.uid_mappings = uid_mappings;
+        self.gid_mappings = gid_mappings;
+        self.joined_user_authority = Some(observed.authority);
+        Ok(())
+    }
+
+    fn verify_joined_user_identity(&self, path: &Path, namespace: &File) -> Result<()> {
+        let authority = self.joined_user_authority.as_ref().ok_or_else(|| {
+            namespace_error(
+                ErrorCode::FailedPrecondition,
+                "joined user namespace authority was not resolved before namespace entry",
+            )
+        })?;
+        authority.verify(path, namespace)
+    }
+
     pub(super) const fn monotonic_offset(&self) -> Option<TimeOffset> {
         self.monotonic_offset
     }
@@ -434,6 +489,59 @@ fn validate_non_overlapping_mappings(field: &str, mappings: &[IdMapping]) -> Res
         }
     }
     Ok(())
+}
+
+fn validate_observed_mappings(kind: &str, mut mappings: Vec<IdMapping>) -> Result<Vec<IdMapping>> {
+    if mappings.is_empty() {
+        return Err(namespace_error(
+            ErrorCode::FailedPrecondition,
+            format!("joined user namespace has no {kind} mappings"),
+        ));
+    }
+    if mappings.len() > MAX_ID_MAPPINGS {
+        return Err(namespace_error(
+            ErrorCode::ResourceExhausted,
+            format!(
+                "joined user namespace has {} {kind} mappings; maximum is {MAX_ID_MAPPINGS}",
+                mappings.len()
+            ),
+        ));
+    }
+    for (index, mapping) in mappings.iter().enumerate() {
+        if mapping.size == 0 {
+            return Err(namespace_error(
+                ErrorCode::FailedPrecondition,
+                format!("joined user namespace {kind} mapping {index} has zero size"),
+            ));
+        }
+        let last_offset = mapping.size - 1;
+        if mapping.container_id.checked_add(last_offset).is_none()
+            || mapping.host_id.checked_add(last_offset).is_none()
+        {
+            return Err(namespace_error(
+                ErrorCode::FailedPrecondition,
+                format!("joined user namespace {kind} mapping {index} exceeds the uint32 ID space"),
+            ));
+        }
+        for (prior_index, prior) in mappings[..index].iter().enumerate() {
+            if mapping_ranges_overlap(
+                mapping.container_id,
+                mapping.size,
+                prior.container_id,
+                prior.size,
+            ) || mapping_ranges_overlap(mapping.host_id, mapping.size, prior.host_id, prior.size)
+            {
+                return Err(namespace_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "joined user namespace {kind} mappings {prior_index} and {index} overlap"
+                    ),
+                ));
+            }
+        }
+    }
+    mappings.sort_unstable();
+    Ok(mappings)
 }
 
 fn mapping_ranges_overlap(left: u32, left_size: u32, right: u32, right_size: u32) -> bool {

@@ -356,9 +356,12 @@ If a rootless plan also needs the six default device nodes, the CLI must start
 the synchronous bounded helper before Tokio and consume that bootstrap when it
 opens the executor. A delegation without this helper remains valid for
 negative qualification and device-free planning, but create fails explicitly
-when device preparation is required. A mount namespace joined to an external
-user namespace is the remaining exception: the executor currently avoids
-inventing default-node ownership for mappings it did not create or verify.
+when device preparation is required. For a private mount namespace joined to
+an existing user namespace, the executor pins and type-checks the namespace
+descriptor, reads its bounded UID/GID maps from a short-lived helper inside
+that namespace, and rechecks the namespace identity immediately before entry.
+It then prepares the same six detached device mounts using the observed
+namespace-root ownership and retains the ordinary manifest-bound cleanup path.
 
 A trusted in-container control plane can opt in to the versioned
 `control-workload-v1` layout with these OCI annotations:

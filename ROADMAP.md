@@ -1383,9 +1383,14 @@ leak. Only then may KVM become `experimental`.
     launch through the same bounded helper without requiring or fabricating a
     `linux.resources.devices` access policy. Recreate the helper for both sides
     of owner-death recovery and verify the nodes from inside the workload.
-  - [ ] Define a fail-closed authority contract for default devices when a
-    container joins an externally owned user namespace. Until then, that join
-    path does not invent device ownership or mappings it cannot verify.
+  - [x] Define a fail-closed authority contract for default devices when a
+    container joins an externally owned user namespace. Pin and type-check the
+    descriptor, observe bounded non-overlapping UID/GID maps from inside the
+    namespace, recheck its device/inode identity immediately before `setns`,
+    and use the observed namespace-root mapping with the existing detached
+    device-source and exact-cleanup path. Native Linux multi-container v16 and
+    real Apple Silicon utility-VM multi-container v10 verify all six nodes from
+    inside the joined-user workload.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
     for every newly advertised controller on x86_64 and aarch64.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate

@@ -401,7 +401,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v15` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v16` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -410,7 +410,9 @@ create barrier and requires:
 1. a namespace descriptor whose type disagrees with its OCI entry to fail
    before container state;
 2. one workload to join the donor UTS, IPC, network, cgroup, PID, user, and
-   time namespaces while retaining a private mount namespace;
+   time namespaces while retaining a private mount namespace, with all six
+   default devices bound at their exact type, number, mode, and namespace-root
+   ownership;
 3. a second workload to join the donor mount namespace and execute through the
    rootfs descriptor retained before `setns`;
 4. PID/time joins to cross `exec` and remain running for a bounded observation
@@ -616,9 +618,6 @@ following pass:
   profile is advertised;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
-- a fail-closed default-device authority for mount namespaces joined to an
-  externally owned user namespace; the current planner does not invent nodes
-  whose ownership mapping it cannot verify;
 - remaining mount and credential controls, broader cgroup v2 policies,
   multi-architecture/notification seccomp, and broader sysctl enforcement;
 - live real-driver reattachment after runtime-process restart, plus generic SDK

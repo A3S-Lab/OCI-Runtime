@@ -358,7 +358,7 @@ impl DevicePlan {
         rootless: bool,
         rootless_mount_descriptors: &[OwnedFd],
     ) -> Result<PreparedDeviceSources> {
-        let target_host_owner = if namespaces.new_user() {
+        let target_host_owner = if namespaces.has_user() {
             Some((
                 namespaces.host_uid(0).ok_or_else(|| {
                     device_error(
@@ -406,12 +406,6 @@ impl DevicePlan {
                 manifest_file: Mutex::new(None),
                 manifest_path: None,
             });
-        }
-        if !namespaces.new_user() && !self.nodes.is_empty() {
-            return Err(unsupported(
-                "linux.devices",
-                "devices in a joined user namespace require externally prepared mount sources",
-            ));
         }
         if self.nodes.is_empty() {
             if !rootless_mount_descriptors.is_empty() {

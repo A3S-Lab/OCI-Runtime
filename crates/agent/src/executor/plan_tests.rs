@@ -659,7 +659,7 @@ fn rootless_planning_retains_normative_default_devices() {
 }
 
 #[test]
-fn joined_user_namespace_does_not_invent_unverifiable_default_devices() {
+fn joined_user_namespace_retains_defaults_for_runtime_authority_resolution() {
     let mut config: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode joined-user configuration");
     config["linux"] = serde_json::json!({
@@ -674,7 +674,8 @@ fn joined_user_namespace_does_not_invent_unverifiable_default_devices() {
 
     assert!(plan.namespaces.has_user());
     assert!(!plan.namespaces.new_user());
-    assert!(!plan.devices.has_node_setup());
+    assert!(plan.devices.has_node_setup());
+    assert_eq!(plan.devices.len(), 6);
 }
 
 #[test]

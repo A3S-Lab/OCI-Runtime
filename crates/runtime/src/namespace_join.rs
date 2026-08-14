@@ -50,7 +50,7 @@ pub(crate) fn build_bundles(
 
     let mut non_mount = base_config.clone();
     replace_linux_profile(&mut non_mount, joined_non_mount_namespaces(donor_pid))?;
-    replace_process_command(&mut non_mount, join_workload_command())?;
+    replace_process_command(&mut non_mount, joined_user_device_workload_command())?;
 
     let mut mount = base_config.clone();
     remove_root_fields(&mut mount, &["hostname", "domainname", "mounts"])?;
@@ -159,6 +159,22 @@ fn join_workload_command() -> String {
     "set -eu; trap 'exit 0' TERM; while :; do /bin/busybox sleep 1; done".into()
 }
 
+fn joined_user_device_workload_command() -> String {
+    "set -eu; \
+     for spec in null:1:3 zero:1:5 full:1:7 random:1:8 urandom:1:9 tty:5:0; do \
+       name=${spec%%:*}; rest=${spec#*:}; major=${rest%%:*}; minor=${rest#*:}; \
+       test \"$(/bin/busybox stat -c %t:%T /dev/$name)\" = \
+         \"$(printf %x $major):$(printf %x $minor)\"; \
+       test \"$(/bin/busybox stat -c %a /dev/$name)\" = 666; \
+       test \"$(/bin/busybox stat -c %u:%g /dev/$name)\" = 0:0; \
+     done; \
+     printf probe > /dev/null; \
+     /bin/busybox head -c 1 /dev/zero > /dev/null; \
+     trap 'exit 0' TERM; \
+     while :; do /bin/busybox sleep 1; done"
+        .into()
+}
+
 fn bundle_from_value(directory: &Path, config: Value) -> Result<OciBundle, String> {
     let config = serde_json::to_string(&config)
         .map_err(|error| format!("failed to encode namespace join config: {error}"))?;
@@ -200,6 +216,10 @@ mod tests {
             .as_str()
             .expect("join command")
             .contains("/bin/busybox sleep 1"));
+        assert!(non_mount["process"]["args"][2]
+            .as_str()
+            .expect("joined-user device command")
+            .contains("stat -c %u:%g"));
 
         let mount: Value = serde_json::from_str(bundles.mount.config_json()).expect("mount JSON");
         assert_eq!(
@@ -214,6 +234,10 @@ mod tests {
             .as_str()
             .expect("mount command")
             .contains("/bin/busybox sleep 1"));
+        assert!(!mount["process"]["args"][2]
+            .as_str()
+            .expect("mount command")
+            .contains("stat -c %u:%g"));
 
         let wrong_type: Value =
             serde_json::from_str(bundles.wrong_type.config_json()).expect("wrong-type JSON");
@@ -249,5 +273,9 @@ mod tests {
             .as_str()
             .expect("host-network command")
             .contains("busybox sleep 1"));
+        assert!(!config["process"]["args"][2]
+            .as_str()
+            .expect("host-network command")
+            .contains("stat -c %u:%g"));
     }
 }

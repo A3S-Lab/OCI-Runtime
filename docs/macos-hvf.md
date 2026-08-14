@@ -570,17 +570,19 @@ target/debug/a3s-oci oci-vm-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.oci-vm-multi-container-smoke.v9` report also requires exact
+The `a3s.oci.oci-vm-multi-container-smoke.v10` report also requires exact
 mutation replay, exact repeated normal-exit results for A and B, independent
 wait/state progress, and an existing-namespace phase. That phase rejects a
 wrong-type descriptor before state, joins donor UTS, IPC, network, cgroup, PID,
-user, and time namespaces while retaining a private mount namespace, then
-joins the donor mount namespace in a second workload. Both workloads must
-cross `exec`, remain running for a bounded observation window, stop with the
-expected status, leave the donor created record unchanged, and remove all
-state. A third workload must create missing directory and file mount targets
-before start and then prove shared rootfs propagation, a distinct read-only
-path, empty read-only masked file and directory replacements, recursive VFS
+user, and time namespaces while retaining a private mount namespace, verifies
+the six default devices with exact type, number, mode, and namespace-root
+ownership, then joins the donor mount namespace in a second workload. Both
+workloads must cross `exec`, remain running for a bounded observation window,
+stop with the expected status, leave the donor created record unchanged, and
+remove all state. A third workload must create missing directory and file
+mount targets before start and then prove shared rootfs propagation, a
+distinct read-only path, empty read-only masked file and directory
+replacements, recursive VFS
 attributes across an rbind submount, explicit `idmap` and `ridmap` ownership
 on detached filesystem mounts, read-only rootfs behavior, an exact normal exit,
 state removal, and host-side fixture cleanup. That workload must also run as

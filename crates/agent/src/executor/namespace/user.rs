@@ -364,7 +364,7 @@ fn verify_mapping_file(path: &Path, kind: &str, expected: &[IdMapping]) -> Resul
     }
 }
 
-fn parse_mapping_file(path: &Path, contents: &str) -> Result<Vec<IdMapping>> {
+pub(super) fn parse_mapping_file(path: &Path, contents: &str) -> Result<Vec<IdMapping>> {
     let mut mappings = contents
         .lines()
         .enumerate()
