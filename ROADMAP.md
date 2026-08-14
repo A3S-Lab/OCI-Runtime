@@ -1541,7 +1541,10 @@ generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
 force Delete identity as a completed remote effect. It then finishes local
 metadata, rootfs, and bundle cleanup without touching caller-owned container
-metadata; unconfirmed state loss fails closed. The
+metadata; unconfirmed state loss fails closed. A post-commit Kill boundary also
+submits the exact stable SIGSTOP mutation against a running generation, kills
+the shim while the stopped process remains live, and proves bounded cleanup
+delivers the terminal signal and reaps the exact PID. The
 qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, or bundle. The R7 items remain open until the version and

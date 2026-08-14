@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Start/Delete, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Start/Kill/Delete, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -158,6 +158,12 @@ runtime reports that generation Running. DeleteShim must bound its kill/wait
 path, force-delete only that generation, and leave no process, runtime state,
 bundle, or shim while preserving containerd-owned metadata.
 
+The post-commit Kill gate submits the exact stable SIGSTOP mutation to a
+running generation, verifies that the runtime retains the same live PID, and
+kills the shim before local state observes that mutation. DeleteShim must send
+the terminal signal, bound its wait, reap that exact PID, and remove the exact
+generation without touching containerd-owned metadata.
+
 The post-commit Delete gate stops the task, submits the shim's exact stable
 StoppedOnly Delete identity directly to the runtime, and kills the shim while
 its durable local metadata and rootfs ownership still exist. DeleteShim must
@@ -195,7 +201,7 @@ test fails if any matching task or container remains.
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
 - extend forced cleanup from the qualified in-flight Create and post-commit
-  Start/Delete boundaries to every remaining lifecycle and process-I/O
+  Start/Kill/Delete boundaries to every remaining lifecycle and process-I/O
   mutation boundary;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
