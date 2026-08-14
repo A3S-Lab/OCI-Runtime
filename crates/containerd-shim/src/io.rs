@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::adapter::{RuntimeAdapter, TaskIdentity};
+use crate::adapter::{ExecIdentity, RuntimeAdapter, TaskIdentity};
 use crate::metadata::{PendingStdinWrite, StdinCloseState};
 
 const FIFO_BUFFER_BYTES: usize = 64 * 1024;
@@ -79,7 +79,7 @@ struct StdinCloseRequest<'a> {
     adapter: &'a RuntimeAdapter,
     task: &'a TaskIdentity,
     generation: Generation,
-    exec_id: Option<&'a str>,
+    exec_id: Option<&'a ExecIdentity>,
     target: &'a a3s_oci_sdk::ProcessTarget,
     journal: Option<&'a dyn StdinJournal>,
 }
@@ -88,7 +88,7 @@ struct RestoredStdinClose {
     adapter: RuntimeAdapter,
     task: TaskIdentity,
     generation: Generation,
-    exec_id: Option<String>,
+    exec_id: Option<ExecIdentity>,
     target: a3s_oci_sdk::ProcessTarget,
     journal: Option<Arc<dyn StdinJournal>>,
 }
@@ -230,11 +230,11 @@ pub(crate) fn start_process_pumps(
     adapter: RuntimeAdapter,
     task: TaskIdentity,
     generation: Generation,
-    exec_id: Option<String>,
+    exec_id: Option<ExecIdentity>,
     endpoints: ProcessIoEndpoints<'_>,
 ) -> Result<ProcessPumps, RuntimeError> {
     validate_process_io_endpoints(&endpoints)?;
-    let target = adapter.process_target(&task, generation, exec_id.as_deref())?;
+    let target = adapter.process_target(&task, generation, exec_id.as_ref())?;
     let cancellation = PumpCancellation::new();
     let (failure_sender, failures) = mpsc::unbounded_channel();
     let mut tasks = Vec::new();
@@ -439,7 +439,7 @@ async fn pump_stdin(
     adapter: RuntimeAdapter,
     task: TaskIdentity,
     generation: Generation,
-    exec_id: Option<String>,
+    exec_id: Option<ExecIdentity>,
     target: a3s_oci_sdk::ProcessTarget,
     fifo: AsyncFd<File>,
     mut cancelled: watch::Receiver<bool>,
@@ -465,7 +465,7 @@ async fn pump_stdin(
             &adapter,
             &task,
             generation,
-            exec_id.as_deref(),
+            exec_id.as_ref(),
             &target,
             &mut sequence,
             &pending,
@@ -483,7 +483,7 @@ async fn pump_stdin(
                             &adapter,
                             &task,
                             generation,
-                            exec_id.as_deref(),
+                            exec_id.as_ref(),
                             &target,
                             &mut sequence,
                             &buffer[..length],
@@ -506,7 +506,7 @@ async fn pump_stdin(
                                 adapter: &adapter,
                                 task: &task,
                                 generation,
-                                exec_id: exec_id.as_deref(),
+                                exec_id: exec_id.as_ref(),
                                 target: &target,
                                 journal: stdin_journal.as_deref(),
                             },
@@ -529,7 +529,7 @@ async fn pump_stdin(
                         &adapter,
                         &task,
                         generation,
-                        exec_id.as_deref(),
+                        exec_id.as_ref(),
                         &target,
                         &mut sequence,
                         &buffer[..length],
@@ -545,7 +545,7 @@ async fn pump_stdin(
                             adapter: &adapter,
                             task: &task,
                             generation,
-                            exec_id: exec_id.as_deref(),
+                            exec_id: exec_id.as_ref(),
                             target: &target,
                             journal: stdin_journal.as_deref(),
                         },
@@ -584,7 +584,7 @@ async fn pump_stdin(
                     adapter: &adapter,
                     task: &task,
                     generation,
-                    exec_id: exec_id.as_deref(),
+                    exec_id: exec_id.as_ref(),
                     target: &target,
                     journal: stdin_journal.as_deref(),
                 },
@@ -597,7 +597,7 @@ async fn pump_stdin(
             &adapter,
             &task,
             generation,
-            exec_id.as_deref(),
+            exec_id.as_ref(),
             &target,
             &mut sequence,
             &buffer[..length],
@@ -674,7 +674,7 @@ async fn write_stdin_chunk(
     adapter: &RuntimeAdapter,
     task: &TaskIdentity,
     generation: Generation,
-    exec_id: Option<&str>,
+    exec_id: Option<&ExecIdentity>,
     target: &a3s_oci_sdk::ProcessTarget,
     sequence: &mut u64,
     data: &[u8],
@@ -710,7 +710,7 @@ async fn replay_stdin_write(
     adapter: &RuntimeAdapter,
     task: &TaskIdentity,
     generation: Generation,
-    exec_id: Option<&str>,
+    exec_id: Option<&ExecIdentity>,
     target: &a3s_oci_sdk::ProcessTarget,
     sequence: &mut u64,
     pending: &PendingStdinWrite,
@@ -757,7 +757,7 @@ async fn dispatch_stdin_write(
     adapter: &RuntimeAdapter,
     task: &TaskIdentity,
     generation: Generation,
-    exec_id: Option<&str>,
+    exec_id: Option<&ExecIdentity>,
     target: &a3s_oci_sdk::ProcessTarget,
     sequence: u64,
     data: &[u8],
@@ -872,7 +872,7 @@ async fn finish_stdin_close(
             adapter: &request.adapter,
             task: &request.task,
             generation: request.generation,
-            exec_id: request.exec_id.as_deref(),
+            exec_id: request.exec_id.as_ref(),
             target: &request.target,
             journal: request.journal.as_deref(),
         },

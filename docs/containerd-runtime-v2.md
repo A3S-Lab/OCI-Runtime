@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty, sequenced committed SignalProcess replay, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, deleted exec-ID reuse, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty, sequenced committed SignalProcess replay, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -19,25 +19,25 @@ the packaged shim, SDK, host service, agent, and selected driver.
 
 The August 14, 2026 arm64 requalification used containerd 2.2.2 and the
 release-built shim SHA-256
-`25d12487f51e68ef176fbf7e8b62bd769b1cf149df9fb9b926916aca4b6c89ed`.
+`9b5978d9d9c2b88634115864d2010e949a377b45f5722c55e54f6e331ee7ac6f`.
 The host CLI, agent, and qualification executable SHA-256 values were
 `9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
 `0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
-and `2e3c0f2111b7f52d6eaf5acd46c6c9986f9ca4ed3cf1532f699917db6ce1207e`.
-The 46.89-second matrix passed two distinct resource updates, two complete
-pause/resume cycles, durable terminal stdin before and after live shim
-replacement, replay of a remotely committed write whose exact payload was
-still locally pending, replay of a remotely committed CloseStdin while the
-shim still recorded Closing, replay of a remotely committed SignalProcess
-while schema-v7 metadata retained its exact sequence and signal as pending,
-and replay of a remotely committed ResizePty while that metadata retained its
-sequence and size as pending. The replacement proved the real process moved
-through `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` with four distinct identities,
-suppressed an identical resize retry, and proved a real `A→B→A` PTY transition
-with distinct identities. It then passed every retained restart and shim-crash
-boundary. An independent post-run audit found no task, container, shim,
-qualification process, bundle, active runtime container, session, marker,
-workload process, workload cgroup member, or zombie left behind.
+and `90a6e92260ec121f7cddca2dbe5db167ef864cd0a405f08665d1b4c2082ccc1d`.
+The 48.29-second matrix ran an exec to exit 7, deleted it, reused the same
+containerd exec ID, restarted containerd while the replacement was Added, and
+observed exit 23 from the new process. It also passed two distinct resource
+updates, two complete pause/resume cycles, durable terminal stdin before and
+after live shim replacement, and replay of remotely committed WriteStdin,
+CloseStdin, SignalProcess, and ResizePty operations while schema-v8 metadata
+still held the corresponding pending request. The replacement proved the real
+process moved through `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` with four distinct
+identities, suppressed an identical resize retry, and proved a real `A→B→A`
+PTY transition with distinct identities. It then passed every retained
+restart and shim-crash boundary. An independent post-run audit reported zero
+tasks, containers, task bundles, runtime container records, and shim
+processes; containerd remained active and the one expected host service
+remained live.
 
 ## Runtime type and package layout
 
@@ -86,34 +86,45 @@ containerd and the SDK keep separate identity domains:
 | containerd namespace + task ID | `ctrd-` plus a length-framed SHA-256 digest; stable and bounded |
 | New containerd task incarnation | Random 32-byte value stored as 64 lowercase hexadecimal characters in the shim bundle |
 | Runtime create | Monotonic runtime generation returned by the host service |
-| namespace + task ID + exec ID | `exec-` plus a length-framed SHA-256 digest |
-| Mutation | `ctrd-op-` plus namespace, task ID, incarnation, optional exec ID, and action digest |
+| namespace + task ID + exec ID + exec incarnation | `exec-` plus a length-framed SHA-256 digest |
+| Mutation | `ctrd-op-` plus namespace, task ID, task incarnation, optional exec ID and exec incarnation, and action digest |
 
 Recreating the same namespace and task ID intentionally keeps the derived SDK
 container ID while allocating a new incarnation and runtime generation. The
 new incarnation prevents a replay from the deleted task from matching a new
 mutation. Every live request carries the exact runtime generation.
 
+Each successful containerd `Exec` allocation increments a durable per-task
+sequence and assigns that value as the exec incarnation. `DeleteProcess`
+removes the current exec record but retains the sequence. Reusing the same
+containerd exec ID therefore produces a different SDK process identity and a
+fresh set of exec-scoped mutation identities, including after shim or
+containerd restart.
+
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v7 records the last completed init and exec stdin
-sequence, an optional in-flight sequence plus its exact bounded payload, the
-Open, Closing, or Closed state of each stdin stream, and the last output cursor
-only after the corresponding FIFO write succeeds. For each terminal process it
-also records a separate completed resize sequence, one pending size, and the
-last committed size. Init and every exec also have an independent completed
-signal sequence plus one pending signal and the init-only `all` flag. The task
-record also stores the last completed per-task control sequence, an optional
-in-flight Pause, Resume, or Update, and the last completed Update request
-digest. Schema-v1 records default input sequences, output cursors, and control
-state to empty. Schema-v2 records preserve output cursors, schema-v3 adds the
-control journal, schema-v4 adds sequenced writes, schema-v5 adds durable stdin
-close state, schema-v6 adds durable terminal resize state, and schema-v7 adds
-durable init and exec signal state. Schemas v1
+any drift. Metadata schema v8 records the last allocated task exec sequence
+and every current exec incarnation. It also retains the last completed init
+and exec stdin sequence, an optional in-flight sequence plus its exact bounded
+payload, the Open, Closing, or Closed state of each stdin stream, and the last
+output cursor only after the corresponding FIFO write succeeds. For each
+terminal process it records a separate completed resize sequence, one pending
+size, and the last committed size. Init and every exec also have an independent
+completed signal sequence plus one pending signal and the init-only `all`
+flag. The task record stores the last completed per-task control sequence, an
+optional in-flight Pause, Resume, or Update, and the last completed Update
+request digest. Schema-v1 records default input sequences, output cursors, and
+control state to empty. Schema-v2 records preserve output cursors, schema-v3
+adds the control journal, schema-v4 adds sequenced writes, schema-v5 adds
+durable stdin close state, schema-v6 adds durable terminal resize state,
+schema-v7 adds durable init and exec signal state, and schema-v8 adds exec
+incarnations. Schemas v1
 through v4 default stdin close state to Open. Schemas v1 through v5 default
 resize state to empty. Schemas v1 through v6 default signal state to empty,
-and every legacy schema is rewritten as schema v7 on the next metadata commit.
+and schemas v1 through v7 default exec incarnations to zero. Incarnation zero
+preserves the legacy process and operation identity encoding. Every legacy
+schema is rewritten as schema v8 on the next metadata commit.
 
 Before dispatching Create, the shim separately commits a schema-v1 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
@@ -136,8 +147,8 @@ driver implementation.
 | Get | Exact-generation `state` or `process` plus durable exit evidence |
 | Wait | `wait` or `wait_process` |
 | Kill | `kill` for init, `signal_process` for exec |
-| Delete / DeleteProcess | Stopped lifecycle `delete` or exec metadata removal |
-| Exec | Decode the OCI `Process`, reserve its identity, then `exec` on Start |
+| Delete / DeleteProcess | Stopped lifecycle `delete`, or durable removal of the current exec while retaining its allocation sequence |
+| Exec | Decode the OCI `Process`, durably allocate a fresh incarnation, then `exec` on Start |
 | ResizePty | Exact-process `resize` |
 | CloseIO | Drain the FIFO and call `close_stdin` once |
 | Pause / Resume | `pause` / `resume` |
@@ -229,6 +240,12 @@ while an exec is Added, Running, and Stopped; while a terminal exec is Running;
 and while four independent tasks are Running. PID, terminal mode, exit status,
 incarnation, and runtime generation must not drift.
 
+The exec-reuse gate starts `restart-exec`, observes exit 7, deletes that exec,
+and adds `restart-exec` again. It restarts containerd before the second Start,
+then requires a new SDK process identity and exit 23 from the replacement.
+The deleted incarnation must not replay its Exec operation or publish a late
+exit into the replacement.
+
 The gate also suspends containerd, kills the live shim, starts a replacement
 shim from the same bundle and socket, kills the suspended daemon, and restarts
 containerd. A live terminal exec must retain its workload PID, incarnation,
@@ -316,7 +333,7 @@ a replacement can never be mistaken for the deleted task.
 
 The test is ignored because it is destructive: it requires root, restarts
 containerd repeatedly, sends `SIGKILL`, and creates temporary tasks and
-containers with an `a3s-r7-` prefix.
+containers with an `a3s-r8-` prefix.
 
 ```bash
 cargo test -p a3s-oci-containerd-shim \

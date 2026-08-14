@@ -180,12 +180,28 @@ pub(super) async fn dispatch(
     exec_id: Option<&str>,
     operation: &PendingResize,
 ) -> Result<(), RuntimeError> {
-    let target = adapter.process_target(&task.identity, task.record.generation, exec_id)?;
+    let exec_identity = exec_id
+        .map(|exec_id| {
+            task.execs
+                .get(exec_id)
+                .ok_or_else(|| {
+                    resize_error(format!(
+                        "containerd exec {exec_id} disappeared before resize dispatch"
+                    ))
+                })?
+                .identity(exec_id)
+        })
+        .transpose()?;
+    let target = adapter.process_target(
+        &task.identity,
+        task.record.generation,
+        exec_identity.as_ref(),
+    )?;
     let result = adapter
         .resize(
             &task.identity,
             task.record.generation,
-            exec_id,
+            exec_identity.as_ref(),
             operation.sequence(),
             operation.size(),
         )

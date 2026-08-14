@@ -34,21 +34,30 @@ pub(crate) fn containerd_exec_operation_id(
     task_id: &str,
     incarnation: &str,
     exec_id: &str,
+    exec_incarnation: u64,
     action: &str,
 ) -> TestResult<OperationId> {
-    operation_id(namespace, task_id, incarnation, Some(exec_id), action)
+    operation_id(
+        namespace,
+        task_id,
+        incarnation,
+        Some((exec_id, exec_incarnation)),
+        action,
+    )
 }
 
 pub(crate) fn containerd_process_id(
     namespace: &str,
     task_id: &str,
     exec_id: &str,
+    exec_incarnation: u64,
 ) -> TestResult<ProcessId> {
-    ProcessId::new(format!(
-        "exec-{}",
-        digest_components(&[namespace, task_id, exec_id])
-    ))
-    .map_err(|error| {
+    let incarnation = exec_incarnation.to_be_bytes();
+    let mut components = vec![namespace.as_bytes(), task_id.as_bytes(), exec_id.as_bytes()];
+    if exec_incarnation != 0 {
+        components.push(&incarnation);
+    }
+    ProcessId::new(format!("exec-{}", digest_components(&components))).map_err(|error| {
         qualification_error(format!(
             "derive stable containerd process identity for {exec_id}: {error}"
         ))
@@ -60,14 +69,22 @@ fn operation_id(
     namespace: &str,
     task_id: &str,
     incarnation: &str,
-    exec_id: Option<&str>,
+    exec: Option<(&str, u64)>,
     action: &str,
 ) -> TestResult<OperationId> {
-    let mut components = vec![namespace, task_id, incarnation];
-    if let Some(exec_id) = exec_id {
-        components.push(exec_id);
+    let exec_incarnation = exec.map_or(0, |(_, incarnation)| incarnation).to_be_bytes();
+    let mut components = vec![
+        namespace.as_bytes(),
+        task_id.as_bytes(),
+        incarnation.as_bytes(),
+    ];
+    if let Some((exec_id, incarnation)) = exec {
+        components.push(exec_id.as_bytes());
+        if incarnation != 0 {
+            components.push(&exec_incarnation);
+        }
     }
-    components.push(action);
+    components.push(action.as_bytes());
     OperationId::new(format!("ctrd-op-{}", digest_components(&components))).map_err(|error| {
         qualification_error(format!(
             "derive stable containerd {action} operation identity: {error}"
@@ -76,11 +93,11 @@ fn operation_id(
     })
 }
 
-fn digest_components(components: &[&str]) -> String {
+fn digest_components(components: &[&[u8]]) -> String {
     let mut digest = Sha256::new();
     for component in components {
         digest.update((component.len() as u64).to_be_bytes());
-        digest.update(component.as_bytes());
+        digest.update(component);
     }
     format!("{:x}", digest.finalize())
 }

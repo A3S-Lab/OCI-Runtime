@@ -443,14 +443,14 @@ async fn finish_rehydrated_terminal_exec(
         qualification_error("rehydrated terminal stdin path has no bundle parent")
     })?;
     let restored_journal = read_exec_stdin_journal(bundle, exec_id).await?;
-    if restored_journal.schema_version != 7
+    if restored_journal.schema_version != 8
         || restored_journal.completed_sequence != 3
         || restored_journal.pending.is_some()
         || restored_journal.close_state != "open"
         || restored_journal.output_cursor == 0
     {
         return Err(qualification_error(format!(
-            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 7, completed sequence 3, no pending write, open stdin, and a nonzero output cursor"
+            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 8, completed sequence 3, no pending write, open stdin, and a nonzero output cursor"
         ))
         .into());
     }
@@ -683,6 +683,7 @@ async fn commit_runtime_exec_stdin(
             task_id,
             &identity.incarnation,
             exec_id,
+            1,
             &format!("write-stdin-{sequence}"),
         )?),
         process: ProcessTarget {
@@ -690,7 +691,7 @@ async fn commit_runtime_exec_stdin(
                 identity.container_id.clone(),
                 Generation(identity.generation),
             ),
-            process_id: faults::containerd_process_id(&config.namespace, task_id, exec_id)?,
+            process_id: faults::containerd_process_id(&config.namespace, task_id, exec_id, 1)?,
         },
         data: data.to_vec(),
     };

@@ -52,14 +52,24 @@ impl IncarnationId {
 pub(crate) fn container_id(namespace: &str, task_id: &str) -> Result<ContainerId> {
     ContainerId::new(format!(
         "{CONTAINER_PREFIX}{}",
-        digest_components(&[namespace, task_id])
+        digest_components(&[namespace.as_bytes(), task_id.as_bytes()])
     ))
 }
 
-pub(crate) fn process_id(namespace: &str, task_id: &str, exec_id: &str) -> Result<ProcessId> {
+pub(crate) fn process_id(
+    namespace: &str,
+    task_id: &str,
+    exec_id: &str,
+    exec_incarnation: u64,
+) -> Result<ProcessId> {
+    let incarnation = exec_incarnation.to_be_bytes();
+    let mut components = vec![namespace.as_bytes(), task_id.as_bytes(), exec_id.as_bytes()];
+    if exec_incarnation != 0 {
+        components.push(&incarnation);
+    }
     ProcessId::new(format!(
         "{PROCESS_PREFIX}{}",
-        digest_components(&[namespace, task_id, exec_id])
+        digest_components(&components)
     ))
 }
 
@@ -67,28 +77,32 @@ pub(crate) fn operation(
     namespace: &str,
     task_id: &str,
     incarnation: Option<&IncarnationId>,
-    exec_id: Option<&str>,
+    exec: Option<(&str, u64)>,
     action: &str,
 ) -> Result<OperationContext> {
-    let mut components = vec![namespace, task_id];
+    let exec_incarnation = exec.map_or(0, |(_, incarnation)| incarnation).to_be_bytes();
+    let mut components = vec![namespace.as_bytes(), task_id.as_bytes()];
     if let Some(incarnation) = incarnation {
-        components.push(incarnation.as_str());
+        components.push(incarnation.as_str().as_bytes());
     }
-    if let Some(exec_id) = exec_id {
-        components.push(exec_id);
+    if let Some((exec_id, incarnation)) = exec {
+        components.push(exec_id.as_bytes());
+        if incarnation != 0 {
+            components.push(&exec_incarnation);
+        }
     }
-    components.push(action);
+    components.push(action.as_bytes());
     Ok(OperationContext::new(OperationId::new(format!(
         "{OPERATION_PREFIX}{}",
         digest_components(&components)
     ))?))
 }
 
-fn digest_components(components: &[&str]) -> String {
+fn digest_components(components: &[&[u8]]) -> String {
     let mut digest = Sha256::new();
     for component in components {
         digest.update((component.len() as u64).to_be_bytes());
-        digest.update(component.as_bytes());
+        digest.update(component);
     }
     format!("{:x}", digest.finalize())
 }
@@ -116,16 +130,28 @@ mod tests {
             .expect("start operation");
         let kill = operation("k8s.io", "task", Some(&incarnation), None, "kill-15")
             .expect("kill operation");
-        let exec = operation("k8s.io", "task", Some(&incarnation), Some("shell"), "start")
-            .expect("exec operation");
+        let exec = operation(
+            "k8s.io",
+            "task",
+            Some(&incarnation),
+            Some(("shell", 1)),
+            "start",
+        )
+        .expect("exec operation");
 
         assert_ne!(start.operation_id, kill.operation_id);
         assert_ne!(start.operation_id, exec.operation_id);
         assert_eq!(
             exec.operation_id,
-            operation("k8s.io", "task", Some(&incarnation), Some("shell"), "start",)
-                .expect("replay")
-                .operation_id
+            operation(
+                "k8s.io",
+                "task",
+                Some(&incarnation),
+                Some(("shell", 1)),
+                "start",
+            )
+            .expect("replay")
+            .operation_id
         );
     }
 
@@ -155,9 +181,48 @@ mod tests {
 
     #[test]
     fn process_identity_does_not_embed_untrusted_path_text() {
-        let process = process_id("k8s.io", "../task", "exec/../../x").expect("process ID");
+        let process = process_id("k8s.io", "../task", "exec/../../x", 1).expect("process ID");
         assert!(process.as_str().starts_with(PROCESS_PREFIX));
         assert!(!process.as_str().contains('/'));
         assert!(!process.as_str().contains(".."));
+    }
+
+    #[test]
+    fn deleted_exec_id_reuse_allocates_fresh_process_and_operation_identities() {
+        let task_incarnation =
+            IncarnationId::new("03".repeat(INCARNATION_BYTES)).expect("task incarnation");
+        let first_process = process_id("default", "task", "shell", 1).expect("first process");
+        let second_process = process_id("default", "task", "shell", 2).expect("second process");
+        let first_operation = operation(
+            "default",
+            "task",
+            Some(&task_incarnation),
+            Some(("shell", 1)),
+            "exec",
+        )
+        .expect("first operation");
+        let second_operation = operation(
+            "default",
+            "task",
+            Some(&task_incarnation),
+            Some(("shell", 2)),
+            "exec",
+        )
+        .expect("second operation");
+
+        assert_ne!(first_process, second_process);
+        assert_ne!(first_operation.operation_id, second_operation.operation_id);
+    }
+
+    #[test]
+    fn zero_exec_incarnation_preserves_the_legacy_identity_encoding() {
+        let legacy = process_id("default", "task", "shell", 0).expect("legacy process");
+        let expected = ProcessId::new(format!(
+            "{PROCESS_PREFIX}{}",
+            digest_components(&[b"default", b"task", b"shell"])
+        ))
+        .expect("expected legacy process");
+
+        assert_eq!(legacy, expected);
     }
 }

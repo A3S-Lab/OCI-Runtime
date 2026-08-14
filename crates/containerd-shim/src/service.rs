@@ -15,7 +15,7 @@ use containerd_shim::{Config, Error, Flags, StartOpts, TtrpcResult};
 use containerd_shim_protos::{api, protobuf, ttrpc};
 use tokio::sync::{Mutex, Notify};
 
-use crate::adapter::{self, RuntimeAdapter, TaskIdentity};
+use crate::adapter::{self, ExecIdentity, RuntimeAdapter, TaskIdentity};
 use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
 use crate::metadata::{
     ControlOperationKind, ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata,
@@ -64,11 +64,13 @@ struct TaskState {
     record: ContainerRecord,
     exit: Option<ExitStatus>,
     exited_at: Option<SystemTime>,
+    exec_sequence: u64,
     execs: BTreeMap<String, ExecState>,
 }
 
 #[derive(Debug, Clone)]
 struct ExecState {
+    incarnation: u64,
     process: Process,
     stdin: String,
     stdout: String,
@@ -89,6 +91,12 @@ struct ExecState {
     record: Option<ProcessRecord>,
     exit: Option<ExitStatus>,
     exited_at: Option<SystemTime>,
+}
+
+impl ExecState {
+    fn identity(&self, exec_id: &str) -> Result<ExecIdentity, RuntimeError> {
+        ExecIdentity::new(exec_id, self.incarnation)
+    }
 }
 
 #[derive(Default)]
@@ -663,12 +671,14 @@ impl Service {
             exited_at: metadata
                 .exited_at_unix_nanos()
                 .and_then(system_time_from_unix_nanos),
+            exec_sequence: metadata.exec_sequence(),
             execs: BTreeMap::new(),
         };
         for exec in metadata.execs() {
             task.execs.insert(
                 exec.exec_id.clone(),
                 ExecState {
+                    incarnation: exec.incarnation,
                     process: exec.process.clone(),
                     stdin: exec.stdin.clone(),
                     stdout: exec.stdout.clone(),
@@ -735,8 +745,9 @@ impl Service {
             })?;
             if matches!(exec.stage, ExecStage::Starting | ExecStage::Started) && exec.exit.is_none()
             {
+                let exec_identity = exec.identity(&exec_id)?;
                 let process = match adapter
-                    .process(&identity, task.record.generation, &exec_id)
+                    .process(&identity, task.record.generation, &exec_identity)
                     .await
                 {
                     Ok(process) => process,
@@ -745,7 +756,7 @@ impl Service {
                             .exec(
                                 &identity,
                                 task.record.generation,
-                                &exec_id,
+                                &exec_identity,
                                 exec.process.clone(),
                                 adapter::process_io(
                                     exec.terminal,
@@ -780,7 +791,7 @@ impl Service {
                     adapter.clone(),
                     identity.clone(),
                     task.record.generation,
-                    Some(exec_id.clone()),
+                    Some(exec_identity),
                     ProcessIoEndpoints {
                         stdin: &pump_exec.stdin,
                         stdout: &pump_exec.stdout,
@@ -1063,6 +1074,29 @@ impl Service {
 
     async fn ensure_exit_monitor(&self, task_id: &str, exec_id: Option<&str>) {
         let key = Self::pump_key(task_id, exec_id);
+        let exec_identity = match exec_id {
+            Some(exec_id) => {
+                let identity = self
+                    .state
+                    .lock()
+                    .await
+                    .tasks
+                    .get(task_id)
+                    .and_then(|task| task.execs.get(exec_id))
+                    .map(|exec| exec.identity(exec_id));
+                match identity {
+                    Some(Ok(identity)) => Some(identity),
+                    Some(Err(error)) => {
+                        log::warn!(
+                            "could not monitor containerd task {task_id} exec {exec_id}: {error}"
+                        );
+                        return;
+                    }
+                    None => return,
+                }
+            }
+            None => None,
+        };
         let mut monitors = self.monitors.lock().await;
         if monitors.contains_key(&key) {
             return;
@@ -1078,26 +1112,40 @@ impl Service {
             }
             let task_id = key.0;
             let exec_id = (!key.1.is_empty()).then_some(key.1);
-            let result = service.observe_exit(&task_id, exec_id.as_deref()).await;
+            let result = service.observe_exit(&task_id, exec_identity.as_ref()).await;
+            let owned = {
+                let mut monitors = service.monitors.lock().await;
+                remove_monitor_if_owner(
+                    &mut monitors,
+                    &Self::pump_key(&task_id, exec_id.as_deref()),
+                    &task_owner,
+                )
+            };
             if let Err(error) = result {
+                if !owned {
+                    return;
+                }
                 log::warn!(
                     "containerd exit monitor failed for task {task_id} exec {:?}: {error}",
                     exec_id
                 );
-                service
-                    .state
-                    .lock()
-                    .await
-                    .wait_errors
-                    .insert(Self::pump_key(&task_id, exec_id.as_deref()), error);
-                service.exit_notify.notify_waiters();
+                let mut state = service.state.lock().await;
+                let still_current = match exec_identity.as_ref() {
+                    None => state.tasks.contains_key(&task_id),
+                    Some(identity) => state
+                        .tasks
+                        .get(&task_id)
+                        .and_then(|task| task.execs.get(identity.exec_id()))
+                        .is_some_and(|exec| exec.incarnation == identity.incarnation()),
+                };
+                if still_current {
+                    state
+                        .wait_errors
+                        .insert(Self::pump_key(&task_id, exec_id.as_deref()), error);
+                    drop(state);
+                    service.exit_notify.notify_waiters();
+                }
             }
-            let mut monitors = service.monitors.lock().await;
-            remove_monitor_if_owner(
-                &mut monitors,
-                &Self::pump_key(&task_id, exec_id.as_deref()),
-                &task_owner,
-            );
         });
         monitors.insert(
             monitor_key,
@@ -1109,10 +1157,14 @@ impl Service {
         let _ = start_sender.send(());
     }
 
-    async fn observe_exit(&self, task_id: &str, exec_id: Option<&str>) -> TtrpcResult<()> {
+    async fn observe_exit(
+        &self,
+        task_id: &str,
+        exec_identity: Option<&ExecIdentity>,
+    ) -> TtrpcResult<()> {
         let snapshot = self.task_snapshot(task_id).await?;
         let adapter = self.adapter().await.map_err(runtime_error)?;
-        let (exit, pid) = match exec_id {
+        let (exit, pid) = match exec_identity {
             None => (
                 adapter
                     .wait(&snapshot.identity, snapshot.record.generation)
@@ -1120,14 +1172,29 @@ impl Service {
                     .map_err(runtime_error)?,
                 record_pid(&snapshot.record),
             ),
-            Some(exec_id) => {
+            Some(exec_identity) => {
+                let exec_id = exec_identity.exec_id();
                 let exec = snapshot
                     .execs
                     .get(exec_id)
                     .ok_or_else(|| ttrpc_not_found(format!("unknown exec {exec_id}")))?;
+                if exec.incarnation != exec_identity.incarnation() {
+                    return Err(ttrpc::Error::RpcStatus(ttrpc::get_status(
+                        ttrpc::Code::ABORTED,
+                        format!(
+                            "exec {exec_id} incarnation {} was replaced by incarnation {}",
+                            exec_identity.incarnation(),
+                            exec.incarnation
+                        ),
+                    )));
+                }
                 (
                     adapter
-                        .wait_process(&snapshot.identity, snapshot.record.generation, exec_id)
+                        .wait_process(
+                            &snapshot.identity,
+                            snapshot.record.generation,
+                            exec_identity,
+                        )
                         .await
                         .map_err(runtime_error)?,
                     exec.record
@@ -1137,25 +1204,27 @@ impl Service {
                 )
             }
         };
-        self.record_exit(task_id, exec_id, exit, pid).await?;
+        self.record_exit(task_id, exec_identity, exit, pid).await?;
         Ok(())
     }
 
     async fn record_exit(
         &self,
         task_id: &str,
-        exec_id: Option<&str>,
+        exec_identity: Option<&ExecIdentity>,
         exit: ExitStatus,
         pid: u32,
     ) -> TtrpcResult<(u32, SystemTime)> {
+        let _metadata_guard = self.metadata_gate.lock().await;
+        let exec_id = exec_identity.map(ExecIdentity::exec_id);
         let code = adapter::exit_code(&exit);
-        let (exited_at, first_observation) = {
+        let (snapshot, exited_at, first_observation) = {
             let mut state = self.state.lock().await;
             let task = state
                 .tasks
                 .get_mut(task_id)
                 .ok_or_else(|| ttrpc_not_found(format!("unknown task {task_id}")))?;
-            match exec_id {
+            let (exited_at, first_observation) = match exec_identity {
                 None => {
                     let first_observation = task.exit.is_none();
                     if task.exit.as_ref().is_some_and(|stored| stored != &exit) {
@@ -1167,11 +1236,22 @@ impl Service {
                     task.exit = Some(exit);
                     (exited_at, first_observation)
                 }
-                Some(exec_id) => {
+                Some(exec_identity) => {
+                    let exec_id = exec_identity.exec_id();
                     let exec = task
                         .execs
                         .get_mut(exec_id)
                         .ok_or_else(|| ttrpc_not_found(format!("unknown exec {exec_id}")))?;
+                    let expected_incarnation = exec_identity.incarnation();
+                    if exec.incarnation != expected_incarnation {
+                        return Err(ttrpc::Error::RpcStatus(ttrpc::get_status(
+                            ttrpc::Code::ABORTED,
+                            format!(
+                                "exec {exec_id} incarnation {expected_incarnation} was replaced by incarnation {}",
+                                exec.incarnation
+                            ),
+                        )));
+                    }
                     let first_observation = exec.exit.is_none();
                     if exec.exit.as_ref().is_some_and(|stored| stored != &exit) {
                         return Err(ttrpc_error(format!(
@@ -1183,9 +1263,12 @@ impl Service {
                     exec.exit = Some(exit);
                     (exited_at, first_observation)
                 }
-            }
+            };
+            (task.clone(), exited_at, first_observation)
         };
-        self.persist_task(task_id).await?;
+        metadata_from_task(&snapshot)
+            .store()
+            .map_err(runtime_error)?;
         if first_observation {
             self.publish_exit(task_id, exec_id, pid, code, exited_at)
                 .await;
@@ -1687,6 +1770,7 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
         task.exit.clone(),
         task.exited_at.and_then(system_time_to_unix_nanos),
     );
+    metadata.set_exec_sequence(task.exec_sequence);
     metadata.set_execs(
         task.execs
             .iter()
@@ -1699,6 +1783,7 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
                     exec.stderr.clone(),
                     exec.terminal,
                 );
+                metadata.incarnation = exec.incarnation;
                 metadata.record = exec.record.clone();
                 metadata.stage = exec.stage;
                 metadata.stdin_sequence = exec.stdin_sequence;

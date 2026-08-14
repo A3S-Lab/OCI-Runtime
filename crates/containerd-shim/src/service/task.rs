@@ -194,6 +194,7 @@ impl Task for Service {
             record: record.clone(),
             exit: None,
             exited_at: None,
+            exec_sequence: 0,
             execs: BTreeMap::new(),
         };
         let mut state = self.state.lock().await;
@@ -282,6 +283,7 @@ impl Task for Service {
                 .get(&exec_id)
                 .cloned()
                 .ok_or_else(|| ttrpc_error(format!("unknown exec {exec_id}")))?;
+            let exec_identity = exec.identity(&exec_id).map_err(runtime_error)?;
             if exec.stage == ExecStage::Exited {
                 return Err(ttrpc::Error::RpcStatus(ttrpc::get_status(
                     ttrpc::Code::FAILED_PRECONDITION,
@@ -301,7 +303,11 @@ impl Task for Service {
                 self.persist_task(&task_id).await?;
             }
             let process = match adapter
-                .process(&snapshot.identity, snapshot.record.generation, &exec_id)
+                .process(
+                    &snapshot.identity,
+                    snapshot.record.generation,
+                    &exec_identity,
+                )
                 .await
             {
                 Ok(process) => process,
@@ -309,7 +315,7 @@ impl Task for Service {
                     .exec(
                         &snapshot.identity,
                         snapshot.record.generation,
-                        &exec_id,
+                        &exec_identity,
                         exec.process,
                         adapter::process_io(
                             exec.terminal,
@@ -335,7 +341,7 @@ impl Task for Service {
                         adapter.clone(),
                         snapshot.identity.clone(),
                         snapshot.record.generation,
-                        Some(exec_id.clone()),
+                        Some(exec_identity.clone()),
                         ProcessIoEndpoints {
                             stdin: &exec.stdin,
                             stdout: &exec.stdout,
@@ -369,10 +375,19 @@ impl Task for Service {
                     pumps.stop().await;
                 }
                 let _ = adapter
-                    .signal_process(&snapshot.identity, snapshot.record.generation, &exec_id, 9)
+                    .signal_process(
+                        &snapshot.identity,
+                        snapshot.record.generation,
+                        &exec_identity,
+                        9,
+                    )
                     .await;
                 let _ = adapter
-                    .wait_process(&snapshot.identity, snapshot.record.generation, &exec_id)
+                    .wait_process(
+                        &snapshot.identity,
+                        snapshot.record.generation,
+                        &exec_identity,
+                    )
                     .await;
                 return Err(ttrpc_error(format!("exec {exec_id} disappeared")));
             };
@@ -471,7 +486,8 @@ impl Task for Service {
         let process: Process = serde_json::from_slice(&req.spec().value).map_err(|error| {
             ttrpc_invalid_argument(format!("invalid OCI exec process: {error}"))
         })?;
-        let exec = ExecState {
+        let mut exec = ExecState {
+            incarnation: 0,
             process,
             stdin: req.stdin().to_string(),
             stdout: req.stdout().to_string(),
@@ -493,6 +509,7 @@ impl Task for Service {
             exit: None,
             exited_at: None,
         };
+        let _metadata_guard = self.metadata_gate.lock().await;
         let mut state = self.state.lock().await;
         let task = state
             .tasks
@@ -503,17 +520,25 @@ impl Task for Service {
                 "exec {exec_id} already exists"
             )));
         }
+        let incarnation = task.exec_sequence.checked_add(1).ok_or_else(|| {
+            runtime_error(
+                RuntimeError::new(
+                    ErrorCode::ResourceExhausted,
+                    format!("containerd task {task_id} exhausted its exec incarnation sequence"),
+                )
+                .for_operation("containerd-exec-allocate"),
+            )
+        })?;
+        exec.incarnation = incarnation;
+        let mut persisted = task.clone();
+        persisted.exec_sequence = incarnation;
+        persisted.execs.insert(exec_id.clone(), exec.clone());
+        metadata_from_task(&persisted)
+            .store()
+            .map_err(runtime_error)?;
+        task.exec_sequence = incarnation;
         task.execs.insert(exec_id.clone(), exec);
         drop(state);
-        if let Err(error) = self.persist_task(&task_id).await {
-            self.state
-                .lock()
-                .await
-                .tasks
-                .get_mut(&task_id)
-                .and_then(|task| task.execs.remove(&exec_id));
-            return Err(error);
-        }
         self.publish_exec_added(&task_id, &exec_id).await;
         Ok(api::Empty::new())
     }
@@ -777,12 +802,13 @@ impl Task for Service {
     ) -> TtrpcResult<api::DeleteResponse> {
         let task_id = req.id().to_string();
         let exec_id = req.exec_id().to_string();
-        let state = self.state.lock().await;
-        let task = state
-            .tasks
-            .get(&task_id)
-            .ok_or_else(|| ttrpc_not_found(format!("unknown task {task_id}")))?;
         if !exec_id.is_empty() {
+            let _metadata_guard = self.metadata_gate.lock().await;
+            let mut state = self.state.lock().await;
+            let task = state
+                .tasks
+                .get(&task_id)
+                .ok_or_else(|| ttrpc_not_found(format!("unknown task {task_id}")))?;
             let Some(exec) = task.execs.get(&exec_id) else {
                 return Err(ttrpc_not_found(format!("unknown exec {exec_id}")));
             };
@@ -795,26 +821,34 @@ impl Task for Service {
             let exec = exec.clone();
             let mut persisted = task.clone();
             persisted.execs.remove(&exec_id);
+            metadata_from_task(&persisted)
+                .store()
+                .map_err(runtime_error)?;
             let mut response = api::DeleteResponse::new();
-            let pid = exec.record.and_then(|record| record.pid).unwrap_or(0);
+            let pid = exec
+                .record
+                .as_ref()
+                .and_then(|record| record.pid)
+                .unwrap_or(0);
             let code = exec.exit.as_ref().map_or(0, adapter::exit_code);
             let exited_at = exec.exited_at.unwrap_or(SystemTime::now());
             response.set_pid(pid);
             response.set_exit_status(code);
-            drop(state);
-            metadata_from_task(&persisted)
-                .store()
-                .map_err(runtime_error)?;
-            let pump = {
-                let mut state = self.state.lock().await;
-                let task = state.tasks.get_mut(&task_id).ok_or_else(|| {
+            state
+                .tasks
+                .get_mut(&task_id)
+                .ok_or_else(|| {
                     ttrpc_error(format!("task {task_id} disappeared during exec delete"))
-                })?;
-                task.execs.remove(&exec_id);
-                state
-                    .pumps
-                    .remove(&Self::pump_key(&task_id, Some(&exec_id)))
-            };
+                })?
+                .execs
+                .remove(&exec_id);
+            let pump = state
+                .pumps
+                .remove(&Self::pump_key(&task_id, Some(&exec_id)));
+            state
+                .wait_errors
+                .remove(&Self::pump_key(&task_id, Some(&exec_id)));
+            drop(state);
             if let Some(pump) = pump {
                 pump.stop().await;
             }
@@ -824,6 +858,11 @@ impl Task for Service {
             response.set_exited_at(timestamp_from(exited_at));
             return Ok(response);
         }
+        let state = self.state.lock().await;
+        let task = state
+            .tasks
+            .get(&task_id)
+            .ok_or_else(|| ttrpc_not_found(format!("unknown task {task_id}")))?;
         let snapshot = task.clone();
         drop(state);
         let adapter = self.adapter().await.map_err(runtime_error)?;

@@ -44,7 +44,7 @@ pub(crate) async fn qualify_exec_effect_committed_shim_sigkill(
         .ok_or_else(|| qualification_error("committed Runtime Exec returned PID zero"))?;
     if process.target.container.id != task.identity.container_id
         || process.target.container.generation != Some(Generation(task.identity.generation))
-        || process.target.process_id != containerd_process_id(&config.namespace, &id, exec_id)?
+        || process.target.process_id != containerd_process_id(&config.namespace, &id, exec_id, 1)?
         || process.terminal
     {
         return Err(qualification_error(
@@ -285,13 +285,14 @@ async fn exec_runtime_process(
             task_id,
             &identity.incarnation,
             exec_id,
+            1,
             "exec",
         )?),
         container: ContainerTarget::exact(
             identity.container_id.clone(),
             Generation(identity.generation),
         ),
-        process_id: containerd_process_id(&config.namespace, task_id, exec_id)?,
+        process_id: containerd_process_id(&config.namespace, task_id, exec_id, 1)?,
         process,
         io: ProcessIo {
             stdin: IoMode::Null,
@@ -331,6 +332,7 @@ async fn signal_runtime_process(
             task_id,
             &identity.incarnation,
             exec_id,
+            1,
             "signal-1",
         )?),
         process: exact_process_target(config, task_id, exec_id, identity)?,
@@ -415,7 +417,7 @@ fn exact_process_target(
             identity.container_id.clone(),
             Generation(identity.generation),
         ),
-        process_id: containerd_process_id(&config.namespace, task_id, exec_id)?,
+        process_id: containerd_process_id(&config.namespace, task_id, exec_id, 1)?,
     })
 }
 

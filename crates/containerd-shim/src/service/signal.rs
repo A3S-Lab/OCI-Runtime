@@ -173,11 +173,20 @@ pub(super) async fn dispatch(
     operation: &PendingSignal,
 ) -> Result<Option<ContainerRecord>, RuntimeError> {
     if let Some(exec_id) = exec_id {
+        let exec_identity = task
+            .execs
+            .get(exec_id)
+            .ok_or_else(|| {
+                signal_error(format!(
+                    "containerd exec {exec_id} disappeared before signal dispatch"
+                ))
+            })?
+            .identity(exec_id)?;
         adapter
             .signal_process_with_sequence(
                 &task.identity,
                 task.record.generation,
-                exec_id,
+                &exec_identity,
                 operation.sequence(),
                 operation.signal().get(),
             )

@@ -507,12 +507,13 @@ fn add_exec(task: &mut super::TaskState, exec_id: &str) {
             task.identity.container_id.clone(),
             task.record.generation,
         ),
-        process_id: crate::identity::process_id("k8s.io", "task-a", exec_id)
+        process_id: crate::identity::process_id("k8s.io", "task-a", exec_id, 0)
             .expect("exec process identity"),
     };
     task.execs.insert(
         exec_id.to_string(),
         ExecState {
+            incarnation: 0,
             process,
             stdin: String::new(),
             stdout: String::new(),

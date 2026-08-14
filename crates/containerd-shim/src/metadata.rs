@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 7;
+const METADATA_SCHEMA_VERSION: u32 = 8;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_INCARNATION_BYTES: u64 = 64;
@@ -70,6 +71,8 @@ pub(crate) struct ShimMetadata {
     exit: Option<ExitStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exited_at_unix_nanos: Option<u128>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    exec_sequence: u64,
     execs: Vec<ExecMetadata>,
 }
 
@@ -77,6 +80,8 @@ pub(crate) struct ShimMetadata {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExecMetadata {
     pub(crate) exec_id: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) incarnation: u64,
     pub(crate) stage: ExecStage,
     pub(crate) process: Process,
     pub(crate) stdin: String,
@@ -329,6 +334,7 @@ impl ExecMetadata {
     ) -> Self {
         Self {
             exec_id,
+            incarnation: 0,
             stage: ExecStage::Added,
             process,
             stdin,
@@ -402,6 +408,7 @@ impl ShimMetadata {
             rootfs_mounted: value.rootfs_mounted,
             exit: None,
             exited_at_unix_nanos: None,
+            exec_sequence: 0,
             execs: Vec::new(),
         }
     }
@@ -647,6 +654,10 @@ impl ShimMetadata {
         &self.execs
     }
 
+    pub(crate) fn exec_sequence(&self) -> u64 {
+        self.exec_sequence
+    }
+
     pub(crate) fn set_exit(&mut self, exit: Option<ExitStatus>, exited_at: Option<u128>) {
         self.exit = exit;
         self.exited_at_unix_nanos = exited_at;
@@ -654,6 +665,10 @@ impl ShimMetadata {
 
     pub(crate) fn set_execs(&mut self, execs: Vec<ExecMetadata>) {
         self.execs = execs;
+    }
+
+    pub(crate) fn set_exec_sequence(&mut self, sequence: u64) {
+        self.exec_sequence = sequence;
     }
 
     pub(crate) fn set_control_state(
@@ -771,6 +786,14 @@ impl ShimMetadata {
                 self.schema_version
             )));
         }
+        if self.schema_version < 8
+            && (self.exec_sequence != 0 || self.execs.iter().any(|exec| exec.incarnation != 0))
+        {
+            return Err(metadata_error(format!(
+                "shim metadata schema {} cannot contain schema-v8 exec incarnation state",
+                self.schema_version
+            )));
+        }
         validate_stdin_state(
             self.stdin_sequence,
             self.pending_stdin_write.as_ref(),
@@ -832,6 +855,7 @@ impl ShimMetadata {
         }
         self.identity()?;
         let mut previous = None;
+        let mut exec_incarnations = BTreeSet::new();
         for exec in &self.execs {
             if exec.exec_id.is_empty() {
                 return Err(metadata_error("shim metadata contains an empty exec ID"));
@@ -843,6 +867,18 @@ impl ShimMetadata {
                 return Err(metadata_error(
                     "shim metadata exec entries must be unique and sorted by exec ID",
                 ));
+            }
+            if exec.incarnation > self.exec_sequence {
+                return Err(metadata_error(format!(
+                    "exec {} incarnation {} exceeds the allocated exec sequence {}",
+                    exec.exec_id, exec.incarnation, self.exec_sequence
+                )));
+            }
+            if exec.incarnation != 0 && !exec_incarnations.insert(exec.incarnation) {
+                return Err(metadata_error(format!(
+                    "exec incarnation {} is assigned to more than one current exec",
+                    exec.incarnation
+                )));
             }
             validate_stdin_state(
                 exec.stdin_sequence,
@@ -1516,6 +1552,7 @@ mod tests {
     fn schema_v7_metadata_round_trip_preserves_task_and_exec_signal_state() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut expected = metadata(directory.path());
+        expected.schema_version = 7;
         expected.set_signal_state(
             3,
             Some(PendingSignal::new(4, libc::SIGTERM, true).expect("pending task signal")),
@@ -1552,6 +1589,130 @@ mod tests {
         assert_eq!(
             loaded.execs()[0].pending_signal,
             expected.execs()[0].pending_signal
+        );
+        assert_eq!(loaded.exec_sequence(), 0);
+        assert_eq!(loaded.execs()[0].incarnation, 0);
+    }
+
+    #[test]
+    fn schema_v8_metadata_preserves_exec_incarnations_after_deletion() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        expected.set_exec_sequence(3);
+        let process: Process = serde_json::from_value(serde_json::json!({
+            "terminal": false,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/true"],
+            "cwd": "/"
+        }))
+        .expect("OCI process");
+        let mut first = ExecMetadata::new(
+            "exec-a".to_string(),
+            process.clone(),
+            String::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        first.incarnation = 1;
+        let mut third = ExecMetadata::new(
+            "exec-b".to_string(),
+            process,
+            String::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        third.incarnation = 3;
+        expected.set_execs(vec![first, third]);
+
+        expected.store().expect("store schema-v8 metadata");
+        let mut loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load schema-v8 metadata")
+            .expect("metadata exists");
+        assert_eq!(loaded.schema_version, 8);
+        assert_eq!(loaded.exec_sequence(), 3);
+        assert_eq!(loaded.execs()[0].incarnation, 1);
+        assert_eq!(loaded.execs()[1].incarnation, 3);
+
+        loaded.set_execs(Vec::new());
+        loaded.store().expect("store deleted exec metadata");
+        let deleted = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("reload deleted exec metadata")
+            .expect("metadata exists");
+        assert!(deleted.execs().is_empty());
+        assert_eq!(deleted.exec_sequence(), 3);
+    }
+
+    #[test]
+    fn schema_v8_metadata_rejects_invalid_exec_incarnation_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let process: Process = serde_json::from_value(serde_json::json!({
+            "terminal": false,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/true"],
+            "cwd": "/"
+        }))
+        .expect("OCI process");
+
+        let mut legacy = metadata(directory.path());
+        legacy.schema_version = 7;
+        legacy.set_exec_sequence(1);
+        assert_eq!(
+            legacy
+                .store()
+                .expect_err("schema-v7 exec sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut beyond_sequence = metadata(directory.path());
+        beyond_sequence.set_exec_sequence(1);
+        let mut exec = ExecMetadata::new(
+            "exec-a".to_string(),
+            process.clone(),
+            String::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        exec.incarnation = 2;
+        beyond_sequence.set_execs(vec![exec]);
+        assert_eq!(
+            beyond_sequence
+                .store()
+                .expect_err("exec incarnation beyond sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut duplicate = metadata(directory.path());
+        duplicate.set_exec_sequence(1);
+        let mut first = ExecMetadata::new(
+            "exec-a".to_string(),
+            process.clone(),
+            String::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        first.incarnation = 1;
+        let mut second = ExecMetadata::new(
+            "exec-b".to_string(),
+            process,
+            String::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        second.incarnation = 1;
+        duplicate.set_execs(vec![first, second]);
+        assert_eq!(
+            duplicate
+                .store()
+                .expect_err("duplicate exec incarnations must fail")
+                .code,
+            ErrorCode::FailedPrecondition
         );
     }
 

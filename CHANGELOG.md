@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Durable containerd exec-ID reuse. Metadata schema v8 retains a monotonic
+  per-task exec sequence and the incarnation allocated to every current exec.
+  SDK `ProcessId` and exec-scoped `OperationId` values include that
+  incarnation, while schema-v1 through schema-v7 records keep incarnation zero
+  and their original identity encoding. `DeleteProcess` commits removal of the
+  current exec without resetting the sequence, and allocation, deletion, and
+  exit recording share the metadata gate. Exit monitors are bound to one
+  incarnation, so a late result from a deleted exec cannot terminate or poison
+  a new exec with the same containerd ID. The Ubuntu arm64/containerd 2.2.2
+  gate ran `Exec restart-exec`, observed exit 7, deleted it, reused
+  `restart-exec`, restarted containerd while the replacement was Added, and
+  observed exit 23 from the new process. The complete 48.29-second matrix and
+  an independent zero-residue audit passed with release shim SHA-256
+  `9b5978d9d9c2b88634115864d2010e949a377b45f5722c55e54f6e331ee7ac6f`.
 - Durable containerd init and exec signal sequencing across live shim
   replacement. Metadata schema v7 gives init and every exec an independent
   monotonic signal sequence plus one pending signal request, including the

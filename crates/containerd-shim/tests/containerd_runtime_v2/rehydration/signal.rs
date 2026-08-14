@@ -47,12 +47,12 @@ pub(super) async fn qualify(
     mut old_replacement: Child,
 ) -> TestResult<(Channel, Child)> {
     let baseline = read_exec_signal_journal(bundle, EXEC_ID).await?;
-    if baseline.schema_version != 7
+    if baseline.schema_version != 8
         || baseline.completed_sequence != 0
         || baseline.pending.is_some()
     {
         return Err(qualification_error(format!(
-            "exec signal journal before committed replacement was {baseline:?}; expected schema 7, sequence 0, and no pending signal"
+            "exec signal journal before committed replacement was {baseline:?}; expected schema 8, sequence 0, and no pending signal"
         ))
         .into());
     }
@@ -209,7 +209,7 @@ async fn wait_for_pending_signal(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_signal_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 7
+        if evidence.schema_version == 8
             && evidence.completed_sequence == completed_sequence
             && evidence.pending.as_ref() == Some(&expected)
         {
@@ -245,7 +245,7 @@ async fn wait_for_completed_signal(bundle: &Path, sequence: u64) -> TestResult<(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_signal_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 7
+        if evidence.schema_version == 8
             && evidence.completed_sequence == sequence
             && evidence.pending.is_none()
         {
@@ -345,6 +345,7 @@ async fn commit_runtime_exec_signal(
             task_id,
             &identity.incarnation,
             EXEC_ID,
+            1,
             &format!("signal-{sequence}"),
         )?),
         process: ProcessTarget {
@@ -352,7 +353,7 @@ async fn commit_runtime_exec_signal(
                 identity.container_id.clone(),
                 Generation(identity.generation),
             ),
-            process_id: faults::containerd_process_id(&config.namespace, task_id, EXEC_ID)?,
+            process_id: faults::containerd_process_id(&config.namespace, task_id, EXEC_ID, 1)?,
         },
         signal: Signal::new(signal).map_err(|error| {
             qualification_error(format!("validate committed process signal: {error}"))

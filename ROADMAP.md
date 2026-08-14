@@ -1525,8 +1525,9 @@ Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
 separate stdout/stderr plus stdin from empty input through 4 MiB,
 Created/Running/Stopped daemon-restart boundaries, terminal exec resize before
-and after daemon restart, schema-v7 durable init/exec stdin, signal, and resize
-sequences, exact pending input payloads, signals, and terminal sizes,
+and after daemon restart, schema-v8 durable exec incarnations plus init/exec
+stdin, signal, and resize sequences, exact pending input payloads, signals,
+and terminal sizes,
 Open/Closing/Closed stdin state, output cursors, and per-task control
 sequencing, live
 terminal-exec input and output continuation without replay after manual shim
@@ -1587,8 +1588,13 @@ its local journal can observe the response. The replacement replays the same
 sequence without a second terminal effect, commits the observed size,
 suppresses an identical retry, and proves that `A→B→A` allocates fresh
 identities and restores the real PTY to A instead of replaying the first A.
-The complete 46.89-second matrix passed with installed shim SHA-256
-`25d12487f51e68ef176fbf7e8b62bd769b1cf149df9fb9b926916aca4b6c89ed`.
+The latest gate also runs one exec to exit 7, deletes it, reuses the same
+containerd exec ID, restarts containerd while the replacement is Added, and
+requires exit 23 from a fresh SDK process identity. Its durable per-task exec
+sequence survives `DeleteProcess`; exit monitors are incarnation-bound so a
+late result cannot terminate or poison the replacement. The complete
+48.29-second matrix passed with installed shim SHA-256
+`9b5978d9d9c2b88634115864d2010e949a377b45f5722c55e54f6e331ee7ac6f`.
 The qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, bundle, live runtime record, session, marker, workload

@@ -542,7 +542,7 @@ async fn schema_v5_defaults_resize_state_and_upgrades_on_restore() {
             .expect("read upgraded metadata"),
     )
     .expect("decode upgraded metadata");
-    assert_eq!(upgraded["schema_version"], serde_json::json!(7));
+    assert_eq!(upgraded["schema_version"], serde_json::json!(8));
     replacement.stop_all_monitors().await;
     replacement.stop_all_pumps().await;
 }
@@ -585,6 +585,7 @@ fn add_terminal_exec(task: &mut super::TaskState, exec_id: &str) {
     task.execs.insert(
         exec_id.to_string(),
         ExecState {
+            incarnation: 0,
             process,
             stdin: String::new(),
             stdout: String::new(),

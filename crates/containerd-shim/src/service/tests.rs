@@ -5,6 +5,8 @@ use a3s_oci_sdk::{
     ExecRequest, Generation, IsolationClass, KillRequest as RuntimeKillRequest, OciRuntimeService,
     ProcessesRequest, StateRequest, WaitProcessRequest, WaitRequest,
 };
+use containerd_shim::TtrpcContext;
+use containerd_shim_protos::shim_async::Task;
 
 mod control;
 mod delete_shim_paused;
@@ -296,6 +298,7 @@ fn task_state(bundle: &Path) -> TaskState {
         },
         exit: Some(ExitStatus::exited(42).expect("exit")),
         exited_at: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10)),
+        exec_sequence: 0,
         execs: BTreeMap::new(),
     }
 }
@@ -419,6 +422,7 @@ async fn exec_wait_can_arrive_before_start_and_completes_from_the_recorded_exit(
     task.execs.insert(
         "exec-early-wait".to_string(),
         ExecState {
+            incarnation: 0,
             process,
             stdin: String::new(),
             stdout: String::new(),
@@ -475,7 +479,7 @@ async fn exec_wait_can_arrive_before_start_and_completes_from_the_recorded_exit(
         .process_target(
             &task.identity,
             task.record.generation,
-            Some("exec-early-wait"),
+            Some(&ExecIdentity::new("exec-early-wait", 0).expect("exec identity")),
         )
         .expect("process target"),
         pid: Some(6161),
@@ -502,8 +506,9 @@ async fn exec_wait_can_arrive_before_start_and_completes_from_the_recorded_exit(
     );
 
     let expected = ExitStatus::exited(23).expect("exit status");
+    let exec_identity = ExecIdentity::new("exec-early-wait", 0).expect("exec identity");
     service
-        .record_exit("task-a", Some("exec-early-wait"), expected.clone(), 6161)
+        .record_exit("task-a", Some(&exec_identity), expected.clone(), 6161)
         .await
         .expect("record exit");
     let (actual, pid, _) = tokio::time::timeout(std::time::Duration::from_secs(1), wait)
@@ -528,6 +533,7 @@ async fn rehydration_reuses_a_starting_exec_already_in_runtime_inventory() {
         "cwd": "/"
     }))
     .expect("OCI process");
+    let exec_identity = ExecIdentity::new("exec-a", 0).expect("exec identity");
     let process_target = RuntimeAdapter::from_client(
         a3s_oci_sdk::RuntimeClient::new(RecoveryService {
             record: task.record.clone(),
@@ -536,7 +542,7 @@ async fn rehydration_reuses_a_starting_exec_already_in_runtime_inventory() {
         }),
         IsolationRequest::SharedHostKernel,
     )
-    .process_target(&task.identity, task.record.generation, Some("exec-a"))
+    .process_target(&task.identity, task.record.generation, Some(&exec_identity))
     .expect("stable process target");
     let runtime_process = ProcessRecord {
         target: process_target,
@@ -546,6 +552,7 @@ async fn rehydration_reuses_a_starting_exec_already_in_runtime_inventory() {
     task.execs.insert(
         "exec-a".to_string(),
         ExecState {
+            incarnation: 0,
             process,
             stdin: String::new(),
             stdout: String::new(),
@@ -630,6 +637,7 @@ async fn output_cursor_commits_are_durable_for_init_and_exec() {
     task.execs.insert(
         "exec-a".to_string(),
         ExecState {
+            incarnation: 0,
             process,
             stdin: String::new(),
             stdout: "exec-out".to_string(),
@@ -859,6 +867,7 @@ async fn stdin_journal_prepare_and_commit_are_durable_for_init_and_exec() {
     task.execs.insert(
         "exec-a".to_string(),
         ExecState {
+            incarnation: 0,
             process,
             stdin: "exec-in".to_string(),
             stdout: String::new(),
@@ -982,6 +991,7 @@ fn task_metadata_round_trip_preserves_terminal_evidence() {
     task.execs.insert(
         "exec-a".to_string(),
         ExecState {
+            incarnation: 0,
             process,
             stdin: String::new(),
             stdout: "exec-out".to_string(),
@@ -1032,52 +1042,137 @@ fn protobuf_status_prefers_durable_exit_over_stale_runtime_state() {
     );
 }
 
-#[test]
-fn exec_delete_metadata_commit_precedes_in_memory_removal() {
+#[tokio::test]
+async fn deleted_exec_id_reuse_allocates_durable_incarnation_across_restarts() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let mut task = task_state(directory.path());
-    let process: Process = serde_json::from_value(serde_json::json!({
+    let task = task_state(directory.path());
+    metadata_from_task(&task)
+        .store()
+        .expect("store initial task metadata");
+    let (adapter, _) = recovery_service(&task, Vec::new());
+    let service = recovery_service_instance(directory.path(), adapter);
+    service
+        .state
+        .lock()
+        .await
+        .tasks
+        .insert("task-a".to_string(), task.clone());
+
+    Task::exec(&service, &ttrpc_context(), exec_request("exec-a"))
+        .await
+        .expect("allocate first exec incarnation");
+    let first = service.task_snapshot("task-a").await.expect("first task");
+    assert_eq!(first.exec_sequence, 1);
+    assert_eq!(first.execs["exec-a"].incarnation, 1);
+    let first_process = crate::identity::process_id("k8s.io", "task-a", "exec-a", 1)
+        .expect("first process identity");
+
+    {
+        let mut state = service.state.lock().await;
+        let exec = state
+            .tasks
+            .get_mut("task-a")
+            .expect("task")
+            .execs
+            .get_mut("exec-a")
+            .expect("first exec");
+        exec.stage = ExecStage::Exited;
+        exec.exit = Some(ExitStatus::exited(7).expect("first exec exit"));
+        exec.exited_at = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(7));
+    }
+    service
+        .persist_task("task-a")
+        .await
+        .expect("persist first exec exit");
+    let mut delete = api::DeleteRequest::new();
+    delete.set_id("task-a".to_string());
+    delete.set_exec_id("exec-a".to_string());
+    Task::delete(&service, &ttrpc_context(), delete)
+        .await
+        .expect("delete first exec incarnation");
+
+    let deleted = service
+        .task_snapshot("task-a")
+        .await
+        .expect("task after exec deletion");
+    assert!(deleted.execs.is_empty());
+    assert_eq!(deleted.exec_sequence, 1);
+    let deleted_metadata = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+        .expect("load metadata")
+        .expect("metadata exists");
+    assert!(deleted_metadata.execs().is_empty());
+    assert_eq!(deleted_metadata.exec_sequence(), 1);
+
+    Task::exec(&service, &ttrpc_context(), exec_request("exec-a"))
+        .await
+        .expect("reuse deleted exec ID");
+    let reused = service
+        .task_snapshot("task-a")
+        .await
+        .expect("task after exec reuse");
+    assert_eq!(reused.exec_sequence, 2);
+    assert_eq!(reused.execs["exec-a"].incarnation, 2);
+    let reused_process = crate::identity::process_id("k8s.io", "task-a", "exec-a", 2)
+        .expect("reused process identity");
+    assert_ne!(first_process, reused_process);
+    let stale_identity = ExecIdentity::new("exec-a", 1).expect("stale exec identity");
+    let error = service
+        .record_exit(
+            "task-a",
+            Some(&stale_identity),
+            ExitStatus::exited(7).expect("stale exit"),
+            5151,
+        )
+        .await
+        .expect_err("stale monitor must not record an exit on the reused exec ID");
+    let ttrpc::Error::RpcStatus(status) = error else {
+        panic!("stale monitor rejection must preserve the RPC status");
+    };
+    assert_eq!(status.code(), ttrpc::Code::ABORTED);
+    assert!(service
+        .task_snapshot("task-a")
+        .await
+        .expect("task after stale exit")
+        .execs["exec-a"]
+        .exit
+        .is_none());
+
+    let (replacement_adapter, _) = recovery_service(&task, Vec::new());
+    let replacement = recovery_service_instance(directory.path(), replacement_adapter);
+    replacement
+        .restore_task("task-a")
+        .await
+        .expect("restore reused exec incarnation");
+    let restored = replacement
+        .task_snapshot("task-a")
+        .await
+        .expect("restored task");
+    assert_eq!(restored.exec_sequence, 2);
+    assert_eq!(restored.execs["exec-a"].incarnation, 2);
+}
+
+fn ttrpc_context() -> TtrpcContext {
+    TtrpcContext {
+        mh: ttrpc::MessageHeader::default(),
+        metadata: Default::default(),
+        timeout_nano: 0,
+    }
+}
+
+fn exec_request(exec_id: &str) -> api::ExecProcessRequest {
+    const OCI_PROCESS_TYPE: &str = "types.containerd.io/opencontainers/runtime-spec/1/Process";
+    let mut spec = protobuf::well_known_types::any::Any::new();
+    spec.type_url = OCI_PROCESS_TYPE.to_string();
+    spec.value = serde_json::to_vec(&serde_json::json!({
         "terminal": false,
         "user": {"uid": 0, "gid": 0},
         "args": ["/bin/true"],
         "cwd": "/"
     }))
-    .expect("OCI process");
-    task.execs.insert(
-        "exec-a".to_string(),
-        ExecState {
-            process,
-            stdin: String::new(),
-            stdout: String::new(),
-            stderr: String::new(),
-            terminal: false,
-            stdin_sequence: 0,
-            pending_stdin_write: None,
-            stdin_close_state: StdinCloseState::Open,
-            resize_gate: Arc::new(Mutex::new(())),
-            resize_sequence: 0,
-            pending_resize: None,
-            terminal_size: None,
-            signal_gate: Arc::new(Mutex::new(())),
-            signal_sequence: 0,
-            pending_signal: None,
-            output_cursor: 0,
-            stage: ExecStage::Exited,
-            record: None,
-            exit: Some(ExitStatus::exited(0).expect("exec exit")),
-            exited_at: Some(SystemTime::UNIX_EPOCH),
-        },
-    );
-
-    let mut persisted = task.clone();
-    persisted.execs.remove("exec-a");
-    metadata_from_task(&persisted)
-        .store()
-        .expect("commit exec deletion");
-
-    assert!(task.execs.contains_key("exec-a"));
-    let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
-        .expect("load metadata")
-        .expect("metadata exists");
-    assert!(loaded.execs().is_empty());
+    .expect("encode exec process");
+    let mut request = api::ExecProcessRequest::new();
+    request.set_id("task-a".to_string());
+    request.set_exec_id(exec_id.to_string());
+    request.set_spec(spec);
+    request
 }

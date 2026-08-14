@@ -164,7 +164,7 @@ async fn wait_for_close_state(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_stdin_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 7
+        if evidence.schema_version == 8
             && evidence.completed_sequence == stdin_sequence
             && evidence.pending.is_none()
             && evidence.close_state == expected
@@ -189,7 +189,7 @@ async fn wait_for_close_request(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_stdin_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 7
+        if evidence.schema_version == 8
             && evidence.completed_sequence == stdin_sequence
             && evidence.pending.is_none()
             && evidence.close_state == "closing"
@@ -234,6 +234,7 @@ async fn commit_runtime_exec_close(
             task_id,
             &identity.incarnation,
             EXEC_ID,
+            1,
             "close-stdin",
         )?),
         process: ProcessTarget {
@@ -241,7 +242,7 @@ async fn commit_runtime_exec_close(
                 identity.container_id.clone(),
                 Generation(identity.generation),
             ),
-            process_id: faults::containerd_process_id(&config.namespace, task_id, EXEC_ID)?,
+            process_id: faults::containerd_process_id(&config.namespace, task_id, EXEC_ID, 1)?,
         },
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);

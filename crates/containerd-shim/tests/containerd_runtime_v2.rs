@@ -43,7 +43,7 @@ async fn real_containerd_runtime_v2_qualification() -> TestResult<()> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| qualification_error(format!("system clock precedes Unix epoch: {error}")))?
         .as_nanos();
-    let prefix = format!("a3s-r7-{}-{nonce:x}", std::process::id());
+    let prefix = format!("a3s-r8-{}-{nonce:x}", std::process::id());
     let lifecycle_id = format!("{prefix}-lifecycle");
     let result = qualify(&config, &prefix, &lifecycle_id).await;
     let cleanup = cleanup_exact(&config, &prefix).await;
@@ -554,6 +554,89 @@ async fn qualify_exec_restart_boundaries(
         return Err(qualification_error(format!(
             "exec Delete returned exit {}, expected 7",
             deleted.exit_status
+        ))
+        .into());
+    }
+
+    let reused_spec = serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0},
+        "args": ["/bin/sh", "-c", "exit 23"],
+        "env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
+        "cwd": "/",
+        "noNewPrivileges": true
+    });
+    TasksClient::new(channel.clone())
+        .exec(namespaced(
+            ExecProcessRequest {
+                container_id: id.to_string(),
+                exec_id: exec_id.to_string(),
+                spec: Some(Any {
+                    type_url: PROCESS_SPEC_TYPE.to_string(),
+                    value: serde_json::to_vec(&reused_spec).map_err(|error| {
+                        qualification_error(format!("encode reused exec process: {error}"))
+                    })?,
+                }),
+                ..Default::default()
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("reuse deleted exec ID", error))?;
+    *channel = restart_containerd(config, "exec-id-reused-added").await?;
+    expect_process(
+        &task_process(config, channel, id, exec_id).await?,
+        STATUS_CREATED,
+        Some(0),
+        "reused exec ID after containerd restart",
+    )?;
+    let reused = TasksClient::new(channel.clone())
+        .start(namespaced(
+            StartRequest {
+                container_id: id.to_string(),
+                exec_id: exec_id.to_string(),
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("start reused exec ID", error))?
+        .into_inner();
+    if reused.pid == 0 {
+        return Err(qualification_error("reused exec Start returned PID zero").into());
+    }
+    let reused_exit = TasksClient::new(channel.clone())
+        .wait(namespaced(
+            WaitRequest {
+                container_id: id.to_string(),
+                exec_id: exec_id.to_string(),
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("wait reused exec ID", error))?
+        .into_inner();
+    if reused_exit.exit_status != 23 {
+        return Err(qualification_error(format!(
+            "reused exec ID returned exit {}, expected 23; the old exec incarnation may have replayed",
+            reused_exit.exit_status
+        ))
+        .into());
+    }
+    let reused_deleted = TasksClient::new(channel.clone())
+        .delete_process(namespaced(
+            DeleteProcessRequest {
+                container_id: id.to_string(),
+                exec_id: exec_id.to_string(),
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("delete reused exec ID", error))?
+        .into_inner();
+    if reused_deleted.exit_status != 23 {
+        return Err(qualification_error(format!(
+            "reused exec Delete returned exit {}, expected 23",
+            reused_deleted.exit_status
         ))
         .into());
     }

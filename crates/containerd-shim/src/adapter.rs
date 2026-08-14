@@ -27,6 +27,36 @@ pub(crate) struct TaskIdentity {
     pub(crate) container_id: ContainerId,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExecIdentity {
+    exec_id: String,
+    incarnation: u64,
+}
+
+impl ExecIdentity {
+    pub(crate) fn new(exec_id: impl Into<String>, incarnation: u64) -> Result<Self> {
+        let exec_id = exec_id.into();
+        if exec_id.is_empty() {
+            return Err(adapter_error(
+                ErrorCode::InvalidArgument,
+                "containerd exec ID must be non-empty",
+            ));
+        }
+        Ok(Self {
+            exec_id,
+            incarnation,
+        })
+    }
+
+    pub(crate) fn exec_id(&self) -> &str {
+        &self.exec_id
+    }
+
+    pub(crate) const fn incarnation(&self) -> u64 {
+        self.incarnation
+    }
+}
+
 impl TaskIdentity {
     #[cfg(test)]
     pub(crate) fn new(namespace: impl Into<String>, task_id: impl Into<String>) -> Result<Self> {
@@ -63,18 +93,23 @@ impl TaskIdentity {
         })
     }
 
-    fn operation(&self, exec_id: Option<&str>, action: &str) -> Result<OperationContext> {
+    fn operation(&self, exec: Option<&ExecIdentity>, action: &str) -> Result<OperationContext> {
         identity::operation(
             &self.namespace,
             &self.task_id,
             self.incarnation.as_ref(),
-            exec_id,
+            exec.map(|exec| (exec.exec_id(), exec.incarnation())),
             action,
         )
     }
 
-    fn process_id(&self, exec_id: &str) -> Result<ProcessId> {
-        identity::process_id(&self.namespace, &self.task_id, exec_id)
+    fn process_id(&self, exec: &ExecIdentity) -> Result<ProcessId> {
+        identity::process_id(
+            &self.namespace,
+            &self.task_id,
+            exec.exec_id(),
+            exec.incarnation(),
+        )
     }
 }
 
@@ -275,14 +310,14 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: &str,
+        exec: &ExecIdentity,
         process: Process,
         io: ProcessIo,
     ) -> Result<ProcessRecord> {
-        let process_id = task.process_id(exec_id)?;
+        let process_id = task.process_id(exec)?;
         self.client
             .exec(ExecRequest {
-                context: task.operation(Some(exec_id), "exec")?,
+                context: task.operation(Some(exec), "exec")?,
                 container: ContainerTarget::exact(task.container_id.clone(), generation),
                 process_id,
                 process,
@@ -295,15 +330,15 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: &str,
+        exec: &ExecIdentity,
         signal: i32,
     ) -> Result<()> {
         self.client
             .signal_process(SignalProcessRequest {
-                context: task.operation(Some(exec_id), &format!("signal-{signal}"))?,
+                context: task.operation(Some(exec), &format!("signal-{signal}"))?,
                 process: ProcessTarget {
                     container: ContainerTarget::exact(task.container_id.clone(), generation),
-                    process_id: task.process_id(exec_id)?,
+                    process_id: task.process_id(exec)?,
                 },
                 signal: Signal::new(signal)?,
             })
@@ -314,16 +349,16 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: &str,
+        exec: &ExecIdentity,
         sequence: u64,
         signal: i32,
     ) -> Result<()> {
         self.client
             .signal_process(SignalProcessRequest {
-                context: task.operation(Some(exec_id), &format!("signal-{sequence}"))?,
+                context: task.operation(Some(exec), &format!("signal-{sequence}"))?,
                 process: ProcessTarget {
                     container: ContainerTarget::exact(task.container_id.clone(), generation),
-                    process_id: task.process_id(exec_id)?,
+                    process_id: task.process_id(exec)?,
                 },
                 signal: Signal::new(signal)?,
             })
@@ -334,13 +369,13 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: &str,
+        exec: &ExecIdentity,
     ) -> Result<ExitStatus> {
         self.client
             .wait_process(WaitProcessRequest {
                 process: ProcessTarget {
                     container: ContainerTarget::exact(task.container_id.clone(), generation),
-                    process_id: task.process_id(exec_id)?,
+                    process_id: task.process_id(exec)?,
                 },
                 timeout_ms: None,
             })
@@ -375,9 +410,9 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: &str,
+        exec: &ExecIdentity,
     ) -> Result<ProcessRecord> {
-        let target = self.process_target(task, generation, Some(exec_id))?;
+        let target = self.process_target(task, generation, Some(exec))?;
         self.processes(task, generation)
             .await?
             .into_iter()
@@ -385,7 +420,11 @@ impl RuntimeAdapter {
             .ok_or_else(|| {
                 adapter_error(
                     ErrorCode::NotFound,
-                    format!("runtime process inventory omitted exec {exec_id}"),
+                    format!(
+                        "runtime process inventory omitted exec {} incarnation {}",
+                        exec.exec_id(),
+                        exec.incarnation()
+                    ),
                 )
             })
     }
@@ -438,12 +477,12 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: Option<&str>,
+        exec: Option<&ExecIdentity>,
     ) -> Result<()> {
         self.client
             .close_stdin(CloseStdinRequest {
-                context: task.operation(exec_id, "close-stdin")?,
-                process: self.process_target(task, generation, exec_id)?,
+                context: task.operation(exec, "close-stdin")?,
+                process: self.process_target(task, generation, exec)?,
             })
             .await
     }
@@ -452,14 +491,14 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: Option<&str>,
+        exec: Option<&ExecIdentity>,
         sequence: u64,
         size: TerminalSize,
     ) -> Result<()> {
         self.client
             .resize(ResizeRequest {
-                context: task.operation(exec_id, &format!("resize-{sequence}"))?,
-                process: self.process_target(task, generation, exec_id)?,
+                context: task.operation(exec, &format!("resize-{sequence}"))?,
+                process: self.process_target(task, generation, exec)?,
                 size,
             })
             .await
@@ -500,22 +539,22 @@ impl RuntimeAdapter {
     pub(crate) fn stdin_operation(
         &self,
         task: &TaskIdentity,
-        exec_id: Option<&str>,
+        exec: Option<&ExecIdentity>,
         sequence: u64,
     ) -> Result<OperationContext> {
-        task.operation(exec_id, &format!("write-stdin-{sequence}"))
+        task.operation(exec, &format!("write-stdin-{sequence}"))
     }
 
     pub(crate) fn process_target(
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
-        exec_id: Option<&str>,
+        exec: Option<&ExecIdentity>,
     ) -> Result<ProcessTarget> {
         Ok(ProcessTarget {
             container: ContainerTarget::exact(task.container_id.clone(), generation),
-            process_id: match exec_id {
-                Some(exec_id) => task.process_id(exec_id)?,
+            process_id: match exec {
+                Some(exec) => task.process_id(exec)?,
                 None => ProcessId::init(),
             },
         })

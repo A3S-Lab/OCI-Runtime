@@ -56,7 +56,7 @@ pub(super) async fn qualify(
     mut old_replacement: Child,
 ) -> TestResult<(Channel, Child, u64)> {
     let baseline = read_exec_resize_journal(bundle, EXEC_ID).await?;
-    if baseline.schema_version != 7
+    if baseline.schema_version != 8
         || baseline.completed_sequence != 2
         || baseline.pending.is_some()
         || baseline.terminal_size
@@ -66,7 +66,7 @@ pub(super) async fn qualify(
             })
     {
         return Err(qualification_error(format!(
-            "terminal resize journal before committed replacement was {baseline:?}; expected schema 7, sequence 2, no pending resize, and 143x47"
+            "terminal resize journal before committed replacement was {baseline:?}; expected schema 8, sequence 2, no pending resize, and 143x47"
         ))
         .into());
     }
@@ -239,7 +239,7 @@ async fn wait_for_pending_resize(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_resize_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 7
+        if evidence.schema_version == 8
             && evidence.completed_sequence == completed_sequence
             && evidence.pending.as_ref() == Some(&expected)
         {
@@ -279,7 +279,7 @@ async fn wait_for_completed_resize(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_resize_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 7
+        if evidence.schema_version == 8
             && evidence.completed_sequence == sequence
             && evidence.pending.is_none()
             && evidence.terminal_size == Some(size)
@@ -398,6 +398,7 @@ async fn commit_runtime_exec_resize(
             task_id,
             &identity.incarnation,
             EXEC_ID,
+            1,
             &format!("resize-{sequence}"),
         )?),
         process: ProcessTarget {
@@ -405,7 +406,7 @@ async fn commit_runtime_exec_resize(
                 identity.container_id.clone(),
                 Generation(identity.generation),
             ),
-            process_id: faults::containerd_process_id(&config.namespace, task_id, EXEC_ID)?,
+            process_id: faults::containerd_process_id(&config.namespace, task_id, EXEC_ID, 1)?,
         },
         size,
     };
