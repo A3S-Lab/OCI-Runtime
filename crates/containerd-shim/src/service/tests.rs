@@ -268,6 +268,8 @@ fn task_state(bundle: &Path) -> TaskState {
         stdout: "stdout".to_string(),
         stderr: "stderr".to_string(),
         terminal: false,
+        stdin_sequence: 0,
+        pending_stdin_write: None,
         output_cursor: 0,
         control_gate: Arc::new(Mutex::new(())),
         control_sequence: 0,
@@ -412,6 +414,8 @@ async fn exec_wait_can_arrive_before_start_and_completes_from_the_recorded_exit(
             stdout: String::new(),
             stderr: String::new(),
             terminal: false,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
             output_cursor: 0,
             stage: ExecStage::Added,
             record: None,
@@ -529,6 +533,8 @@ async fn rehydration_reuses_a_starting_exec_already_in_runtime_inventory() {
             stdout: String::new(),
             stderr: String::new(),
             terminal: false,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
             output_cursor: 0,
             stage: ExecStage::Starting,
             record: None,
@@ -603,6 +609,8 @@ async fn output_cursor_commits_are_durable_for_init_and_exec() {
             stdout: "exec-out".to_string(),
             stderr: String::new(),
             terminal: true,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
             output_cursor: 0,
             stage: ExecStage::Started,
             record: None,
@@ -802,6 +810,90 @@ async fn delete_shim_retains_metadata_when_runtime_absence_is_unconfirmed() {
         .all(|request| request.target.generation == Some(Generation(7))));
 }
 
+#[tokio::test]
+async fn stdin_journal_prepare_and_commit_are_durable_for_init_and_exec() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.exit = None;
+    let process: Process = serde_json::from_value(serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0},
+        "args": ["/bin/cat"],
+        "cwd": "/"
+    }))
+    .expect("OCI process");
+    task.execs.insert(
+        "exec-a".to_string(),
+        ExecState {
+            process,
+            stdin: "exec-in".to_string(),
+            stdout: String::new(),
+            stderr: String::new(),
+            terminal: false,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
+            output_cursor: 0,
+            stage: ExecStage::Started,
+            record: None,
+            exit: None,
+            exited_at: None,
+        },
+    );
+    metadata_from_task(&task).store().expect("store metadata");
+    let (adapter, _) = recovery_service(&task, Vec::new());
+    let service = recovery_service_instance(directory.path(), adapter);
+    service
+        .state
+        .lock()
+        .await
+        .tasks
+        .insert("task-a".to_string(), task);
+
+    let init = service.stdin_journal("task-a", None);
+    init.prepare(1, b"init".to_vec())
+        .await
+        .expect("prepare init stdin");
+    init.prepare(1, b"init".to_vec())
+        .await
+        .expect("replay identical init stdin prepare");
+    let prepared = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+        .expect("load prepared metadata")
+        .expect("prepared metadata exists");
+    assert_eq!(prepared.stdin_sequence(), 0);
+    assert_eq!(
+        prepared.pending_stdin_write(),
+        Some(&PendingStdinWrite::new(1, b"init".to_vec()).expect("expected init stdin"))
+    );
+    assert_eq!(
+        init.prepare(1, b"changed".to_vec())
+            .await
+            .expect_err("changed pending init stdin must fail")
+            .code,
+        ErrorCode::Conflict
+    );
+    init.commit(1).await.expect("commit init stdin");
+
+    let exec = service.stdin_journal("task-a", Some("exec-a"));
+    exec.prepare(1, b"exec".to_vec())
+        .await
+        .expect("prepare exec stdin");
+    exec.commit(1).await.expect("commit exec stdin");
+    let committed = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+        .expect("load committed metadata")
+        .expect("committed metadata exists");
+    assert_eq!(committed.stdin_sequence(), 1);
+    assert_eq!(committed.pending_stdin_write(), None);
+    assert_eq!(committed.execs()[0].stdin_sequence, 1);
+    assert_eq!(committed.execs()[0].pending_stdin_write, None);
+    assert_eq!(
+        exec.prepare(3, b"skipped".to_vec())
+            .await
+            .expect_err("skipped exec stdin sequence must fail")
+            .code,
+        ErrorCode::Conflict
+    );
+}
+
 #[test]
 fn task_metadata_round_trip_preserves_terminal_evidence() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -821,6 +913,8 @@ fn task_metadata_round_trip_preserves_terminal_evidence() {
             stdout: "exec-out".to_string(),
             stderr: "exec-err".to_string(),
             terminal: false,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
             output_cursor: 0,
             stage: ExecStage::Exited,
             record: None,
@@ -875,6 +969,8 @@ fn exec_delete_metadata_commit_precedes_in_memory_removal() {
             stdout: String::new(),
             stderr: String::new(),
             terminal: false,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
             output_cursor: 0,
             stage: ExecStage::Exited,
             record: None,

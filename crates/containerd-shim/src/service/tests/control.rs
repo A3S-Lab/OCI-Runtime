@@ -271,7 +271,7 @@ async fn pending_update_survives_reopen_and_reuses_the_same_operation_id() {
 }
 
 #[tokio::test]
-async fn legacy_metadata_upgrades_to_schema_v3_before_the_first_control() {
+async fn legacy_metadata_upgrades_to_current_schema_before_the_first_control() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let task = task_state(directory.path());
     metadata_from_task(&task)
@@ -309,7 +309,7 @@ async fn legacy_metadata_upgrades_to_schema_v3_before_the_first_control() {
             .expect("read upgraded task metadata"),
     )
     .expect("decode upgraded task metadata");
-    assert_eq!(document["schema_version"], serde_json::json!(3));
+    assert_eq!(document["schema_version"], serde_json::json!(4));
 }
 
 #[tokio::test]

@@ -12,6 +12,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::adapter::{RuntimeAdapter, TaskIdentity};
+use crate::metadata::PendingStdinWrite;
 
 const FIFO_BUFFER_BYTES: usize = 64 * 1024;
 const OUTPUT_READ_BYTES: u32 = 64 * 1024;
@@ -80,6 +81,10 @@ pub(crate) struct ProcessIoEndpoints<'a> {
     pub(crate) stderr: &'a str,
     pub(crate) terminal: bool,
     pub(crate) await_start_activation: bool,
+    pub(crate) read_stdin_at_activation: bool,
+    pub(crate) stdin_sequence: u64,
+    pub(crate) pending_stdin_write: Option<PendingStdinWrite>,
+    pub(crate) stdin_journal: Option<Arc<dyn StdinJournal>>,
     pub(crate) output_cursor: u64,
     pub(crate) output_cursor_committer: Option<Arc<dyn OutputCursorCommitter>>,
 }
@@ -95,6 +100,13 @@ struct OutputPumpEndpoints {
 #[async_trait]
 pub(crate) trait OutputCursorCommitter: Send + Sync {
     async fn commit(&self, cursor: u64) -> Result<(), RuntimeError>;
+}
+
+#[async_trait]
+pub(crate) trait StdinJournal: Send + Sync {
+    async fn prepare(&self, sequence: u64, data: Vec<u8>) -> Result<(), RuntimeError>;
+
+    async fn commit(&self, sequence: u64) -> Result<(), RuntimeError>;
 }
 
 impl ProcessPumps {
@@ -227,6 +239,10 @@ pub(crate) fn start_process_pumps(
                 cancellation.subscribe(),
                 drain_requested,
                 activation_requested,
+                endpoints.read_stdin_at_activation,
+                endpoints.stdin_sequence,
+                endpoints.pending_stdin_write,
+                endpoints.stdin_journal,
             ),
         );
         tasks.push(task_handle);
@@ -265,10 +281,35 @@ pub(crate) fn start_process_pumps(
 }
 
 fn validate_process_io_endpoints(endpoints: &ProcessIoEndpoints<'_>) -> Result<(), RuntimeError> {
+    if endpoints.read_stdin_at_activation && !endpoints.await_start_activation {
+        return Err(RuntimeError::new(
+            ErrorCode::InvalidArgument,
+            "containerd stdin cannot read at activation without an activation gate",
+        )
+        .for_operation("containerd-stdio"));
+    }
     if endpoints.terminal && !endpoints.stderr.is_empty() {
         return Err(RuntimeError::new(
             ErrorCode::InvalidArgument,
             "containerd terminal I/O must use one merged stdout stream and omit stderr",
+        )
+        .for_operation("containerd-stdio"));
+    }
+    if endpoints.stdin.is_empty()
+        && (endpoints.stdin_sequence != 0 || endpoints.pending_stdin_write.is_some())
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::FailedPrecondition,
+            "containerd stdin journal state requires a configured stdin FIFO",
+        )
+        .for_operation("containerd-stdio"));
+    }
+    if (endpoints.stdin_sequence != 0 || endpoints.pending_stdin_write.is_some())
+        && endpoints.stdin_journal.is_none()
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::FailedPrecondition,
+            "containerd stdin recovery state requires a durable journal",
         )
         .for_operation("containerd-stdio"));
     }
@@ -340,47 +381,76 @@ async fn pump_stdin(
     mut cancelled: watch::Receiver<bool>,
     mut drain_requested: watch::Receiver<bool>,
     mut activation_requested: Option<watch::Receiver<bool>>,
+    read_stdin_at_activation: bool,
+    initial_sequence: u64,
+    pending_stdin_write: Option<PendingStdinWrite>,
+    stdin_journal: Option<Arc<dyn StdinJournal>>,
 ) -> Result<StdinPumpOutcome, RuntimeError> {
-    let mut sequence = 0_u64;
+    let mut sequence = initial_sequence;
     let mut buffer = vec![0_u8; FIFO_BUFFER_BYTES];
-    if let Some(activation) = &mut activation_requested {
-        match wait_for_stdin_activation(activation, &mut cancelled, &mut drain_requested).await? {
-            StdinStartup::Activated => match read_fifo_nonblocking(fifo.get_ref(), &mut buffer)? {
-                FifoRead::Bytes(length) => {
-                    write_stdin_chunk(
-                        &adapter,
-                        &task,
-                        generation,
-                        exec_id.as_deref(),
-                        &target,
-                        &mut sequence,
-                        &buffer[..length],
-                        &mut cancelled,
-                    )
-                    .await?;
+    let startup = if let Some(activation) = &mut activation_requested {
+        Some(wait_for_stdin_activation(activation, &mut cancelled, &mut drain_requested).await?)
+    } else {
+        None
+    };
+    if matches!(startup, Some(StdinStartup::Stopped)) {
+        return Ok(StdinPumpOutcome::Stopped);
+    }
+    if let Some(pending) = pending_stdin_write {
+        replay_stdin_write(
+            &adapter,
+            &task,
+            generation,
+            exec_id.as_deref(),
+            &target,
+            &mut sequence,
+            &pending,
+            stdin_journal.as_deref(),
+            &mut cancelled,
+        )
+        .await?;
+    }
+    if let Some(startup) = startup {
+        match startup {
+            StdinStartup::Activated if read_stdin_at_activation => {
+                match read_fifo_nonblocking(fifo.get_ref(), &mut buffer)? {
+                    FifoRead::Bytes(length) => {
+                        write_stdin_chunk(
+                            &adapter,
+                            &task,
+                            generation,
+                            exec_id.as_deref(),
+                            &target,
+                            &mut sequence,
+                            &buffer[..length],
+                            stdin_journal.as_deref(),
+                            &mut cancelled,
+                        )
+                        .await?;
+                    }
+                    // EAGAIN proves that containerd's producer is connected but
+                    // has not emitted a byte yet. Continue waiting without
+                    // inventing EOF for delayed or interactive input.
+                    FifoRead::Empty => {}
+                    // containerd installs the fresh task's FIFO producer before
+                    // Start. EOF at the successful Start boundary therefore means
+                    // that an empty producer has already finished, possibly before
+                    // it could issue CloseIO.
+                    FifoRead::Eof => {
+                        return close_runtime_stdin(
+                            &adapter,
+                            &task,
+                            generation,
+                            exec_id.as_deref(),
+                            &target,
+                            &mut cancelled,
+                        )
+                        .await;
+                    }
                 }
-                // EAGAIN proves that containerd's producer is connected but
-                // has not emitted a byte yet. Continue waiting without
-                // inventing EOF for delayed or interactive input.
-                FifoRead::Empty => {}
-                // containerd installs the fresh task's FIFO producer before
-                // Start. EOF at the successful Start boundary therefore means
-                // that an empty producer has already finished, possibly before
-                // it could issue CloseIO.
-                FifoRead::Eof => {
-                    return close_runtime_stdin(
-                        &adapter,
-                        &task,
-                        generation,
-                        exec_id.as_deref(),
-                        &target,
-                        &mut cancelled,
-                    )
-                    .await;
-                }
-            },
-            StdinStartup::DrainRequested => {}
-            StdinStartup::Stopped => return Ok(StdinPumpOutcome::Stopped),
+            }
+            StdinStartup::Activated | StdinStartup::DrainRequested => {}
+            StdinStartup::Stopped => unreachable!("stopped stdin startup handled before replay"),
         }
     }
     loop {
@@ -395,6 +465,7 @@ async fn pump_stdin(
                         &target,
                         &mut sequence,
                         &buffer[..length],
+                        stdin_journal.as_deref(),
                         &mut cancelled,
                     )
                     .await?;
@@ -454,6 +525,7 @@ async fn pump_stdin(
             &target,
             &mut sequence,
             &buffer[..length],
+            stdin_journal.as_deref(),
             &mut cancelled,
         )
         .await?;
@@ -530,16 +602,99 @@ async fn write_stdin_chunk(
     target: &a3s_oci_sdk::ProcessTarget,
     sequence: &mut u64,
     data: &[u8],
+    stdin_journal: Option<&dyn StdinJournal>,
     cancelled: &mut watch::Receiver<bool>,
 ) -> Result<(), RuntimeError> {
-    *sequence = sequence.checked_add(1).ok_or_else(|| {
+    let next_sequence = sequence.checked_add(1).ok_or_else(|| {
         RuntimeError::new(
             ErrorCode::ResourceExhausted,
             "containerd stdin pump sequence space is exhausted",
         )
         .for_operation("containerd-stdin")
     })?;
-    let context = adapter.stdin_operation(task, exec_id, *sequence)?;
+    dispatch_stdin_write(
+        adapter,
+        task,
+        generation,
+        exec_id,
+        target,
+        next_sequence,
+        data,
+        stdin_journal,
+        true,
+        cancelled,
+    )
+    .await?;
+    *sequence = next_sequence;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn replay_stdin_write(
+    adapter: &RuntimeAdapter,
+    task: &TaskIdentity,
+    generation: Generation,
+    exec_id: Option<&str>,
+    target: &a3s_oci_sdk::ProcessTarget,
+    sequence: &mut u64,
+    pending: &PendingStdinWrite,
+    stdin_journal: Option<&dyn StdinJournal>,
+    cancelled: &mut watch::Receiver<bool>,
+) -> Result<(), RuntimeError> {
+    let expected = sequence.checked_add(1).ok_or_else(|| {
+        RuntimeError::new(
+            ErrorCode::ResourceExhausted,
+            "containerd stdin pump sequence space is exhausted",
+        )
+        .for_operation("containerd-stdin")
+    })?;
+    if pending.sequence() != expected {
+        return Err(RuntimeError::new(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "pending containerd stdin sequence {} does not follow completed sequence {}",
+                pending.sequence(),
+                *sequence
+            ),
+        )
+        .for_operation("containerd-stdin"));
+    }
+    dispatch_stdin_write(
+        adapter,
+        task,
+        generation,
+        exec_id,
+        target,
+        pending.sequence(),
+        pending.data(),
+        stdin_journal,
+        false,
+        cancelled,
+    )
+    .await?;
+    *sequence = pending.sequence();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_stdin_write(
+    adapter: &RuntimeAdapter,
+    task: &TaskIdentity,
+    generation: Generation,
+    exec_id: Option<&str>,
+    target: &a3s_oci_sdk::ProcessTarget,
+    sequence: u64,
+    data: &[u8],
+    stdin_journal: Option<&dyn StdinJournal>,
+    prepare: bool,
+    cancelled: &mut watch::Receiver<bool>,
+) -> Result<(), RuntimeError> {
+    let context = adapter.stdin_operation(task, exec_id, sequence)?;
+    if prepare {
+        if let Some(journal) = stdin_journal {
+            journal.prepare(sequence, data.to_vec()).await?;
+        }
+    }
     let write = cancellable_request(
         cancelled,
         "write containerd stdin through the runtime SDK",
@@ -547,26 +702,34 @@ async fn write_stdin_chunk(
     )
     .await;
     match write {
-        Ok(Some(())) => Ok(()),
-        Ok(None) => Err(RuntimeError::new(
-            ErrorCode::Unavailable,
-            "containerd stdin pump stopped during an ordered write",
-        )
-        .for_operation("containerd-stdin")
-        .retryable(true)),
+        Ok(Some(())) => {}
+        Ok(None) => {
+            return Err(RuntimeError::new(
+                ErrorCode::Unavailable,
+                "containerd stdin pump stopped during an ordered write",
+            )
+            .for_operation("containerd-stdin")
+            .retryable(true));
+        }
         Err(error) => {
             match stdin_target_state(adapter, task, generation, target, &error, cancelled).await {
-                StdinTargetState::Exited => Ok(()),
-                StdinTargetState::Stopped => Err(RuntimeError::new(
-                    ErrorCode::Unavailable,
-                    "containerd stdin pump stopped while confirming a late write",
-                )
-                .for_operation("containerd-stdin")
-                .retryable(true)),
-                StdinTargetState::LiveOrUnknown => Err(error),
+                StdinTargetState::Exited => {}
+                StdinTargetState::Stopped => {
+                    return Err(RuntimeError::new(
+                        ErrorCode::Unavailable,
+                        "containerd stdin pump stopped while confirming a late write",
+                    )
+                    .for_operation("containerd-stdin")
+                    .retryable(true));
+                }
+                StdinTargetState::LiveOrUnknown => return Err(error),
             }
         }
     }
+    if let Some(journal) = stdin_journal {
+        journal.commit(sequence).await?;
+    }
+    Ok(())
 }
 
 async fn close_runtime_stdin(
@@ -918,6 +1081,124 @@ mod tests {
         requested_cursors: Arc<std::sync::Mutex<Vec<u64>>>,
     }
 
+    #[derive(Clone, Default)]
+    struct ReplaySafeStdinService {
+        completed:
+            Arc<std::sync::Mutex<std::collections::HashMap<a3s_oci_sdk::OperationId, Vec<u8>>>>,
+        requests: Arc<std::sync::Mutex<Vec<a3s_oci_sdk::OperationId>>>,
+        effects: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl ReplaySafeStdinService {
+        fn with_completed(operation_id: a3s_oci_sdk::OperationId, data: Vec<u8>) -> Self {
+            let mut completed = std::collections::HashMap::new();
+            completed.insert(operation_id, data.clone());
+            Self {
+                completed: Arc::new(std::sync::Mutex::new(completed)),
+                requests: Arc::default(),
+                effects: Arc::new(std::sync::Mutex::new(vec![data])),
+            }
+        }
+    }
+
+    #[a3s_oci_sdk::async_trait]
+    impl a3s_oci_sdk::OciRuntimeService for ReplaySafeStdinService {
+        async fn features(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::RuntimeInfo> {
+            Err(RuntimeError::unsupported("test-features"))
+        }
+
+        async fn create(
+            &self,
+            _request: a3s_oci_sdk::CreateRequest,
+        ) -> a3s_oci_sdk::Result<a3s_oci_sdk::ContainerRecord> {
+            Err(RuntimeError::unsupported("test-create"))
+        }
+
+        async fn state(
+            &self,
+            _request: a3s_oci_sdk::StateRequest,
+        ) -> a3s_oci_sdk::Result<a3s_oci_sdk::ContainerRecord> {
+            Err(RuntimeError::unsupported("test-state"))
+        }
+
+        async fn start(
+            &self,
+            _request: a3s_oci_sdk::StartRequest,
+        ) -> a3s_oci_sdk::Result<a3s_oci_sdk::ContainerRecord> {
+            Err(RuntimeError::unsupported("test-start"))
+        }
+
+        async fn kill(
+            &self,
+            _request: a3s_oci_sdk::KillRequest,
+        ) -> a3s_oci_sdk::Result<a3s_oci_sdk::ContainerRecord> {
+            Err(RuntimeError::unsupported("test-kill"))
+        }
+
+        async fn delete(&self, _request: a3s_oci_sdk::DeleteRequest) -> a3s_oci_sdk::Result<()> {
+            Err(RuntimeError::unsupported("test-delete"))
+        }
+
+        async fn write_stdin(
+            &self,
+            request: a3s_oci_sdk::WriteStdinRequest,
+        ) -> a3s_oci_sdk::Result<()> {
+            let operation_id = request.context.operation_id;
+            self.requests
+                .lock()
+                .expect("stdin requests")
+                .push(operation_id.clone());
+            let mut completed = self.completed.lock().expect("completed stdin writes");
+            if let Some(previous) = completed.get(&operation_id) {
+                if previous == &request.data {
+                    return Ok(());
+                }
+                return Err(RuntimeError::new(
+                    ErrorCode::Conflict,
+                    "stdin operation ID was reused with different data",
+                ));
+            }
+            completed.insert(operation_id, request.data.clone());
+            self.effects
+                .lock()
+                .expect("stdin effects")
+                .push(request.data);
+            Ok(())
+        }
+
+        async fn close_stdin(
+            &self,
+            _request: a3s_oci_sdk::CloseStdinRequest,
+        ) -> a3s_oci_sdk::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingStdinJournal {
+        prepared: std::sync::Mutex<Vec<(u64, Vec<u8>)>>,
+        committed: std::sync::Mutex<Vec<u64>>,
+    }
+
+    #[async_trait]
+    impl StdinJournal for RecordingStdinJournal {
+        async fn prepare(&self, sequence: u64, data: Vec<u8>) -> Result<(), RuntimeError> {
+            self.prepared
+                .lock()
+                .expect("prepared stdin journal")
+                .push((sequence, data));
+            Ok(())
+        }
+
+        async fn commit(&self, sequence: u64) -> Result<(), RuntimeError> {
+            self.committed
+                .lock()
+                .expect("committed stdin journal")
+                .push(sequence);
+            Ok(())
+        }
+    }
+
     #[a3s_oci_sdk::async_trait]
     impl a3s_oci_sdk::OciRuntimeService for OutputReplayService {
         async fn features(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::RuntimeInfo> {
@@ -1137,6 +1418,10 @@ mod tests {
             stderr: "stderr",
             terminal: true,
             await_start_activation: true,
+            read_stdin_at_activation: true,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
+            stdin_journal: None,
             output_cursor: 0,
             output_cursor_committer: None,
         })
@@ -1202,6 +1487,10 @@ mod tests {
                 stderr: "",
                 terminal: true,
                 await_start_activation: false,
+                read_stdin_at_activation: false,
+                stdin_sequence: 0,
+                pending_stdin_write: None,
+                stdin_journal: None,
                 output_cursor: 5,
                 output_cursor_committer: Some(committer.clone()),
             },
@@ -1329,6 +1618,99 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
+    async fn stdin_pump_replays_pending_write_and_continues_after_durable_sequence() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("journaled-stdin");
+        let path_c =
+            std::ffi::CString::new(path.as_os_str().as_bytes()).expect("FIFO path without NUL");
+        let result = unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
+        assert_eq!(
+            result,
+            0,
+            "create test FIFO: {}",
+            io::Error::last_os_error()
+        );
+
+        let pending_data = b"pending\n".to_vec();
+        let fresh_data = b"fresh\n".to_vec();
+        let pending_operation =
+            crate::identity::operation("k8s.io", "journaled-stdin", None, None, "write-stdin-5")
+                .expect("pending stdin operation")
+                .operation_id;
+        let fresh_operation =
+            crate::identity::operation("k8s.io", "journaled-stdin", None, None, "write-stdin-6")
+                .expect("fresh stdin operation")
+                .operation_id;
+        let service =
+            ReplaySafeStdinService::with_completed(pending_operation.clone(), pending_data.clone());
+        let adapter = RuntimeAdapter::from_client(
+            a3s_oci_sdk::RuntimeClient::new(service.clone()),
+            a3s_oci_sdk::IsolationRequest::SharedHostKernel,
+        );
+        let journal = Arc::new(RecordingStdinJournal::default());
+        let identity = TaskIdentity::new("k8s.io", "journaled-stdin").expect("task identity");
+        let mut pumps = start_process_pumps(
+            adapter,
+            identity,
+            Generation(7),
+            None,
+            ProcessIoEndpoints {
+                stdin: path.to_str().expect("UTF-8 FIFO path"),
+                stdout: "",
+                stderr: "",
+                terminal: false,
+                await_start_activation: true,
+                read_stdin_at_activation: false,
+                stdin_sequence: 4,
+                pending_stdin_write: Some(
+                    PendingStdinWrite::new(5, pending_data.clone()).expect("pending stdin write"),
+                ),
+                stdin_journal: Some(journal.clone()),
+                output_cursor: 0,
+                output_cursor_committer: None,
+            },
+        )
+        .expect("start journaled stdin pump");
+        let writer = open_fifo(path.to_str().expect("UTF-8 FIFO path"), false, true)
+            .expect("open journaled stdin writer");
+        let cancellation = PumpCancellation::new();
+        let mut receiver = cancellation.subscribe();
+        write_all(&writer, &fresh_data, &mut receiver)
+            .await
+            .expect("write fresh stdin");
+
+        pumps
+            .stdin_drain()
+            .expect("stdin drain")
+            .request_and_wait()
+            .await
+            .expect("replay and drain journaled stdin");
+
+        assert_eq!(
+            *service.requests.lock().expect("stdin requests"),
+            vec![pending_operation, fresh_operation]
+        );
+        assert_eq!(
+            *service.effects.lock().expect("stdin effects"),
+            vec![pending_data, fresh_data.clone()],
+            "replaying the pending operation must not duplicate its remote effect"
+        );
+        assert_eq!(
+            *journal.prepared.lock().expect("prepared stdin journal"),
+            vec![(6, fresh_data)]
+        );
+        assert_eq!(
+            *journal.committed.lock().expect("committed stdin journal"),
+            vec![5, 6]
+        );
+        assert!(pumps.failure().is_none());
+        pumps.stop().await;
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
     async fn initial_empty_stdin_closes_at_the_successful_start_boundary() {
         use std::os::unix::ffi::OsStrExt;
 
@@ -1362,6 +1744,10 @@ mod tests {
                 stderr: "",
                 terminal: false,
                 await_start_activation: true,
+                read_stdin_at_activation: true,
+                stdin_sequence: 0,
+                pending_stdin_write: None,
+                stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,
             },
@@ -1420,6 +1806,10 @@ mod tests {
                 stderr: "",
                 terminal: false,
                 await_start_activation: true,
+                read_stdin_at_activation: true,
+                stdin_sequence: 0,
+                pending_stdin_write: None,
+                stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,
             },
@@ -1493,6 +1883,10 @@ mod tests {
                 stderr: "",
                 terminal: false,
                 await_start_activation: false,
+                read_stdin_at_activation: false,
+                stdin_sequence: 0,
+                pending_stdin_write: None,
+                stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,
             },
@@ -1570,6 +1964,10 @@ mod tests {
                 stderr: "",
                 terminal: false,
                 await_start_activation: true,
+                read_stdin_at_activation: true,
+                stdin_sequence: 0,
+                pending_stdin_write: None,
+                stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,
             },

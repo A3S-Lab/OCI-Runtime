@@ -18,10 +18,11 @@ pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 3;
+const METADATA_SCHEMA_VERSION: u32 = 4;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_INCARNATION_BYTES: u64 = 64;
+const MAX_PENDING_STDIN_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +41,10 @@ pub(crate) struct ShimMetadata {
     stdout: String,
     stderr: String,
     terminal: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    stdin_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_stdin_write: Option<PendingStdinWrite>,
     #[serde(default, skip_serializing_if = "is_zero")]
     output_cursor: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -67,6 +72,10 @@ pub(crate) struct ExecMetadata {
     pub(crate) stderr: String,
     pub(crate) terminal: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) stdin_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_stdin_write: Option<PendingStdinWrite>,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) output_cursor: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) record: Option<ProcessRecord>,
@@ -91,6 +100,49 @@ pub(crate) enum ControlOperationKind {
     Pause,
     Resume,
     Update,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingStdinWrite {
+    sequence: u64,
+    data: Vec<u8>,
+}
+
+impl PendingStdinWrite {
+    pub(crate) fn new(sequence: u64, data: Vec<u8>) -> Result<Self> {
+        let write = Self { sequence, data };
+        write.validate()?;
+        Ok(write)
+    }
+
+    pub(crate) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub(crate) fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.sequence == 0 {
+            return Err(metadata_error(
+                "pending containerd stdin write records sequence zero",
+            ));
+        }
+        if self.data.is_empty() {
+            return Err(metadata_error(
+                "pending containerd stdin write records an empty payload",
+            ));
+        }
+        if self.data.len() > MAX_PENDING_STDIN_BYTES {
+            return Err(metadata_error(format!(
+                "pending containerd stdin write contains {} bytes, exceeding the {MAX_PENDING_STDIN_BYTES}-byte limit",
+                self.data.len()
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +223,8 @@ impl ExecMetadata {
             stdout,
             stderr,
             terminal,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
             output_cursor: 0,
             record: None,
             exit: None,
@@ -215,6 +269,8 @@ impl ShimMetadata {
             stdout: value.stdout,
             stderr: value.stderr,
             terminal: value.terminal,
+            stdin_sequence: 0,
+            pending_stdin_write: None,
             output_cursor: value.output_cursor,
             control_sequence: 0,
             pending_control: None,
@@ -407,6 +463,14 @@ impl ShimMetadata {
         self.output_cursor
     }
 
+    pub(crate) fn stdin_sequence(&self) -> u64 {
+        self.stdin_sequence
+    }
+
+    pub(crate) fn pending_stdin_write(&self) -> Option<&PendingStdinWrite> {
+        self.pending_stdin_write.as_ref()
+    }
+
     pub(crate) fn control_sequence(&self) -> u64 {
         self.control_sequence
     }
@@ -455,6 +519,11 @@ impl ShimMetadata {
         self.last_update_digest = last_update_digest;
     }
 
+    pub(crate) fn set_stdin_state(&mut self, sequence: u64, pending: Option<PendingStdinWrite>) {
+        self.stdin_sequence = sequence;
+        self.pending_stdin_write = pending;
+    }
+
     fn validate(&self, path: &Path) -> Result<()> {
         if !(MIN_METADATA_SCHEMA_VERSION..=METADATA_SCHEMA_VERSION).contains(&self.schema_version) {
             return Err(metadata_error(format!(
@@ -478,6 +547,30 @@ impl ShimMetadata {
                 "shim metadata schema {} cannot contain schema-v3 control state",
                 self.schema_version
             )));
+        }
+        if self.schema_version < 4
+            && (self.stdin_sequence != 0
+                || self.pending_stdin_write.is_some()
+                || self
+                    .execs
+                    .iter()
+                    .any(|exec| exec.stdin_sequence != 0 || exec.pending_stdin_write.is_some()))
+        {
+            return Err(metadata_error(format!(
+                "shim metadata schema {} cannot contain schema-v4 stdin state",
+                self.schema_version
+            )));
+        }
+        validate_stdin_state(
+            self.stdin_sequence,
+            self.pending_stdin_write.as_ref(),
+            "task",
+        )?;
+        if self.stdin.is_empty() && (self.stdin_sequence != 0 || self.pending_stdin_write.is_some())
+        {
+            return Err(metadata_error(
+                "task stdin journal state requires a configured stdin FIFO",
+            ));
         }
         if let Some(pending) = &self.pending_control {
             pending.validate()?;
@@ -524,10 +617,41 @@ impl ShimMetadata {
                     "shim metadata exec entries must be unique and sorted by exec ID",
                 ));
             }
+            validate_stdin_state(
+                exec.stdin_sequence,
+                exec.pending_stdin_write.as_ref(),
+                &format!("exec {}", exec.exec_id),
+            )?;
+            if exec.stdin.is_empty()
+                && (exec.stdin_sequence != 0 || exec.pending_stdin_write.is_some())
+            {
+                return Err(metadata_error(format!(
+                    "exec {} stdin journal state requires a configured stdin FIFO",
+                    exec.exec_id
+                )));
+            }
             previous = Some(exec.exec_id.clone());
         }
         Ok(())
     }
+}
+
+fn validate_stdin_state(
+    completed_sequence: u64,
+    pending: Option<&PendingStdinWrite>,
+    context: &str,
+) -> Result<()> {
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    pending.validate()?;
+    if completed_sequence.checked_add(1) != Some(pending.sequence) {
+        return Err(metadata_error(format!(
+            "pending containerd {context} stdin sequence {} does not follow completed sequence {completed_sequence}",
+            pending.sequence
+        )));
+    }
+    Ok(())
 }
 
 const fn is_zero(value: &u64) -> bool {
@@ -862,6 +986,7 @@ mod tests {
     fn schema_v3_metadata_round_trip_preserves_pending_control_state() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut expected = metadata(directory.path());
+        expected.schema_version = 3;
         let last_update = format!("sha256:{}", "1".repeat(64));
         let pending_update = format!("sha256:{}", "2".repeat(64));
         expected.set_control_state(
@@ -892,6 +1017,51 @@ mod tests {
             Some(pending_update.as_str())
         );
         assert_eq!(loaded.last_update_digest(), Some(last_update.as_str()));
+        assert_eq!(loaded.stdin_sequence(), 0);
+        assert_eq!(loaded.pending_stdin_write(), None);
+    }
+
+    #[test]
+    fn schema_v4_metadata_round_trip_preserves_task_and_exec_stdin_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        expected.set_stdin_state(
+            4,
+            Some(PendingStdinWrite::new(5, b"task-pending".to_vec()).expect("task stdin")),
+        );
+        let process: Process = serde_json::from_value(serde_json::json!({
+            "terminal": false,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/cat"],
+            "cwd": "/"
+        }))
+        .expect("OCI process");
+        let mut exec = ExecMetadata::new(
+            "exec-a".to_string(),
+            process,
+            "exec-in".to_string(),
+            "exec-out".to_string(),
+            String::new(),
+            false,
+        );
+        exec.stdin_sequence = 8;
+        exec.pending_stdin_write =
+            Some(PendingStdinWrite::new(9, b"exec-pending".to_vec()).expect("exec stdin"));
+        expected.set_execs(vec![exec]);
+
+        expected.store().expect("store schema-v4 metadata");
+        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load schema-v4 metadata")
+            .expect("metadata exists");
+
+        assert_eq!(loaded.schema_version, 4);
+        assert_eq!(loaded.stdin_sequence(), 4);
+        assert_eq!(loaded.pending_stdin_write(), expected.pending_stdin_write());
+        assert_eq!(loaded.execs()[0].stdin_sequence, 8);
+        assert_eq!(
+            loaded.execs()[0].pending_stdin_write,
+            expected.execs()[0].pending_stdin_write
+        );
     }
 
     #[test]
@@ -936,6 +1106,40 @@ mod tests {
             legacy_with_control
                 .store()
                 .expect_err("schema-v2 control state must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut legacy_with_stdin = metadata(directory.path());
+        legacy_with_stdin.schema_version = 3;
+        legacy_with_stdin.set_stdin_state(
+            0,
+            Some(PendingStdinWrite::new(1, b"pending".to_vec()).expect("pending stdin")),
+        );
+        assert_eq!(
+            legacy_with_stdin
+                .store()
+                .expect_err("schema-v3 stdin state must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut skipped_sequence = metadata(directory.path());
+        skipped_sequence.set_stdin_state(
+            4,
+            Some(PendingStdinWrite::new(6, b"pending".to_vec()).expect("pending stdin")),
+        );
+        assert_eq!(
+            skipped_sequence
+                .store()
+                .expect_err("nonconsecutive stdin sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        assert_eq!(
+            PendingStdinWrite::new(1, vec![0; MAX_PENDING_STDIN_BYTES + 1])
+                .expect_err("oversized pending stdin must fail")
                 .code,
             ErrorCode::FailedPrecondition
         );

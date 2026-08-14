@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Durable containerd stdin continuation across live shim replacement. Metadata
+  schema v4 gives init and each exec an independent completed sequence plus one
+  bounded pending payload. The shim persists exact bytes before dispatch,
+  replays a response-loss write with the same SDK operation identity, rejects
+  sequence or payload drift, and resumes new FIFO input at the next sequence.
+  The Ubuntu arm64/containerd 2.2.2 release gate now proves terminal input and
+  output continuation, PTY resize, unchanged process identity, and zero task,
+  container, shim, bundle, process, or cgroup residue after manual replacement.
 - Rootless Native Linux owner-death recovery qualification. The hidden owner
   and replacement commands now accept the same explicit user-owned cgroup-v2
   delegation and record effective credentials, verified delegation use,

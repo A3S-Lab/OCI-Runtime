@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -19,15 +19,16 @@ the packaged shim, SDK, host service, agent, and selected driver.
 
 The August 14, 2026 arm64 requalification used containerd 2.2.2 and the
 release-built shim SHA-256
-`3358a0f693bbab7551496125cd5092e66bbea0dc35a1f7deeea55e2807ccb4f1`.
+`2d03eca60f1cbf098f038811fda61c6c353c7a0f85c6cc64ac422feaf5f0fb18`.
 The host CLI, agent, and qualification executable SHA-256 values were
 `9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
 `0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
-and `7c967019a57329839136ae4d53c7d795dd825b255ee6a49f36bdf25da6c098b2`.
-The 42.76-second matrix passed two distinct resource updates, two complete
-pause/resume cycles, every retained restart and shim-crash boundary, and its
-post-run audit with no task, container, shim, bundle, active runtime container,
-workload process, or workload cgroup member left behind.
+and `9fefd1c6cf73b699eb06135bc753bfc56fa54b17821fee4d5fed5f47d4139316`.
+The 40.95-second matrix passed two distinct resource updates, two complete
+pause/resume cycles, durable terminal stdin before and after live shim
+replacement, every retained restart and shim-crash boundary, and its post-run
+audit with no task, container, shim, bundle, active runtime container, workload
+process, or workload cgroup member left behind.
 
 ## Runtime type and package layout
 
@@ -87,13 +88,15 @@ mutation. Every live request carries the exact runtime generation.
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v3 records the last init and exec output cursor only
-after the corresponding FIFO write succeeds. It also records the last
-completed per-task control sequence, an optional in-flight Pause, Resume, or
-Update, and the last completed Update request digest. Schema-v1 records remain
-readable with zero output cursors and empty control state. Schema-v2 records
-preserve their output cursors and default only the new control state. Either
-legacy schema is rewritten as schema v3 on the next metadata commit.
+any drift. Metadata schema v4 records the last completed init and exec stdin
+sequence, an optional in-flight sequence plus its exact bounded payload, and
+the last output cursor only after the corresponding FIFO write succeeds. It
+also records the last completed per-task control sequence, an optional
+in-flight Pause, Resume, or Update, and the last completed Update request
+digest. Schema-v1 records default input sequences, output cursors, and control
+state to empty. Schema-v2 records preserve output cursors, and schema-v3 adds
+the control journal. All three legacy schemas default the new stdin journal to
+empty and are rewritten as schema v4 on the next metadata commit.
 
 Before dispatching Create, the shim separately commits a schema-v1 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
@@ -147,6 +150,16 @@ The host Runtime writes canonical fingerprints as durable operation schema v2
 while continuing to load and validate schema-v1 journals with their original
 encoding.
 
+Init and exec stdin use separate durable sequences. Before each FIFO chunk is
+sent, the shim stores the next sequence and exact bytes; it clears that pending
+entry only after the Runtime accepts the matching SDK operation. A replacement
+shim first replays any pending entry with the same `OperationId` and payload,
+then continues at the next sequence. Reusing a sequence with different bytes,
+skipping a sequence, attaching journal state to a process without stdin, or
+loading an oversized pending payload fails closed. The retained arm64 gate
+proves that a live terminal exec receives input before and after manual shim
+replacement without duplicating the first remote effect.
+
 ## Restart and cleanup contract
 
 The real gate restarts containerd while init is Created, Running, and Stopped;
@@ -157,9 +170,10 @@ incarnation, and runtime generation must not drift.
 The gate also suspends containerd, kills the live shim, starts a replacement
 shim from the same bundle and socket, kills the suspended daemon, and restarts
 containerd. A live terminal exec must retain its workload PID, incarnation,
-runtime generation, and replacement shim PID. Output delivered before the
-replacement must not replay, and a resize issued after replacement must
-produce only its new terminal dimensions.
+runtime generation, replacement shim PID, completed stdin sequence, and output
+cursor. Output delivered before the replacement must not replay; new stdin
+must use the next durable operation identity and reach the original PTY; and a
+resize issued after replacement must produce only its new terminal dimensions.
 
 containerd 2.2 treats an already-stopped shim as leaked during some daemon
 recovery paths. In that case it invokes DeleteShim. The shim replays durable

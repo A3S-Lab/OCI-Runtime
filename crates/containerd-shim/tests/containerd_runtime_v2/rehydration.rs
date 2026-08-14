@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use prost_types::Any;
 use serde::Deserialize;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::Child;
 
 use super::api::{
@@ -21,6 +21,22 @@ struct Bootstrap {
     version: u32,
     address: String,
     protocol: String,
+}
+
+struct RehydratedTerminalExec {
+    pid: u32,
+    stdin_path: PathBuf,
+    stdin: Option<tokio::fs::File>,
+    stdout_path: PathBuf,
+    output: Lines<BufReader<tokio::fs::File>>,
+}
+
+#[derive(Debug)]
+struct StdinJournalEvidence {
+    schema_version: u64,
+    completed_sequence: u64,
+    pending: Option<serde_json::Value>,
+    output_cursor: u64,
 }
 
 pub(crate) async fn qualify_manual_shim_rehydration(
@@ -62,8 +78,7 @@ pub(crate) async fn qualify_manual_shim_rehydration(
     }
 
     let bundle = config.bundle(&id);
-    let (exec_pid, terminal_stdout, mut terminal_output) =
-        start_terminal_exec(config, &channel, &id, &bundle).await?;
+    let mut terminal_exec = start_terminal_exec(config, &channel, &id, &bundle).await?;
     let identity = read_runtime_identity(config, &id).await?;
     let bootstrap = load_bootstrap(&bundle).await?;
     let binary = load_shim_binary(&bundle).await?;
@@ -122,15 +137,7 @@ pub(crate) async fn qualify_manual_shim_rehydration(
         .into());
     }
 
-    finish_rehydrated_terminal_exec(
-        config,
-        &channel,
-        &id,
-        exec_pid,
-        &terminal_stdout,
-        &mut terminal_output,
-    )
-    .await?;
+    finish_rehydrated_terminal_exec(config, &channel, &id, &mut terminal_exec).await?;
 
     TasksClient::new(channel.clone())
         .kill(namespaced(
@@ -187,17 +194,29 @@ async fn start_terminal_exec(
     channel: &tonic::transport::Channel,
     id: &str,
     bundle: &Path,
-) -> TestResult<(u32, PathBuf, Lines<BufReader<tokio::fs::File>>)> {
+) -> TestResult<RehydratedTerminalExec> {
     let exec_id = "rehydrated-terminal-exec";
+    let stdin = bundle.join("rehydrated-terminal-exec.stdin");
     let stdout = bundle.join("rehydrated-terminal-exec.stdout");
+    terminal::create_fifo(&stdin).await?;
     terminal::create_fifo(&stdout).await?;
+    let mut stdin_writer = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&stdin)
+        .await
+        .map_err(|error| {
+            qualification_error(format!(
+                "open rehydrated terminal stdin FIFO for read/write: {error}"
+            ))
+        })?;
     let spec = serde_json::json!({
         "terminal": true,
         "user": {"uid": 0, "gid": 0},
         "args": [
             "/bin/sh",
             "-c",
-            "trap 'exit 31' TERM; trap 'stty size' WINCH; printf 'rehydrate-ready\\n'; while :; do sleep 1; done"
+            "stty -echo; trap 'exit 31' TERM; trap '' WINCH; printf 'rehydrate-ready\\n'; while :; do IFS= read -r line || continue; if [ \"$line\" = __a3s_size__ ]; then stty size; else printf 'stdin:%s\\n' \"$line\"; fi; done"
         ],
         "env": [
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -210,6 +229,7 @@ async fn start_terminal_exec(
         .exec(namespaced(
             ExecProcessRequest {
                 container_id: id.to_string(),
+                stdin: stdin.to_string_lossy().into_owned(),
                 stdout: stdout.to_string_lossy().into_owned(),
                 terminal: true,
                 spec: Some(Any {
@@ -254,30 +274,63 @@ async fn start_terminal_exec(
         "terminal exec before manual shim rehydration",
     )
     .await?;
+    stdin_writer
+        .write_all(b"before-rehydrate\n")
+        .await
+        .map_err(|error| {
+            qualification_error(format!("write terminal stdin before rehydration: {error}"))
+        })?;
+    stdin_writer.flush().await.map_err(|error| {
+        qualification_error(format!("flush terminal stdin before rehydration: {error}"))
+    })?;
+    terminal::expect_line(
+        &mut output,
+        "stdin:before-rehydrate",
+        "terminal stdin before manual shim rehydration",
+    )
+    .await?;
     terminal::resize(config, channel, id, exec_id, 97, 37).await?;
+    stdin_writer
+        .write_all(b"__a3s_size__\n")
+        .await
+        .map_err(|error| {
+            qualification_error(format!(
+                "request terminal size before shim rehydration: {error}"
+            ))
+        })?;
+    stdin_writer.flush().await.map_err(|error| {
+        qualification_error(format!(
+            "flush terminal size request before shim rehydration: {error}"
+        ))
+    })?;
     terminal::expect_line(
         &mut output,
         "37 97",
         "terminal resize before manual shim rehydration",
     )
     .await?;
-    Ok((started.pid, stdout, output))
+    wait_for_exec_stdin_sequence(bundle, exec_id, 2).await?;
+    Ok(RehydratedTerminalExec {
+        pid: started.pid,
+        stdin_path: stdin,
+        stdin: Some(stdin_writer),
+        stdout_path: stdout,
+        output,
+    })
 }
 
 async fn finish_rehydrated_terminal_exec(
     config: &QualificationConfig,
     channel: &tonic::transport::Channel,
     id: &str,
-    exec_pid: u32,
-    stdout: &Path,
-    output: &mut Lines<BufReader<tokio::fs::File>>,
+    exec: &mut RehydratedTerminalExec,
 ) -> TestResult<()> {
     let exec_id = "rehydrated-terminal-exec";
     let restored = task_process(config, channel, id, exec_id).await?;
     expect_process(
         &restored,
         STATUS_RUNNING,
-        Some(exec_pid),
+        Some(exec.pid),
         "terminal exec after manual shim rehydration",
     )?;
     if !restored.terminal {
@@ -286,13 +339,63 @@ async fn finish_rehydrated_terminal_exec(
         )
         .into());
     }
+    let bundle = exec.stdin_path.parent().ok_or_else(|| {
+        qualification_error("rehydrated terminal stdin path has no bundle parent")
+    })?;
+    let restored_journal = read_exec_stdin_journal(bundle, exec_id).await?;
+    if restored_journal.schema_version != 4
+        || restored_journal.completed_sequence != 2
+        || restored_journal.pending.is_some()
+        || restored_journal.output_cursor == 0
+    {
+        return Err(qualification_error(format!(
+            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 4, completed sequence 2, no pending write, and a nonzero output cursor"
+        ))
+        .into());
+    }
+    let stdin = exec.stdin.as_mut().ok_or_else(|| {
+        qualification_error("terminal stdin writer disappeared during manual shim rehydration")
+    })?;
+    stdin
+        .write_all(b"after-rehydrate\n")
+        .await
+        .map_err(|error| {
+            qualification_error(format!("write terminal stdin after rehydration: {error}"))
+        })?;
+    stdin.flush().await.map_err(|error| {
+        qualification_error(format!("flush terminal stdin after rehydration: {error}"))
+    })?;
+    if let Err(error) = terminal::expect_line(
+        &mut exec.output,
+        "stdin:after-rehydrate",
+        "terminal stdin after manual shim rehydration",
+    )
+    .await
+    {
+        let journal = read_exec_stdin_journal(bundle, exec_id).await?;
+        return Err(qualification_error(format!(
+            "terminal stdin after manual shim rehydration failed: {error}; stdin journal was {journal:?}"
+        ))
+        .into());
+    }
     terminal::resize(config, channel, id, exec_id, 143, 47).await?;
+    stdin.write_all(b"__a3s_size__\n").await.map_err(|error| {
+        qualification_error(format!(
+            "request terminal size after shim rehydration: {error}"
+        ))
+    })?;
+    stdin.flush().await.map_err(|error| {
+        qualification_error(format!(
+            "flush terminal size request after shim rehydration: {error}"
+        ))
+    })?;
     terminal::expect_line(
-        output,
+        &mut exec.output,
         "47 143",
         "terminal output after manual shim rehydration",
     )
     .await?;
+    wait_for_exec_stdin_sequence(bundle, exec_id, 4).await?;
     TasksClient::new(channel.clone())
         .kill(namespaced(
             KillRequest {
@@ -341,12 +444,69 @@ async fn finish_rehydrated_terminal_exec(
         ))
         .into());
     }
-    tokio::fs::remove_file(stdout).await.map_err(|error| {
-        qualification_error(format!(
-            "remove terminal FIFO after manual shim rehydration: {error}"
-        ))
-    })?;
+    drop(exec.stdin.take());
+    tokio::fs::remove_file(&exec.stdin_path)
+        .await
+        .map_err(|error| {
+            qualification_error(format!(
+                "remove terminal stdin FIFO after manual shim rehydration: {error}"
+            ))
+        })?;
+    tokio::fs::remove_file(&exec.stdout_path)
+        .await
+        .map_err(|error| {
+            qualification_error(format!(
+                "remove terminal FIFO after manual shim rehydration: {error}"
+            ))
+        })?;
     Ok(())
+}
+
+async fn wait_for_exec_stdin_sequence(
+    bundle: &Path,
+    exec_id: &str,
+    expected: u64,
+) -> TestResult<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let evidence = read_exec_stdin_journal(bundle, exec_id).await?;
+        if evidence.completed_sequence == expected && evidence.pending.is_none() {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(qualification_error(format!(
+                "terminal stdin journal did not commit sequence {expected}: {evidence:?}"
+            ))
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn read_exec_stdin_journal(bundle: &Path, exec_id: &str) -> TestResult<StdinJournalEvidence> {
+    let path = bundle.join("a3s-oci-shim-v1.json");
+    let document: serde_json::Value = serde_json::from_slice(
+        &tokio::fs::read(&path)
+            .await
+            .map_err(|error| qualification_error(format!("read shim metadata: {error}")))?,
+    )
+    .map_err(|error| qualification_error(format!("decode shim metadata: {error}")))?;
+    let exec = document["execs"]
+        .as_array()
+        .and_then(|execs| {
+            execs
+                .iter()
+                .find(|exec| exec["exec_id"].as_str() == Some(exec_id))
+        })
+        .ok_or_else(|| qualification_error(format!("shim metadata omitted exec {exec_id}")))?;
+    Ok(StdinJournalEvidence {
+        schema_version: document["schema_version"]
+            .as_u64()
+            .ok_or_else(|| qualification_error("shim metadata omitted schema_version"))?,
+        completed_sequence: exec["stdin_sequence"].as_u64().unwrap_or(0),
+        pending: exec.get("pending_stdin_write").cloned(),
+        output_cursor: exec["output_cursor"].as_u64().unwrap_or(0),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
