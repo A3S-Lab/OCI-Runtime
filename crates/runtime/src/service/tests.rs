@@ -105,6 +105,7 @@ struct RecordingDriver {
     operations: Vec<RuntimeOperation>,
     hooks: Vec<OciHookPhase>,
     calls: Mutex<Vec<DriverCall>>,
+    acknowledgements: Mutex<Vec<OperationId>>,
     states: Mutex<HashMap<ContainerId, (Generation, DriverState)>>,
     exits: Mutex<HashMap<ContainerId, ExitStatus>>,
     processes: Mutex<HashMap<DriverProcessKey, DriverProcessState>>,
@@ -144,6 +145,7 @@ impl RecordingDriver {
             ],
             hooks: Vec::new(),
             calls: Mutex::new(Vec::new()),
+            acknowledgements: Mutex::new(Vec::new()),
             states: Mutex::new(HashMap::new()),
             exits: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
@@ -243,6 +245,13 @@ impl RecordingDriver {
 
     fn calls(&self) -> Vec<DriverCall> {
         self.calls.lock().expect("driver calls lock").clone()
+    }
+
+    fn acknowledgements(&self) -> Vec<OperationId> {
+        self.acknowledgements
+            .lock()
+            .expect("driver acknowledgements lock")
+            .clone()
     }
 
     fn fail_next(&self, operation: &'static str, error: Error) {
@@ -520,6 +529,14 @@ impl RuntimeDriver for RecordingDriver {
 
     fn hooks(&self) -> &[OciHookPhase] {
         &self.hooks
+    }
+
+    async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        self.acknowledgements
+            .lock()
+            .expect("driver acknowledgements lock")
+            .push(operation_id.clone());
+        Ok(())
     }
 
     async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
@@ -1926,6 +1943,20 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
             .filter(|call| matches!(call, DriverCall::Wait(_)))
             .count(),
         1
+    );
+    assert_eq!(
+        driver.acknowledgements(),
+        vec![
+            operation_id("create-1"),
+            operation_id("create-1"),
+            operation_id("start-1"),
+            operation_id("start-1"),
+            operation_id("kill-1"),
+            operation_id("kill-1"),
+            operation_id("delete-1"),
+            operation_id("delete-1"),
+        ],
+        "the driver must release replay records only after durable completion and on replay"
     );
     let DriverCall::Create(driver_create) = &calls[0] else {
         panic!("create must be the first driver call");

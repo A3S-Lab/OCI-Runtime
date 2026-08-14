@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use a3s_oci_sdk::{
     async_trait, ContainerStats, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
-    FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
+    FilesystemRequest, FilesystemResponse, OperationId, OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -31,6 +31,15 @@ use crate::wire::{read_frame, write_frame};
 pub trait GuestAgentService: Send + Sync {
     /// Protocol and executor features available in this guest.
     fn capabilities(&self) -> AgentCapabilities;
+
+    /// Release completed replay records after the Host durably commits their outcomes.
+    ///
+    /// Unknown operation IDs are already absent and therefore succeed. An implementation
+    /// must reject a record that is still executing so a Host acknowledgement can never
+    /// remove the only replay evidence for an in-flight side effect.
+    async fn acknowledge_operations(&self, _operation_ids: &[OperationId]) -> Result<()> {
+        Ok(())
+    }
 
     /// Prepare an init process without running its configured program.
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState>;

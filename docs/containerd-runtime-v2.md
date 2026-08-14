@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, deleted exec-ID reuse, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty, sequenced committed SignalProcess replay, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Three consecutive same-Host real lifecycle matrices with guest-journal reclamation, exec, deleted exec-ID reuse, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty, sequenced committed SignalProcess replay, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -17,27 +17,31 @@ runtime-v2 contract is stable. That is not a support claim. Add a release to
 the table only after the same ignored real-host qualification passes against
 the packaged shim, SDK, host service, agent, and selected driver.
 
-The August 14, 2026 arm64 requalification used containerd 2.2.2 and the
-release-built shim SHA-256
-`9b5978d9d9c2b88634115864d2010e949a377b45f5722c55e54f6e331ee7ac6f`.
-The host CLI, agent, and qualification executable SHA-256 values were
-`9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
-`0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
+The August 14, 2026 arm64 requalification used containerd 2.2.2 and Linux
+7.0.11. Three complete 46.92, 47.39, and 47.23-second matrices ran
+consecutively through the same Host PID. The release-built shim SHA-256 was
+`a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`.
+The Host CLI, agent, and qualification executable SHA-256 values were
+`f097da3529c47a06b32271550417ed810d698a2a6e385f122771c197b7de2b67`,
+`be0b13215c21a2312f8a3e8d79cc9a39ed1a4b07b539f3d557e0f4e168c3345a`,
 and `90a6e92260ec121f7cddca2dbe5db167ef864cd0a405f08665d1b4c2082ccc1d`.
-The 48.29-second matrix ran an exec to exit 7, deleted it, reused the same
-containerd exec ID, restarted containerd while the replacement was Added, and
-observed exit 23 from the new process. It also passed two distinct resource
-updates, two complete pause/resume cycles, durable terminal stdin before and
-after live shim replacement, and replay of remotely committed WriteStdin,
-CloseStdin, SignalProcess, and ResizePty operations while schema-v8 metadata
-still held the corresponding pending request. The replacement proved the real
-process moved through `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` with four distinct
-identities, suppressed an identical resize retry, and proved a real `A→B→A`
-PTY transition with distinct identities. It then passed every retained
-restart and shim-crash boundary. An independent post-run audit reported zero
-tasks, containers, task bundles, runtime container records, and shim
-processes; containerd remained active and the one expected host service
-remained live.
+The Cargo lock SHA-256 was
+`1b23294aa01fb3b92745ebfce02b0f6a79e6e22dc9636cb404fecb5bd073d90f`.
+Every matrix ran an exec to exit 7, deleted it, reused the same containerd exec
+ID, restarted containerd while the replacement was Added, and observed exit
+23 from the new process. It also passed two distinct resource updates, two
+complete pause/resume cycles, durable terminal stdin before and after live
+shim replacement, and replay of remotely committed WriteStdin, CloseStdin,
+SignalProcess, and ResizePty operations while schema-v8 metadata still held
+the corresponding pending request. The replacement proved the real process
+moved through `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` with four distinct identities,
+suppressed an identical resize retry, and proved a real `A→B→A` PTY transition
+with distinct identities. Each durable Native Linux Host outcome then released
+its guest replay record, including all derived identities for chunked stdin.
+An independent post-run audit reported zero tasks, containers, task bundles,
+workload cgroups, runtime container records, prepared Host operations, shim
+processes, and agent children; containerd remained active and the one expected
+Host service remained live.
 
 ## Runtime type and package layout
 
@@ -76,6 +80,30 @@ The final release layout and checksums remain open. A release is not qualified
 until it records at least the containerd version, shim checksum, OCI Runtime
 commit, Cargo lock digest, SDK protocol, agent protocol, driver, kernel, and
 host architecture.
+
+## Guest replay-journal lifetime
+
+The Native Linux executor keeps at most 4,096 completed or in-flight mutation
+records so a lost Host response can replay an effect without running it twice.
+The Host acknowledges Create, Start, Kill, Delete, Exec, Pause, Resume, Update,
+WriteStdin, CloseStdin, Resize, and SignalProcess only after success or a
+terminal failure is durably committed. It repeats the acknowledgement when a
+completed Host result is replayed. Retryable failures, prepared operations,
+and asynchronous unit operations that are still executing are never released.
+An acknowledgement containing any pending operation fails atomically, and an
+unknown identity succeeds because it is already absent.
+
+A Host stdin request may cross the 4 MiB guest payload boundary and become
+several deterministic guest operations. The Native Linux driver retains the
+complete parent-to-child identity set until the Host outcome commits and then
+acknowledges the whole set as one batch. A failed acknowledgement restores that
+set for retry.
+
+This reclamation path is currently Native Linux-specific. The remote
+utility-VM transport does not yet carry an acknowledgement operation, and
+Host file/filesystem mutations do not yet have durable Host operation records
+that can establish the same commit boundary. Those records therefore remain
+outside this qualification claim.
 
 ## Identity mapping
 

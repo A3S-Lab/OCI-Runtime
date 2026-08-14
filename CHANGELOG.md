@@ -6,6 +6,24 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Bounded Native Linux guest replay-journal reclamation. The Host now asks a
+  driver to release mutation replay evidence only after the corresponding
+  success or terminal failure is durable, and repeats that acknowledgement
+  when serving an already-completed Host operation. Prepared, retryable, and
+  in-flight operations remain replayable. The Linux executor rejects a batch
+  containing an asynchronous operation that is still pending without removing
+  any completed record, treats unknown identities as already released, and
+  restores capacity after all 4,096 journal slots have been exercised. Large
+  stdin writes retain every deterministically derived 4 MiB guest chunk
+  identity until the parent Host operation commits. On Ubuntu arm64 with
+  containerd 2.2.2, three complete 46.92, 47.39, and 47.23-second qualification
+  matrices passed consecutively through one Host PID. The release-built Host,
+  agent, and shim SHA-256 values were
+  `f097da3529c47a06b32271550417ed810d698a2a6e385f122771c197b7de2b67`,
+  `be0b13215c21a2312f8a3e8d79cc9a39ed1a4b07b539f3d557e0f4e168c3345a`,
+  and `a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`.
+  An independent audit found no task, container, shim, agent child, task
+  bundle, workload cgroup, live Runtime record, or prepared Host operation.
 - Durable containerd exec-ID reuse. Metadata schema v8 retains a monotonic
   per-task exec sequence and the incarnation allocated to every current exec.
   SDK `ProcessId` and exec-scoped `OperationId` values include that

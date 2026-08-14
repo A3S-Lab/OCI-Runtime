@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ use a3s_oci_sdk::{
     ProcessRecord, Result,
 };
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex;
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
@@ -87,6 +89,7 @@ pub(crate) struct AgentDriverClient {
     service: Arc<dyn GuestAgentService>,
     source: &'static str,
     mapping_scope: &'static str,
+    guest_operation_ids: Arc<Mutex<BTreeMap<OperationId, Vec<OperationId>>>>,
 }
 
 impl fmt::Debug for AgentDriverClient {
@@ -110,6 +113,51 @@ impl AgentDriverClient {
             service,
             source,
             mapping_scope,
+            guest_operation_ids: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    pub(crate) async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        let guest_operation_ids = self
+            .guest_operation_ids
+            .lock()
+            .await
+            .remove(operation_id)
+            .unwrap_or_else(|| vec![operation_id.clone()]);
+        if let Err(error) = self
+            .service
+            .acknowledge_operations(&guest_operation_ids)
+            .await
+        {
+            self.guest_operation_ids
+                .lock()
+                .await
+                .entry(operation_id.clone())
+                .or_insert(guest_operation_ids);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn retain_guest_operation_ids(
+        &self,
+        operation_id: &OperationId,
+        guest_operation_ids: &[OperationId],
+    ) -> Result<()> {
+        let mut retained = self.guest_operation_ids.lock().await;
+        match retained.get(operation_id) {
+            Some(existing) if existing == guest_operation_ids => Ok(()),
+            Some(_) => Err(self.mapping_error(
+                ErrorCode::Conflict,
+                "operation-acknowledgement",
+                format!(
+                    "Host operation {operation_id} changed its derived guest operation identities"
+                ),
+            )),
+            None => {
+                retained.insert(operation_id.clone(), guest_operation_ids.to_vec());
+                Ok(())
+            }
         }
     }
 
@@ -359,12 +407,24 @@ impl AgentDriverClient {
         }
         let chunk_bytes = AGENT_MAX_IO_PAYLOAD_BYTES as usize;
         let chunk_count = request.data.len().div_ceil(chunk_bytes);
-        for (index, data) in request.data.chunks(chunk_bytes).enumerate() {
-            let context = if chunk_count == 1 {
-                request.context.clone()
-            } else {
-                process_io_chunk_context(&request.context, index)?
-            };
+        let contexts = (0..chunk_count)
+            .map(|index| {
+                if chunk_count == 1 {
+                    Ok(request.context.clone())
+                } else {
+                    process_io_chunk_context(&request.context, index)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if chunk_count > 1 {
+            let guest_operation_ids = contexts
+                .iter()
+                .map(|context| context.operation_id.clone())
+                .collect::<Vec<_>>();
+            self.retain_guest_operation_ids(&request.context.operation_id, &guest_operation_ids)
+                .await?;
+        }
+        for (context, data) in contexts.into_iter().zip(request.data.chunks(chunk_bytes)) {
             self.service
                 .write_stdin(AgentWriteStdinRequest {
                     context: Some(context),
@@ -486,13 +546,19 @@ fn process_io_chunk_context(parent: &OperationContext, index: usize) -> Result<O
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
 
-    use a3s_oci_agent_protocol::{AgentCapabilities, AgentState, GuestAgentService};
+    use a3s_oci_agent_protocol::{
+        AgentCapabilities, AgentState, AgentWriteStdinRequest, GuestAgentService,
+        AGENT_MAX_IO_PAYLOAD_BYTES,
+    };
     use a3s_oci_sdk::oci_spec::runtime::ContainerState;
     use a3s_oci_sdk::{
         async_trait, ContainerId, ContainerTarget, Error, Generation, OperationContext,
-        OperationId, Result,
+        OperationId, ProcessId, ProcessTarget, Result,
     };
+
+    use crate::driver::DriverWriteStdinRequest;
 
     use super::{process_io_chunk_context, AgentDriverClient};
 
@@ -500,12 +566,24 @@ mod tests {
     const OTHER_DIGEST: &str =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 
-    struct MappingOnlyGuest;
+    #[derive(Default)]
+    struct MappingOnlyGuest {
+        writes: StdMutex<Vec<OperationId>>,
+        acknowledgements: StdMutex<Vec<Vec<OperationId>>>,
+    }
 
     #[async_trait]
     impl GuestAgentService for MappingOnlyGuest {
         fn capabilities(&self) -> AgentCapabilities {
             AgentCapabilities::linux_executor("test", "x86_64").expect("capabilities")
+        }
+
+        async fn acknowledge_operations(&self, operation_ids: &[OperationId]) -> Result<()> {
+            self.acknowledgements
+                .lock()
+                .expect("acknowledgement capture")
+                .push(operation_ids.to_vec());
+            Ok(())
         }
 
         async fn create(
@@ -539,10 +617,24 @@ mod tests {
         async fn delete(&self, _request: a3s_oci_agent_protocol::AgentDeleteRequest) -> Result<()> {
             Err(Error::unsupported("mapping-test-delete"))
         }
+
+        async fn write_stdin(&self, request: AgentWriteStdinRequest) -> Result<()> {
+            self.writes.lock().expect("write capture").push(
+                request
+                    .context
+                    .expect("protocol-v8 write context")
+                    .operation_id,
+            );
+            Ok(())
+        }
     }
 
     fn client() -> AgentDriverClient {
-        AgentDriverClient::new(Arc::new(MappingOnlyGuest), "test guest", "test-agent")
+        AgentDriverClient::new(
+            Arc::new(MappingOnlyGuest::default()),
+            "test guest",
+            "test-agent",
+        )
     }
 
     #[test]
@@ -620,5 +712,51 @@ mod tests {
         assert_ne!(first.operation_id, other.operation_id);
         assert_eq!(first.deadline_unix_ms, parent.deadline_unix_ms);
         assert!(first.operation_id.as_str().starts_with("io."));
+    }
+
+    #[tokio::test]
+    async fn host_acknowledgement_releases_every_derived_stdin_chunk_identity() {
+        let guest = Arc::new(MappingOnlyGuest::default());
+        let client = AgentDriverClient::new(guest.clone(), "test guest", "test-agent");
+        let context = OperationContext::new(
+            OperationId::new("chunked-stdin-parent").expect("parent operation ID"),
+        );
+        let target = ProcessTarget {
+            container: ContainerTarget::exact(
+                ContainerId::new("chunked-stdin").expect("container ID"),
+                Generation(1),
+            ),
+            process_id: ProcessId::init(),
+        };
+        client
+            .write_stdin(DriverWriteStdinRequest {
+                context: context.clone(),
+                target,
+                data: vec![0x5a; AGENT_MAX_IO_PAYLOAD_BYTES as usize + 1],
+            })
+            .await
+            .expect("dispatch chunked stdin");
+
+        client
+            .acknowledge_operation(&context.operation_id)
+            .await
+            .expect("acknowledge durable Host result");
+
+        let expected = vec![
+            process_io_chunk_context(&context, 0)
+                .expect("first context")
+                .operation_id,
+            process_io_chunk_context(&context, 1)
+                .expect("second context")
+                .operation_id,
+        ];
+        assert_eq!(*guest.writes.lock().expect("captured writes"), expected);
+        assert_eq!(
+            *guest
+                .acknowledgements
+                .lock()
+                .expect("captured acknowledgements"),
+            vec![expected]
+        );
     }
 }

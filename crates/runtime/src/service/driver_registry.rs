@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use a3s_oci_core::{DriverCapability, DriverKind, IsolationClass};
 use a3s_oci_sdk::{
-    AttachmentCapabilities, ContainerRecord, Error, ErrorCode, Result, RuntimeOperation,
-    ATTACHMENT_SCHEMA_V1,
+    AttachmentCapabilities, ContainerRecord, Error, ErrorCode, OperationId, Result,
+    RuntimeOperation, ATTACHMENT_SCHEMA_V1,
 };
 
 use crate::{OciHookPhase, RuntimeDriver};
@@ -227,6 +227,13 @@ impl DriverRegistry {
 
     pub(super) fn kinds(&self) -> Vec<DriverKind> {
         self.entries.iter().map(RegisteredDriver::kind).collect()
+    }
+
+    pub(super) async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        for entry in &self.entries {
+            entry.driver().acknowledge_operation(operation_id).await?;
+        }
+        Ok(())
     }
 
     pub(super) const fn operations(&self) -> &BTreeSet<RuntimeOperation> {

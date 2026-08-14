@@ -295,7 +295,11 @@ impl HostRuntimeService {
             )
             .await?;
         let record = match prepared {
-            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Replayed(record) => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(record))
+                    .await;
+            }
             RecordOperationPreparation::Prepared(record)
             | RecordOperationPreparation::Resume(record) => record,
         };
@@ -364,9 +368,12 @@ impl HostRuntimeService {
             )
             .for_operation("create")
         })?;
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_create(&request.context.operation_id, pid)
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 }
@@ -421,7 +428,22 @@ impl LifecycleHost {
             return Err(error);
         }
         self.store.fail_operation(operation_id, &error).await?;
+        self.drivers.acknowledge_operation(operation_id).await?;
         Err(error)
+    }
+
+    async fn acknowledge_operation(&self, operation_id: &a3s_oci_sdk::OperationId) -> Result<()> {
+        self.drivers.acknowledge_operation(operation_id).await
+    }
+
+    async fn acknowledge_result<T>(
+        &self,
+        operation_id: &a3s_oci_sdk::OperationId,
+        result: Result<T>,
+    ) -> Result<T> {
+        let value = result?;
+        self.acknowledge_operation(operation_id).await?;
+        Ok(value)
     }
 
     async fn complete_process_wait(
@@ -532,7 +554,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("start")?;
         let prepared = lifecycle.store.prepare_start(&request).await?;
         let record = match prepared {
-            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Replayed(record) => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(record))
+                    .await;
+            }
             RecordOperationPreparation::Prepared(record)
             | RecordOperationPreparation::Resume(record) => record,
         };
@@ -566,13 +592,16 @@ impl OciRuntimeService for HostRuntimeService {
                 .fail_driver_operation(&request.context.operation_id, error)
                 .await;
         }
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_start(
                 &request.context.operation_id,
                 observed.status(),
                 observed.pid(),
             )
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -580,7 +609,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("kill")?;
         let prepared = lifecycle.store.prepare_kill(&request).await?;
         let record = match prepared {
-            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Replayed(record) => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(record))
+                    .await;
+            }
             RecordOperationPreparation::Prepared(record)
             | RecordOperationPreparation::Resume(record) => record,
         };
@@ -605,13 +638,16 @@ impl OciRuntimeService for HostRuntimeService {
                     .await;
             }
         };
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_kill(
                 &request.context.operation_id,
                 observed.status(),
                 observed.pid(),
             )
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -619,7 +655,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("delete")?;
         let prepared = lifecycle.store.prepare_delete(&request).await?;
         let record = match prepared {
-            DeletePreparation::Replayed => return Ok(()),
+            DeletePreparation::Replayed => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(()))
+                    .await;
+            }
             DeletePreparation::Prepared(record) | DeletePreparation::Resume(record) => record,
         };
         let registered = lifecycle.driver(record.driver, "delete")?;
@@ -639,9 +679,12 @@ impl OciRuntimeService for HostRuntimeService {
                 .fail_driver_operation(&request.context.operation_id, error)
                 .await;
         }
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_delete(&request.context.operation_id)
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -650,7 +693,11 @@ impl OciRuntimeService for HostRuntimeService {
         lifecycle.ensure_operation(RuntimeOperation::Exec, "exec")?;
         let prepared = lifecycle.store.prepare_exec(&request).await?;
         let durable = match prepared {
-            ProcessOperationPreparation::Replayed(record) => return Ok(record),
+            ProcessOperationPreparation::Replayed(record) => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(record))
+                    .await;
+            }
             ProcessOperationPreparation::Prepared(record)
             | ProcessOperationPreparation::Resume(record) => record,
         };
@@ -677,13 +724,16 @@ impl OciRuntimeService for HostRuntimeService {
                     .await;
             }
         };
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_exec(
                 &request.context.operation_id,
                 process.pid(),
                 process.terminal(),
             )
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -731,7 +781,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("pause")?;
         lifecycle.ensure_operation(RuntimeOperation::Pause, "pause")?;
         let record = match lifecycle.store.prepare_pause(&request).await? {
-            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Replayed(record) => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(record))
+                    .await;
+            }
             RecordOperationPreparation::Prepared(record)
             | RecordOperationPreparation::Resume(record) => record,
         };
@@ -755,7 +809,7 @@ impl OciRuntimeService for HostRuntimeService {
                     .await;
             }
         };
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_pause(
                 &request.context.operation_id,
@@ -763,6 +817,9 @@ impl OciRuntimeService for HostRuntimeService {
                 observed.pid(),
                 observed.paused(),
             )
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -770,7 +827,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("resume")?;
         lifecycle.ensure_operation(RuntimeOperation::Resume, "resume")?;
         let record = match lifecycle.store.prepare_resume(&request).await? {
-            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Replayed(record) => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(record))
+                    .await;
+            }
             RecordOperationPreparation::Prepared(record)
             | RecordOperationPreparation::Resume(record) => record,
         };
@@ -794,7 +855,7 @@ impl OciRuntimeService for HostRuntimeService {
                     .await;
             }
         };
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_resume(
                 &request.context.operation_id,
@@ -802,6 +863,9 @@ impl OciRuntimeService for HostRuntimeService {
                 observed.pid(),
                 observed.paused(),
             )
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -809,7 +873,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("update")?;
         lifecycle.ensure_operation(RuntimeOperation::Update, "update")?;
         let record = match lifecycle.store.prepare_update(&request).await? {
-            RecordOperationPreparation::Replayed(record) => return Ok(record),
+            RecordOperationPreparation::Replayed(record) => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(record))
+                    .await;
+            }
             RecordOperationPreparation::Prepared(record)
             | RecordOperationPreparation::Resume(record) => record,
         };
@@ -834,7 +902,7 @@ impl OciRuntimeService for HostRuntimeService {
                     .await;
             }
         };
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_update(
                 &request.context.operation_id,
@@ -842,6 +910,9 @@ impl OciRuntimeService for HostRuntimeService {
                 observed.pid(),
                 observed.paused(),
             )
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -956,7 +1027,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("write-stdin")?;
         lifecycle.ensure_operation(RuntimeOperation::WriteStdin, "write-stdin")?;
         let target = match lifecycle.store.prepare_write_stdin(&request).await? {
-            ProcessIoPreparation::Replayed => return Ok(()),
+            ProcessIoPreparation::Replayed => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(()))
+                    .await;
+            }
             ProcessIoPreparation::Prepared(target) | ProcessIoPreparation::Resume(target) => target,
         };
         let container = lifecycle.store.state(&target.container).await?;
@@ -977,9 +1052,12 @@ impl OciRuntimeService for HostRuntimeService {
                 .fail_driver_operation(&request.context.operation_id, error)
                 .await;
         }
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_write_stdin(&request.context.operation_id)
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -987,7 +1065,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("close-stdin")?;
         lifecycle.ensure_operation(RuntimeOperation::CloseStdin, "close-stdin")?;
         let target = match lifecycle.store.prepare_close_stdin(&request).await? {
-            ProcessIoPreparation::Replayed => return Ok(()),
+            ProcessIoPreparation::Replayed => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(()))
+                    .await;
+            }
             ProcessIoPreparation::Prepared(target) | ProcessIoPreparation::Resume(target) => target,
         };
         let container = lifecycle.store.state(&target.container).await?;
@@ -1007,9 +1089,12 @@ impl OciRuntimeService for HostRuntimeService {
                 .fail_driver_operation(&request.context.operation_id, error)
                 .await;
         }
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_close_stdin(&request.context.operation_id)
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -1017,7 +1102,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("resize")?;
         lifecycle.ensure_operation(RuntimeOperation::Resize, "resize")?;
         let target = match lifecycle.store.prepare_resize(&request).await? {
-            ProcessIoPreparation::Replayed => return Ok(()),
+            ProcessIoPreparation::Replayed => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(()))
+                    .await;
+            }
             ProcessIoPreparation::Prepared(target) | ProcessIoPreparation::Resume(target) => target,
         };
         let container = lifecycle.store.state(&target.container).await?;
@@ -1038,9 +1127,12 @@ impl OciRuntimeService for HostRuntimeService {
                 .fail_driver_operation(&request.context.operation_id, error)
                 .await;
         }
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_resize(&request.context.operation_id)
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 
@@ -1048,7 +1140,11 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("signal-process")?;
         lifecycle.ensure_operation(RuntimeOperation::SignalProcess, "signal-process")?;
         let target = match lifecycle.store.prepare_signal_process(&request).await? {
-            SignalProcessPreparation::Replayed => return Ok(()),
+            SignalProcessPreparation::Replayed => {
+                return lifecycle
+                    .acknowledge_result(&request.context.operation_id, Ok(()))
+                    .await;
+            }
             SignalProcessPreparation::Prepared(target)
             | SignalProcessPreparation::Resume(target) => target,
         };
@@ -1076,9 +1172,12 @@ impl OciRuntimeService for HostRuntimeService {
                 .fail_driver_operation(&request.context.operation_id, error)
                 .await;
         }
-        lifecycle
+        let completed = lifecycle
             .store
             .complete_signal_process(&request.context.operation_id)
+            .await;
+        lifecycle
+            .acknowledge_result(&request.context.operation_id, completed)
             .await
     }
 

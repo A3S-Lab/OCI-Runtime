@@ -30,6 +30,33 @@ pub(super) struct ExecutorState {
 }
 
 impl ExecutorState {
+    pub(super) fn acknowledge_operations(&mut self, operation_ids: &[OperationId]) -> Result<()> {
+        if operation_ids.len() > MAX_OPERATION_RECORDS {
+            return Err(executor_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "guest operation acknowledgement contains {} entries; maximum is {MAX_OPERATION_RECORDS}",
+                    operation_ids.len()
+                ),
+            ));
+        }
+        if let Some(operation_id) = operation_ids
+            .iter()
+            .find(|operation_id| self.pending_unit_operations.contains_key(*operation_id))
+        {
+            return Err(executor_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "guest operation {operation_id} cannot be acknowledged while it is still pending"
+                ),
+            ));
+        }
+        for operation_id in operation_ids {
+            self.operations.remove(operation_id);
+        }
+        Ok(())
+    }
+
     pub(super) fn reserve_operation(&self, operation_id: &OperationId) -> Result<()> {
         if self.pending_unit_operations.contains_key(operation_id) {
             return Err(reused_operation(operation_id));
@@ -647,6 +674,82 @@ mod tests {
                 .expect("replay operation"),
             UnitOperationPreparation::Completed(Ok(()))
         ));
+    }
+
+    #[test]
+    fn durable_host_acknowledgement_releases_completed_journal_capacity() {
+        let request = RecordedRequest::new(
+            MutationKind::WriteStdin,
+            &json!({"target": "init", "data": "bounded"}),
+        )
+        .expect("fingerprint request");
+        let mut state = ExecutorState::default();
+        let mut completed = Vec::with_capacity(super::super::MAX_OPERATION_RECORDS);
+        for index in 0..super::super::MAX_OPERATION_RECORDS {
+            let operation_id =
+                OperationId::new(format!("completed-{index}")).expect("operation ID");
+            state
+                .reserve_operation(&operation_id)
+                .expect("journal capacity before its bound");
+            state.record(
+                operation_id.clone(),
+                request.clone(),
+                RecordedOutcome::Unit(Ok(())),
+            );
+            completed.push(operation_id);
+        }
+        let next = OperationId::new("after-capacity").expect("next operation ID");
+        assert_eq!(
+            state
+                .reserve_operation(&next)
+                .expect_err("full journal must fail closed")
+                .code,
+            ErrorCode::ResourceExhausted
+        );
+
+        state
+            .acknowledge_operations(&completed)
+            .expect("acknowledge durably committed host operations");
+
+        assert!(state.operations.is_empty());
+        assert_eq!(state.replay_unit(&completed[0], &request), None);
+        state
+            .reserve_operation(&next)
+            .expect("acknowledgement must restore capacity");
+    }
+
+    #[test]
+    fn acknowledgement_is_atomic_when_one_operation_is_still_pending() {
+        let completed_id = OperationId::new("completed-operation").expect("completed ID");
+        let pending_id = OperationId::new("pending-operation").expect("pending ID");
+        let request = RecordedRequest::new(
+            MutationKind::WriteStdin,
+            &json!({"target": "init", "data": "bounded"}),
+        )
+        .expect("fingerprint request");
+        let mut state = ExecutorState::default();
+        state.record(
+            completed_id.clone(),
+            request.clone(),
+            RecordedOutcome::Unit(Ok(())),
+        );
+        assert!(matches!(
+            state
+                .prepare_unit_operation(&pending_id, &request)
+                .expect("claim pending operation"),
+            UnitOperationPreparation::Claimed(_)
+        ));
+
+        let error = state
+            .acknowledge_operations(&[completed_id.clone(), pending_id])
+            .expect_err("pending operation acknowledgement must fail");
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            state.replay_unit(&completed_id, &request),
+            Some(Ok(())),
+            "a rejected batch must not partially release completed records"
+        );
     }
 
     #[test]

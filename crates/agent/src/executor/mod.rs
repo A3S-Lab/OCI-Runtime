@@ -58,8 +58,8 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest,
-    FileResponse, FilesystemRequest, FilesystemResponse, OperationContext, OutputChunk,
-    ProcessRecord, Result,
+    FileResponse, FilesystemRequest, FilesystemResponse, OperationContext, OperationId,
+    OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -1012,6 +1012,13 @@ impl LinuxExecutor {
 impl GuestAgentService for LinuxExecutor {
     fn capabilities(&self) -> AgentCapabilities {
         self.capabilities.clone()
+    }
+
+    async fn acknowledge_operations(&self, operation_ids: &[OperationId]) -> Result<()> {
+        self.state
+            .lock()
+            .await
+            .acknowledge_operations(operation_ids)
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {

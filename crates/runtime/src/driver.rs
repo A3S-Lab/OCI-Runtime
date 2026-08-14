@@ -5,8 +5,8 @@ use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerRecord, ContainerStats, ContainerTarget,
     CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
     FilesystemRequest, FilesystemResponse, IsolationRequest, OciBundle, OperationContext,
-    OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation, Signal,
-    TerminalSize,
+    OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation,
+    Signal, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -617,6 +617,15 @@ pub trait RuntimeDriver: Send + Sync {
     /// Versioned create-attachment extensions implemented by this driver.
     fn attachment_capabilities(&self) -> AttachmentCapabilities {
         AttachmentCapabilities::base_v1()
+    }
+
+    /// Release driver replay evidence after the Host has durably committed an outcome.
+    ///
+    /// The Host never invokes this hook for a prepared or retryable operation. Unknown
+    /// identities must succeed so replayed Host outcomes and driver/session replacement
+    /// can acknowledge the same operation more than once.
+    async fn acknowledge_operation(&self, _operation_id: &OperationId) -> Result<()> {
+        Ok(())
     }
 
     /// Reconcile process-local resources with one durable record while the

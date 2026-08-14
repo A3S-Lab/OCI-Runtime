@@ -488,6 +488,12 @@ enforce it. No property is silently ignored.
 - [x] Extend idempotent journals to write-stdin, close-stdin, and resize,
   including exact driver/guest replay, claim release, terminal failure replay,
   and fault-injected recovery.
+- [x] Reclaim completed Native Linux guest mutation records only after the Host
+  durably commits success or terminal failure. Keep prepared, retryable, and
+  asynchronous in-flight effects replayable; acknowledge every derived stdin
+  chunk identity; and reject mixed pending/completed acknowledgement batches
+  atomically. Unit evidence fills all 4,096 guest slots before releasing them,
+  and three complete containerd matrices pass through one unchanged Host PID.
 - [x] Reconcile interrupted core lifecycle operations and quarantine failed
   create/delete state.
 - [x] Implement driver-independent `create`, `state`, `start`, `kill`, and
@@ -1592,15 +1598,22 @@ The latest gate also runs one exec to exit 7, deletes it, reuses the same
 containerd exec ID, restarts containerd while the replacement is Added, and
 requires exit 23 from a fresh SDK process identity. Its durable per-task exec
 sequence survives `DeleteProcess`; exit monitors are incarnation-bound so a
-late result cannot terminate or poison the replacement. The complete
-48.29-second matrix passed with installed shim SHA-256
-`9b5978d9d9c2b88634115864d2010e949a377b45f5722c55e54f6e331ee7ac6f`.
-The qualification recreates the killed task ID with a new
-incarnation and generation and leaves no matching task, container, shim,
-workload process, bundle, live runtime record, session, marker, workload
-cgroup, or zombie. The R7 items remain open until the version and package
-contract, remaining failure boundaries, every advertised driver profile, and
-release-artifact record pass.
+late result cannot terminate or poison the replacement. The latest
+qualification also releases each Native Linux guest mutation record only
+after its Host result is durable, including every derived chunk identity for a
+stdin payload larger than the 4 MiB guest frame limit. Three complete 46.92,
+47.39, and 47.23-second matrices passed consecutively through Host PID 3605
+with installed shim SHA-256
+`a0e7dce493308ebea0b4642dd81a9e489109a8b3709f2a1ede62b015cc123482`.
+The matching Host and agent SHA-256 values were
+`f097da3529c47a06b32271550417ed810d698a2a6e385f122771c197b7de2b67`
+and `be0b13215c21a2312f8a3e8d79cc9a39ed1a4b07b539f3d557e0f4e168c3345a`.
+The qualification recreates the killed task ID with a new incarnation and
+generation and leaves no matching task, container, shim, agent child,
+workload process, bundle, live runtime record, prepared Host operation,
+session, marker, workload cgroup, or zombie. The R7 items remain open until
+the version and package contract, remaining failure boundaries, every
+advertised driver profile, and release-artifact record pass.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,

@@ -20,6 +20,73 @@ async fn every_host_driver_boundary_recovers_without_duplicate_effects() {
     }
 }
 
+#[tokio::test]
+async fn guest_replay_acknowledgement_waits_for_the_durable_host_outcome() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    fs::create_dir(&bundle_directory).expect("bundle directory");
+    let state_root = temporary.path().join("state");
+    let driver = Arc::new(RecordingDriver::supported());
+    let setup =
+        HostRuntimeService::open(&state_root, Arc::clone(&driver) as Arc<dyn RuntimeDriver>)
+            .await
+            .expect("open setup runtime");
+    let create = create_request(&bundle_directory, "ack-boundary-create");
+    let created = setup
+        .create(create.clone())
+        .await
+        .expect("create setup container");
+    drop(setup);
+
+    let point = FaultPoint::DriverBoundary {
+        operation: DriverOperation::Start,
+        stage: DriverBoundaryStage::AfterCall,
+    };
+    let injector = Arc::new(RecordingFaultInjector::fail_once(point));
+    let faults: Arc<dyn FaultInjector> = injector;
+    let service = HostRuntimeService::open_with_fault_injector(
+        &state_root,
+        Arc::clone(&driver) as Arc<dyn RuntimeDriver>,
+        faults,
+    )
+    .await
+    .expect("open faulted runtime");
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("ack-boundary-start")),
+        target: ContainerTarget::exact(create.id, created.generation),
+    };
+    let error = service
+        .start(start.clone())
+        .await
+        .expect_err("post-driver fault must interrupt Host commit");
+    assert_injected(&error, point);
+    assert!(
+        !driver
+            .acknowledgements()
+            .contains(&start.context.operation_id),
+        "a driver response is not enough to release guest replay evidence"
+    );
+    drop(service);
+
+    let recovered =
+        HostRuntimeService::open(&state_root, Arc::clone(&driver) as Arc<dyn RuntimeDriver>)
+            .await
+            .expect("reopen runtime");
+    recovered
+        .start(start.clone())
+        .await
+        .expect("resume interrupted start");
+    assert_eq!(
+        driver
+            .acknowledgements()
+            .iter()
+            .filter(|operation_id| *operation_id == &start.context.operation_id)
+            .count(),
+        1,
+        "the completed durable Host journal must acknowledge exactly once"
+    );
+}
+
 async fn exercise_driver_boundary(point: FaultPoint) {
     let FaultPoint::DriverBoundary { operation, stage } = point else {
         panic!("driver registry contained non-driver point {point}");
