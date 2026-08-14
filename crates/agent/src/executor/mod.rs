@@ -38,6 +38,7 @@ mod rlimit;
 mod rootfs;
 #[cfg(test)]
 mod rootfs_tests;
+mod scheduler;
 mod seccomp;
 #[cfg(test)]
 mod seccomp_tests;
@@ -82,7 +83,7 @@ pub use inherited_descriptor::InheritedDescriptorPlan;
 pub(crate) use pidfd::verify_support as verify_pidfd_support;
 pub use recovery::LinuxExecutorTombstone;
 
-/// One-shot rootless device-policy bootstrap completed before Tokio starts.
+/// One-shot rootless device bootstrap completed before Tokio starts.
 #[derive(Debug)]
 pub struct RootlessDevicePolicyBootstrap {
     delegation: RootlessCgroupDelegation,
@@ -91,7 +92,7 @@ pub struct RootlessDevicePolicyBootstrap {
 }
 
 impl RootlessDevicePolicyBootstrap {
-    /// Retain one exact cgroup delegation, fork its bounded policy helper, and
+    /// Retain one exact cgroup delegation, fork its bounded device helper, and
     /// permanently drop the owner process to its non-root real identity.
     pub fn start(delegated_cgroup_root: impl AsRef<Path>) -> Result<Self> {
         let (uid, gid) = device_policy::DevicePolicyAuthority::bootstrap_identity()?;
@@ -276,11 +277,12 @@ impl LinuxExecutor {
             .await
     }
 
-    /// Open rootless native Linux with an inherited privileged device-policy authority.
+    /// Open rootless native Linux with an inherited privileged device authority.
     ///
     /// The constructor retains the verified delegation before the caller
     /// drops privilege, starts one parent-bound helper, and never exposes a
-    /// global privileged executable or arbitrary BPF interface.
+    /// global privileged executable, arbitrary device source, or raw BPF
+    /// interface.
     pub async fn open_native_with_rootless_cgroup_device_policy(
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,
@@ -644,8 +646,9 @@ impl LinuxExecutor {
         }
 
         let bundle = request.bundle.to_guest_bundle()?;
+        let rootless = self.user_mapping_runtime.is_rootless();
         let plan = InitPlan::from_bundle(&bundle, &request.io)?;
-        if self.user_mapping_runtime.is_rootless() {
+        if rootless {
             if !plan.namespaces.new_user() {
                 return Err(executor_error(
                     ErrorCode::Unsupported,
@@ -664,7 +667,9 @@ impl LinuxExecutor {
                     "rootless linux.cgroupsPath requires an explicit verified cgroup-v2 delegation",
                 ));
             }
-            if plan.devices.has_access_policy()
+            let device_support_requested =
+                plan.devices.has_node_setup() || plan.devices.has_access_policy();
+            if device_support_requested
                 && self
                     .rootless_cgroup_delegation
                     .as_ref()
@@ -672,15 +677,16 @@ impl LinuxExecutor {
             {
                 return Err(executor_error(
                     ErrorCode::Unsupported,
-                    "rootless linux.devices and linux.resources.devices require an authenticated delegated-cgroup device-policy authority",
+                    "rootless device preparation requires an authenticated delegated-cgroup device authority",
                 ));
             }
-            if self
-                .rootless_cgroup_delegation
-                .as_ref()
-                .is_some_and(RootlessCgroupDelegation::has_device_policy_authority)
+            if device_support_requested
+                && self
+                    .rootless_cgroup_delegation
+                    .as_ref()
+                    .is_some_and(RootlessCgroupDelegation::has_device_policy_authority)
             {
-                plan.devices.validate_rootless_device_set()?;
+                plan.devices.validate_rootless_device_support()?;
             }
         }
         let hook_state = HookStateTemplate::new(
@@ -1702,7 +1708,7 @@ mod rootless_device_tests {
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error
             .message
-            .contains("linux.devices and linux.resources.devices"));
+            .contains("rootless device preparation requires"));
     }
 
     #[tokio::test]

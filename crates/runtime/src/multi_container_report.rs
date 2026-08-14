@@ -6,7 +6,7 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v14";
+    "a3s.oci.native-linux-multi-container-smoke.v15";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
 pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v9";
 /// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.

@@ -361,7 +361,7 @@ if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
 fi
 
 # shellcheck disable=SC2016 # Expanded inside the rootless workload.
-rootless_command='set -eu; test "$(/bin/busybox id -u)" = 0; test "$(/bin/busybox id -g)" = 0; test "$(/bin/busybox cat /proc/self/setgroups)" = deny; test "$(/bin/busybox stat -c "%u:%g" /.a3s-oci-rootless-subordinate)" = 1:1; printf "a3s-oci-rootless-mapping-v1\n" > /.a3s-oci-rootless-smoke; progress=0; while :; do progress=$((progress + 1)); printf "%s\n" "$progress" > /.a3s-oci-rootless-progress.next; /bin/busybox mv /.a3s-oci-rootless-progress.next /.a3s-oci-rootless-progress; /bin/busybox sleep 0.05; done'
+rootless_command='set -eu; test "$(/bin/busybox id -u)" = 0; test "$(/bin/busybox id -g)" = 0; test "$(/bin/busybox cat /proc/self/setgroups)" = deny; test "$(/bin/busybox stat -c "%u:%g" /.a3s-oci-rootless-subordinate)" = 1:1; for spec in null:1:3 zero:1:5 full:1:7 random:1:8 urandom:1:9 tty:5:0; do name=${spec%%:*}; rest=${spec#*:}; major=${rest%%:*}; minor=${rest#*:}; test "$(/bin/busybox stat -c %t:%T /dev/$name)" = "$(printf %x $major):$(printf %x $minor)"; test "$(/bin/busybox stat -c %a /dev/$name)" = 666; done; printf probe > /dev/null; /bin/busybox head -c 1 /dev/zero > /dev/null; test "$(/bin/busybox head -c 1 /dev/full | /bin/busybox wc -c)" = 1; /bin/busybox head -c 1 /dev/random > /dev/null; /bin/busybox head -c 1 /dev/urandom > /dev/null; printf "a3s-oci-rootless-mapping-v1\n" > /.a3s-oci-rootless-smoke; progress=0; while :; do progress=$((progress + 1)); printf "%s\n" "$progress" > /.a3s-oci-rootless-progress.next; /bin/busybox mv /.a3s-oci-rootless-progress.next /.a3s-oci-rootless-progress; /bin/busybox sleep 0.05; done'
 jq \
   --arg command "$rootless_command" \
   --argjson uid "$rootless_uid" \
@@ -477,7 +477,7 @@ verify_single_container_report() {
   local output="$2"
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v14"
+    '.schema_version == "a3s.oci.native-linux-smoke.v15"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
@@ -503,10 +503,12 @@ verify_single_container_report() {
      and .running_observed
      and .init_oom_score_adj_verified
      and .init_io_priority_verified
+     and .init_scheduler_verified
      and .processes_verified
      and .process_io_verified
      and .exec_oom_score_adj_verified
      and .exec_io_priority_verified
+     and .exec_scheduler_verified
      and .terminal_io_verified
      and .file_transfer_verified
      and .filesystem_operations_verified
@@ -602,7 +604,7 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v14"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v15"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -868,7 +870,10 @@ run_rootless_smoke() {
       gid=$3
       shift 3
       printf 0 > "$control/cgroup.procs"
-      exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+      exec setpriv \
+        --ruid="$uid" --euid=0 \
+        --rgid="$gid" --egid=0 \
+        --clear-groups -- "$@"
     ' sh \
       "$rootless_cgroup_host_control" \
       "$rootless_uid" \
@@ -877,7 +882,8 @@ run_rootless_smoke() {
       --agent "$rootless_bin/a3s-oci-agent" \
       --bundle "$rootless_bundle" \
       --work-parent "$rootless_work_parent" \
-      --delegated-cgroup-root "$rootless_cgroup_parent")"; then
+      --delegated-cgroup-root "$rootless_cgroup_parent" \
+      --rootless-device-bootstrap)"; then
     status=0
   else
     status=$?
@@ -911,6 +917,9 @@ run_rootless_smoke() {
      and .uid_map_verified
      and .gid_map_verified
      and .setgroups_denied
+     and .device_policy_helper_verified
+     and .device_nodes_verified
+     and (.device_policy_updates_verified | not)
      and .cgroup_delegation_requested
      and .cgroup_delegation_verified
      and .resources_updated
@@ -1132,7 +1141,10 @@ run_rootless_post_open_negative_smoke() {
     gid=$3
     shift 3
     printf 0 > "$control/cgroup.procs"
-    exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+    exec setpriv \
+      --ruid="$uid" --euid=0 \
+      --rgid="$gid" --egid=0 \
+      --clear-groups -- "$@"
   ' sh \
     "$rootless_cgroup_host_control" \
     "$rootless_uid" \
@@ -1142,6 +1154,7 @@ run_rootless_post_open_negative_smoke() {
     --bundle "$rootless_bundle" \
     --work-parent "$rootless_work_parent" \
     --delegated-cgroup-root "$rootless_cgroup_parent" \
+    --rootless-device-bootstrap \
     --post-open-ready-file "$ready_file" \
     --post-open-continue-file "$continue_file" \
     >"$output_file" 2>&1 &
@@ -1387,7 +1400,10 @@ run_rootless_owner_death_recovery() {
       gid=$3
       shift 3
       printf 0 > "$control/cgroup.procs"
-      exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+      exec setpriv \
+        --ruid="$uid" --euid=0 \
+        --rgid="$gid" --egid=0 \
+        --clear-groups -- "$@"
     ' sh \
       "$rootless_cgroup_host_control" \
       "$rootless_uid" \
@@ -1399,6 +1415,7 @@ run_rootless_owner_death_recovery() {
       --container-id native-rootless-owner-recovery \
       --ready-file "$ready_file" \
       --delegated-cgroup-root "$rootless_cgroup_parent" \
+      --rootless-device-bootstrap \
       >"$owner_log" 2>&1 &
   recovery_owner_pid=$!
 
@@ -1472,7 +1489,10 @@ run_rootless_owner_death_recovery() {
       gid=$3
       shift 3
       printf 0 > "$control/cgroup.procs"
-      exec setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"
+      exec setpriv \
+        --ruid="$uid" --euid=0 \
+        --rgid="$gid" --egid=0 \
+        --clear-groups -- "$@"
     ' sh \
       "$rootless_cgroup_host_control" \
       "$rootless_uid" \
@@ -1483,7 +1503,8 @@ run_rootless_owner_death_recovery() {
       --bundle "$rootless_bundle" \
       --container-id native-rootless-owner-recovery \
       --generation "$generation" \
-      --delegated-cgroup-root "$rootless_cgroup_parent")"; then
+      --delegated-cgroup-root "$rootless_cgroup_parent" \
+      --rootless-device-bootstrap)"; then
     status=0
   else
     status=$?

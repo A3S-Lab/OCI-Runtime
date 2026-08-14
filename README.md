@@ -101,11 +101,11 @@ and `experimental` or `supported` readiness.
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals including File upload and Filesystem mkdir/move/remove, replay, generation fencing, startup recovery, quarantine, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
-| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, `oomScoreAdj`, I/O priority, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, a bounded Host-acknowledged mutation replay journal, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
+| Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, `oomScoreAdj`, scheduler policy, I/O priority, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, a bounded Host-acknowledged mutation replay journal, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated protocol v10 with v1-v9 compatibility, 20 public workload operations plus one bounded maintenance acknowledgement, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent. Durable recovery records remain on the per-generation share, privileged OCI device sources are created only on Guest-local devtmpfs and removed at the Create barrier, and shutdown consumes every retained device-target manifest before deleting the Guest runtime root |
 | containerd runtime-v2 | SDK-only `containerd-shim-a3s-oci-v2` with durable namespace/task identity, lifecycle and exec recovery, and schema-v8 metadata. A retained per-task exec sequence gives every `Exec` incarnation fresh SDK process and operation identities, so `DeleteProcess` can be followed by reuse of the same containerd exec ID across daemon restart without replaying the deleted process. Init/exec input, signal, and terminal-resize journals retain Open/Closing/Closed stdin state, output cursors, independent per-process signal and resize sequences, and a per-task control sequence. The shim also provides process/task-scoped serialization, cross-process-stable request fingerprints, bounded FIFO/PTY I/O, live replacement with exact stdin continuation, committed pending-write, close, signal, and resize replay without duplicate effects, correct `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` transitions, same-size resize suppression, correct `A→B→A` terminal restoration, no output replay, repeated pause/resume and update, stats, PID inventory, in-flight Create and committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty recovery, post-commit Native Linux guest-journal reclamation, four-state forced shim-crash cleanup, and a four-task parallel restart gate; compatibility, packaging, and cross-driver release gates remain open |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
-| Retained evidence | Schema and normative locks, 189-pair authenticated protocol fault coverage, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen with exact post-commit acknowledgement, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem transitions through durable service reopen and VM/session-owner replacement, a real protocol-v10 Apple Silicon Guest boot, native Linux real-container with exact init/exec OOM-score and I/O-priority read-back, soak, owner-death safe-termination, and three consecutive same-Host live containerd 2.2 lifecycle/restart/I/O matrices with deleted exec-ID reuse, post-commit guest-journal reclamation, and committed WriteStdin/CloseStdin/SignalProcess/ResizePty shim-replacement gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
+| Retained evidence | Schema and normative locks, 189-pair authenticated protocol fault coverage, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen with exact post-commit acknowledgement, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem transitions through durable service reopen and VM/session-owner replacement, a real protocol-v10 Apple Silicon Guest boot, native Linux real-container with exact init/exec OOM-score, I/O-priority, and scheduler read-back, rootless default-device and device-policy gates, soak, owner-death safe-termination, and three consecutive same-Host live containerd 2.2 lifecycle/restart/I/O matrices with deleted exec-ID reuse, post-commit guest-journal reclamation, and committed WriteStdin/CloseStdin/SignalProcess/ResizePty shim-replacement gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
 The current Box adapter at `A3S-Lab/Box@a16772c3` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
@@ -292,7 +292,7 @@ reattachment remains open for the Box B2 cutover.
 
 | Host path | Retained real evidence | Current readiness and open gate |
 | --- | --- | --- |
-| Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle; SDK service transport; exec/PTY/I/O; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64/aarch64 Box production-owner composition through all four SDKs plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
+| Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle, including the six OCI default devices and the bounded A3S Box device policy; SDK service transport; exec/PTY/I/O; init/exec scheduler read-back; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64/aarch64 Box production-owner composition through all four SDKs plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
 | Linux KVM utility VM | Device access, ioctl result, and KVM API version probes | `probe-only`; workload driver not implemented |
 | macOS arm64/HVF | Public same-UID SDK host service; one dedicated VM per exact generation; manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate writable runtime share; Guest-local devtmpfs sources for privileged OCI device nodes; a real protocol-v10 bridge with all 21 Guest operations; retained full protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 workload-operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves; source revision `a5a6b53` passed the revision-bound public-path gate across all 20 driver operations plus `features`/`list`/`events`, Host Service `SIGKILL` recovery, and a separate 25/25 fresh-VM soak with zero transient leaks | `experimental` on Apple Silicon. Every currently advertised public macOS/HVF function is implemented and the protocol-v10 public path is qualified at the recorded revision. Signed release-package qualification, OCI conformance, security review, upgrade/rollback compatibility, and longer release soak remain before `supported` |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup | `probe-only`; pinned immutable system root and in-process native-handle reclamation remain before `experimental` |
@@ -381,15 +381,16 @@ Real execution gates require a prepared host and isolated runtime root.
 | Apple Silicon | `cargo run -p a3s-oci-cli -- hvf-smoke` followed by the signed utility-VM profiles | [macOS HVF development](docs/macos-hvf.md) |
 | Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` and `scripts/windows-whpx-recovery-smoke.ps1` with a verified rootfs archive | [Windows WHPX development](docs/windows-whpx.md) |
 
-The Linux smoke now prepares an explicit user-owned cgroup-v2 subtree for the
-rootless v4 gate. The core gate covers create, live update/stats,
-workload-proven pause/resume, an exact lifecycle event sequence, and cleanup
-without allowing the runtime to guess or take over a host cgroup. A separate
-effective-root bootstrap gate exercises the exact six-node A3S Box device
-profile through a parent-bound helper, then drops the runtime owner permanently
-to its real identity. Runtime commit `bed43d2` passed that bounded profile on
-both x86_64 and aarch64 in CI run `31714178349`. The retained v4 reports verify
-the helper, all six nodes, policy replacement and rollback, durable events, and
+The Linux smoke prepares an explicit user-owned cgroup-v2 subtree for the
+rootless v4 gate. Before Tokio starts, the CLI retains that exact delegation,
+starts a parent-bound effective-root helper, and permanently drops the runtime
+owner to its real identity. Ordinary rootless launch uses the helper only to
+provide the six OCI default device nodes; it does not invent a
+`linux.resources.devices` policy. The separate A3S Box profile also exercises
+bounded device-access BPF replacement and rollback. Runtime commit `bed43d2`
+passed the full policy profile on x86_64 and aarch64 in CI run `31714178349`.
+The v4 gates verify create, live update/stats, workload-proven pause/resume,
+durable events, all six nodes, exact policy updates where requested, and
 complete cgroup, runtime, session, and marker cleanup. Broader delegated
 profiles remain unadvertised promotion work.
 
@@ -405,6 +406,8 @@ The repository turns release claims into checked inventories:
 | --- | ---: |
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
+| Typed semantic validation rules | 73 |
+| OCI normative dispositions | 14 enforced · 24 validated · 617 pending review |
 | Registered durable commit fault stages | 741 |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
 | Authenticated agent operation-stage fault pairs | 180 |
@@ -446,6 +449,9 @@ qualification must all pass before a driver becomes `supported`.
 ### Still intentionally open
 
 - complete review and enforcement of pending OCI normative entries;
+- default-device provisioning for a mount namespace joined to an externally
+  owned user namespace; the runtime currently avoids inventing unverifiable
+  mappings for that case;
 - real-host qualification of descriptor-confined filesystem sessions on each
   remaining utility-VM driver;
 - production-ready Native Linux and utility-VM drivers;

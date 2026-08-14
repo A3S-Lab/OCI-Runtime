@@ -131,7 +131,17 @@ impl OciBundle {
 
     /// Construct an immutable bundle from an already decoded complete OCI spec.
     pub fn from_spec(directory: impl Into<PathBuf>, spec: Spec) -> Result<Self> {
-        let config_json = serde_json::to_string(&spec).map_err(|error| {
+        let mut value = serde_json::to_value(&spec).map_err(|error| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!("failed to encode OCI configuration: {error}"),
+            )
+            .for_operation("build-bundle")
+        })?;
+        if let Some(process) = value.get_mut("process") {
+            crate::process_serde::normalize_for_wire(process);
+        }
+        let config_json = serde_json::to_string(&value).map_err(|error| {
             Error::new(
                 ErrorCode::InvalidArgument,
                 format!("failed to encode OCI configuration: {error}"),
@@ -300,7 +310,21 @@ fn decode_spec(bytes: &[u8], path: &Path) -> Result<Spec> {
         }
     }
 
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let mut typed = raw.clone();
+    if let Some(process) = typed.get_mut("process") {
+        crate::process_serde::normalize_for_typed_model(process);
+    }
+    let typed_bytes = serde_json::to_vec(&typed).map_err(|error| {
+        Error::new(
+            ErrorCode::Internal,
+            format!(
+                "failed to prepare typed OCI configuration {}: {error}",
+                path.display()
+            ),
+        )
+        .for_operation("load-bundle")
+    })?;
+    let mut deserializer = serde_json::Deserializer::from_slice(&typed_bytes);
     let mut unknown = Vec::new();
     let spec: Spec = serde_ignored::deserialize(&mut deserializer, |field| {
         unknown.push(field.to_string());
@@ -561,6 +585,45 @@ mod tests {
             let encoded = serde_json::to_value(spec).expect("encode decoded OCI spec");
             assert_explicit_fields_preserved(&original, &encoded, "");
         }
+    }
+
+    #[test]
+    fn bundle_round_trip_preserves_standard_scheduler_flag_names() {
+        let mut fixture = complete_v1_3_fixture();
+        fixture["process"]["scheduler"] = json!({
+            "policy": "SCHED_DEADLINE",
+            "flags": [
+                "SCHED_FLAG_RESET_ON_FORK",
+                "SCHED_FLAG_DL_OVERRUN"
+            ],
+            "runtime": 1024,
+            "deadline": 2048,
+            "period": 4096
+        });
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("scheduler-bundle");
+        let config_json = serde_json::to_string(&fixture).expect("encode scheduler fixture");
+        let bundle = OciBundle::from_json(&absolute, config_json.clone())
+            .expect("decode standard scheduler flags");
+        let flags = bundle
+            .spec()
+            .process()
+            .as_ref()
+            .and_then(|process| process.scheduler().as_ref())
+            .and_then(|scheduler| scheduler.flags().as_deref())
+            .expect("typed scheduler flags");
+        assert_eq!(flags.len(), 2);
+        assert_eq!(bundle.config_json(), config_json);
+
+        let rebuilt = OciBundle::from_spec(absolute, bundle.spec().clone())
+            .expect("rebuild standard scheduler bundle");
+        let rebuilt: serde_json::Value =
+            serde_json::from_str(rebuilt.config_json()).expect("decode rebuilt bundle");
+        assert_eq!(
+            rebuilt["process"]["scheduler"]["flags"],
+            json!(["SCHED_FLAG_RESET_ON_FORK", "SCHED_FLAG_DL_OVERRUN"])
+        );
     }
 
     #[test]

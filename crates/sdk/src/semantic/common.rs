@@ -277,29 +277,60 @@ fn validate_scheduler(process: &Map<String, Value>, collector: &mut ViolationCol
         return;
     };
 
-    if matches!(policy, "SCHED_OTHER" | "SCHED_BATCH")
-        && scheduler
-            .get("nice")
-            .and_then(Value::as_i64)
-            .is_some_and(|nice| !(-20..=19).contains(&nice))
+    if scheduler
+        .get("nice")
+        .and_then(Value::as_i64)
+        .is_some_and(|nice| !(-20..=19).contains(&nice))
     {
         collector.invalid(
             "/process/scheduler/nice",
             rules::SCHEDULER_NICE_RANGE,
-            "scheduler nice must be between -20 and 19 for SCHED_OTHER or SCHED_BATCH",
+            "scheduler nice must be between -20 and 19",
         );
     }
-    if scheduler
+    let priority = scheduler
         .get("priority")
         .and_then(Value::as_i64)
-        .is_some_and(|priority| priority != 0)
-        && !matches!(policy, "SCHED_FIFO" | "SCHED_RR")
-    {
+        .unwrap_or_default();
+    if matches!(policy, "SCHED_FIFO" | "SCHED_RR") && !(1..=99).contains(&priority) {
+        collector.invalid(
+            "/process/scheduler/priority",
+            rules::SCHEDULER_REALTIME_PRIORITY_RANGE,
+            "SCHED_FIFO and SCHED_RR priority must be between 1 and 99",
+        );
+    } else if !matches!(policy, "SCHED_FIFO" | "SCHED_RR") && priority != 0 {
         collector.invalid(
             "/process/scheduler/priority",
             rules::SCHEDULER_PRIORITY_POLICY,
-            "scheduler priority is valid only for SCHED_FIFO or SCHED_RR",
+            "scheduler priority must be 0 outside SCHED_FIFO and SCHED_RR",
         );
+    }
+
+    let mut scheduler_flags = BTreeSet::new();
+    for (index, flag) in scheduler
+        .get("flags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .enumerate()
+    {
+        if !scheduler_flags.insert(flag) {
+            collector.invalid(
+                format!("/process/scheduler/flags/{index}"),
+                rules::SCHEDULER_FLAGS_UNIQUE,
+                format!("scheduler flag {flag} is duplicated"),
+            );
+        }
+        if matches!(flag, "SCHED_FLAG_RECLAIM" | "SCHED_FLAG_DL_OVERRUN")
+            && policy != "SCHED_DEADLINE"
+        {
+            collector.invalid(
+                format!("/process/scheduler/flags/{index}"),
+                rules::SCHEDULER_FLAG_POLICY,
+                format!("scheduler flag {flag} requires SCHED_DEADLINE"),
+            );
+        }
     }
 
     let deadline_fields = ["runtime", "deadline", "period"];
@@ -329,12 +360,28 @@ fn validate_scheduler(process: &Map<String, Value>, collector: &mut ViolationCol
             .get("period")
             .and_then(Value::as_u64)
             .unwrap_or_default();
-        if runtime == 0 || runtime > deadline || deadline > period {
+        if runtime == 0 || deadline == 0 || runtime > deadline || (period != 0 && deadline > period)
+        {
             collector.invalid(
                 "/process/scheduler",
                 rules::SCHEDULER_DEADLINE_ORDER,
-                "SCHED_DEADLINE requires 0 < runtime <= deadline <= period",
+                "SCHED_DEADLINE requires 0 < runtime <= deadline and period=0 or deadline <= period",
             );
+        }
+        for (field, value) in [("runtime", runtime), ("deadline", deadline)]
+            .into_iter()
+            .chain((period != 0).then_some(("period", period)))
+        {
+            if !(1_024..=i64::MAX as u64).contains(&value) {
+                collector.invalid(
+                    format!("/process/scheduler/{field}"),
+                    rules::SCHEDULER_DEADLINE_KERNEL_RANGE,
+                    format!(
+                        "SCHED_DEADLINE {field} must be between 1024 and {} nanoseconds",
+                        i64::MAX
+                    ),
+                );
+            }
         }
     }
 }

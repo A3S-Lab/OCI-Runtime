@@ -130,9 +130,11 @@ pub use native_linux_driver::NativeLinuxDriver;
 #[cfg(target_os = "linux")]
 pub use native_recovery_smoke::{
     native_linux_recovery_owner, native_linux_recovery_owner_with_cgroup_delegation,
-    native_linux_recovery_resume, native_linux_recovery_resume_with_cgroup_delegation,
-    NativeLinuxRecoveryOwnerReady, NativeLinuxRecoverySmokeReport,
-    NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION, NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION,
+    native_linux_recovery_owner_with_device_bootstrap, native_linux_recovery_resume,
+    native_linux_recovery_resume_with_cgroup_delegation,
+    native_linux_recovery_resume_with_device_bootstrap, NativeLinuxRecoveryOwnerReady,
+    NativeLinuxRecoverySmokeReport, NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION,
+    NATIVE_LINUX_RECOVERY_SMOKE_SCHEMA_VERSION,
 };
 #[cfg(target_os = "linux")]
 pub use native_service::{
@@ -143,7 +145,8 @@ pub use native_smoke::{
     native_linux_fault_cleanup, native_linux_multi_container_smoke,
     native_linux_rootless_device_policy_smoke, native_linux_rootless_smoke,
     native_linux_rootless_smoke_with_cgroup_delegation,
-    native_linux_rootless_smoke_with_cgroup_delegation_barrier, native_linux_service_smoke,
+    native_linux_rootless_smoke_with_cgroup_delegation_barrier,
+    native_linux_rootless_smoke_with_device_bootstrap_barrier, native_linux_service_smoke,
     native_linux_smoke, native_linux_soak,
 };
 pub use oci_smoke::{

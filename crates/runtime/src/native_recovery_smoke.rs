@@ -16,7 +16,10 @@ use a3s_oci_sdk::{
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
-use crate::{DriverKillRequest, HostRuntimeService, NativeLinuxDriver, RuntimeDriver};
+use crate::{
+    DriverKillRequest, HostRuntimeService, NativeLinuxDriver, RootlessDevicePolicyBootstrap,
+    RuntimeDriver,
+};
 
 /// Versioned readiness handoff written by the live Native Linux owner.
 pub const NATIVE_LINUX_RECOVERY_OWNER_READY_SCHEMA_VERSION: &str =
@@ -158,9 +161,50 @@ pub async fn native_linux_recovery_owner_with_cgroup_delegation(
     ready_file: &Path,
     delegated_cgroup_root: Option<&Path>,
 ) -> Result<()> {
+    native_linux_recovery_owner_with_driver(
+        agent,
+        root,
+        bundle_directory,
+        container_id,
+        ready_file,
+        RecoveryDriverAccess::from_delegation(delegated_cgroup_root),
+    )
+    .await
+}
+
+/// Run the rootless owner-death qualification with the synchronous bounded
+/// helper required to prepare the OCI default device nodes.
+pub async fn native_linux_recovery_owner_with_device_bootstrap(
+    agent: &Path,
+    root: &Path,
+    bundle_directory: &Path,
+    container_id: ContainerId,
+    ready_file: &Path,
+    bootstrap: RootlessDevicePolicyBootstrap,
+) -> Result<()> {
+    native_linux_recovery_owner_with_driver(
+        agent,
+        root,
+        bundle_directory,
+        container_id,
+        ready_file,
+        RecoveryDriverAccess::DeviceBootstrap(bootstrap),
+    )
+    .await
+}
+
+async fn native_linux_recovery_owner_with_driver(
+    agent: &Path,
+    root: &Path,
+    bundle_directory: &Path,
+    container_id: ContainerId,
+    ready_file: &Path,
+    access: RecoveryDriverAccess<'_>,
+) -> Result<()> {
+    let cgroup_delegation_requested = access.delegation_root().is_some();
     prepare_layout(root).await?;
     let bundle = OciBundle::load(bundle_directory).await?;
-    let driver = open_driver(root, agent, delegated_cgroup_root).await?;
+    let driver = open_driver(root, agent, access).await?;
     let runtime_driver: Arc<dyn RuntimeDriver> = driver.clone();
     let service = HostRuntimeService::open(root.join("state"), runtime_driver).await?;
     let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())?;
@@ -209,8 +253,8 @@ pub async fn native_linux_recovery_owner_with_cgroup_delegation(
             effective_uid: unsafe { libc::geteuid() },
             // SAFETY: see the effective UID query above.
             effective_gid: unsafe { libc::getegid() },
-            cgroup_delegation_requested: delegated_cgroup_root.is_some(),
-            cgroup_delegation_verified: delegated_cgroup_root.is_some(),
+            cgroup_delegation_requested,
+            cgroup_delegation_verified: cgroup_delegation_requested,
             running_observed: true,
         },
     )?;
@@ -262,6 +306,47 @@ pub async fn native_linux_recovery_resume_with_cgroup_delegation(
     target: ContainerTarget,
     delegated_cgroup_root: Option<&Path>,
 ) -> NativeLinuxRecoverySmokeReport {
+    native_linux_recovery_resume_with_driver(
+        agent,
+        root,
+        bundle_directory,
+        target,
+        RecoveryDriverAccess::from_delegation(delegated_cgroup_root),
+    )
+    .await
+}
+
+/// Reopen a killed rootless owner with a fresh synchronous bounded helper.
+///
+/// The helper is recreated before Tokio starts by the caller and is consumed
+/// here so recovery and cleanup use the same verified delegation authority as
+/// a normal rootless launch.
+#[must_use]
+pub async fn native_linux_recovery_resume_with_device_bootstrap(
+    agent: &Path,
+    root: &Path,
+    bundle_directory: &Path,
+    target: ContainerTarget,
+    bootstrap: RootlessDevicePolicyBootstrap,
+) -> NativeLinuxRecoverySmokeReport {
+    native_linux_recovery_resume_with_driver(
+        agent,
+        root,
+        bundle_directory,
+        target,
+        RecoveryDriverAccess::DeviceBootstrap(bootstrap),
+    )
+    .await
+}
+
+async fn native_linux_recovery_resume_with_driver(
+    agent: &Path,
+    root: &Path,
+    bundle_directory: &Path,
+    target: ContainerTarget,
+    access: RecoveryDriverAccess<'_>,
+) -> NativeLinuxRecoverySmokeReport {
+    let delegated_cgroup_root = access.delegation_root().map(Path::to_path_buf);
     let mut report =
         NativeLinuxRecoverySmokeReport::initial(target.clone(), delegated_cgroup_root.is_some());
     let bundle = match OciBundle::load(bundle_directory).await {
@@ -272,7 +357,7 @@ pub async fn native_linux_recovery_resume_with_cgroup_delegation(
     if let Err(error) = prepare_layout(root).await {
         return failed(report, format!("failed to reopen recovery layout: {error}"));
     }
-    let driver = match open_driver(root, agent, delegated_cgroup_root).await {
+    let driver = match open_driver(root, agent, access).await {
         Ok(driver) => {
             report.cgroup_delegation_verified = delegated_cgroup_root.is_some();
             driver
@@ -413,7 +498,7 @@ pub async fn native_linux_recovery_resume_with_cgroup_delegation(
             false
         }
     };
-    report.cgroup_delegation_clean = match delegated_cgroup_root {
+    report.cgroup_delegation_clean = match delegated_cgroup_root.as_deref() {
         Some(root) => match delegated_cgroup_has_no_runtime_children(root) {
             Ok(clean) => clean,
             Err(error) => {
@@ -443,13 +528,36 @@ pub async fn native_linux_recovery_resume_with_cgroup_delegation(
     report
 }
 
+enum RecoveryDriverAccess<'a> {
+    Host,
+    Delegation(&'a Path),
+    DeviceBootstrap(RootlessDevicePolicyBootstrap),
+}
+
+impl<'a> RecoveryDriverAccess<'a> {
+    fn from_delegation(delegated_cgroup_root: Option<&'a Path>) -> Self {
+        delegated_cgroup_root.map_or(Self::Host, Self::Delegation)
+    }
+
+    fn delegation_root(&self) -> Option<&Path> {
+        match self {
+            Self::Host => None,
+            Self::Delegation(root) => Some(root),
+            Self::DeviceBootstrap(bootstrap) => Some(bootstrap.delegated_cgroup_root()),
+        }
+    }
+}
+
 async fn open_driver(
     root: &Path,
     agent: &Path,
-    delegated_cgroup_root: Option<&Path>,
+    access: RecoveryDriverAccess<'_>,
 ) -> Result<Arc<NativeLinuxDriver>> {
-    let driver = match delegated_cgroup_root {
-        Some(delegation) => {
+    let driver = match access {
+        RecoveryDriverAccess::Host => {
+            NativeLinuxDriver::open_experimental(root.join("executor"), agent).await?
+        }
+        RecoveryDriverAccess::Delegation(delegation) => {
             NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
                 root.join("executor"),
                 agent,
@@ -457,7 +565,14 @@ async fn open_driver(
             )
             .await?
         }
-        None => NativeLinuxDriver::open_experimental(root.join("executor"), agent).await?,
+        RecoveryDriverAccess::DeviceBootstrap(bootstrap) => {
+            NativeLinuxDriver::open_experimental_with_rootless_device_policy(
+                root.join("executor"),
+                agent,
+                bootstrap,
+            )
+            .await?
+        }
     };
     Ok(Arc::new(driver))
 }

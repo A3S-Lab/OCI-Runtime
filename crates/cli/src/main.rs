@@ -56,6 +56,9 @@ enum Command {
         /// Explicit user-owned cgroup-v2 delegation for bundles with cgroupsPath.
         #[arg(long, value_name = "DIR")]
         delegated_cgroup_root: Option<PathBuf>,
+        /// Bootstrap the bounded helper required for rootless default devices.
+        #[arg(long, requires = "delegated_cgroup_root")]
+        rootless_device_bootstrap: bool,
         /// Publish after delegation open and pause before the first mutation.
         #[arg(
             long,
@@ -152,6 +155,9 @@ enum Command {
         /// Explicit user-owned cgroup-v2 delegation for rootless recovery.
         #[arg(long, value_name = "DIR")]
         delegated_cgroup_root: Option<PathBuf>,
+        /// Bootstrap the bounded helper required for rootless default devices.
+        #[arg(long, requires = "delegated_cgroup_root")]
+        rootless_device_bootstrap: bool,
     },
     /// Reopen a killed Native Linux owner and emit safe-recovery evidence.
     #[cfg(target_os = "linux")]
@@ -170,6 +176,9 @@ enum Command {
         /// Exact cgroup-v2 delegation used by the killed rootless owner.
         #[arg(long, value_name = "DIR")]
         delegated_cgroup_root: Option<PathBuf>,
+        /// Recreate the bounded helper required for rootless recovery.
+        #[arg(long, requires = "delegated_cgroup_root")]
+        rootless_device_bootstrap: bool,
     },
     /// Own one A3S Box container through the native Linux SDK service.
     #[cfg(target_os = "linux")]
@@ -569,20 +578,45 @@ enum CliError {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let rootless_device_policy_bootstrap = match &cli.command {
+    #[cfg(target_os = "linux")]
+    let bootstrap_root = match &cli.command {
+        Command::NativeLinuxRootlessSmoke {
+            delegated_cgroup_root,
+            rootless_device_bootstrap: true,
+            ..
+        }
+        | Command::NativeLinuxRecoveryOwner {
+            delegated_cgroup_root,
+            rootless_device_bootstrap: true,
+            ..
+        }
+        | Command::NativeLinuxRecoveryResume {
+            delegated_cgroup_root,
+            rootless_device_bootstrap: true,
+            ..
+        } => delegated_cgroup_root.as_deref(),
         #[cfg(target_os = "linux")]
         Command::NativeLinuxRootlessDevicePolicySmoke {
             delegated_cgroup_root,
             ..
-        } => match a3s_oci_runtime::RootlessDevicePolicyBootstrap::start(delegated_cgroup_root) {
-            Ok(bootstrap) => Some(bootstrap),
-            Err(error) => {
-                eprintln!("a3s-oci: runtime request failed: {error}");
-                return ExitCode::FAILURE;
-            }
-        },
+        } => Some(delegated_cgroup_root.as_path()),
         _ => None,
     };
+    #[cfg(target_os = "linux")]
+    let rootless_device_policy_bootstrap = match bootstrap_root {
+        Some(delegated_cgroup_root) => {
+            match a3s_oci_runtime::RootlessDevicePolicyBootstrap::start(delegated_cgroup_root) {
+                Ok(bootstrap) => Some(bootstrap),
+                Err(error) => {
+                    eprintln!("a3s-oci: runtime request failed: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        None => None,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let rootless_device_policy_bootstrap = None;
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -665,10 +699,29 @@ async fn dispatch(
             bundle,
             work_parent,
             delegated_cgroup_root,
+            rootless_device_bootstrap,
             post_open_ready_file,
             post_open_continue_file,
         } => {
-            let report =
+            #[cfg(target_os = "linux")]
+            let report = if rootless_device_bootstrap {
+                let bootstrap = rootless_device_policy_bootstrap.take().ok_or_else(|| {
+                    a3s_oci_sdk::Error::new(
+                        a3s_oci_sdk::ErrorCode::FailedPrecondition,
+                        "rootless command did not complete synchronous device bootstrap",
+                    )
+                    .for_operation("rootless-device-bootstrap")
+                })?;
+                a3s_oci_runtime::native_linux_rootless_smoke_with_device_bootstrap_barrier(
+                    &agent,
+                    &bundle,
+                    &work_parent,
+                    bootstrap,
+                    post_open_ready_file.as_deref(),
+                    post_open_continue_file.as_deref(),
+                )
+                .await
+            } else {
                 a3s_oci_runtime::native_linux_rootless_smoke_with_cgroup_delegation_barrier(
                     &agent,
                     &bundle,
@@ -677,7 +730,21 @@ async fn dispatch(
                     post_open_ready_file.as_deref(),
                     post_open_continue_file.as_deref(),
                 )
-                .await;
+                .await
+            };
+            #[cfg(not(target_os = "linux"))]
+            let report = {
+                let _ = rootless_device_bootstrap;
+                a3s_oci_runtime::native_linux_rootless_smoke_with_cgroup_delegation_barrier(
+                    &agent,
+                    &bundle,
+                    &work_parent,
+                    delegated_cgroup_root.as_deref(),
+                    post_open_ready_file.as_deref(),
+                    post_open_continue_file.as_deref(),
+                )
+                .await
+            };
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {
@@ -767,16 +834,36 @@ async fn dispatch(
             container_id,
             ready_file,
             delegated_cgroup_root,
+            rootless_device_bootstrap,
         } => {
-            a3s_oci_runtime::native_linux_recovery_owner_with_cgroup_delegation(
-                &agent,
-                &root,
-                &bundle,
-                container_id,
-                &ready_file,
-                delegated_cgroup_root.as_deref(),
-            )
-            .await?;
+            if rootless_device_bootstrap {
+                let bootstrap = rootless_device_policy_bootstrap.take().ok_or_else(|| {
+                    a3s_oci_sdk::Error::new(
+                        a3s_oci_sdk::ErrorCode::FailedPrecondition,
+                        "rootless recovery owner did not complete synchronous device bootstrap",
+                    )
+                    .for_operation("rootless-device-bootstrap")
+                })?;
+                a3s_oci_runtime::native_linux_recovery_owner_with_device_bootstrap(
+                    &agent,
+                    &root,
+                    &bundle,
+                    container_id,
+                    &ready_file,
+                    bootstrap,
+                )
+                .await?;
+            } else {
+                a3s_oci_runtime::native_linux_recovery_owner_with_cgroup_delegation(
+                    &agent,
+                    &root,
+                    &bundle,
+                    container_id,
+                    &ready_file,
+                    delegated_cgroup_root.as_deref(),
+                )
+                .await?;
+            }
             Ok(ExitCode::SUCCESS)
         }
         #[cfg(target_os = "linux")]
@@ -787,17 +874,32 @@ async fn dispatch(
             container_id,
             generation,
             delegated_cgroup_root,
+            rootless_device_bootstrap,
         } => {
             let generation = a3s_oci_sdk::Generation(generation);
             let target = a3s_oci_sdk::ContainerTarget::exact(container_id, generation);
-            let report = a3s_oci_runtime::native_linux_recovery_resume_with_cgroup_delegation(
-                &agent,
-                &root,
-                &bundle,
-                target,
-                delegated_cgroup_root.as_deref(),
-            )
-            .await;
+            let report = if rootless_device_bootstrap {
+                let bootstrap = rootless_device_policy_bootstrap.take().ok_or_else(|| {
+                    a3s_oci_sdk::Error::new(
+                        a3s_oci_sdk::ErrorCode::FailedPrecondition,
+                        "rootless recovery resume did not complete synchronous device bootstrap",
+                    )
+                    .for_operation("rootless-device-bootstrap")
+                })?;
+                a3s_oci_runtime::native_linux_recovery_resume_with_device_bootstrap(
+                    &agent, &root, &bundle, target, bootstrap,
+                )
+                .await
+            } else {
+                a3s_oci_runtime::native_linux_recovery_resume_with_cgroup_delegation(
+                    &agent,
+                    &root,
+                    &bundle,
+                    target,
+                    delegated_cgroup_root.as_deref(),
+                )
+                .await
+            };
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

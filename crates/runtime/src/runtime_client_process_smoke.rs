@@ -26,6 +26,10 @@ pub(crate) async fn exercise_process_io(
         "test \"$(ulimit -n)\" = 48; \
          test \"$(/bin/busybox cat /proc/self/oom_score_adj)\" = 200; \
          test \"$(/bin/busybox ionice -p $$)\" = \"best-effort: prio 5\"; \
+         /bin/busybox awk '$1 == \"policy\" && $3 == 3 { ok = 1 } END { exit !ok }' \
+           /proc/self/sched; \
+         /bin/busybox awk '$1 == \"prio\" && $3 == 127 { ok = 1 } END { exit !ok }' \
+           /proc/self/sched; \
          IFS= read -r first; IFS= read -r second; \
          printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
          printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
@@ -37,6 +41,12 @@ pub(crate) async fn exercise_process_io(
     }))
     .map_err(|error| format!("failed to construct exec I/O priority: {error}"))?;
     request.process.set_io_priority(Some(io_priority));
+    let scheduler = serde_json::from_value(serde_json::json!({
+        "policy": "SCHED_BATCH",
+        "nice": 7
+    }))
+    .map_err(|error| format!("failed to construct exec scheduler: {error}"))?;
+    request.process.set_scheduler(Some(scheduler));
     request.io = ProcessIo {
         stdin: IoMode::Pipe,
         stdout: IoMode::Capture,

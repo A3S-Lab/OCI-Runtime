@@ -158,18 +158,29 @@ impl OciSemanticValidator {
 
     /// Validate a complete typed OCI configuration.
     pub fn validate_spec(self, phase: OciSemanticPhase, spec: &Spec) -> Result<()> {
-        let value = serde_json::to_value(spec).map_err(|error| {
+        let mut value = serde_json::to_value(spec).map_err(|error| {
             Error::new(
                 ErrorCode::InvalidArgument,
                 format!("failed to encode OCI configuration for semantic validation: {error}"),
             )
             .for_operation("validate-oci-semantics")
         })?;
+        if let Some(process) = value.get_mut("process") {
+            crate::process_serde::normalize_for_wire(process);
+        }
         self.validate(phase, &value)
     }
 
     /// Validate one Linux OCI process using the same runnable-process rules.
     pub fn validate_process(self, process: &Process) -> Result<()> {
+        let mut process = serde_json::to_value(process).map_err(|error| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!("failed to encode OCI process for semantic validation: {error}"),
+            )
+            .for_operation("validate-oci-semantics")
+        })?;
+        crate::process_serde::normalize_for_wire(&mut process);
         let value = serde_json::json!({
             "ociVersion": crate::OCI_RUNTIME_SPEC_VERSION_MAX,
             "root": {"path": "rootfs"},

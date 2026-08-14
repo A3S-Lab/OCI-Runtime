@@ -154,17 +154,22 @@ The current mount slice:
   propagation or ID-map modes, comma-packed options, `tmpcopyup`, and mount
   moves instead of silently ignoring them.
 
-Privileged device setup retains a separate boundary for source nodes and
-cleanup evidence. Native Linux creates private sources below the executor's
+Device setup retains a separate boundary for source nodes and cleanup
+evidence. Rootful Native Linux creates private sources below the executor's
 owned runtime directory. A utility VM instead creates each container's
 short-lived sources below the Guest-local `/dev` devtmpfs, because its durable
 runtime directory is a host-backed virtiofs share and cannot provide portable
-Linux character/block device identity. The device-target cleanup manifest
-remains in that durable runtime directory. Both roots are real directories,
-the per-container source path rejects symbolic-link substitution, and the
-executor removes the source directory immediately after the bind-mounted
-targets cross the Create-ready barrier. Strict type, major/minor, ownership,
-mode, allowlist, and cgroup-device checks are unchanged.
+Linux character/block device identity. Rootless Native Linux cannot create
+those sources after dropping privilege, so a parent-bound helper opens and
+verifies only the six fixed OCI default devices and passes their descriptors
+to the unprivileged owner. Supplying those defaults does not require an OCI
+device-access policy; when the exact A3S Box policy is present, the same helper
+also owns its bounded cgroup-device BPF operations. The device-target cleanup
+manifest remains in the durable runtime directory. Every source boundary
+rejects symbolic-link substitution, and the executor removes transient
+sources immediately after the bind-mounted targets cross the Create-ready
+barrier. Strict type, major/minor, ownership, mode, allowlist, and
+cgroup-device checks are unchanged.
 
 Graceful executor shutdown now consumes every live container's device-target
 manifest before clearing its runtime state or removing the Guest runtime root.
@@ -236,8 +241,8 @@ fail, and exact mutation retries replay their original process or signal
 result. Init and exec share the same fail-closed OCI process planner and I/O
 owner. The current process-I/O slice accepts null, piped, or inherited stdin,
 null, captured, or inherited stdout/stderr, or the exact all-terminal PTY
-contract. It accepts the enforced `oomScoreAdj` and `ioPriority` fields while
-rejecting scheduler, CPU affinity, and other unenforced process settings.
+contract. It accepts the enforced `oomScoreAdj`, `scheduler`, and `ioPriority`
+fields while rejecting CPU affinity and other unenforced process settings.
 Inherited descriptors remain owned by the runtime launcher and are
 deliberately absent from SDK read/write operations. A separate Linux-only
 native create attachment implements the fixed
@@ -265,6 +270,18 @@ represented without normalization. Values outside `0..=7`, nonzero class data
 for the kernel's data-less idle class, permission failures, unavailable
 syscalls, and read-back mismatches fail with typed context. An omitted field
 performs no syscall and preserves the inherited I/O priority.
+
+Optional `process.scheduler` is applied at the same point with Linux
+`sched_setattr` and verified immediately with `sched_getattr`. The planner
+represents all seven OCI policies and all seven flags, validates the Linux
+nice and realtime-priority ranges plus deadline ordering and kernel bounds,
+and rejects duplicate or policy-incompatible flags before mutation.
+`SCHED_ISO` returns `Unsupported` when the host kernel does not implement it;
+permission and other syscall failures retain their typed error instead of
+falling back to inherited scheduling. Omission performs no scheduler syscall.
+The SDK's process adapter also preserves the exact OCI spellings for
+`SCHED_FLAG_RESET_ON_FORK` and `SCHED_FLAG_DL_OVERRUN` across bundle and Guest
+protocol serialization.
 
 Piped stdin is written asynchronously with backpressure and can be closed
 idempotently. Dedicated tasks continuously drain captured stdout and stderr so
@@ -334,6 +351,14 @@ already enabled. The executor pins its filesystem device and inode, rechecks
 ownership and controller state before first use, and creates the same private
 manager layout beneath that root. A rootless `linux.cgroupsPath` without this
 authority fails before container state or filesystem mutation.
+
+If a rootless plan also needs the six default device nodes, the CLI must start
+the synchronous bounded helper before Tokio and consume that bootstrap when it
+opens the executor. A delegation without this helper remains valid for
+negative qualification and device-free planning, but create fails explicitly
+when device preparation is required. A mount namespace joined to an external
+user namespace is the remaining exception: the executor currently avoids
+inventing default-node ownership for mappings it did not create or verify.
 
 A trusted in-container control plane can opt in to the versioned
 `control-workload-v1` layout with these OCI annotations:

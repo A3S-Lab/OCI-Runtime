@@ -91,9 +91,13 @@ define_rules! {
     RDMA_LIMIT_REQUIRED => Normative, "oci.linux.rdma.limit-required";
     RESTRICTED_PATH_REQUIRES_MOUNT_NAMESPACE => RuntimeConstraint, "oci.linux.restricted-path.requires-mount-namespace";
     SCHEDULER_DEADLINE_FIELDS_POLICY => RuntimeConstraint, "oci.linux.scheduler.deadline-fields.policy";
+    SCHEDULER_DEADLINE_KERNEL_RANGE => RuntimeConstraint, "oci.linux.scheduler.deadline.kernel-range";
     SCHEDULER_DEADLINE_ORDER => RuntimeConstraint, "oci.linux.scheduler.deadline-order";
+    SCHEDULER_FLAG_POLICY => RuntimeConstraint, "oci.linux.scheduler.flag.policy";
+    SCHEDULER_FLAGS_UNIQUE => RuntimeConstraint, "oci.linux.scheduler.flags.unique";
     SCHEDULER_NICE_RANGE => RuntimeConstraint, "oci.linux.scheduler.nice.range";
     SCHEDULER_PRIORITY_POLICY => RuntimeConstraint, "oci.linux.scheduler.priority.policy";
+    SCHEDULER_REALTIME_PRIORITY_RANGE => RuntimeConstraint, "oci.linux.scheduler.realtime-priority.range";
     SECCOMP_ERRNO_ACTION => RuntimeConstraint, "oci.linux.seccomp.errno-action";
     SECCOMP_LISTENER_METADATA_REQUIRES_PATH => RuntimeConstraint, "oci.linux.seccomp.listener-metadata.requires-path";
     SYSCTL_HOSTNAME_CONFLICT => RuntimeConstraint, "oci.linux.sysctl.hostname-conflict";

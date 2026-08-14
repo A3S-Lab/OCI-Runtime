@@ -120,7 +120,7 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v14` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v15` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
@@ -147,15 +147,16 @@ following:
    `execve`, runs `poststart`, and returns; the workload verifies exact rootful
    UID/GID maps, monotonic and boottime namespace offsets, and an applied
    `RLIMIT_NOFILE` soft/hard value of 64, exact configured `oom_score_adj`
-   value of 100, and best-effort I/O priority 4, verifies FD 3 and FD 4 are
-   sockets, and writes the exact `a3s-box-native-control-v1\n` bytes through
-   FD 5 before the marker is observed; the host connects to both inherited
-   listeners and reads back the exact log;
+   value of 100, best-effort I/O priority 4, and `SCHED_BATCH` with nice 6,
+   verifies FD 3 and FD 4 are sockets, and writes the exact
+   `a3s-box-native-control-v1\n` bytes through FD 5 before the marker is
+   observed; the host connects to both inherited listeners and reads back the
+   exact log;
 8. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48
-   plus exact configured `oom_score_adj` value of 200 and best-effort I/O
-   priority 5; exec and its retry return the same positive authenticated PID,
-   a duplicate process ID is rejected, and a 50-millisecond process wait
-   returns `DeadlineExceeded`;
+   plus exact configured `oom_score_adj` value of 200, best-effort I/O priority
+   5, and `SCHED_BATCH` with nice 7; exec and its retry return the same positive
+   authenticated PID, a duplicate process ID is rejected, and a
+   50-millisecond process wait returns `DeadlineExceeded`;
 9. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
 10. process inventory returns exactly the live init and second exec process;
@@ -252,7 +253,7 @@ configured with one container ID and duplicates the inherited Box FD 3/4/5
 roles before it opens any workload.
 
 The `native-linux-service-smoke` command reuses the complete
-`a3s.oci.native-linux-smoke.v14` lifecycle assertions over a real `0600` Unix
+`a3s.oci.native-linux-smoke.v15` lifecycle assertions over a real `0600` Unix
 socket. In addition to the 26 lifecycle requirements above, success requires:
 
 1. the service root, state root, and executor parent are real, owner-owned
@@ -311,6 +312,15 @@ device/inode identity before creating a private `a3s-oci-*` manager below it;
 it never guesses a systemd scope or enables controllers outside the supplied
 delegation.
 
+A positive rootless run also uses `--rootless-device-bootstrap` and starts
+with non-root real UID/GID plus effective root. Before Tokio is created, the
+CLI pins the delegation, starts one parent-bound helper, and permanently drops
+the owner to its real identity. The helper supplies descriptors for exactly
+`/dev/null`, `/dev/zero`, `/dev/full`, `/dev/random`, `/dev/urandom`, and
+`/dev/tty`. This is the OCI default-device mount path and does not require a
+`linux.resources.devices` policy. A launch that needs those defaults but does
+not provide the helper fails explicitly before rootfs mutation.
+
 The CI fixture creates a dedicated UID/GID 20000 account with UID range
 300000:65536 and GID range 400000:65536. A host file owned by 300000:400000
 must appear as 1:1 inside the workload. The versioned
@@ -319,8 +329,9 @@ must appear as 1:1 inside the workload. The versioned
 1. exact create and replay behind the OCI `created` barrier;
 2. exact `/proc/<pid>/uid_map` and `gid_map` read-back plus
    `/proc/<pid>/setgroups == deny` before start;
-3. a started workload that observes namespace root and the translated 1:1
-   fixture ownership;
+3. a started workload that observes namespace root, the translated 1:1
+   fixture ownership, and the exact type, major/minor, mode, and basic I/O
+   behavior of all six default devices;
 4. exact exec/replay, pidfd signal/replay, and stable signal-9 process wait;
 5. exact init kill/replay and stable signal-9 lifecycle wait;
 6. one ordered creating/created/started, exec create/start/exit, stopped, init
@@ -330,14 +341,11 @@ must appear as 1:1 inside the workload. The versioned
 8. stopped-only delete replay, post-delete `NotFound`, empty list, and removal
    of every process, marker, executor root, and durable session directory.
 
-The hidden `native-linux-rootless-device-policy-smoke` extends that gate for the
-exact A3S Box six-node device profile. It must be launched with non-root real
-UID/GID, effective UID/GID zero, and no supplementary groups. Before creating
-Tokio, the CLI retains the exact delegated cgroup descriptor, forks one
-parent-bound helper, then irreversibly drops all owner credentials to the real
-identity. The helper accepts only framed, versioned install, replace, remove,
-and explicit shutdown messages for normalized paths below that descriptor. It
-does not accept filesystem roots, raw BPF, arbitrary device nodes, or
+The hidden `native-linux-rootless-device-policy-smoke` extends the same helper
+path with the exact A3S Box six-node device-access policy. It accepts only
+framed, versioned install, replace, remove, mount-preparation, and explicit
+shutdown messages for normalized paths below the pinned delegation. It does
+not accept filesystem roots, raw BPF, arbitrary device nodes, or
 caller-supplied program descriptors.
 
 The v4 device-policy report verifies all six retained host nodes inside the
@@ -393,7 +401,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v14` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v15` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -553,11 +561,13 @@ durable state. Its `a3s.oci.native-linux-recovery-smoke.v2` report requires:
 
 Both x86_64 and aarch64 Linux CI run the gate twice. The rootful report is
 retained via `A3S_OCI_NATIVE_RECOVERY_REPORT`; the non-root UID/GID 20000 run
-reopens the same explicit delegation in a distinct non-root process and is
-retained via `A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT`. These gates prove safe
-termination and exact cleanup. They deliberately do not claim live process-I/O
-session reattachment; that requires a persistent authenticated supervisor and
-remains a promotion gate.
+starts a bounded default-device helper before the original owner and recreates
+that authority before the distinct replacement process reopens the same
+explicit delegation. Its result is retained via
+`A3S_OCI_NATIVE_ROOTLESS_RECOVERY_REPORT`. These gates prove safe termination,
+helper replacement, and exact cleanup. They deliberately do not claim live
+process-I/O session reattachment; that requires a persistent authenticated
+supervisor and remains a promotion gate.
 
 Runtime commit `49cea11` passed both real-host lanes in CI run `31674526443`.
 The retained x86_64 and aarch64 rootless reports both record `available`, exact
@@ -606,6 +616,9 @@ following pass:
   profile is advertised;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
+- a fail-closed default-device authority for mount namespaces joined to an
+  externally owned user namespace; the current planner does not invent nodes
+  whose ownership mapping it cannot verify;
 - remaining mount and credential controls, broader cgroup v2 policies,
   multi-architecture/notification seccomp, and broader sysctl enforcement;
 - live real-driver reattachment after runtime-process restart, plus generic SDK

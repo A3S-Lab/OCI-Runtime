@@ -76,6 +76,25 @@ pub(super) async fn run_rootless_device_policy(
     rootless::run_device_policy(init_executable, bundle, work_parent, bootstrap).await
 }
 
+pub(super) async fn run_rootless_device_bootstrap(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    bootstrap: a3s_oci_agent::RootlessDevicePolicyBootstrap,
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
+) -> crate::NativeLinuxRootlessSmokeReport {
+    rootless::run_device_bootstrap(
+        init_executable,
+        bundle,
+        work_parent,
+        bootstrap,
+        ready_file,
+        continue_file,
+    )
+    .await
+}
+
 pub(super) async fn run_soak(
     init_executable: &Path,
     bundles: &[PathBuf],

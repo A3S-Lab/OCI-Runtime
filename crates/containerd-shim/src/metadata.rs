@@ -83,6 +83,7 @@ pub(crate) struct ExecMetadata {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) incarnation: u64,
     pub(crate) stage: ExecStage,
+    #[serde(with = "a3s_oci_sdk::process_serde")]
     pub(crate) process: Process,
     pub(crate) stdin: String,
     pub(crate) stdout: String,

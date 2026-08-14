@@ -1,5 +1,7 @@
 use super::*;
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process, StateBuilder};
+use a3s_oci_sdk::oci_spec::runtime::{
+    ContainerState, LinuxSchedulerFlag, LinuxSchedulerPolicy, Process, StateBuilder,
+};
 use a3s_oci_sdk::{
     async_trait, CreateRequest, DeleteMode, DeleteRequest as RuntimeDeleteRequest, DriverKind,
     ExecRequest, Generation, IsolationClass, KillRequest as RuntimeKillRequest, OciRuntimeService,
@@ -380,6 +382,65 @@ fn every_runtime_error_class_has_an_explicit_containerd_mapping() {
 fn timestamp_is_populated() {
     let timestamp = timestamp_now();
     assert!(timestamp.seconds > 0);
+}
+
+#[tokio::test]
+async fn containerd_exec_accepts_exact_oci_scheduler_flag_names() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let task = task_state(directory.path());
+    let (adapter, _) = recovery_service(&task, Vec::new());
+    let service = recovery_service_instance(directory.path(), adapter);
+    service
+        .state
+        .lock()
+        .await
+        .tasks
+        .insert("task-a".to_string(), task);
+
+    let process = serde_json::json!({
+        "terminal": false,
+        "user": {"uid": 0, "gid": 0},
+        "args": ["/bin/true"],
+        "cwd": "/",
+        "scheduler": {
+            "policy": "SCHED_DEADLINE",
+            "flags": [
+                "SCHED_FLAG_RESET_ON_FORK",
+                "SCHED_FLAG_DL_OVERRUN"
+            ],
+            "runtime": 1024,
+            "deadline": 2048,
+            "period": 4096
+        }
+    });
+    Task::exec(
+        &service,
+        &ttrpc_context(),
+        exec_request_with_process("exec-scheduler", process),
+    )
+    .await
+    .expect("add scheduler-configured exec process");
+
+    let task = service
+        .task_snapshot("task-a")
+        .await
+        .expect("task with scheduler-configured exec process");
+    let scheduler = task.execs["exec-scheduler"]
+        .process
+        .scheduler()
+        .as_ref()
+        .expect("exec scheduler");
+    assert_eq!(*scheduler.policy(), LinuxSchedulerPolicy::SchedDeadline);
+    assert_eq!(
+        scheduler.flags().as_deref(),
+        Some(
+            [
+                LinuxSchedulerFlag::SchedResetOnFork,
+                LinuxSchedulerFlag::SchedFlagDLOverrun,
+            ]
+            .as_slice()
+        )
+    );
 }
 
 #[tokio::test]
@@ -1160,16 +1221,22 @@ fn ttrpc_context() -> TtrpcContext {
 }
 
 fn exec_request(exec_id: &str) -> api::ExecProcessRequest {
+    exec_request_with_process(
+        exec_id,
+        serde_json::json!({
+            "terminal": false,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/true"],
+            "cwd": "/"
+        }),
+    )
+}
+
+fn exec_request_with_process(exec_id: &str, process: serde_json::Value) -> api::ExecProcessRequest {
     const OCI_PROCESS_TYPE: &str = "types.containerd.io/opencontainers/runtime-spec/1/Process";
     let mut spec = protobuf::well_known_types::any::Any::new();
     spec.type_url = OCI_PROCESS_TYPE.to_string();
-    spec.value = serde_json::to_vec(&serde_json::json!({
-        "terminal": false,
-        "user": {"uid": 0, "gid": 0},
-        "args": ["/bin/true"],
-        "cwd": "/"
-    }))
-    .expect("encode exec process");
+    spec.value = serde_json::to_vec(&process).expect("encode exec process");
     let mut request = api::ExecProcessRequest::new();
     request.set_id("task-a".to_string());
     request.set_exec_id(exec_id.to_string());

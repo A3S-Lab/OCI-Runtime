@@ -118,7 +118,7 @@ fn native_linux_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v14");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v15");
     assert_ne!(report["status"], "available");
 }
 
@@ -145,6 +145,27 @@ fn native_linux_rootless_smoke_fails_closed_with_versioned_output() {
         "a3s.oci.native-linux-rootless-smoke.v4"
     );
     assert_ne!(report["status"], "available");
+}
+
+#[test]
+fn rootless_device_bootstrap_requires_an_explicit_delegation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "native-linux-rootless-smoke",
+            "--agent",
+            "missing-a3s-oci-agent",
+            "--bundle",
+            "missing-a3s-oci-bundle",
+            "--work-parent",
+            "missing-a3s-oci-work-parent",
+            "--rootless-device-bootstrap",
+        ])
+        .output()
+        .expect("native Linux rootless command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--delegated-cgroup-root"));
+    assert!(output.stdout.is_empty());
 }
 
 #[cfg(target_os = "linux")]
@@ -262,7 +283,7 @@ fn native_linux_service_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout)
         .expect("native service smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v14");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v15");
     assert_ne!(report["status"], "available");
 }
 
@@ -288,7 +309,7 @@ fn native_linux_multi_container_smoke_fails_closed_with_versioned_output() {
         serde_json::from_slice(&output.stdout).expect("diagnostic output must be valid JSON");
     assert_eq!(
         report["schema_version"],
-        "a3s.oci.native-linux-multi-container-smoke.v14"
+        "a3s.oci.native-linux-multi-container-smoke.v15"
     );
     assert_ne!(report["status"], "available");
 }

@@ -456,7 +456,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 625-entry pending normative evidence backlog.
+- [ ] Close the 617-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1321,6 +1321,12 @@ leak. Only then may KVM become `experimental`.
   classes to init and exec before credential reduction, preserve inherited
   priority when omitted, reject out-of-range or nonzero idle class data, and
   require exact syscall read-back plus real Native Linux evidence.
+- [x] Validate, retain, and apply OCI `process.scheduler` to init and exec with
+  Linux `sched_setattr`/`sched_getattr`: preserve inherited scheduling when
+  omitted; support all seven OCI policies and flags; reject duplicate flags,
+  invalid nice/realtime/deadline relationships, and unavailable `SCHED_ISO`
+  with stable typed errors; preserve the exact OCI flag spellings across SDK
+  transport; and require real Native Linux kernel read-back.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
@@ -1342,9 +1348,9 @@ leak. Only then may KVM become `experimental`.
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   cgroup-controlled `mknod`, and verified device-node creation.
 - [ ] Complete the remaining process and rootless configuration boundary.
-  - [x] Enforce or explicitly reject supplementary credentials, scheduler,
-    I/O priority, CPU affinity, and unsupported rootless ID-mapping shapes
-    before executor mutation.
+  - [x] Enforce or explicitly reject supplementary credentials, I/O priority,
+    CPU affinity, and unsupported rootless ID-mapping shapes before executor
+    mutation.
   - [x] Advertise and enforce the exact supported LSM set, with fail-closed
     behavior and positive and negative evidence for every reported module.
   - [x] Extend seccomp classification and enforcement to every advertised
@@ -1373,6 +1379,13 @@ leak. Only then may KVM become `experimental`.
     deletion replay, durable-state removal, and empty cgroup, runtime, session,
     and marker cleanup. This is the only advertised rootless device profile;
     broader device and controller profiles remain outside that boundary.
+  - [x] Supply the six normative default device nodes for an ordinary rootless
+    launch through the same bounded helper without requiring or fabricating a
+    `linux.resources.devices` access policy. Recreate the helper for both sides
+    of owner-death recovery and verify the nodes from inside the workload.
+  - [ ] Define a fail-closed authority contract for default devices when a
+    container joins an externally owned user namespace. Until then, that join
+    path does not invent device ownership or mappings it cannot verify.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
     for every newly advertised controller on x86_64 and aarch64.
 - [x] Reap adopted orphan and zombie processes under namespace PID 1, terminate

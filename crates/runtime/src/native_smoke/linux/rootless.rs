@@ -53,6 +53,7 @@ struct RootlessRun<'a> {
     ready_file: Option<&'a Path>,
     continue_file: Option<&'a Path>,
     device_policy_bootstrap: Option<a3s_oci_agent::RootlessDevicePolicyBootstrap>,
+    exercise_device_policy: bool,
 }
 
 struct RootlessExercise<'a> {
@@ -81,6 +82,7 @@ pub(super) async fn run(
         ready_file,
         continue_file,
         device_policy_bootstrap: None,
+        exercise_device_policy: false,
     })
     .await
 }
@@ -94,13 +96,14 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
         ready_file,
         continue_file,
         device_policy_bootstrap,
+        exercise_device_policy,
     } = run;
-    let device_policy = device_policy_bootstrap.is_some();
+    let device_bootstrap = device_policy_bootstrap.is_some();
     let mut report = NativeLinuxRootlessSmokeReport::initial(HostPlatform::Linux);
     // SAFETY: these credential queries have no pointer arguments or failure
     // return values.
     let (effective_uid, effective_gid) = unsafe {
-        if device_policy {
+        if device_bootstrap {
             (libc::getuid(), libc::getgid())
         } else {
             (libc::geteuid(), libc::getegid())
@@ -206,12 +209,8 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
     if let Err(reason) = create_private_directory(&executor_parent).await {
         return cleanup_session(report, &session_root, reason).await;
     }
-    let driver = match match (
-        delegated_cgroup_root,
-        device_policy,
-        device_policy_bootstrap,
-    ) {
-        (Some(_), true, Some(bootstrap)) => {
+    let driver = match match (delegated_cgroup_root, device_policy_bootstrap) {
+        (Some(_), Some(bootstrap)) => {
             NativeLinuxDriver::open_experimental_with_rootless_device_policy(
                 &executor_parent,
                 init_executable,
@@ -219,7 +218,7 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
             )
             .await
         }
-        (Some(root), false, None) => {
+        (Some(root), None) => {
             NativeLinuxDriver::open_experimental_with_rootless_cgroup_delegation(
                 &executor_parent,
                 init_executable,
@@ -227,10 +226,10 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
             )
             .await
         }
-        (None, false, None) => {
+        (None, None) => {
             NativeLinuxDriver::open_experimental(&executor_parent, init_executable).await
         }
-        _ => unreachable!("device-policy mode requires one synchronous bootstrap"),
+        (None, Some(_)) => unreachable!("device bootstrap always retains one delegation"),
     } {
         Ok(driver) => Arc::new(driver),
         Err(error) => {
@@ -242,7 +241,7 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
             .await;
         }
     };
-    report.device_policy_helper_verified = device_policy;
+    report.device_policy_helper_verified = device_bootstrap;
     let executor_root = driver.executor_root().to_path_buf();
     if let Err(reason) = qualification_barrier(ready_file, continue_file).await {
         cleanup_driver(
@@ -282,7 +281,7 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
             cgroup_requirement,
             nonce: &nonce,
             workload_files: &workload_files,
-            device_policy,
+            device_policy: exercise_device_policy,
         },
         &mut report,
     )
@@ -327,6 +326,29 @@ pub(super) async fn run_device_policy(
         ready_file: None,
         continue_file: None,
         device_policy_bootstrap: Some(bootstrap),
+        exercise_device_policy: true,
+    })
+    .await
+}
+
+pub(super) async fn run_device_bootstrap(
+    init_executable: &Path,
+    bundle_directory: &Path,
+    work_parent: &Path,
+    bootstrap: a3s_oci_agent::RootlessDevicePolicyBootstrap,
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
+) -> NativeLinuxRootlessSmokeReport {
+    let delegated_cgroup_root = bootstrap.delegated_cgroup_root().to_path_buf();
+    run_inner(RootlessRun {
+        init_executable,
+        bundle_directory,
+        work_parent,
+        delegated_cgroup_root: Some(&delegated_cgroup_root),
+        ready_file,
+        continue_file,
+        device_policy_bootstrap: Some(bootstrap),
+        exercise_device_policy: false,
     })
     .await
 }
@@ -491,7 +513,7 @@ async fn exercise(
     }
     wait_for_marker(client, &target, &workload_files.marker).await?;
     report.workload_verified = true;
-    if device_policy {
+    if report.device_policy_helper_verified {
         report.device_nodes_verified = true;
     }
 

@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 69);
+    assert_eq!(registry.len(), 73);
     assert_eq!(
         registry
             .iter()
@@ -99,6 +99,11 @@ fn accepts_validated_normative_cross_field_boundaries() {
             "ioPriority": {
                 "class": "IOPRIO_CLASS_BE",
                 "priority": 4
+            },
+            "scheduler": {
+                "policy": "SCHED_BATCH",
+                "nice": 7,
+                "flags": ["SCHED_FLAG_RESET_ON_FORK"]
             },
             "rlimits": [{
                 "type": "RLIMIT_NOFILE",
@@ -237,6 +242,62 @@ fn idle_io_priority_rejects_nonzero_class_data() {
     let rules = rules(&value, OciSemanticPhase::Configuration);
     assert!(rules.contains("oci.linux.io-priority.idle-class-data-zero"));
     assert!(!rules.contains("oci.linux.io-priority.range"));
+}
+
+#[test]
+fn scheduler_semantics_match_the_linux_sched_attr_boundary() {
+    let process = |scheduler: Value| {
+        json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "process": {
+                "cwd": "/",
+                "args": ["/bin/true"],
+                "user": {"uid": 0, "gid": 0},
+                "scheduler": scheduler
+            }
+        })
+    };
+
+    let valid_deadline = process(json!({
+        "policy": "SCHED_DEADLINE",
+        "runtime": 1024,
+        "deadline": 2048,
+        "period": 0,
+        "flags": ["SCHED_FLAG_RECLAIM", "SCHED_FLAG_DL_OVERRUN"]
+    }));
+    OciSemanticValidator::new()
+        .expect("construct validator")
+        .validate(OciSemanticPhase::Start, &valid_deadline)
+        .expect("deadline period zero uses the kernel-defined deadline default");
+
+    let realtime = rules(
+        &process(json!({"policy": "SCHED_FIFO", "priority": 0})),
+        OciSemanticPhase::Start,
+    );
+    assert!(realtime.contains("oci.linux.scheduler.realtime-priority.range"));
+
+    let flags = rules(
+        &process(json!({
+            "policy": "SCHED_OTHER",
+            "flags": ["SCHED_FLAG_RECLAIM", "SCHED_FLAG_RECLAIM"]
+        })),
+        OciSemanticPhase::Start,
+    );
+    assert!(flags.contains("oci.linux.scheduler.flag.policy"));
+    assert!(flags.contains("oci.linux.scheduler.flags.unique"));
+
+    let deadline = rules(
+        &process(json!({
+            "policy": "SCHED_DEADLINE",
+            "runtime": 1000,
+            "deadline": 900,
+            "period": 800
+        })),
+        OciSemanticPhase::Start,
+    );
+    assert!(deadline.contains("oci.linux.scheduler.deadline-order"));
+    assert!(deadline.contains("oci.linux.scheduler.deadline.kernel-range"));
 }
 
 #[test]

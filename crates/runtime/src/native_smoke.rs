@@ -132,6 +132,46 @@ pub async fn native_linux_rootless_smoke_with_cgroup_delegation_barrier(
     }
 }
 
+/// Exercise rootless native Linux with a synchronous default-device bootstrap.
+///
+/// The bootstrap retains the exact delegated cgroup and fixed default-device
+/// sources before permanently dropping the owner to its non-root identity.
+#[doc(hidden)]
+pub async fn native_linux_rootless_smoke_with_device_bootstrap_barrier(
+    init_executable: &Path,
+    bundle: &Path,
+    work_parent: &Path,
+    bootstrap: crate::RootlessDevicePolicyBootstrap,
+    ready_file: Option<&Path>,
+    continue_file: Option<&Path>,
+) -> NativeLinuxRootlessSmokeReport {
+    #[cfg(target_os = "linux")]
+    {
+        linux::run_rootless_device_bootstrap(
+            init_executable,
+            bundle,
+            work_parent,
+            bootstrap,
+            ready_file,
+            continue_file,
+        )
+        .await
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (
+            init_executable,
+            bundle,
+            work_parent,
+            bootstrap,
+            ready_file,
+            continue_file,
+        );
+        NativeLinuxRootlessSmokeReport::unsupported(HostPlatform::current())
+    }
+}
+
 /// Exercise the rootless device-policy profile from an effective-root bootstrap.
 ///
 /// The Linux implementation permanently drops the caller to its non-root real

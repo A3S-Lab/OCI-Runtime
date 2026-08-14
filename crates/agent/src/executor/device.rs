@@ -579,14 +579,27 @@ impl DevicePlan {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn validate_rootless_device_set(&self) -> Result<()> {
-        if !self.has_rootless_safe_nodes()
-            || self.terminal
-            || !self.has_rootless_safe_access_policy()
-        {
+        self.validate_rootless_device_support()?;
+        if !self.has_rootless_safe_access_policy() {
             Err(device_error(
                 ErrorCode::Unsupported,
                 "rootless device policy requires the exact six-node A3S Box safe-device profile",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn validate_rootless_device_support(&self) -> Result<()> {
+        if !self.has_rootless_safe_nodes()
+            || self.terminal
+            || (self.access_policy.is_some() && !self.has_rootless_safe_access_policy())
+        {
+            Err(device_error(
+                ErrorCode::Unsupported,
+                "rootless device support requires the exact six-node A3S Box safe-device profile",
             ))
         } else {
             Ok(())
@@ -597,7 +610,7 @@ impl DevicePlan {
         &self,
         descriptors: &[OwnedFd],
     ) -> Result<Vec<PreparedDeviceSource>> {
-        self.validate_rootless_device_set()?;
+        self.validate_rootless_device_support()?;
         if descriptors.len() != self.nodes.len() {
             return Err(device_error(
                 ErrorCode::PermissionDenied,
@@ -2001,7 +2014,7 @@ mod tests {
         load_device_target_manifest, load_device_target_manifest_from,
         write_device_target_manifest, DeviceKind, DeviceNode, DevicePlan, DeviceTargetManifest,
         DeviceTargetRecord, PreparedDeviceSources, DEVICE_TARGETS_RECORD_NAME,
-        DEVICE_TARGETS_SCHEMA_VERSION,
+        DEVICE_TARGETS_SCHEMA_VERSION, ROOTLESS_DEVICE_MOUNT_COUNT,
     };
     use crate::executor::mount;
     use crate::executor::namespace::NamespacePlan;
@@ -2400,6 +2413,19 @@ mod tests {
         assert_eq!(plan.len(), 6);
         plan.validate_rootless_device_set()
             .expect("A3S Box fixture is the fixed rootless device set");
+    }
+
+    #[test]
+    fn rootless_default_devices_do_not_require_an_access_policy() {
+        let linux: Linux = serde_json::from_value(serde_json::json!({}))
+            .expect("decode empty Linux configuration");
+        let plan = DevicePlan::from_linux(Some(&linux), &[], false, true)
+            .expect("plan normative default devices");
+
+        assert_eq!(plan.len(), ROOTLESS_DEVICE_MOUNT_COUNT);
+        plan.validate_rootless_device_support()
+            .expect("default devices need only the bounded mount helper");
+        assert!(plan.validate_rootless_device_set().is_err());
     }
 
     #[test]

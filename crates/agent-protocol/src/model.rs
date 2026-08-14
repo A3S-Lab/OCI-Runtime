@@ -619,6 +619,7 @@ pub struct AgentExecRequest {
     /// Exact container generation plus caller-selected exec process ID.
     pub target: ProcessTarget,
     /// Complete OCI process configuration.
+    #[serde(with = "a3s_oci_sdk::process_serde")]
     pub process: Process,
     /// Requested process standard-I/O disposition.
     pub io: ProcessIo,

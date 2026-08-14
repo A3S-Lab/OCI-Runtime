@@ -463,31 +463,56 @@ fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
 }
 
 #[test]
-fn rejects_process_scheduler_and_cpu_affinity() {
-    for (field, value) in [
-        ("scheduler", serde_json::json!({"policy": "SCHED_OTHER"})),
-        (
-            "execCPUAffinity",
-            serde_json::json!({"initial": "0-3", "final": "0-3"}),
-        ),
-    ] {
-        let mut config_value: serde_json::Value =
-            serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
-        config_value["process"][field] = value;
-        let config_json =
-            serde_json::to_string(&config_value).expect("encode unsupported process field");
-        let error = InitPlan::from_bundle(&bundle(&config_json), &null_io())
-            .expect_err("unsupported process fields must fail closed");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains(&format!("process.{field}")));
+fn plans_and_serializes_process_scheduler_for_init_and_exec() {
+    let mut config_value: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config_value["process"]["scheduler"] = serde_json::json!({
+        "policy": "SCHED_BATCH",
+        "nice": 7
+    });
+    let config_json = serde_json::to_string(&config_value).expect("encode process scheduler");
+    let init = InitPlan::from_bundle(&bundle(&config_json), &null_io())
+        .expect("plan init process scheduler");
+    assert!(init.scheduler.is_some());
 
-        let process: Process =
-            serde_json::from_value(config_value["process"].clone()).expect("decode process");
-        let error = ProcessPlan::from_process(&process, &null_io())
-            .expect_err("unsupported exec process fields must fail closed");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains(&format!("process.{field}")));
-    }
+    let process: Process =
+        serde_json::from_value(config_value["process"].clone()).expect("decode process");
+    let exec =
+        ProcessPlan::from_process(&process, &null_io()).expect("plan exec process scheduler");
+    let snapshot = serde_json::to_value(&exec).expect("serialize exec process plan");
+    assert_eq!(snapshot["scheduler"]["policy"], "batch");
+    assert_eq!(snapshot["scheduler"]["nice"], 7);
+
+    config_value["process"]
+        .as_object_mut()
+        .unwrap()
+        .remove("scheduler");
+    let process: Process =
+        serde_json::from_value(config_value["process"].clone()).expect("decode process");
+    let omitted =
+        ProcessPlan::from_process(&process, &null_io()).expect("plan omitted process scheduler");
+    assert!(omitted.scheduler.is_none());
+}
+
+#[test]
+fn rejects_process_cpu_affinity() {
+    let mut config_value: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config_value["process"]["execCPUAffinity"] =
+        serde_json::json!({"initial": "0-3", "final": "0-3"});
+    let config_json =
+        serde_json::to_string(&config_value).expect("encode unsupported process field");
+    let error = InitPlan::from_bundle(&bundle(&config_json), &null_io())
+        .expect_err("unsupported process affinity must fail closed");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("process.execCPUAffinity"));
+
+    let process: Process =
+        serde_json::from_value(config_value["process"].clone()).expect("decode process");
+    let error = ProcessPlan::from_process(&process, &null_io())
+        .expect_err("unsupported exec affinity must fail closed");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("process.execCPUAffinity"));
 }
 
 #[test]
@@ -607,6 +632,49 @@ fn accepts_new_uts_and_mount_namespaces_in_any_order() {
         assert!(plan.namespaces.new_uts());
         assert!(plan.namespaces.new_mount());
     }
+}
+
+#[test]
+fn rootless_planning_retains_normative_default_devices() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode rootless configuration");
+    config["linux"] = serde_json::json!({
+        "namespaces": [
+            {"type": "mount"},
+            {"type": "user"}
+        ],
+        "uidMappings": [
+            {"containerID": 0, "hostID": 20000, "size": 1}
+        ],
+        "gidMappings": [
+            {"containerID": 0, "hostID": 20000, "size": 1}
+        ]
+    });
+    let config = serde_json::to_string(&config).expect("encode rootless configuration");
+    let bundle = bundle(&config);
+
+    let plan = InitPlan::from_bundle(&bundle, &null_io()).expect("rootless plan");
+
+    assert!(plan.devices.has_node_setup());
+}
+
+#[test]
+fn joined_user_namespace_does_not_invent_unverifiable_default_devices() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode joined-user configuration");
+    config["linux"] = serde_json::json!({
+        "namespaces": [
+            {"type": "mount"},
+            {"type": "user", "path": "/proc/42/ns/user"}
+        ]
+    });
+    let config = serde_json::to_string(&config).expect("encode joined-user configuration");
+    let plan =
+        InitPlan::from_bundle(&bundle(&config), &null_io()).expect("joined user namespace plan");
+
+    assert!(plan.namespaces.has_user());
+    assert!(!plan.namespaces.new_user());
+    assert!(!plan.devices.has_node_setup());
 }
 
 #[test]

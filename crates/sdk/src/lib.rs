@@ -12,6 +12,7 @@ mod fingerprint;
 mod handoff;
 mod id;
 mod model;
+pub mod process_serde;
 mod rootfs_metadata;
 mod schema;
 mod semantic;

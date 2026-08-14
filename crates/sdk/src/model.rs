@@ -403,6 +403,7 @@ pub struct ExecRequest {
     pub context: OperationContext,
     pub container: ContainerTarget,
     pub process_id: ProcessId,
+    #[serde(with = "crate::process_serde")]
     pub process: Process,
     pub io: ProcessIo,
 }

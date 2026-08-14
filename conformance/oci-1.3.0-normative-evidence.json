@@ -254,6 +254,41 @@
     },
     {
       "requirementIds": [
+        "sha256:5b9d199127adf9c02497c157c910e642025d0d5d05076396ede446f60ac7cf6a",
+        "sha256:60b36ad0d01167dcbc20bce500e37a83534254f7c3a9a28898a8b1acc20aea3d",
+        "sha256:c75ed134a955bac325214957b8d4566b1e901695ef3b7afd0c2890e9d43ac5fb",
+        "sha256:854556c110364712a70dad86ee0dba8acbbe148250fffae9e5c95ae9d8b725d5",
+        "sha256:825fbd352d2b7a1264a3a11b353da2b8d913ba68b2dd90a9b11c1528475f1b61",
+        "sha256:bb796580db66bfe226967f812aa3326c080fa480a2c19ff8982786ff3e3a5a1c",
+        "sha256:fa3198bfe6c980f9a3237ebaa029d4d3a669d5a96f0bdecf1a357eca8eef8b78",
+        "sha256:61736b21515ce025336829a04847649eb811db6d0e3da056884b4831cadef61e"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.scheduler.deadline-fields.policy",
+        "oci.linux.scheduler.deadline.kernel-range",
+        "oci.linux.scheduler.deadline-order",
+        "oci.linux.scheduler.flag.policy",
+        "oci.linux.scheduler.flags.unique",
+        "oci.linux.scheduler.nice.range",
+        "oci.linux.scheduler.priority.policy",
+        "oci.linux.scheduler.realtime-priority.range"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-scheduler-readback",
+        "bundle::tests::bundle_round_trip_preserves_standard_scheduler_flag_names",
+        "executor::plan_tests::plans_and_serializes_process_scheduler_for_init_and_exec",
+        "executor::scheduler::tests::applies_batch_policy_in_an_isolated_process",
+        "executor::scheduler::tests::plans_every_policy_and_flag_without_silent_normalization",
+        "executor::scheduler::tests::rejects_invalid_scheduler_relationships_before_mutation",
+        "executor::scheduler::tests::syscall_errors_have_stable_types",
+        "process_serde::tests::standalone_decoder_accepts_exact_oci_scheduler_flag_names",
+        "semantic::tests::scheduler_semantics_match_the_linux_sched_attr_boundary"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:a1c94801345bf5bfaf2c9a63bdc4af4295906ecca14c4833be615a2324322716",
         "sha256:24f001e175ff4247080c6044964ecad4f652d3bbed584cf0955c128ceaf808d1",
         "sha256:5baf766eb335fb8cd23c8fab434f515894fd1088c18bbd42092e216582adb4ba"

@@ -132,12 +132,12 @@ impl NativeLinuxDriver {
     }
 
     /// Open rootless native Linux from an effective-root bootstrap and retain
-    /// that privilege only inside a parent-bound delegated-cgroup policy helper.
+    /// that privilege only inside a parent-bound delegated-cgroup device helper.
     ///
     /// The process must have non-root real UID/GID and effective UID/GID zero.
     /// Construction drops the caller permanently to its real identity before
-    /// returning; only the helper retains privilege for structured cgroup-device
-    /// install, replace, and remove requests below the exact delegation.
+    /// returning; only the helper retains privilege for the fixed default-device
+    /// mounts and structured cgroup-device requests below the exact delegation.
     pub async fn open_experimental_with_rootless_device_policy(
         runtime_parent: impl AsRef<Path>,
         init_executable: impl AsRef<Path>,

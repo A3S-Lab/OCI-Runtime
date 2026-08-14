@@ -1,5 +1,5 @@
 use super::*;
-use a3s_oci_sdk::oci_spec::runtime::{LinuxResources, Process};
+use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use containerd_shim::{TtrpcContext, TtrpcResult};
 use containerd_shim_protos::shim_async::Task;
 
@@ -483,7 +483,10 @@ impl Task for Service {
                 req.spec().type_url
             )));
         }
-        let process: Process = serde_json::from_slice(&req.spec().value).map_err(|error| {
+        let process = serde_json::from_slice(&req.spec().value).map_err(|error| {
+            ttrpc_invalid_argument(format!("invalid OCI exec process: {error}"))
+        })?;
+        let process = a3s_oci_sdk::process_serde::decode(process).map_err(|error| {
             ttrpc_invalid_argument(format!("invalid OCI exec process: {error}"))
         })?;
         let mut exec = ExecState {
