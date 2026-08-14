@@ -1544,7 +1544,13 @@ metadata, rootfs, and bundle cleanup without touching caller-owned container
 metadata; unconfirmed state loss fails closed. A post-commit Kill boundary also
 submits the exact stable SIGSTOP mutation against a running generation, kills
 the shim while the stopped process remains live, and proves bounded cleanup
-delivers the terminal signal and reaps the exact PID. The
+delivers the terminal signal and reaps the exact PID. Post-commit Pause,
+Resume, and PID-limit Update boundaries retain the same exact generation,
+verify the real paused state or applied `pids.max`, then kill the shim and prove
+the same bounded cleanup converges without leaked cgroups or processes. Paused
+cleanup uses the exact force Delete operation so the runtime thaws and stops
+the generation as one cleanup operation instead of waiting on a frozen
+terminal signal. The
 qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, or bundle. The R7 items remain open until the version and

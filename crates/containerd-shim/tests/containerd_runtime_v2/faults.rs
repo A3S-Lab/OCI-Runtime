@@ -14,6 +14,10 @@ use super::support::*;
 
 #[path = "faults/committed.rs"]
 mod committed;
+#[path = "faults/controls.rs"]
+mod controls;
+#[path = "faults/shared.rs"]
+mod shared;
 
 const CREATE_INTENT_FILE_NAME: &str = "a3s-oci-shim-create-v1.json";
 
@@ -81,6 +85,9 @@ pub(crate) async fn qualify_shim_sigkill(
     committed::qualify_start_effect_committed_shim_sigkill(config, prefix).await?;
     committed::qualify_kill_effect_committed_shim_sigkill(config, prefix).await?;
     committed::qualify_delete_effect_committed_shim_sigkill(config, prefix).await?;
+    controls::qualify_pause_effect_committed_shim_sigkill(config, prefix).await?;
+    controls::qualify_resume_effect_committed_shim_sigkill(config, prefix).await?;
+    controls::qualify_update_effect_committed_shim_sigkill(config, prefix).await?;
     for stage in [
         PartialShimStage::InitCreated,
         PartialShimStage::ExecAdded,

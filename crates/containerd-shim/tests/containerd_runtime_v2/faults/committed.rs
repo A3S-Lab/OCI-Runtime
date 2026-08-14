@@ -3,16 +3,16 @@ use std::time::Duration;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerRecord, ContainerTarget, DeleteMode, DeleteRequest as RuntimeDeleteRequest,
-    Generation, KillRequest as RuntimeKillRequest, LocalIpcEndpoint, OperationContext, OperationId,
-    RuntimeClient, Signal, StartRequest as RuntimeStartRequest,
+    Generation, KillRequest as RuntimeKillRequest, OperationContext, Signal,
+    StartRequest as RuntimeStartRequest,
 };
-use sha2::{Digest, Sha256};
 
 use crate::api::{
     ContainersClient, CreateTaskRequest, GetContainerRequest, KillRequest, TasksClient, WaitRequest,
 };
 use crate::support::*;
 
+use super::shared::{containerd_operation_id, runtime_client};
 use super::{find_exact_shim_pid, signal_kill, wait_for_runtime_absence, wait_for_shim_cleanup};
 
 pub(super) async fn qualify_start_effect_committed_shim_sigkill(
@@ -347,40 +347,4 @@ async fn kill_runtime_generation(
             }
         }
     }
-}
-
-async fn runtime_client(config: &QualificationConfig) -> TestResult<RuntimeClient> {
-    let endpoint =
-        LocalIpcEndpoint::unix_socket(config.runtime_endpoint.clone()).map_err(|error| {
-            qualification_error(format!(
-                "validate A3S OCI runtime endpoint {}: {error}",
-                config.runtime_endpoint.display()
-            ))
-        })?;
-    RuntimeClient::connect(&endpoint).await.map_err(|error| {
-        qualification_error(format!(
-            "connect A3S OCI runtime endpoint {}: {error}",
-            config.runtime_endpoint.display()
-        ))
-        .into()
-    })
-}
-
-fn containerd_operation_id(
-    namespace: &str,
-    task_id: &str,
-    incarnation: &str,
-    action: &str,
-) -> TestResult<OperationId> {
-    let mut digest = Sha256::new();
-    for component in [namespace, task_id, incarnation, action] {
-        digest.update((component.len() as u64).to_be_bytes());
-        digest.update(component.as_bytes());
-    }
-    OperationId::new(format!("ctrd-op-{:x}", digest.finalize())).map_err(|error| {
-        qualification_error(format!(
-            "derive stable containerd {action} operation identity: {error}"
-        ))
-        .into()
-    })
 }

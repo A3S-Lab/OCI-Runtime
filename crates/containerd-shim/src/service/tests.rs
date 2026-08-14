@@ -6,6 +6,8 @@ use a3s_oci_sdk::{
     ProcessesRequest, StateRequest, WaitProcessRequest, WaitRequest,
 };
 
+mod delete_shim_paused;
+
 #[derive(Clone)]
 struct RecoveryService {
     record: ContainerRecord,

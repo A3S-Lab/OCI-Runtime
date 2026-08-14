@@ -1050,9 +1050,26 @@ impl Shim for Service {
                 }
                 Err(error) => return Err(Error::Other(error.to_string())),
             };
+            if let Some(observed) = record.as_ref() {
+                if observed.state.id() != identity.container_id.as_str()
+                    || observed.generation != metadata.generation()
+                    || observed.driver != metadata.driver()
+                    || observed.isolation != metadata.isolation()
+                {
+                    return Err(Error::FailedPreconditionError(
+                        "runtime state no longer matches the persisted containerd shim identity, generation, driver, or isolation"
+                            .to_string(),
+                    ));
+                }
+            }
             let pid = record.as_ref().map_or(0, record_pid);
             let mut exit = metadata.exit().cloned();
-            if record.is_some() {
+            if record.as_ref().is_some_and(ContainerRecord::is_paused) {
+                adapter
+                    .delete(&identity, metadata.generation(), true)
+                    .await
+                    .map_err(|error| Error::Other(error.to_string()))?;
+            } else if record.is_some() {
                 if exit.is_none() {
                     let _ = adapter
                         .kill(&identity, metadata.generation(), 9, true)
