@@ -1546,10 +1546,14 @@ metadata; unconfirmed state loss fails closed. A post-commit Exec boundary
 submits the exact stable generation-scoped process identity while shim metadata
 still records the exec as Added, verifies its live PID, then proves DeleteShim
 reaps both init and exec and removes the exact generation without touching
-caller-owned metadata. A post-commit Kill boundary also submits the exact
-stable SIGSTOP mutation against a running generation, kills the shim while the
-stopped process remains live, and proves bounded cleanup delivers the terminal
-signal and reaps the exact PID. Post-commit Pause,
+caller-owned metadata. A post-commit SignalProcess boundary starts an exec,
+suspends the shim before submitting its exact stable SIGKILL identity directly
+to the runtime, observes the exact signal-9 exit while the init remains Running
+at its original PID, then kills the stopped shim and proves bounded cleanup
+removes both processes and the exact generation. A post-commit Kill boundary
+also submits the exact stable SIGSTOP mutation against a running generation,
+kills the shim while the stopped process remains live, and proves bounded
+cleanup delivers the terminal signal and reaps the exact PID. Post-commit Pause,
 Resume, and PID-limit Update boundaries retain the same exact generation,
 verify the real paused state or applied `pids.max`, then kill the shim and prove
 the same bounded cleanup converges without leaked cgroups or processes. Paused
@@ -1564,7 +1568,7 @@ metadata reopen. Canonical JSON request fingerprints keep unordered resource
 maps stable across shim, host, and guest reconstruction. Runtime operation
 schema v2 records that encoding explicitly while retaining schema-v1 retry
 validation with the legacy serializer. The August 14, 2026
-Ubuntu arm64/containerd 2.2.2 release build passed the complete 43.12-second
+Ubuntu arm64/containerd 2.2.2 release build passed the complete 42.76-second
 matrix with installed shim SHA-256
 `3358a0f693bbab7551496125cd5092e66bbea0dc35a1f7deeea55e2807ccb4f1`.
 The qualification recreates the killed task ID with a new

@@ -45,6 +45,12 @@ impl SuspendedProcess {
         self.resumed = true;
         Ok(())
     }
+
+    fn kill(mut self, target: &str) -> TestResult<()> {
+        send_signal(self.pid, libc::SIGKILL, target)?;
+        self.resumed = true;
+        Ok(())
+    }
 }
 
 impl Drop for SuspendedProcess {
@@ -86,6 +92,7 @@ pub(crate) async fn qualify_shim_sigkill(
     committed::qualify_kill_effect_committed_shim_sigkill(config, prefix).await?;
     committed::qualify_delete_effect_committed_shim_sigkill(config, prefix).await?;
     committed::qualify_exec_effect_committed_shim_sigkill(config, prefix).await?;
+    committed::qualify_signal_process_effect_committed_shim_sigkill(config, prefix).await?;
     controls::qualify_pause_effect_committed_shim_sigkill(config, prefix).await?;
     controls::qualify_resume_effect_committed_shim_sigkill(config, prefix).await?;
     controls::qualify_update_effect_committed_shim_sigkill(config, prefix).await?;

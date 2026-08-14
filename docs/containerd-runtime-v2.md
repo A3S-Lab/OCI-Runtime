@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Start/Kill/Delete/Exec/Pause/Resume/Update, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -23,8 +23,8 @@ release-built shim SHA-256
 The host CLI, agent, and qualification executable SHA-256 values were
 `9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
 `0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
-and `a42e10c48c1374fbfdd4895b6c307d212fc0ee828523cb8556b65b279371987b`.
-The 43.12-second matrix passed two distinct resource updates, two complete
+and `7c967019a57329839136ae4d53c7d795dd825b255ee6a49f36bdf25da6c098b2`.
+The 42.76-second matrix passed two distinct resource updates, two complete
 pause/resume cycles, every retained restart and shim-crash boundary, and its
 post-run audit with no task, container, shim, bundle, active runtime container,
 workload process, or workload cgroup member left behind.
@@ -193,6 +193,13 @@ process identity and live PID before killing the shim. DeleteShim must reap
 both the init and unrecorded exec PIDs and remove only that runtime generation,
 task bundle, and shim while preserving containerd-owned metadata.
 
+The post-commit SignalProcess gate starts an exec, suspends the shim, then
+submits the exact stable exec-scoped SIGKILL mutation directly to the runtime.
+It requires the exact signal-9 exit while the init remains Running with its
+original PID before killing the stopped shim. DeleteShim must then remove the
+terminal exec, live init, exact generation, task bundle, and shim without
+touching containerd-owned metadata.
+
 The post-commit Kill gate submits the exact stable SIGSTOP mutation to a
 running generation, verifies that the runtime retains the same live PID, and
 kills the shim before local state observes that mutation. DeleteShim must send
@@ -244,8 +251,8 @@ test fails if any matching task or container remains.
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
 - extend forced cleanup from the qualified in-flight Create and post-commit
-  Start/Kill/Delete/Exec/Pause/Resume/Update boundaries to every remaining
-  lifecycle and process-I/O mutation boundary;
+  Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update boundaries to every
+  remaining lifecycle and process-I/O mutation boundary;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
   soak gates.
