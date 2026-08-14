@@ -213,6 +213,24 @@ impl RuntimeAdapter {
             .await
     }
 
+    pub(crate) async fn kill_with_sequence(
+        &self,
+        task: &TaskIdentity,
+        generation: a3s_oci_sdk::Generation,
+        sequence: u64,
+        signal: i32,
+        all: bool,
+    ) -> Result<ContainerRecord> {
+        self.client
+            .kill(KillRequest {
+                context: task.operation(None, &format!("kill-{sequence}"))?,
+                target: ContainerTarget::exact(task.container_id.clone(), generation),
+                signal: Signal::new(signal)?,
+                all,
+            })
+            .await
+    }
+
     pub(crate) async fn wait(
         &self,
         task: &TaskIdentity,
@@ -283,6 +301,26 @@ impl RuntimeAdapter {
         self.client
             .signal_process(SignalProcessRequest {
                 context: task.operation(Some(exec_id), &format!("signal-{signal}"))?,
+                process: ProcessTarget {
+                    container: ContainerTarget::exact(task.container_id.clone(), generation),
+                    process_id: task.process_id(exec_id)?,
+                },
+                signal: Signal::new(signal)?,
+            })
+            .await
+    }
+
+    pub(crate) async fn signal_process_with_sequence(
+        &self,
+        task: &TaskIdentity,
+        generation: a3s_oci_sdk::Generation,
+        exec_id: &str,
+        sequence: u64,
+        signal: i32,
+    ) -> Result<()> {
+        self.client
+            .signal_process(SignalProcessRequest {
+                context: task.operation(Some(exec_id), &format!("signal-{sequence}"))?,
                 process: ProcessTarget {
                     container: ContainerTarget::exact(task.container_id.clone(), generation),
                     process_id: task.process_id(exec_id)?,
@@ -754,6 +792,38 @@ mod tests {
         assert!(calls
             .iter()
             .all(|(_, _, target)| target.generation == Some(generation)));
+    }
+
+    #[tokio::test]
+    async fn repeated_signals_after_an_intervening_signal_use_fresh_identities() {
+        let service = RecordingService::default();
+        let calls = service.calls.clone();
+        let adapter = RuntimeAdapter::from_client(
+            RuntimeClient::new(service),
+            IsolationRequest::SharedHostKernel,
+        );
+        let task = TaskIdentity::new("k8s.io", "task-signal-cycle").expect("task identity");
+        let generation = Generation(7);
+
+        adapter
+            .kill_with_sequence(&task, generation, 1, libc::SIGSTOP, false)
+            .await
+            .expect("first SIGSTOP");
+        adapter
+            .kill_with_sequence(&task, generation, 2, libc::SIGCONT, false)
+            .await
+            .expect("SIGCONT");
+        adapter
+            .kill_with_sequence(&task, generation, 3, libc::SIGSTOP, false)
+            .await
+            .expect("second SIGSTOP");
+
+        let calls = calls.lock().expect("recorded calls");
+        assert_eq!(calls.len(), 3);
+        assert_ne!(
+            calls[0].1.operation_id, calls[2].1.operation_id,
+            "the second SIGSTOP is a new mutation after SIGCONT"
+        );
     }
 
     #[tokio::test]

@@ -6,6 +6,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Durable containerd init and exec signal sequencing across live shim
+  replacement. Metadata schema v7 gives init and every exec an independent
+  monotonic signal sequence plus one pending signal request, including the
+  init-only `all` flag. SDK identities use `kill-{sequence}` and
+  `signal-{sequence}`, so `SIGSTOP→SIGCONT→SIGSTOP` cannot replay the first
+  `SIGSTOP`. Per-process gates serialize concurrent requests, retryable
+  failures retain the pending identity, terminal failures advance the
+  sequence, and a replacement shim replays pending signals before accepting
+  new work. The Ubuntu arm64/containerd 2.2.2 gate froze the Runtime and the
+  original shim, committed sequence 1 `SIGSTOP` directly to the Runtime, then
+  replaced the shim while its local journal remained pending. The replacement
+  joined the completed operation and continued through
+  `SIGCONT→SIGSTOP→SIGCONT` as sequences 2 through 4 while `/proc` proved the
+  real process state changed at every step. The complete 46.89-second matrix
+  and its independent residue audit passed with release shim SHA-256
+  `25d12487f51e68ef176fbf7e8b62bd769b1cf149df9fb9b926916aca4b6c89ed`.
 - Durable containerd terminal resize recovery across live shim replacement.
   Metadata schema v6 gives init and each exec an independent monotonic resize
   sequence, one pending size, and the last committed terminal size. Resize

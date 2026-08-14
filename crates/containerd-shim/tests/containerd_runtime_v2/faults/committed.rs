@@ -329,7 +329,7 @@ async fn kill_runtime_generation(
             &config.namespace,
             task_id,
             &identity.incarnation,
-            &format!("kill-{signal}-{all}"),
+            "kill-1",
         )?),
         target: ContainerTarget::exact(
             identity.container_id.clone(),

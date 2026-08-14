@@ -1525,8 +1525,8 @@ Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
 separate stdout/stderr plus stdin from empty input through 4 MiB,
 Created/Running/Stopped daemon-restart boundaries, terminal exec resize before
-and after daemon restart, schema-v6 durable init/exec stdin and resize
-sequences, exact pending input payloads and terminal sizes,
+and after daemon restart, schema-v7 durable init/exec stdin, signal, and resize
+sequences, exact pending input payloads, signals, and terminal sizes,
 Open/Closing/Closed stdin state, output cursors, and per-task control
 sequencing, live
 terminal-exec input and output continuation without replay after manual shim
@@ -1534,7 +1534,11 @@ replacement, including a pending WriteStdin operation committed remotely
 before the replacement can observe its response and replayed with exactly one
 input effect, plus a committed CloseStdin boundary that persists Closing,
 loses the original response, replays through the replacement, commits Closed,
-and delivers one terminal EOF effect without reopening its FIFO, stale task
+and delivers one terminal EOF effect without reopening its FIFO, plus a
+committed exec SignalProcess boundary that retains sequence 1 SIGSTOP as
+pending, commits it remotely, replaces the shim, joins the completed operation,
+and then proves the real process transitions through
+`SIGCONT→SIGSTOP→SIGCONT` under fresh sequences 2 through 4, stale task
 incarnation and runtime-generation replacement, a
 four-task parallel Create/Start/running-restart/137-cleanup matrix, and exact
 cleanup after shim
@@ -1583,8 +1587,8 @@ its local journal can observe the response. The replacement replays the same
 sequence without a second terminal effect, commits the observed size,
 suppresses an identical retry, and proves that `A→B→A` allocates fresh
 identities and restores the real PTY to A instead of replaying the first A.
-The complete 44.23-second matrix passed with installed shim SHA-256
-`f13165079acc22d73e14bab6118ca77da78dc88be47a254b3b7cb2d0ca845f29`.
+The complete 46.89-second matrix passed with installed shim SHA-256
+`25d12487f51e68ef176fbf7e8b62bd769b1cf149df9fb9b926916aca4b6c89ed`.
 The qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, bundle, live runtime record, session, marker, workload

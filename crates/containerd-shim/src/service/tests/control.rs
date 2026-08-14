@@ -309,7 +309,7 @@ async fn legacy_metadata_upgrades_to_current_schema_before_the_first_control() {
             .expect("read upgraded task metadata"),
     )
     .expect("decode upgraded task metadata");
-    assert_eq!(document["schema_version"], serde_json::json!(6));
+    assert_eq!(document["schema_version"], serde_json::json!(7));
 }
 
 #[tokio::test]

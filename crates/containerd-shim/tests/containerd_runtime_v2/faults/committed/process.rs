@@ -331,7 +331,7 @@ async fn signal_runtime_process(
             task_id,
             &identity.incarnation,
             exec_id,
-            &format!("signal-{signal}"),
+            "signal-1",
         )?),
         process: exact_process_target(config, task_id, exec_id, identity)?,
         signal: Signal::new(signal).map_err(|error| {

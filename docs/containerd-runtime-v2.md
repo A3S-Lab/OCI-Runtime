@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls and signals, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty, sequenced committed SignalProcess replay, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -19,22 +19,25 @@ the packaged shim, SDK, host service, agent, and selected driver.
 
 The August 14, 2026 arm64 requalification used containerd 2.2.2 and the
 release-built shim SHA-256
-`f13165079acc22d73e14bab6118ca77da78dc88be47a254b3b7cb2d0ca845f29`.
+`25d12487f51e68ef176fbf7e8b62bd769b1cf149df9fb9b926916aca4b6c89ed`.
 The host CLI, agent, and qualification executable SHA-256 values were
 `9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
 `0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
-and `99a7fce24beaefc70199485d711564a979ad0d794bac923b2bef40508337d85d`.
-The 44.23-second matrix passed two distinct resource updates, two complete
+and `2e3c0f2111b7f52d6eaf5acd46c6c9986f9ca4ed3cf1532f699917db6ce1207e`.
+The 46.89-second matrix passed two distinct resource updates, two complete
 pause/resume cycles, durable terminal stdin before and after live shim
 replacement, replay of a remotely committed write whose exact payload was
 still locally pending, replay of a remotely committed CloseStdin while the
-shim still recorded Closing, and replay of a remotely committed ResizePty
-while schema-v6 metadata still held its sequence and size as pending. The
-replacement suppressed an identical resize retry and proved a real
-`A→B→A` PTY transition with distinct operation identities. It then passed
-every retained restart and shim-crash boundary, and its post-run audit found
-no task, container, shim, bundle, active runtime
-container, workload process, or workload cgroup member left behind.
+shim still recorded Closing, replay of a remotely committed SignalProcess
+while schema-v7 metadata retained its exact sequence and signal as pending,
+and replay of a remotely committed ResizePty while that metadata retained its
+sequence and size as pending. The replacement proved the real process moved
+through `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` with four distinct identities,
+suppressed an identical resize retry, and proved a real `A→B→A` PTY transition
+with distinct identities. It then passed every retained restart and shim-crash
+boundary. An independent post-run audit found no task, container, shim,
+qualification process, bundle, active runtime container, session, marker,
+workload process, workload cgroup member, or zombie left behind.
 
 ## Runtime type and package layout
 
@@ -94,21 +97,23 @@ mutation. Every live request carries the exact runtime generation.
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v6 records the last completed init and exec stdin
+any drift. Metadata schema v7 records the last completed init and exec stdin
 sequence, an optional in-flight sequence plus its exact bounded payload, the
 Open, Closing, or Closed state of each stdin stream, and the last output cursor
 only after the corresponding FIFO write succeeds. For each terminal process it
 also records a separate completed resize sequence, one pending size, and the
-last committed size. It also records the last completed per-task control
-sequence, an optional
+last committed size. Init and every exec also have an independent completed
+signal sequence plus one pending signal and the init-only `all` flag. The task
+record also stores the last completed per-task control sequence, an optional
 in-flight Pause, Resume, or Update, and the last completed Update request
 digest. Schema-v1 records default input sequences, output cursors, and control
 state to empty. Schema-v2 records preserve output cursors, schema-v3 adds the
 control journal, schema-v4 adds sequenced writes, schema-v5 adds durable stdin
-close state, and schema-v6 adds durable terminal resize state. Schemas v1
+close state, schema-v6 adds durable terminal resize state, and schema-v7 adds
+durable init and exec signal state. Schemas v1
 through v4 default stdin close state to Open. Schemas v1 through v5 default
-resize state to empty, and every legacy schema is rewritten as schema v6 on the
-next metadata commit.
+resize state to empty. Schemas v1 through v6 default signal state to empty,
+and every legacy schema is rewritten as schema v7 on the next metadata commit.
 
 Before dispatching Create, the shim separately commits a schema-v1 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
@@ -176,6 +181,21 @@ finish, commits that same operation through the Runtime, and replaces the shim
 while its journal still records the payload as pending. The replacement must
 join the completed operation, emit the input effect exactly once, clear the
 pending entry, and continue from the following sequence.
+
+Init and exec signals use independent durable sequences and process-local
+serialization gates. The shim stores the next sequence, exact signal, and the
+init-only `all` flag before dispatch. SDK identities are `kill-{sequence}` for
+init and `signal-{sequence}` for exec, so a repeated signal after an
+intervening mutation is a new operation. Retryable failures retain the pending
+request; terminal failures close its sequence; replacement rehydration replays
+an unsettled request with the original identity before serving new signals.
+The retained arm64 gate freezes the Runtime with exec sequence 1 SIGSTOP
+pending, freezes and kills the original shim after committing that exact
+Runtime request, and requires the replacement to join the completed operation
+without another signal effect. It then dispatches SIGCONT, SIGSTOP, and
+SIGCONT as sequences 2 through 4 and reads `/proc/<pid>/status` after every
+request to prove the actual workload transitions instead of journal-only
+success.
 
 Init and exec terminal resize use separate durable sequences and process-local
 serialization gates. The shim stores the next sequence and exact dimensions
@@ -260,6 +280,14 @@ It requires the exact signal-9 exit while the init remains Running with its
 original PID before killing the stopped shim. DeleteShim must then remove the
 terminal exec, live init, exact generation, task bundle, and shim without
 touching containerd-owned metadata.
+
+The committed SignalProcess rehydration gate instead keeps the exec alive. It
+persists sequence 1 SIGSTOP, freezes the original shim and Runtime, commits the
+exact signal directly to the Runtime, then kills and replaces the shim before
+the local journal can observe the response. The replacement must replay the
+same operation identity, clear the pending record, retain the exec PID and
+generation, and continue with fresh sequences for
+`SIGCONT→SIGSTOP→SIGCONT`.
 
 The post-commit Kill gate submits the exact stable SIGSTOP mutation to a
 running generation, verifies that the runtime retains the same live PID, and

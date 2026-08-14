@@ -182,6 +182,9 @@ impl Task for Service {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             control_gate: Arc::new(Mutex::new(())),
             control_sequence: 0,
@@ -481,6 +484,9 @@ impl Task for Service {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Added,
             record: None,
@@ -543,31 +549,65 @@ impl Task for Service {
                     .to_string(),
             ));
         }
-        let adapter = self.adapter().await.map_err(runtime_error)?;
-        if req.exec_id().is_empty() {
-            let record = adapter
-                .kill(&task.identity, task.record.generation, signal, req.all())
-                .await
-                .map_err(runtime_error)?;
-            self.state
-                .lock()
-                .await
-                .tasks
-                .get_mut(req.id())
-                .ok_or_else(|| ttrpc_error(format!("task {} disappeared", req.id())))?
-                .record = record;
+        let exec_id = (!req.exec_id().is_empty()).then_some(req.exec_id());
+        let signal_gate = if let Some(exec_id) = exec_id {
+            task.execs
+                .get(exec_id)
+                .ok_or_else(|| ttrpc_not_found(format!("unknown exec {exec_id}")))?
+                .signal_gate
+                .clone()
         } else {
-            adapter
-                .signal_process(
-                    &task.identity,
-                    task.record.generation,
-                    req.exec_id(),
-                    signal,
-                )
-                .await
-                .map_err(runtime_error)?;
+            task.signal_gate.clone()
+        };
+        let all = exec_id.is_none() && req.all();
+        let _signal_guard = signal_gate.lock().await;
+        loop {
+            let prepared = self
+                .prepare_signal(req.id(), exec_id, &signal_gate, signal, all)
+                .await?;
+            let requested_operation =
+                prepared.operation.signal().get() == signal && prepared.operation.all() == all;
+            let adapter = match self.adapter().await {
+                Ok(adapter) => adapter,
+                Err(error) => {
+                    self.finish_signal_error(
+                        req.id(),
+                        exec_id,
+                        &signal_gate,
+                        &prepared.operation,
+                        &error,
+                    )
+                    .await?;
+                    return Err(runtime_error(error));
+                }
+            };
+            match signal::dispatch(&adapter, &prepared.task, exec_id, &prepared.operation).await {
+                Ok(record) => {
+                    self.complete_signal(
+                        req.id(),
+                        exec_id,
+                        &signal_gate,
+                        &prepared.operation,
+                        record,
+                    )
+                    .await?;
+                }
+                Err(error) => {
+                    self.finish_signal_error(
+                        req.id(),
+                        exec_id,
+                        &signal_gate,
+                        &prepared.operation,
+                        &error,
+                    )
+                    .await?;
+                    return Err(runtime_error(error));
+                }
+            }
+            if requested_operation {
+                return Ok(api::Empty::new());
+            }
         }
-        Ok(api::Empty::new())
     }
 
     async fn pause(&self, _ctx: &TtrpcContext, req: api::PauseRequest) -> TtrpcResult<api::Empty> {

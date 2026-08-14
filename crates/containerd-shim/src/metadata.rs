@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
     ContainerId, DriverKind, Error, ErrorCode, ExitStatus, Generation, IsolationClass,
-    ProcessRecord, Result, TerminalSize,
+    ProcessRecord, Result, Signal, TerminalSize,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 6;
+const METADATA_SCHEMA_VERSION: u32 = 7;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_INCARNATION_BYTES: u64 = 64;
@@ -53,6 +53,10 @@ pub(crate) struct ShimMetadata {
     pending_resize: Option<PendingResize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     terminal_size: Option<TerminalSize>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    signal_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_signal: Option<PendingSignal>,
     #[serde(default, skip_serializing_if = "is_zero")]
     output_cursor: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -91,6 +95,10 @@ pub(crate) struct ExecMetadata {
     pub(crate) pending_resize: Option<PendingResize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) terminal_size: Option<TerminalSize>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) signal_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_signal: Option<PendingSignal>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) output_cursor: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,6 +147,47 @@ pub(crate) enum StdinCloseState {
 pub(crate) struct PendingResize {
     sequence: u64,
     size: TerminalSize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingSignal {
+    sequence: u64,
+    signal: Signal,
+    all: bool,
+}
+
+impl PendingSignal {
+    pub(crate) fn new(sequence: u64, signal: i32, all: bool) -> Result<Self> {
+        let operation = Self {
+            sequence,
+            signal: Signal::new(signal)?,
+            all,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub(crate) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub(crate) fn signal(&self) -> Signal {
+        self.signal
+    }
+
+    pub(crate) fn all(&self) -> bool {
+        self.all
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.sequence == 0 {
+            return Err(metadata_error(
+                "pending containerd signal records sequence zero",
+            ));
+        }
+        Signal::new(self.signal.get()).map(drop)
+    }
 }
 
 impl PendingResize {
@@ -292,6 +341,8 @@ impl ExecMetadata {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             record: None,
             exit: None,
@@ -342,6 +393,8 @@ impl ShimMetadata {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: value.output_cursor,
             control_sequence: 0,
             pending_control: None,
@@ -558,6 +611,14 @@ impl ShimMetadata {
         self.terminal_size
     }
 
+    pub(crate) fn signal_sequence(&self) -> u64 {
+        self.signal_sequence
+    }
+
+    pub(crate) fn pending_signal(&self) -> Option<&PendingSignal> {
+        self.pending_signal.as_ref()
+    }
+
     pub(crate) fn control_sequence(&self) -> u64 {
         self.control_sequence
     }
@@ -628,6 +689,11 @@ impl ShimMetadata {
         self.terminal_size = terminal_size;
     }
 
+    pub(crate) fn set_signal_state(&mut self, sequence: u64, pending: Option<PendingSignal>) {
+        self.signal_sequence = sequence;
+        self.pending_signal = pending;
+    }
+
     fn validate(&self, path: &Path) -> Result<()> {
         if !(MIN_METADATA_SCHEMA_VERSION..=METADATA_SCHEMA_VERSION).contains(&self.schema_version) {
             return Err(metadata_error(format!(
@@ -692,6 +758,19 @@ impl ShimMetadata {
                 self.schema_version
             )));
         }
+        if self.schema_version < 7
+            && (self.signal_sequence != 0
+                || self.pending_signal.is_some()
+                || self
+                    .execs
+                    .iter()
+                    .any(|exec| exec.signal_sequence != 0 || exec.pending_signal.is_some()))
+        {
+            return Err(metadata_error(format!(
+                "shim metadata schema {} cannot contain schema-v7 signal state",
+                self.schema_version
+            )));
+        }
         validate_stdin_state(
             self.stdin_sequence,
             self.pending_stdin_write.as_ref(),
@@ -703,6 +782,12 @@ impl ShimMetadata {
             self.pending_resize.as_ref(),
             self.terminal_size,
             self.terminal,
+            "task",
+        )?;
+        validate_signal_state(
+            self.signal_sequence,
+            self.pending_signal.as_ref(),
+            true,
             "task",
         )?;
         if self.stdin.is_empty()
@@ -770,6 +855,12 @@ impl ShimMetadata {
                 exec.pending_resize.as_ref(),
                 exec.terminal_size,
                 exec.terminal,
+                &format!("exec {}", exec.exec_id),
+            )?;
+            validate_signal_state(
+                exec.signal_sequence,
+                exec.pending_signal.as_ref(),
+                false,
                 &format!("exec {}", exec.exec_id),
             )?;
             if exec.stdin.is_empty()
@@ -853,6 +944,30 @@ fn validate_terminal_size(size: TerminalSize, context: &str) -> Result<()> {
     if size.width == 0 || size.height == 0 {
         return Err(metadata_error(format!(
             "{context} records zero terminal width or height"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_signal_state(
+    completed_sequence: u64,
+    pending: Option<&PendingSignal>,
+    allow_all: bool,
+    context: &str,
+) -> Result<()> {
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    pending.validate()?;
+    if completed_sequence.checked_add(1) != Some(pending.sequence) {
+        return Err(metadata_error(format!(
+            "pending containerd {context} signal sequence {} does not follow completed sequence {completed_sequence}",
+            pending.sequence
+        )));
+    }
+    if pending.all && !allow_all {
+        return Err(metadata_error(format!(
+            "pending containerd {context} signal cannot request all processes"
         )));
     }
     Ok(())
@@ -1313,12 +1428,17 @@ mod tests {
         assert_eq!(loaded.execs()[0].resize_sequence, 0);
         assert_eq!(loaded.execs()[0].pending_resize, None);
         assert_eq!(loaded.execs()[0].terminal_size, None);
+        assert_eq!(loaded.signal_sequence(), 0);
+        assert_eq!(loaded.pending_signal(), None);
+        assert_eq!(loaded.execs()[0].signal_sequence, 0);
+        assert_eq!(loaded.execs()[0].pending_signal, None);
     }
 
     #[test]
     fn schema_v6_metadata_round_trip_preserves_task_and_exec_resize_state() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut expected = metadata(directory.path());
+        expected.schema_version = 6;
         expected.terminal = true;
         let task_size = TerminalSize {
             width: 120,
@@ -1385,6 +1505,53 @@ mod tests {
         assert_eq!(
             loaded.execs()[0].pending_resize,
             expected.execs()[0].pending_resize
+        );
+        assert_eq!(loaded.signal_sequence(), 0);
+        assert_eq!(loaded.pending_signal(), None);
+        assert_eq!(loaded.execs()[0].signal_sequence, 0);
+        assert_eq!(loaded.execs()[0].pending_signal, None);
+    }
+
+    #[test]
+    fn schema_v7_metadata_round_trip_preserves_task_and_exec_signal_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        expected.set_signal_state(
+            3,
+            Some(PendingSignal::new(4, libc::SIGTERM, true).expect("pending task signal")),
+        );
+        let process: Process = serde_json::from_value(serde_json::json!({
+            "terminal": false,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/sh"],
+            "cwd": "/"
+        }))
+        .expect("OCI process");
+        let mut exec = ExecMetadata::new(
+            "exec-signal".to_string(),
+            process,
+            String::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        exec.signal_sequence = 8;
+        exec.pending_signal =
+            Some(PendingSignal::new(9, libc::SIGUSR1, false).expect("pending exec signal"));
+        expected.set_execs(vec![exec]);
+
+        expected.store().expect("store schema-v7 metadata");
+        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load schema-v7 metadata")
+            .expect("metadata exists");
+
+        assert_eq!(loaded.schema_version, 7);
+        assert_eq!(loaded.signal_sequence(), 3);
+        assert_eq!(loaded.pending_signal(), expected.pending_signal());
+        assert_eq!(loaded.execs()[0].signal_sequence, 8);
+        assert_eq!(
+            loaded.execs()[0].pending_signal,
+            expected.execs()[0].pending_signal
         );
     }
 
@@ -1475,6 +1642,20 @@ mod tests {
             legacy_with_resize
                 .store()
                 .expect_err("schema-v5 resize state must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut legacy_with_signal = metadata(directory.path());
+        legacy_with_signal.schema_version = 6;
+        legacy_with_signal.set_signal_state(
+            0,
+            Some(PendingSignal::new(1, libc::SIGTERM, false).expect("pending signal")),
+        );
+        assert_eq!(
+            legacy_with_signal
+                .store()
+                .expect_err("schema-v6 signal state must fail")
                 .code,
             ErrorCode::FailedPrecondition
         );
@@ -1591,6 +1772,58 @@ mod tests {
             .expect_err("zero-width pending resize must fail")
             .code,
             ErrorCode::FailedPrecondition
+        );
+
+        let mut skipped_signal = metadata(directory.path());
+        skipped_signal.set_signal_state(
+            4,
+            Some(PendingSignal::new(6, libc::SIGTERM, false).expect("pending signal")),
+        );
+        assert_eq!(
+            skipped_signal
+                .store()
+                .expect_err("nonconsecutive signal sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut exec_all = ExecMetadata::new(
+            "exec-all".to_string(),
+            serde_json::from_value(serde_json::json!({
+                "terminal": false,
+                "user": {"uid": 0, "gid": 0},
+                "args": ["/bin/sh"],
+                "cwd": "/"
+            }))
+            .expect("OCI process"),
+            String::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        exec_all.pending_signal =
+            Some(PendingSignal::new(1, libc::SIGTERM, true).expect("pending exec signal"));
+        let mut invalid_exec_all = metadata(directory.path());
+        invalid_exec_all.set_execs(vec![exec_all]);
+        assert_eq!(
+            invalid_exec_all
+                .store()
+                .expect_err("exec signal cannot target all processes")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        assert_eq!(
+            PendingSignal::new(0, libc::SIGTERM, false)
+                .expect_err("zero signal sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+        assert_eq!(
+            PendingSignal::new(1, 0, false)
+                .expect_err("zero signal number must fail")
+                .code,
+            ErrorCode::InvalidArgument
         );
     }
 

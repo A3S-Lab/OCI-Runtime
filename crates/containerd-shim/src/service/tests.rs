@@ -9,6 +9,7 @@ use a3s_oci_sdk::{
 mod control;
 mod delete_shim_paused;
 mod resize;
+mod signal;
 
 #[derive(Clone)]
 struct RecoveryService {
@@ -276,6 +277,9 @@ fn task_state(bundle: &Path) -> TaskState {
         resize_sequence: 0,
         pending_resize: None,
         terminal_size: None,
+        signal_gate: Arc::new(Mutex::new(())),
+        signal_sequence: 0,
+        pending_signal: None,
         output_cursor: 0,
         control_gate: Arc::new(Mutex::new(())),
         control_sequence: 0,
@@ -427,6 +431,9 @@ async fn exec_wait_can_arrive_before_start_and_completes_from_the_recorded_exit(
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Added,
             record: None,
@@ -551,6 +558,9 @@ async fn rehydration_reuses_a_starting_exec_already_in_runtime_inventory() {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Starting,
             record: None,
@@ -632,6 +642,9 @@ async fn output_cursor_commits_are_durable_for_init_and_exec() {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Started,
             record: None,
@@ -858,6 +871,9 @@ async fn stdin_journal_prepare_and_commit_are_durable_for_init_and_exec() {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Started,
             record: None,
@@ -978,6 +994,9 @@ fn task_metadata_round_trip_preserves_terminal_evidence() {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Exited,
             record: None,
@@ -1039,6 +1058,9 @@ fn exec_delete_metadata_commit_precedes_in_memory_removal() {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Exited,
             record: None,

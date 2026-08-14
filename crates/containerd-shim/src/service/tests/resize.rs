@@ -542,7 +542,7 @@ async fn schema_v5_defaults_resize_state_and_upgrades_on_restore() {
             .expect("read upgraded metadata"),
     )
     .expect("decode upgraded metadata");
-    assert_eq!(upgraded["schema_version"], serde_json::json!(6));
+    assert_eq!(upgraded["schema_version"], serde_json::json!(7));
     replacement.stop_all_monitors().await;
     replacement.stop_all_pumps().await;
 }
@@ -597,6 +597,9 @@ fn add_terminal_exec(task: &mut super::TaskState, exec_id: &str) {
             resize_sequence: 0,
             pending_resize: None,
             terminal_size: None,
+            signal_gate: Arc::new(Mutex::new(())),
+            signal_sequence: 0,
+            pending_signal: None,
             output_cursor: 0,
             stage: ExecStage::Started,
             record: None,
