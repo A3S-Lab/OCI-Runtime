@@ -27,6 +27,77 @@ struct CreateIntentCleanupService {
     retryable_create_failures: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+#[derive(Default)]
+struct DeletedRuntimeCalls {
+    states: Vec<StateRequest>,
+    kills: usize,
+    deletes: Vec<RuntimeDeleteRequest>,
+}
+
+#[derive(Clone)]
+struct DeletedRuntimeService {
+    calls: Arc<std::sync::Mutex<DeletedRuntimeCalls>>,
+    confirmed_delete_mode: Option<DeleteMode>,
+}
+
+#[async_trait]
+impl OciRuntimeService for DeletedRuntimeService {
+    async fn features(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::RuntimeInfo> {
+        Err(RuntimeError::unsupported("test-features"))
+    }
+
+    async fn create(&self, _request: CreateRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
+        Err(RuntimeError::unsupported("test-create"))
+    }
+
+    async fn state(&self, request: StateRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
+        self.calls
+            .lock()
+            .expect("deleted-runtime calls")
+            .states
+            .push(request);
+        Err(RuntimeError::new(
+            ErrorCode::NotFound,
+            "runtime generation was already deleted",
+        )
+        .for_operation("test-state"))
+    }
+
+    async fn start(
+        &self,
+        _request: a3s_oci_sdk::StartRequest,
+    ) -> a3s_oci_sdk::Result<ContainerRecord> {
+        Err(RuntimeError::unsupported("test-start"))
+    }
+
+    async fn kill(&self, _request: RuntimeKillRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
+        self.calls.lock().expect("deleted-runtime calls").kills += 1;
+        Err(RuntimeError::new(
+            ErrorCode::NotFound,
+            "runtime generation was already deleted",
+        )
+        .for_operation("test-kill"))
+    }
+
+    async fn delete(&self, request: RuntimeDeleteRequest) -> a3s_oci_sdk::Result<()> {
+        let mode = request.mode;
+        self.calls
+            .lock()
+            .expect("deleted-runtime calls")
+            .deletes
+            .push(request);
+        if self.confirmed_delete_mode == Some(mode) {
+            Ok(())
+        } else {
+            Err(RuntimeError::new(
+                ErrorCode::NotFound,
+                "runtime has no matching committed Delete operation",
+            )
+            .for_operation("test-delete"))
+        }
+    }
+}
+
 #[async_trait]
 impl OciRuntimeService for CreateIntentCleanupService {
     async fn features(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::RuntimeInfo> {
@@ -647,6 +718,81 @@ async fn delete_shim_replays_an_in_flight_create_intent_before_exact_cleanup() {
     assert_eq!(calls.deletes.len(), 1);
     assert_eq!(calls.deletes[0].mode, DeleteMode::Force);
     assert_eq!(calls.deletes[0].target.generation, Some(Generation(7)));
+}
+
+#[tokio::test]
+async fn delete_shim_finishes_local_cleanup_after_runtime_delete_committed() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    metadata_from_task(&task)
+        .store()
+        .expect("store stopped task metadata");
+    let runtime = DeletedRuntimeService {
+        calls: Arc::new(std::sync::Mutex::new(DeletedRuntimeCalls::default())),
+        confirmed_delete_mode: Some(DeleteMode::StoppedOnly),
+    };
+    let calls = runtime.calls.clone();
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(runtime),
+        IsolationRequest::SharedHostKernel,
+    );
+    let mut service = recovery_service_instance(directory.path(), adapter);
+
+    let response = service
+        .delete_shim()
+        .await
+        .expect("finish interrupted runtime delete");
+
+    assert_eq!(response.pid(), 0);
+    assert_eq!(response.exit_status(), 42);
+    assert_eq!(response.exited_at().seconds, 10);
+    assert!(!ShimMetadata::path(directory.path()).exists());
+    let calls = calls.lock().expect("deleted-runtime calls");
+    assert_eq!(calls.states.len(), 1);
+    assert_eq!(calls.states[0].target.id, task.identity.container_id);
+    assert_eq!(calls.states[0].target.generation, Some(Generation(7)));
+    assert_eq!(calls.kills, 0);
+    assert_eq!(calls.deletes.len(), 1);
+    assert_eq!(calls.deletes[0].mode, DeleteMode::StoppedOnly);
+    assert_eq!(calls.deletes[0].target.generation, Some(Generation(7)));
+}
+
+#[tokio::test]
+async fn delete_shim_retains_metadata_when_runtime_absence_is_unconfirmed() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut task = task_state(directory.path());
+    task.rootfs_mounted = false;
+    metadata_from_task(&task)
+        .store()
+        .expect("store stopped task metadata");
+    let runtime = DeletedRuntimeService {
+        calls: Arc::new(std::sync::Mutex::new(DeletedRuntimeCalls::default())),
+        confirmed_delete_mode: None,
+    };
+    let calls = runtime.calls.clone();
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(runtime),
+        IsolationRequest::SharedHostKernel,
+    );
+    let mut service = recovery_service_instance(directory.path(), adapter);
+
+    service
+        .delete_shim()
+        .await
+        .expect_err("unconfirmed runtime state loss must fail closed");
+
+    assert!(ShimMetadata::path(directory.path()).exists());
+    let calls = calls.lock().expect("deleted-runtime calls");
+    assert_eq!(calls.states.len(), 1);
+    assert_eq!(calls.kills, 0);
+    assert_eq!(calls.deletes.len(), 2);
+    assert_eq!(calls.deletes[0].mode, DeleteMode::StoppedOnly);
+    assert_eq!(calls.deletes[1].mode, DeleteMode::Force);
+    assert!(calls
+        .deletes
+        .iter()
+        .all(|request| request.target.generation == Some(Generation(7))));
 }
 
 #[test]

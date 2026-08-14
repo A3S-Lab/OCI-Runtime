@@ -37,6 +37,7 @@ pub(crate) struct QualificationConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeIdentity {
+    pub(crate) container_id: a3s_oci_sdk::ContainerId,
     pub(crate) incarnation: String,
     pub(crate) generation: u64,
 }
@@ -248,7 +249,16 @@ pub(crate) async fn read_runtime_identity(
         .get("generation")
         .and_then(Value::as_u64)
         .ok_or_else(|| qualification_error("shim metadata omitted a numeric generation"))?;
+    let container_id = metadata
+        .get("container_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| qualification_error("shim metadata omitted its runtime container ID"))?;
     Ok(RuntimeIdentity {
+        container_id: a3s_oci_sdk::ContainerId::new(container_id).map_err(|error| {
+            qualification_error(format!(
+                "shim metadata contains an invalid runtime container ID: {error}"
+            ))
+        })?,
         incarnation,
         generation,
     })

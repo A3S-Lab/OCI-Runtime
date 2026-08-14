@@ -1031,22 +1031,38 @@ impl Shim for Service {
                 .adapter()
                 .await
                 .map_err(|error| Error::Other(error.to_string()))?;
-            let record = adapter
-                .exact_state(&identity, metadata.generation())
-                .await
-                .map_err(|error| Error::Other(error.to_string()))?;
-            let pid = record_pid(&record);
+            let record = match adapter.exact_state(&identity, metadata.generation()).await {
+                Ok(record) => Some(record),
+                Err(error) if error.code == ErrorCode::NotFound => {
+                    match adapter
+                        .delete(&identity, metadata.generation(), false)
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(error) if error.code == ErrorCode::NotFound => adapter
+                            .delete(&identity, metadata.generation(), true)
+                            .await
+                            .map_err(|error| Error::Other(error.to_string()))?,
+                        Err(error) => return Err(Error::Other(error.to_string())),
+                    }
+                    None
+                }
+                Err(error) => return Err(Error::Other(error.to_string())),
+            };
+            let pid = record.as_ref().map_or(0, record_pid);
             let mut exit = metadata.exit().cloned();
-            if exit.is_none() {
-                let _ = adapter
-                    .kill(&identity, metadata.generation(), 9, true)
-                    .await;
-                exit = adapter.wait(&identity, metadata.generation()).await.ok();
+            if record.is_some() {
+                if exit.is_none() {
+                    let _ = adapter
+                        .kill(&identity, metadata.generation(), 9, true)
+                        .await;
+                    exit = adapter.wait(&identity, metadata.generation()).await.ok();
+                }
+                adapter
+                    .delete(&identity, metadata.generation(), true)
+                    .await
+                    .map_err(|error| Error::Other(error.to_string()))?;
             }
-            adapter
-                .delete(&identity, metadata.generation(), true)
-                .await
-                .map_err(|error| Error::Other(error.to_string()))?;
             ShimCreateIntent::remove(metadata.bundle())
                 .map_err(|error| Error::Other(error.to_string()))?;
             if metadata.rootfs_mounted() {

@@ -1533,7 +1533,12 @@ Create/Start/running-restart/137-cleanup matrix, and exact cleanup after shim
 pre-generation create intent now also replays an in-flight Create through its
 exact incarnation and operation identity after shim `SIGKILL`, obtains the one
 runtime generation, and force-cleans it without task, process, bundle, or
-runtime-state residue. The
+runtime-state residue. A separate post-commit Delete boundary removes the exact
+runtime generation before killing the shim, then proves DeleteShim treats only
+that generation's `NotFound` result plus a successful replay of its stable
+normal or force Delete identity as a completed remote effect. It then finishes
+local metadata, rootfs, and bundle cleanup without touching caller-owned
+container metadata; unconfirmed state loss fails closed. The
 qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, or bundle. The R7 items remain open until the version and

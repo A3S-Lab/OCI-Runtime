@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, controls, daemon restart, live shim replacement with exact output continuation, in-flight Create plus four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Delete, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -152,6 +152,15 @@ original operation, delete its one resulting generation, and leave no runtime
 state, task, workload process, bundle, or shim while preserving caller-owned
 container metadata.
 
+The post-commit Delete gate stops the task, submits the shim's exact stable
+StoppedOnly Delete identity directly to the runtime, and kills the shim while
+its durable local metadata and rootfs ownership still exist. DeleteShim must
+accept `NotFound` only for that exact generation and only after its stable
+normal or force Delete identity replays a committed deletion. It then finishes
+local cleanup and preserves containerd-owned container metadata. Missing
+replay evidence and generation conflicts remain hard failures, so state loss or
+a replacement can never be mistaken for the deleted task.
+
 ## Run the real qualification
 
 The test is ignored because it is destructive: it requires root, restarts
@@ -179,8 +188,9 @@ test fails if any matching task or container remains.
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
-- extend forced cleanup from the qualified in-flight Create boundary to every
-  remaining lifecycle and process-I/O mutation boundary;
+- extend forced cleanup from the qualified in-flight Create and post-commit
+  Delete boundaries to every remaining lifecycle and process-I/O mutation
+  boundary;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
   soak gates.
