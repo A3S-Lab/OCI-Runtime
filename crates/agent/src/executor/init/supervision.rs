@@ -64,7 +64,14 @@ pub(super) fn run_supervised_init(
                 );
             }
             drop(outcome_channel);
-            complete_create_and_wait_for_start(create, detached_sources, host_pid, None, control)
+            complete_create_and_wait_for_start(
+                create,
+                host_proc,
+                detached_sources,
+                host_pid,
+                None,
+                control,
+            )
         }
         Err(error) => reject_before_ready(&mut control, error),
     }
@@ -105,6 +112,7 @@ fn run_pid_namespace_init(
             };
             complete_create_and_wait_for_start(
                 create,
+                host_proc,
                 detached_sources,
                 runtime_pid,
                 Some(namespace_init_host_pid),

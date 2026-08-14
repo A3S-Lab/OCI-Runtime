@@ -236,7 +236,8 @@ fail, and exact mutation retries replay their original process or signal
 result. Init and exec share the same fail-closed OCI process planner and I/O
 owner. The current process-I/O slice accepts null, piped, or inherited stdin,
 null, captured, or inherited stdout/stderr, or the exact all-terminal PTY
-contract, while rejecting scheduler and other unenforced process settings.
+contract. It accepts the enforced `oomScoreAdj` field while rejecting
+scheduler and other unenforced process settings.
 Inherited descriptors remain owned by the runtime launcher and are
 deliberately absent from SDK read/write operations. A separate Linux-only
 native create attachment implements the fixed
@@ -246,6 +247,14 @@ guest protocol; the native driver supplies a process-local descriptor plan
 directly to `LinuxExecutor`. It retains and applies all 16 OCI
 `process.rlimits` types to init and exec before credentials are reduced, with
 duplicate, count, and soft/hard validation.
+
+Init and exec also retain the host procfs directory before PID namespace and
+root changes. When `process.oomScoreAdj` is present, the payload opens
+`self/oom_score_adj` relative to that descriptor, writes the validated Linux
+value before reducing credentials or capabilities, and requires an exact
+read-back. An omitted field returns without opening procfs, preserving the
+inherited value. Values outside `-1000..=1000`, permission failures, malformed
+read-back, and mismatches fail with contextual typed errors.
 
 Piped stdin is written asynchronously with backpressure and can be closed
 idempotently. Dedicated tasks continuously drain captured stdout and stderr so

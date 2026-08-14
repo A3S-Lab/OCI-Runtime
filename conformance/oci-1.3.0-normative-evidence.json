@@ -91,6 +91,25 @@
     },
     {
       "requirementIds": [
+        "sha256:2aa0add6139457892f538b277481877da7dea6cb39b4986bbb8f379286ef0578",
+        "sha256:bff67ac1d7e9084a73f96bde13cdade2bd31680dfb4deb1a08f37fe97fb18c0f",
+        "sha256:e0354b513623ec1bcf5c5c0b45d97289348e0a67a48a3606ffe73e5619751fc9"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.oom-score-adj.kernel-range"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-oom-score-adj-readback",
+        "executor::oom::tests::applies_exact_value_in_an_isolated_process",
+        "executor::oom::tests::omitted_value_does_not_open_or_modify_procfs",
+        "executor::plan_tests::plans_and_serializes_process_oom_score_adj_for_init_and_exec",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:ccb4ddae139f49f522c030aabfb27ba33d94e80a3b99428b48dda6c0f9ff35d8",
         "sha256:4574f1f626f0905ede6b72ebe7a483cabe1d4f91187f0520127dce04eeb3d4ed"
       ],

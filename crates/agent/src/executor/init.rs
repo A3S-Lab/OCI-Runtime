@@ -319,6 +319,7 @@ pub(super) struct CreateContext<'a> {
 
 pub(super) fn complete_create_and_wait_for_start(
     create: &CreateContext<'_>,
+    host_proc: &File,
     mut detached_sources: DetachedMountSources,
     runtime_pid: i32,
     namespace_init_pid: Option<i32>,
@@ -363,6 +364,7 @@ pub(super) fn complete_create_and_wait_for_start(
     write_ready(&mut control, runtime_pid, namespace_init_pid)?;
     wait_for_start_and_exec(
         create.plan,
+        host_proc,
         create.rootfs_file,
         runtime_pid,
         control,
@@ -400,6 +402,7 @@ fn wait_for_create_continue(control: &mut UnixStream) -> Result<()> {
 
 fn wait_for_start_and_exec(
     plan: &InitPlan,
+    host_proc: &File,
     rootfs: &File,
     runtime_pid: i32,
     mut control: UnixStream,
@@ -418,7 +421,8 @@ fn wait_for_start_and_exec(
             "prepared init received an invalid start byte",
         ));
     }
-    let result = enter_rootfs_run_start_hooks_and_exec(plan, rootfs, runtime_pid, hook_state);
+    let result =
+        enter_rootfs_run_start_hooks_and_exec(plan, host_proc, rootfs, runtime_pid, hook_state);
     match result {
         Ok(()) => Ok(()),
         Err(error) => reject_before_ready(&mut control, error),
@@ -697,6 +701,7 @@ fn read_bounded_config(path: &Path) -> Result<String> {
 
 fn enter_rootfs_run_start_hooks_and_exec(
     plan: &InitPlan,
+    host_proc: &File,
     rootfs: &File,
     runtime_pid: i32,
     hook_state: &HookStateTemplate,
@@ -709,10 +714,10 @@ fn enter_rootfs_run_start_hooks_and_exec(
         Some(runtime_pid),
     )?;
     plan.hooks.run_sync(HookPhase::StartContainer, &created)?;
-    exec_configured_process(plan)
+    exec_configured_process(plan, host_proc)
 }
 
-fn exec_configured_process(plan: &InitPlan) -> Result<()> {
+fn exec_configured_process(plan: &InitPlan, host_proc: &File) -> Result<()> {
     let cwd = CString::new(plan.cwd.as_bytes()).map_err(|error| {
         init_error(
             ErrorCode::InvalidArgument,
@@ -735,6 +740,7 @@ fn exec_configured_process(plan: &InitPlan) -> Result<()> {
         .collect::<Vec<_>>();
     environment_pointers.push(std::ptr::null());
 
+    super::oom::apply(host_proc, plan.oom_score_adj)?;
     plan.rlimits.apply()?;
     plan.capabilities.prepare_for_credentials(plan.uid)?;
     namespace::apply_supplementary_groups(

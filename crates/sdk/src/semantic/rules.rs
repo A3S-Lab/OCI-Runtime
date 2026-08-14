@@ -53,6 +53,7 @@ define_rules! {
     PROCESS_ARGUMENT_NO_NUL => RuntimeConstraint, "oci.common.process.argument.no-nul";
     PROCESS_CWD_ABSOLUTE => Normative, "oci.common.process.cwd.absolute";
     PROCESS_EXECUTABLE_NON_EMPTY => Normative, "oci.common.process.executable.non-empty";
+    PROCESS_OOM_SCORE_ADJ_KERNEL_RANGE => RuntimeConstraint, "oci.common.process.oom-score-adj.kernel-range";
     PROCESS_REQUIRED_FOR_START => Normative, "oci.common.process.required-for-start";
     RLIMIT_SOFT_AT_MOST_HARD => RuntimeConstraint, "oci.common.rlimit.soft-at-most-hard";
     RLIMIT_TYPE_UNIQUE => Normative, "oci.common.rlimit.type.unique";

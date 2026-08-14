@@ -15,6 +15,7 @@ mod mount;
 #[cfg(test)]
 mod mount_tests;
 mod namespace;
+mod oom;
 mod pid;
 mod pid_supervisor;
 #[cfg(test)]

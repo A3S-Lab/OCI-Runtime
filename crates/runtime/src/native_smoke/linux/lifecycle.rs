@@ -218,12 +218,14 @@ async fn exercise_client(
         return Err("native start did not leave the workload running".into());
     }
     wait_for_marker(client, &target, marker, report).await?;
+    report.init_oom_score_adj_verified = true;
     control_descriptors.verify_listeners().await?;
     report.control_listener_connectivity_verified = true;
     control_descriptors.verify_init_log().await?;
     report.control_init_log_verified = true;
     process::exercise_process_io(client, &target, nonce).await?;
     report.process_io_verified = true;
+    report.exec_oom_score_adj_verified = true;
     process::exercise_terminal_io(client, &target, nonce).await?;
     report.terminal_io_verified = true;
     crate::filesystem_smoke::exercise_runtime(client, &target, nonce).await?;

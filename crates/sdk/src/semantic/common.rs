@@ -162,8 +162,25 @@ fn validate_process(
         validate_environment(environment, "/process/env", collector);
     }
     validate_rlimits(process, collector);
+    validate_oom_score_adj(process, collector);
     validate_io_priority(process, collector);
     validate_scheduler(process, collector);
+}
+
+fn validate_oom_score_adj(process: &Map<String, Value>, collector: &mut ViolationCollector) {
+    let Some(value) = process.get("oomScoreAdj") else {
+        return;
+    };
+    if !value
+        .as_i64()
+        .is_some_and(|value| (-1000..=1000).contains(&value))
+    {
+        collector.invalid(
+            "/process/oomScoreAdj",
+            rules::PROCESS_OOM_SCORE_ADJ_KERNEL_RANGE,
+            "process.oomScoreAdj must be between -1000 and 1000 for Linux",
+        );
+    }
 }
 
 fn validate_environment(

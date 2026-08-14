@@ -190,11 +190,12 @@ Completed:
   and aarch64, including exact repeated SIGKILL status and bounded running
   wait, plus public SDK exec replay, duplicate process-ID rejection, durable
   process journals, pidfd signal replay, stable per-process wait, and init-exit
-  exec cleanup, plus durable cgroup-v2 pause/resume and exact live process
-  inventory, replay-safe resource update, and normalized stats with real
-  workload-progress evidence, plus controlling PTY allocation, initial and
-  resized dimensions, interactive I/O, merged output, and VEOF close, repeated
-  with `/dev/kvm` absent and present but unusable;
+  exec cleanup, exact init/exec `oom_score_adj` read-back, plus durable
+  cgroup-v2 pause/resume and exact live process inventory, replay-safe resource
+  update, and normalized stats with real workload-progress evidence, plus
+  controlling PTY allocation, initial and resized dimensions, interactive I/O,
+  merged output, and VEOF close, repeated with `/dev/kvm` absent and present
+  but unusable;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
   and time namespaces, including retained rootfs execution after a mount join,
   three-pass user-namespace permission recovery, and shared native Linux/macOS
@@ -455,7 +456,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 630-entry pending normative evidence backlog.
+- [ ] Close the 627-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1311,6 +1312,11 @@ leak. Only then may KVM become `experimental`.
   credential reduction for both init and exec; reject duplicates, inverted
   soft/hard values, and unbounded plans, and verify `RLIMIT_NOFILE` through
   the native Linux workload.
+- [x] Validate and retain OCI `process.oomScoreAdj`, apply it to init and exec
+  through procfs retained before namespace and root changes, leave the
+  inherited value untouched when omitted, require exact kernel read-back
+  before credential reduction, and bind all three OCI requirements to unit
+  and real Native Linux evidence.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

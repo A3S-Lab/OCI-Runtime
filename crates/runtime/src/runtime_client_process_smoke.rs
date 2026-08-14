@@ -24,10 +24,12 @@ pub(crate) async fn exercise_process_io(
         "io",
         "exec-io",
         "test \"$(ulimit -n)\" = 48; \
+         test \"$(/bin/busybox cat /proc/self/oom_score_adj)\" = 200; \
          IFS= read -r first; IFS= read -r second; \
          printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
          printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
     )?;
+    request.process.set_oom_score_adj(Some(200));
     request.io = ProcessIo {
         stdin: IoMode::Pipe,
         stdout: IoMode::Capture,

@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 67);
+    assert_eq!(registry.len(), 68);
     assert_eq!(
         registry
             .iter()
@@ -95,6 +95,7 @@ fn accepts_validated_normative_cross_field_boundaries() {
             "cwd": "/",
             "args": ["/bin/true"],
             "user": {"uid": 0, "gid": 0},
+            "oomScoreAdj": 100,
             "ioPriority": {
                 "class": "IOPRIO_CLASS_BE",
                 "priority": 4
@@ -175,6 +176,7 @@ fn reports_common_cross_field_violations_with_stable_rules() {
         "process": {
             "cwd": "relative",
             "args": [],
+            "oomScoreAdj": 1001,
             "env": ["MISSING_EQUALS", "=empty"],
             "ioPriority": {"class": "IOPRIO_CLASS_BE", "priority": 8},
             "scheduler": {
@@ -202,6 +204,7 @@ fn reports_common_cross_field_violations_with_stable_rules() {
         "oci.common.root.path.non-empty",
         "oci.common.process.cwd.absolute",
         "oci.common.process.args.non-empty",
+        "oci.common.process.oom-score-adj.kernel-range",
         "oci.common.environment.assignment",
         "oci.common.environment.name.non-empty",
         "oci.linux.io-priority.range",

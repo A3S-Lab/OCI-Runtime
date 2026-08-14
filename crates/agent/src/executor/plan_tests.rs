@@ -219,6 +219,39 @@ fn builds_the_same_fail_closed_plan_for_an_exec_process() {
 }
 
 #[test]
+fn plans_and_serializes_process_oom_score_adj_for_init_and_exec() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["process"]["oomScoreAdj"] = serde_json::json!(250);
+    let encoded_config = serde_json::to_string(&config).expect("encode OOM configuration");
+
+    let init =
+        InitPlan::from_bundle(&bundle(&encoded_config), &null_io()).expect("plan init oomScoreAdj");
+    assert_eq!(init.oom_score_adj, Some(250));
+
+    let process: Process =
+        serde_json::from_value(config["process"].clone()).expect("decode OOM process");
+    let exec = ProcessPlan::from_process(&process, &null_io()).expect("plan exec oomScoreAdj");
+    assert_eq!(exec.oom_score_adj, Some(250));
+    let encoded = serde_json::to_vec(&exec).expect("encode exec process plan");
+    assert_eq!(
+        serde_json::from_slice::<ProcessPlan>(&encoded).expect("decode exec process plan"),
+        exec
+    );
+
+    config["process"]
+        .as_object_mut()
+        .expect("process object")
+        .remove("oomScoreAdj");
+    let omitted = InitPlan::from_bundle(
+        &bundle(&serde_json::to_string(&config).expect("encode omitted OOM configuration")),
+        &null_io(),
+    )
+    .expect("plan omitted oomScoreAdj");
+    assert_eq!(omitted.oom_score_adj, None);
+}
+
+#[test]
 fn plans_and_serializes_every_oci_process_rlimit() {
     let rlimits = serde_json::json!([
         {"type": "RLIMIT_CPU", "hard": 101, "soft": 100},

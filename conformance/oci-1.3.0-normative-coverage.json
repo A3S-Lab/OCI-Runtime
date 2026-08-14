@@ -3510,10 +3510,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`oomScoreAdj`** *(int, OPTIONAL)* adjusts the oom-killer score in `[pid]/oom_score_adj` for the process's `[pid]` in a [proc pseudo-filesystem][proc_2].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.oom-score-adj.kernel-range"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-oom-score-adj-readback",
+        "executor::oom::tests::applies_exact_value_in_an_isolated_process",
+        "executor::oom::tests::omitted_value_does_not_open_or_modify_procfs",
+        "executor::plan_tests::plans_and_serializes_process_oom_score_adj_for_init_and_exec",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:bff67ac1d7e9084a73f96bde13cdade2bd31680dfb4deb1a08f37fe97fb18c0f",
@@ -3524,10 +3532,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If `oomScoreAdj` is set, the runtime MUST set `oom_score_adj` to the given value.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.oom-score-adj.kernel-range"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-oom-score-adj-readback",
+        "executor::oom::tests::applies_exact_value_in_an_isolated_process",
+        "executor::oom::tests::omitted_value_does_not_open_or_modify_procfs",
+        "executor::plan_tests::plans_and_serializes_process_oom_score_adj_for_init_and_exec",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:e0354b513623ec1bcf5c5c0b45d97289348e0a67a48a3606ffe73e5619751fc9",
@@ -3538,10 +3554,18 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "If `oomScoreAdj` is not set, the runtime MUST NOT change the value of `oom_score_adj`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.oom-score-adj.kernel-range"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-oom-score-adj-readback",
+        "executor::oom::tests::applies_exact_value_in_an_isolated_process",
+        "executor::oom::tests::omitted_value_does_not_open_or_modify_procfs",
+        "executor::plan_tests::plans_and_serializes_process_oom_score_adj_for_init_and_exec",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
     },
     {
       "id": "sha256:5b9d199127adf9c02497c157c910e642025d0d5d05076396ede446f60ac7cf6a",

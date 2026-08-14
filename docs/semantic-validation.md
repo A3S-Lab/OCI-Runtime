@@ -37,8 +37,8 @@ Validation always runs the pinned official schema first.
 The initial rule set covers:
 
 - Linux root and runnable-process requirements;
-- process arguments, environment, working directory, rlimits, scheduler, and
-  I/O priority;
+- process arguments, environment, working directory, rlimits, OOM score
+  adjustment, scheduler, and I/O priority;
 - mount destinations, ID-mapping pairs, hooks, and annotations;
 - namespace uniqueness, namespace paths, UID/GID mapping ranges, and
   namespace-dependent hostname, paths, sysctls, time offsets, and network
@@ -51,11 +51,12 @@ The initial rule set covers:
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 67 rule identifiers come from one typed registry. Twenty are classified
+All 68 rule identifiers come from one typed registry. Twenty are classified
 as direct OCI normative validators and are currently bound to 25 exact source
-entries in the normative evidence manifest. The remainder are explicit
-kernel/runtime constraints or platform policy and cannot accidentally be
-reported as normative coverage.
+entries in the normative evidence manifest. The Linux `oomScoreAdj` runtime
+constraint and executor tests separately promote three process requirements
+to `enforced`. The remainder are explicit kernel/runtime constraints or
+platform policy and cannot accidentally be reported as normative coverage.
 
 The validator does not invent hardware minima or silently convert unsupported
 controls. Host capabilities, path allowlists, and whether the selected driver

@@ -305,7 +305,10 @@ fn run_exec_payload(
             ),
         );
     }
-    match apply_exec_credentials(plan).and_then(|()| execute_process(plan)) {
+    match crate::executor::oom::apply(host_proc, plan.oom_score_adj)
+        .and_then(|()| apply_exec_credentials(plan))
+        .and_then(|()| execute_process(plan))
+    {
         Ok(()) => Ok(()),
         Err(error) => reject_exec(control, error),
     }

@@ -120,7 +120,7 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v12` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v13` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
@@ -146,14 +146,15 @@ following:
 7. start releases `startContainer`, confirms the configured process crossed
    `execve`, runs `poststart`, and returns; the workload verifies exact rootful
    UID/GID maps, monotonic and boottime namespace offsets, and an applied
-   `RLIMIT_NOFILE` soft/hard value of 64, verifies FD 3 and FD 4 are sockets,
-   and writes the exact `a3s-box-native-control-v1\n` bytes through FD 5
-   before the marker is observed; the host connects to both inherited
-   listeners and reads back the exact log;
-8. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48;
-   exec and its retry return the same positive authenticated PID, a duplicate
-   process ID is rejected, and a 50-millisecond process wait returns
-   `DeadlineExceeded`;
+   `RLIMIT_NOFILE` soft/hard value of 64 plus the exact configured
+   `oom_score_adj` value of 100, verifies FD 3 and FD 4 are sockets, and
+   writes the exact `a3s-box-native-control-v1\n` bytes through FD 5 before
+   the marker is observed; the host connects to both inherited listeners and
+   reads back the exact log;
+8. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48
+   and exact configured `oom_score_adj` value of 200; exec and its retry
+   return the same positive authenticated PID, a duplicate process ID is
+   rejected, and a 50-millisecond process wait returns `DeadlineExceeded`;
 9. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
 10. process inventory returns exactly the live init and second exec process;
@@ -249,7 +250,7 @@ configured with one container ID and duplicates the inherited Box FD 3/4/5
 roles before it opens any workload.
 
 The `native-linux-service-smoke` command reuses the complete
-`a3s.oci.native-linux-smoke.v12` lifecycle assertions over a real `0600` Unix
+`a3s.oci.native-linux-smoke.v13` lifecycle assertions over a real `0600` Unix
 socket. In addition to the 26 lifecycle requirements above, success requires:
 
 1. the service root, state root, and executor parent are real, owner-owned
