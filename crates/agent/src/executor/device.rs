@@ -354,6 +354,7 @@ impl DevicePlan {
         &self,
         namespaces: &NamespacePlan,
         runtime_directory: &Path,
+        device_source_directory: &Path,
         rootless: bool,
         rootless_mount_descriptors: &[OwnedFd],
     ) -> Result<PreparedDeviceSources> {
@@ -441,7 +442,8 @@ impl DevicePlan {
             });
         }
 
-        let directory = runtime_directory.join("devices");
+        let device_source_directory = canonical_device_source_directory(device_source_directory)?;
+        let directory = device_source_directory.join("devices");
         let mut builder = fs::DirBuilder::new();
         builder.mode(0o700);
         builder.create(&directory).map_err(|error| {
@@ -1903,6 +1905,36 @@ fn open_path_descriptor(path: &Path) -> Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
 
+fn canonical_device_source_directory(path: &Path) -> Result<PathBuf> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        device_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to inspect OCI device-source directory {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(device_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "OCI device-source directory is not a real directory: {}",
+                path.display()
+            ),
+        ));
+    }
+    path.canonicalize().map_err(|error| {
+        device_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to resolve OCI device-source directory {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
 fn path_cstring(path: &Path, label: &str) -> Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|error| {
         invalid(format!(
@@ -1965,14 +1997,34 @@ mod tests {
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        cleanup_device_target_manifest, load_device_target_manifest,
-        load_device_target_manifest_from, write_device_target_manifest, DeviceKind, DeviceNode,
-        DevicePlan, DeviceTargetManifest, DeviceTargetRecord, PreparedDeviceSources,
-        DEVICE_TARGETS_RECORD_NAME, DEVICE_TARGETS_SCHEMA_VERSION,
+        canonical_device_source_directory, cleanup_device_target_manifest,
+        load_device_target_manifest, load_device_target_manifest_from,
+        write_device_target_manifest, DeviceKind, DeviceNode, DevicePlan, DeviceTargetManifest,
+        DeviceTargetRecord, PreparedDeviceSources, DEVICE_TARGETS_RECORD_NAME,
+        DEVICE_TARGETS_SCHEMA_VERSION,
     };
     use crate::executor::mount;
     use crate::executor::namespace::NamespacePlan;
     use tempfile::tempdir;
+
+    #[test]
+    fn device_source_directory_must_be_a_real_directory() {
+        let temporary = tempdir().expect("temporary device source parent");
+        let directory = temporary.path().join("sources");
+        let symlink = temporary.path().join("sources-link");
+        std::fs::create_dir(&directory).expect("device source directory");
+        std::os::unix::fs::symlink(&directory, &symlink).expect("device source symlink");
+
+        assert_eq!(
+            canonical_device_source_directory(&directory).expect("real source directory"),
+            directory
+                .canonicalize()
+                .expect("canonical source directory")
+        );
+        let error = canonical_device_source_directory(&symlink)
+            .expect_err("device source symlink must fail closed");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+    }
 
     #[test]
     fn cleanup_device_target_removes_exact_placeholder_file() {

@@ -34,6 +34,7 @@ struct ContainerInitInvocation {
     rootfs_scope: RootfsScope,
     expected_owner_pid: libc::pid_t,
     rootless: bool,
+    device_source_directory: PathBuf,
     process_io: ProcessIo,
 }
 
@@ -49,6 +50,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let rootfs_scope = arguments.next();
     let expected_owner_pid = arguments.next();
     let mapping_mode = arguments.next();
+    let device_source_directory = arguments.next().map(PathBuf::from);
     let process_io = arguments.next();
     let extra = arguments.next();
     let (
@@ -59,6 +61,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         Some(rootfs_scope),
         Some(expected_owner_pid),
         Some(mapping_mode),
+        Some(device_source_directory),
         Some(process_io),
         None,
     ) = (
@@ -69,13 +72,14 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         rootfs_scope,
         expected_owner_pid,
         mapping_mode,
+        device_source_directory,
         process_io,
         extra,
     )
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID MAPPING_MODE PROCESS_IO and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID MAPPING_MODE DEVICE_SOURCE_DIRECTORY PROCESS_IO and no extra arguments",
         )));
     };
     let container_id = match container_id.into_string() {
@@ -116,6 +120,15 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
             )));
         }
     };
+    if !device_source_directory.is_absolute() {
+        return Some(Err(init_error(
+            ErrorCode::InvalidArgument,
+            format!(
+                "container-init device-source directory must be absolute: {}",
+                device_source_directory.display()
+            ),
+        )));
+    }
     let process_io = match process_io.to_str() {
         Some(encoded) if encoded.len() <= super::MAX_INTERNAL_PROCESS_IO_BYTES => {
             match serde_json::from_str::<ProcessIo>(encoded) {
@@ -153,6 +166,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         rootfs_scope,
         expected_owner_pid,
         rootless,
+        device_source_directory,
         process_io,
     }))
 }
@@ -166,6 +180,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         rootfs_scope,
         expected_owner_pid,
         rootless,
+        device_source_directory,
         process_io,
     } = invocation;
     pid_supervisor::verify_and_arm_parent_death_signal(expected_owner_pid, "container launcher")?;
@@ -215,6 +230,7 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
     let prepared_devices = match plan.devices.prepare_sources(
         &plan.namespaces,
         &runtime_directory,
+        &device_source_directory,
         rootless,
         &rootless_device_mount_descriptors,
     ) {

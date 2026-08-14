@@ -1128,7 +1128,11 @@ then may WHPX become `experimental`.
   for backward compatibility.
 - [x] Run the same fixed create/state/start/kill/wait/delete OCI lifecycle used
   by WHPX, including bounded running wait, exact repeated exit status,
-  pause/resume, live process inventory, resource update, and normalized stats.
+  pause/resume, live process inventory, resource update, normalized stats, and
+  the exact six-device privileged profile. Keep durable target-cleanup evidence
+  on the writable runtime share, create temporary source nodes only on
+  Guest-local devtmpfs, and remove those sources at the Create barrier without
+  weakening device identity validation.
 - [x] Prove deterministic VM, process, descriptor, and filesystem cleanup
   without normal delete after successful create, start, and kill boundaries.
   Each phase requires exact endpoint removal, observed-PID reap, complete

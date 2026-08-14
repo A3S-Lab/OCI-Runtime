@@ -116,6 +116,11 @@ impl RootlessDevicePolicyBootstrap {
 }
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
+// Device nodes must be created on a Linux device filesystem. A utility VM's
+// runtime parent is a host-backed virtiofs share whose device metadata follows
+// host semantics, so it remains suitable for durable records but not mknod
+// sources. The sources are private, short-lived children of guest devtmpfs.
+const UTILITY_VM_DEVICE_SOURCE_PARENT: &str = "/dev";
 const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_OPERATION_RECORDS: usize = AGENT_MAX_ACKNOWLEDGED_OPERATIONS;
 const MAX_INTERNAL_PROCESS_IO_BYTES: usize = 1_024;
@@ -163,6 +168,7 @@ pub struct LinuxExecutor {
     init_executable: PathBuf,
     runtime_parent: PathBuf,
     runtime_root: PathBuf,
+    device_source_root: PathBuf,
     owner_identity: Option<recovery::ProcessIdentity>,
     rootfs_scope: RootfsScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
@@ -183,6 +189,7 @@ impl LinuxExecutor {
             executable,
             RootfsScope::BundleOnly,
             RecoveryMode::Transient,
+            None,
         )
         .await
     }
@@ -200,6 +207,7 @@ impl LinuxExecutor {
             executable,
             RootfsScope::BundleOnly,
             RecoveryMode::Transient,
+            Some(Path::new(UTILITY_VM_DEVICE_SOURCE_PARENT)),
         )
         .await
     }
@@ -219,6 +227,7 @@ impl LinuxExecutor {
             init_executable,
             RootfsScope::BundleOnly,
             RecoveryMode::DurableNative,
+            None,
         )
         .await
     }
@@ -237,6 +246,7 @@ impl LinuxExecutor {
             init_executable,
             RootfsScope::NativeAbsolute,
             RecoveryMode::DurableNative,
+            None,
         )
         .await
     }
@@ -256,6 +266,7 @@ impl LinuxExecutor {
             init_executable,
             RootfsScope::NativeAbsolute,
             RecoveryMode::DurableNative,
+            None,
         )
         .await?;
         executor
@@ -278,6 +289,7 @@ impl LinuxExecutor {
             init_executable,
             RootfsScope::NativeAbsolute,
             RecoveryMode::DurableNative,
+            None,
         )
         .await?;
         let Some((effective_uid, effective_gid)) = executor.user_mapping_runtime.effective_ids()
@@ -334,6 +346,7 @@ impl LinuxExecutor {
         init_executable: impl AsRef<Path>,
         rootfs_scope: RootfsScope,
         recovery_mode: RecoveryMode,
+        device_source_parent: Option<&Path>,
     ) -> Result<Self> {
         pidfd::verify_support()?;
         let parent = runtime_parent.as_ref();
@@ -364,6 +377,41 @@ impl LinuxExecutor {
                 ),
             ));
         }
+        let device_source_parent = match device_source_parent {
+            Some(device_source_parent) => {
+                if !device_source_parent.is_absolute() {
+                    return Err(executor_error(
+                        ErrorCode::InvalidArgument,
+                        format!(
+                            "Linux executor device-source parent must be absolute: {}",
+                            device_source_parent.display()
+                        ),
+                    ));
+                }
+                let metadata = tokio::fs::symlink_metadata(device_source_parent)
+                    .await
+                    .map_err(|error| {
+                        executor_error(
+                            ErrorCode::FailedPrecondition,
+                            format!(
+                                "failed to inspect Linux executor device-source parent {}: {error}",
+                                device_source_parent.display()
+                            ),
+                        )
+                    })?;
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    return Err(executor_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "Linux executor device-source parent must be a real directory: {}",
+                            device_source_parent.display()
+                        ),
+                    ));
+                }
+                Some(device_source_parent.to_path_buf())
+            }
+            None => None,
+        };
         let init_executable = tokio::fs::canonicalize(init_executable.as_ref())
             .await
             .map_err(|error| {
@@ -399,6 +447,13 @@ impl LinuxExecutor {
         let runtime_parent = parent.to_path_buf();
         let (runtime_root, owner_identity) =
             executor_runtime_layout(&runtime_parent, recovery_mode)?;
+        let device_source_root = executor_device_source_root(
+            &runtime_parent,
+            &runtime_root,
+            device_source_parent.as_deref(),
+        )?;
+        let capabilities =
+            AgentCapabilities::linux_executor(AGENT_VERSION, std::env::consts::ARCH)?;
         let mut builder = tokio::fs::DirBuilder::new();
         builder.mode(0o700);
         builder.create(&runtime_root).await.map_err(|error| {
@@ -410,19 +465,37 @@ impl LinuxExecutor {
                 ),
             )
         })?;
+        if device_source_root != runtime_root {
+            let mut source_builder = tokio::fs::DirBuilder::new();
+            source_builder.mode(0o700);
+            if let Err(error) = source_builder.create(&device_source_root).await {
+                let _ = tokio::fs::remove_dir_all(&runtime_root).await;
+                return Err(executor_error(
+                    ErrorCode::Conflict,
+                    format!(
+                        "failed to create exclusive guest device-source root {}: {error}",
+                        device_source_root.display()
+                    ),
+                ));
+            }
+        }
 
         if let Some(owner) = owner_identity {
             if let Err(error) = recovery::write_owner_record(&runtime_root, owner).await {
                 let _ = tokio::fs::remove_dir_all(&runtime_root).await;
+                if device_source_root != runtime_root {
+                    let _ = tokio::fs::remove_dir_all(&device_source_root).await;
+                }
                 return Err(error);
             }
         }
 
         Ok(Self {
-            capabilities: AgentCapabilities::linux_executor(AGENT_VERSION, std::env::consts::ARCH)?,
+            capabilities,
             init_executable,
             runtime_parent,
             runtime_root,
+            device_source_root,
             owner_identity,
             rootfs_scope,
             user_mapping_runtime,
@@ -489,6 +562,23 @@ impl LinuxExecutor {
                         ),
                     )
                 });
+            }
+        }
+        if self.device_source_root != self.runtime_root {
+            match tokio::fs::remove_dir_all(&self.device_source_root).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    first_error.get_or_insert_with(|| {
+                        executor_error(
+                            ErrorCode::Internal,
+                            format!(
+                                "failed to remove guest device-source root {}: {error}",
+                                self.device_source_root.display()
+                            ),
+                        )
+                    });
+                }
             }
         }
         for plan in poststop {
@@ -628,6 +718,14 @@ impl LinuxExecutor {
             } else {
                 Vec::new()
             };
+        let device_source_directory = self.device_source_root.join(format!("c-{slot:016x}"));
+        let separate_device_source_directory = device_source_directory != runtime_directory;
+        if separate_device_source_directory {
+            if let Err(error) = create_private_directory(&device_source_directory).await {
+                let _ = remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                return Err(error);
+            }
+        }
         let mut process = match PreparedProcess::spawn(
             &plan,
             &config_snapshot,
@@ -640,12 +738,26 @@ impl LinuxExecutor {
                 rootless_device_mounts,
                 rootfs_scope: self.rootfs_scope,
                 user_mapping_runtime: &self.user_mapping_runtime,
+                device_source_directory: &device_source_directory,
             },
         )
         .await
         {
             Ok(process) => process,
-            Err(error) => {
+            Err(mut error) => {
+                if separate_device_source_directory {
+                    if let Err(cleanup) = remove_container_directory(
+                        &self.device_source_root,
+                        &device_source_directory,
+                    )
+                    .await
+                    {
+                        error.message = format!(
+                            "{}; failed to clean the guest-local device sources: {}",
+                            error.message, cleanup.message
+                        );
+                    }
+                }
                 if cleanup_device_targets(&runtime_directory).is_ok() {
                     let _ =
                         remove_container_directory(&self.runtime_root, &runtime_directory).await;
@@ -653,6 +765,18 @@ impl LinuxExecutor {
                 return Err(error);
             }
         };
+        if separate_device_source_directory {
+            if let Err(error) =
+                remove_container_directory(&self.device_source_root, &device_source_directory).await
+            {
+                let _ = process.force_stop().await;
+                if cleanup_device_targets(&runtime_directory).is_ok() {
+                    let _ =
+                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                }
+                return Err(error);
+            }
+        }
         if let Some(owner) = self.owner_identity {
             if let Err(error) = recovery::write_container_record(
                 &runtime_directory,
@@ -1204,6 +1328,50 @@ fn executor_runtime_layout(
     Ok((runtime_parent.join(name), owner_identity))
 }
 
+fn executor_device_source_root(
+    runtime_parent: &Path,
+    runtime_root: &Path,
+    device_source_parent: Option<&Path>,
+) -> Result<PathBuf> {
+    let Some(device_source_parent) = device_source_parent else {
+        return Ok(runtime_root.to_path_buf());
+    };
+    if runtime_root.parent() != Some(runtime_parent) || runtime_root == runtime_parent {
+        return Err(executor_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "guest runtime root is not an immediate child of its owned parent: {}",
+                runtime_root.display()
+            ),
+        ));
+    }
+    if device_source_parent == runtime_parent {
+        return Ok(runtime_root.to_path_buf());
+    }
+    let name = runtime_root.file_name().ok_or_else(|| {
+        executor_error(
+            ErrorCode::Internal,
+            format!(
+                "guest runtime root has no device-source directory name: {}",
+                runtime_root.display()
+            ),
+        )
+    })?;
+    let device_source_root = device_source_parent.join(name);
+    if device_source_root.starts_with(runtime_root) || runtime_root.starts_with(&device_source_root)
+    {
+        return Err(executor_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "guest device-source root overlaps the durable runtime root: {} and {}",
+                device_source_root.display(),
+                runtime_root.display()
+            ),
+        ));
+    }
+    Ok(device_source_root)
+}
+
 async fn create_private_directory(path: &Path) -> Result<()> {
     let mut builder = tokio::fs::DirBuilder::new();
     builder.mode(0o700);
@@ -1423,6 +1591,7 @@ mod rootless_device_tests {
                 .expect("capabilities"),
             init_executable: std::env::current_exe().expect("test executable"),
             runtime_parent,
+            device_source_root: runtime_root.clone(),
             runtime_root,
             owner_identity: None,
             rootfs_scope: super::RootfsScope::BundleOnly,
@@ -1507,6 +1676,7 @@ mod rootless_device_tests {
                 .expect("capabilities"),
             init_executable: std::env::current_exe().expect("test executable"),
             runtime_parent,
+            device_source_root: runtime_root.clone(),
             runtime_root,
             owner_identity: None,
             rootfs_scope: super::RootfsScope::BundleOnly,

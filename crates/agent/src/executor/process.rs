@@ -61,6 +61,7 @@ pub(super) struct ProcessSpawnContext<'a> {
     pub(super) rootless_device_mounts: Vec<OwnedFd>,
     pub(super) rootfs_scope: RootfsScope,
     pub(super) user_mapping_runtime: &'a UserMappingRuntime,
+    pub(super) device_source_directory: &'a Path,
 }
 
 impl PreparedProcess {
@@ -78,6 +79,7 @@ impl PreparedProcess {
             rootless_device_mounts,
             rootfs_scope,
             user_mapping_runtime,
+            device_source_directory,
         } = context;
         let rootless = user_mapping_runtime.is_rootless();
         let original_rootfs = retain_original_rootfs(&plan.rootfs).await?;
@@ -131,6 +133,7 @@ impl PreparedProcess {
             .arg(rootfs_scope.internal_argument())
             .arg(expected_owner_pid.to_string())
             .arg(if rootless { "rootless" } else { "privileged" })
+            .arg(device_source_directory)
             .arg(process_io_json)
             .env_clear()
             .kill_on_drop(true);

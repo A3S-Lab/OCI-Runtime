@@ -52,6 +52,14 @@ removes only the exact socket inode it created. Graceful SIGINT or SIGTERM
 closes active transports and invokes the idempotent HVF shutdown path so every
 live VM owner is reaped exactly once.
 
+Inside each utility VM, durable Agent records and device-target cleanup
+manifests stay on the writable per-generation virtiofs share. Temporary
+privileged OCI device sources do not: the Agent creates them in a private
+per-container directory on Guest-local `/dev` devtmpfs, rejects a symlinked
+source directory, and removes it as soon as Create is ready. This keeps Linux
+device type and major/minor validation exact without interpreting macOS
+virtiofs metadata as a Linux device node.
+
 SDK `features()` through this socket reports 20 public driver operations over
 the protocol-v10 Guest plus `features`, `list`, and `events`, and requires the
 versioned runtime bundle-handoff extension. This is the integration boundary

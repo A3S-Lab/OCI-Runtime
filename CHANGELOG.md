@@ -302,6 +302,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Create privileged OCI device nodes for utility-VM workloads from a private,
+  per-container directory on the Guest's local `/dev` devtmpfs instead of the
+  host-backed virtiofs runtime share. The exact durable device-target cleanup
+  manifest remains in the shared runtime directory, source directories reject
+  symbolic-link substitution, and the executor removes each source directory
+  as soon as Create is ready with a root-level shutdown sweep as a fallback.
+  This preserves strict character/block device identity checks across macOS
+  and Linux rather than accepting Darwin device metadata as a Linux source.
 - Reject unrepresentable Unix SDK socket paths during endpoint configuration
   instead of after writable service state has been opened. The macOS HVF public
   Host Service qualification now uses compact private service directories, and

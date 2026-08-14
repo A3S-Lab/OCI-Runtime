@@ -154,6 +154,18 @@ The current mount slice:
   propagation or ID-map modes, comma-packed options, `tmpcopyup`, and mount
   moves instead of silently ignoring them.
 
+Privileged device setup retains a separate boundary for source nodes and
+cleanup evidence. Native Linux creates private sources below the executor's
+owned runtime directory. A utility VM instead creates each container's
+short-lived sources below the Guest-local `/dev` devtmpfs, because its durable
+runtime directory is a host-backed virtiofs share and cannot provide portable
+Linux character/block device identity. The device-target cleanup manifest
+remains in that durable runtime directory. Both roots are real directories,
+the per-container source path rejects symbolic-link substitution, and the
+executor removes the source directory immediately after the bind-mounted
+targets cross the Create-ready barrier. Strict type, major/minor, ownership,
+mode, allowlist, and cgroup-device checks are unchanged.
+
 Create snapshots the exact digest-bound configuration, starts an internal
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
 accepts only the exact kernel-reported launcher PID. The wrapper revalidates
