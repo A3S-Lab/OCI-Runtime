@@ -51,12 +51,13 @@ The initial rule set covers:
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 68 rule identifiers come from one typed registry. Twenty are classified
-as direct OCI normative validators and are currently bound to 25 exact source
-entries in the normative evidence manifest. The Linux `oomScoreAdj` runtime
-constraint and executor tests separately promote three process requirements
-to `enforced`. The remainder are explicit kernel/runtime constraints or
-platform policy and cannot accidentally be reported as normative coverage.
+All 69 rule identifiers come from one typed registry. Twenty are classified
+as direct OCI normative validators and are currently bound to 27 exact source
+entries in the normative evidence manifest. Linux `oomScoreAdj` and I/O
+priority runtime constraints plus executor tests promote six process
+requirements to `enforced`. The remainder are explicit kernel/runtime
+constraints or platform policy and cannot accidentally be reported as
+normative coverage.
 
 The validator does not invent hardware minima or silently convert unsupported
 controls. Host capabilities, path allowlists, and whether the selected driver

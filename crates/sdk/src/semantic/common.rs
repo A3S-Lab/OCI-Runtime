@@ -246,20 +246,26 @@ fn validate_rlimits(process: &Map<String, Value>, collector: &mut ViolationColle
 }
 
 fn validate_io_priority(process: &Map<String, Value>, collector: &mut ViolationCollector) {
-    let Some(priority) = process
-        .get("ioPriority")
-        .and_then(Value::as_object)
-        .and_then(|value| value.get("priority"))
-        .and_then(Value::as_i64)
-    else {
+    let Some(io_priority) = process.get("ioPriority").and_then(Value::as_object) else {
         return;
     };
-    if !(0..=7).contains(&priority) {
-        collector.invalid(
-            "/process/ioPriority/priority",
-            rules::IO_PRIORITY_RANGE,
-            "Linux I/O priority must be between 0 and 7",
-        );
+    if let Some(priority) = io_priority.get("priority").and_then(Value::as_i64) {
+        if !(0..=7).contains(&priority) {
+            collector.invalid(
+                "/process/ioPriority/priority",
+                rules::IO_PRIORITY_RANGE,
+                "Linux I/O priority must be between 0 and 7",
+            );
+        }
+        if io_priority.get("class").and_then(Value::as_str) == Some("IOPRIO_CLASS_IDLE")
+            && priority != 0
+        {
+            collector.invalid(
+                "/process/ioPriority/priority",
+                rules::IO_PRIORITY_IDLE_CLASS_DATA_ZERO,
+                "Linux IOPRIO_CLASS_IDLE has no class data, so priority must be 0",
+            );
+        }
     }
 }
 

@@ -76,6 +76,7 @@ define_rules! {
     INTEL_RDT_L3_SCHEMA => RuntimeConstraint, "oci.linux.intel-rdt.l3-schema";
     INTEL_RDT_MEMORY_BANDWIDTH_SCHEMA => RuntimeConstraint, "oci.linux.intel-rdt.memory-bandwidth-schema";
     INTEL_RDT_SCHEMATA_SINGLE_LINE => RuntimeConstraint, "oci.linux.intel-rdt.schemata.single-line";
+    IO_PRIORITY_IDLE_CLASS_DATA_ZERO => RuntimeConstraint, "oci.linux.io-priority.idle-class-data-zero";
     IO_PRIORITY_RANGE => Normative, "oci.linux.io-priority.range";
     MEMORY_POLICY_NODES_FORBIDDEN => RuntimeConstraint, "oci.linux.memory-policy.nodes-forbidden";
     MEMORY_POLICY_NODES_REQUIRED => RuntimeConstraint, "oci.linux.memory-policy.nodes-required";

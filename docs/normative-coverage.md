@@ -33,9 +33,9 @@ The v1.3.0 corpus currently contains 764 entries:
 | --- | ---: | --- |
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
-| `validated` | 25 | Exact semantic rules with positive and negative SDK tests |
-| `enforced` | 3 | OCI `oomScoreAdj` representation, application, and omission semantics enforced by the Linux executor |
-| `pending-review` | 627 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `validated` | 24 | Exact semantic rules with positive and negative SDK tests |
+| `enforced` | 6 | OCI `oomScoreAdj` and I/O-priority representation and application semantics enforced by the Linux executor |
+| `pending-review` | 625 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
@@ -57,7 +57,7 @@ non-empty rule and test evidence. The verifier rejects:
 Reviewed promotions live in
 `conformance/oci-1.3.0-normative-evidence.json`. The generator applies that
 small source-of-truth file to a fresh 764-entry baseline and produces
-`conformance/oci-1.3.0-normative-coverage.json`. The SDK's typed 68-rule
+`conformance/oci-1.3.0-normative-coverage.json`. The SDK's typed 69-rule
 registry is checked in both directions: an evidence rule must exist, and every
 rule classified as directly normative must have at least one requirement
 binding.

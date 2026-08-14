@@ -254,15 +254,23 @@
     },
     {
       "requirementIds": [
+        "sha256:a1c94801345bf5bfaf2c9a63bdc4af4295906ecca14c4833be615a2324322716",
+        "sha256:24f001e175ff4247080c6044964ecad4f652d3bbed584cf0955c128ceaf808d1",
         "sha256:5baf766eb335fb8cd23c8fab434f515894fd1088c18bbd42092e216582adb4ba"
       ],
-      "disposition": "validated",
-      "owner": "sdk-semantic-validation",
+      "disposition": "enforced",
+      "owner": "linux-executor",
       "ruleIds": [
+        "oci.linux.io-priority.idle-class-data-zero",
         "oci.linux.io-priority.range"
       ],
       "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-io-priority-readback",
+        "executor::io_priority::tests::applies_best_effort_in_an_isolated_process",
+        "executor::io_priority::tests::plans_every_kernel_class_without_silent_normalization",
+        "executor::plan_tests::plans_and_serializes_process_io_priority_for_init_and_exec",
         "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::idle_io_priority_rejects_nonzero_class_data",
         "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
       ]
     },

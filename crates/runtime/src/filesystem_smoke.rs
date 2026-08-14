@@ -25,6 +25,8 @@ const PAYLOAD: &[u8] = b"a3s-oci-filesystem-smoke\0\xff\x80\n";
 
 #[async_trait]
 trait FilesystemSmokeClient: Sync {
+    fn changed_request_code(&self) -> ErrorCode;
+
     async fn file(&self, request: FileRequest) -> Result<FileResponse>;
 
     async fn filesystem(&self, request: FilesystemRequest) -> Result<FilesystemResponse>;
@@ -33,6 +35,10 @@ trait FilesystemSmokeClient: Sync {
 #[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
 #[async_trait]
 impl FilesystemSmokeClient for RuntimeClient {
+    fn changed_request_code(&self) -> ErrorCode {
+        ErrorCode::FailedPrecondition
+    }
+
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
         RuntimeClient::file(self, request).await
     }
@@ -51,6 +57,10 @@ impl<T> FilesystemSmokeClient for AgentClient<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
+    fn changed_request_code(&self) -> ErrorCode {
+        ErrorCode::Conflict
+    }
+
     async fn file(&self, request: FileRequest) -> Result<FileResponse> {
         AgentClient::file(self, request).await
     }
@@ -206,7 +216,7 @@ async fn exercise_created_directory(
             user: None,
             context: Some(upload_context),
         },
-        ErrorCode::Conflict,
+        client.changed_request_code(),
     )
     .await?;
     require_filesystem_error(

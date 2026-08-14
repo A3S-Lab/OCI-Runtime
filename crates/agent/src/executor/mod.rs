@@ -11,6 +11,7 @@ mod hook;
 mod inherited_descriptor;
 mod init;
 mod io;
+mod io_priority;
 mod mount;
 #[cfg(test)]
 mod mount_tests;

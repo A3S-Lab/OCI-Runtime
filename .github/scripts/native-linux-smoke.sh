@@ -188,12 +188,12 @@ rootless_bin="$qualification_root/rootless-bin"
 work_parent="$qualification_root/work"
 rootless_work_parent="$qualification_root/rootless-work"
 mkdir -p \
-  "$bundle/rootfs/bin" "$bundle/rootfs/proc" \
-  "$bundle_b/rootfs/bin" "$bundle_b/rootfs/proc" \
-  "$control_bundle/rootfs/bin" "$control_bundle/rootfs/proc" \
+  "$bundle/rootfs/bin" "$bundle/rootfs/dev" "$bundle/rootfs/proc" \
+  "$bundle_b/rootfs/bin" "$bundle_b/rootfs/dev" "$bundle_b/rootfs/proc" \
+  "$control_bundle/rootfs/bin" "$control_bundle/rootfs/dev" "$control_bundle/rootfs/proc" \
   "$control_bundle/rootfs/sys/fs/cgroup" \
-  "$recovery_bundle/rootfs/bin" "$recovery_bundle/rootfs/proc" \
-  "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/proc" \
+  "$recovery_bundle/rootfs/bin" "$recovery_bundle/rootfs/dev" "$recovery_bundle/rootfs/proc" \
+  "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/dev" "$rootless_bundle/rootfs/proc" \
   "$rootless_bin" "$work_parent" "$rootless_work_parent"
 for candidate in "$bundle" "$bundle_b" "$control_bundle" "$recovery_bundle"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
@@ -205,7 +205,7 @@ jq '.linux.cgroupsPath = "a3s-oci-owner-recovery" | del(.hooks)' \
 mv "$recovery_bundle/config.json.tmp" "$recovery_bundle/config.json"
 for slot in 0 1 2 3; do
   candidate="$qualification_root/soak-bundle-$slot"
-  mkdir -p "$candidate/rootfs/bin" "$candidate/rootfs/proc"
+  mkdir -p "$candidate/rootfs/bin" "$candidate/rootfs/dev" "$candidate/rootfs/proc"
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
@@ -477,7 +477,7 @@ verify_single_container_report() {
   local output="$2"
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v13"
+    '.schema_version == "a3s.oci.native-linux-smoke.v14"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
@@ -502,9 +502,11 @@ verify_single_container_report() {
      and .start_released
      and .running_observed
      and .init_oom_score_adj_verified
+     and .init_io_priority_verified
      and .processes_verified
      and .process_io_verified
      and .exec_oom_score_adj_verified
+     and .exec_io_priority_verified
      and .terminal_io_verified
      and .file_transfer_verified
      and .filesystem_operations_verified

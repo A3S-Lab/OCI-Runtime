@@ -252,6 +252,50 @@ fn plans_and_serializes_process_oom_score_adj_for_init_and_exec() {
 }
 
 #[test]
+fn plans_and_serializes_process_io_priority_for_init_and_exec() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["process"]["ioPriority"] = serde_json::json!({
+        "class": "IOPRIO_CLASS_BE",
+        "priority": 4
+    });
+    let encoded_config = serde_json::to_string(&config).expect("encode I/O priority config");
+
+    let init =
+        InitPlan::from_bundle(&bundle(&encoded_config), &null_io()).expect("plan init ioPriority");
+    assert_eq!(
+        init.io_priority
+            .map(super::io_priority::IoPriorityPlan::encoded),
+        Some((2 << 13) | 4)
+    );
+
+    let process: Process =
+        serde_json::from_value(config["process"].clone()).expect("decode I/O priority process");
+    let exec = ProcessPlan::from_process(&process, &null_io()).expect("plan exec ioPriority");
+    assert_eq!(
+        exec.io_priority
+            .map(super::io_priority::IoPriorityPlan::encoded),
+        Some((2 << 13) | 4)
+    );
+    let encoded = serde_json::to_vec(&exec).expect("encode exec process plan");
+    assert_eq!(
+        serde_json::from_slice::<ProcessPlan>(&encoded).expect("decode exec process plan"),
+        exec
+    );
+
+    config["process"]
+        .as_object_mut()
+        .expect("process object")
+        .remove("ioPriority");
+    let omitted = InitPlan::from_bundle(
+        &bundle(&serde_json::to_string(&config).expect("encode omitted I/O priority config")),
+        &null_io(),
+    )
+    .expect("plan omitted ioPriority");
+    assert!(omitted.io_priority.is_none());
+}
+
+#[test]
 fn plans_and_serializes_every_oci_process_rlimit() {
     let rlimits = serde_json::json!([
         {"type": "RLIMIT_CPU", "hard": 101, "soft": 100},
@@ -419,13 +463,9 @@ fn rejects_every_unimplemented_property_instead_of_ignoring_it() {
 }
 
 #[test]
-fn rejects_process_scheduler_io_priority_and_cpu_affinity() {
+fn rejects_process_scheduler_and_cpu_affinity() {
     for (field, value) in [
         ("scheduler", serde_json::json!({"policy": "SCHED_OTHER"})),
-        (
-            "ioPriority",
-            serde_json::json!({"class": "IOPRIO_CLASS_BE", "priority": 4}),
-        ),
         (
             "execCPUAffinity",
             serde_json::json!({"initial": "0-3", "final": "0-3"}),

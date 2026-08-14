@@ -456,7 +456,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 627-entry pending normative evidence backlog.
+- [ ] Close the 625-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1317,6 +1317,10 @@ leak. Only then may KVM become `experimental`.
   inherited value untouched when omitted, require exact kernel read-back
   before credential reduction, and bind all three OCI requirements to unit
   and real Native Linux evidence.
+- [x] Validate and retain OCI `process.ioPriority`, apply all three Linux I/O
+  classes to init and exec before credential reduction, preserve inherited
+  priority when omitted, reject out-of-range or nonzero idle class data, and
+  require exact syscall read-back plus real Native Linux evidence.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

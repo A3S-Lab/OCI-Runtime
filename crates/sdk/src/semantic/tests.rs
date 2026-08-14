@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 68);
+    assert_eq!(registry.len(), 69);
     assert_eq!(
         registry
             .iter()
@@ -220,6 +220,23 @@ fn reports_common_cross_field_violations_with_stable_rules() {
     ] {
         assert!(rules.contains(expected), "missing rule {expected}");
     }
+}
+
+#[test]
+fn idle_io_priority_rejects_nonzero_class_data() {
+    let value = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "process": {
+            "cwd": "/",
+            "args": ["/bin/true"],
+            "user": {"uid": 0, "gid": 0},
+            "ioPriority": {"class": "IOPRIO_CLASS_IDLE", "priority": 4}
+        }
+    });
+    let rules = rules(&value, OciSemanticPhase::Configuration);
+    assert!(rules.contains("oci.linux.io-priority.idle-class-data-zero"));
+    assert!(!rules.contains("oci.linux.io-priority.range"));
 }
 
 #[test]

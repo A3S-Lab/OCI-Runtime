@@ -305,7 +305,8 @@ fn run_exec_payload(
             ),
         );
     }
-    match crate::executor::oom::apply(host_proc, plan.oom_score_adj)
+    match crate::executor::io_priority::apply(plan.io_priority.as_ref())
+        .and_then(|()| crate::executor::oom::apply(host_proc, plan.oom_score_adj))
         .and_then(|()| apply_exec_credentials(plan))
         .and_then(|()| execute_process(plan))
     {

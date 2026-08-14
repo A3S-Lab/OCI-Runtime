@@ -26,6 +26,7 @@ pub(super) fn apply(host_proc: &File, requested: Option<i32>) -> Result<()> {
             ),
         ));
     }
+    make_self_procfs_accessible()?;
 
     let mut destination = open_score_file(host_proc, libc::O_WRONLY, "write")?;
     destination
@@ -72,6 +73,40 @@ pub(super) fn apply(host_proc: &File, requested: Option<i32>) -> Result<()> {
             ErrorCode::FailedPrecondition,
             format!(
                 "process.oomScoreAdj read-back mismatch: requested {requested}, observed {actual}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn make_self_procfs_accessible() -> Result<()> {
+    // SAFETY: PR_GET_DUMPABLE has no pointer arguments.
+    let dumpable = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) };
+    if dumpable < 0 {
+        let source = io::Error::last_os_error();
+        return Err(oom_error(
+            error_code_for_io(&source),
+            format!("failed to read process dumpability before process.oomScoreAdj: {source}"),
+        ));
+    }
+    if dumpable == 1 {
+        return Ok(());
+    }
+    // Selecting mapped namespace-root credentials can reset dumpability to
+    // fs.suid_dumpable (commonly 2). The retained parent procfs then exposes
+    // this task as an unmapped owner and rejects its own oom_score_adj open.
+    // This is still the trusted pre-exec payload; restore ordinary user-
+    // dumpable ownership before touching the process-local procfs node. The
+    // configured exec image applies its own credential and dumpability
+    // transition immediately afterwards.
+    // SAFETY: PR_SET_DUMPABLE consumes one integer flag and zero padding.
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 1, 0, 0, 0) } != 0 {
+        let source = io::Error::last_os_error();
+        return Err(oom_error(
+            error_code_for_io(&source),
+            format!(
+                "failed to restore process-local procfs ownership before \
+                 process.oomScoreAdj: {source}"
             ),
         ));
     }
@@ -222,8 +257,17 @@ mod tests {
                 .parse::<i32>()
                 .expect("parse initial OOM score");
             let requested = (before + 1).min(1000);
+            // SAFETY: PR_SET_DUMPABLE consumes one integer flag and zero
+            // padding arguments in this isolated child process.
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) },
+                0,
+                "make the child non-dumpable"
+            );
             let retained = File::open("/proc").expect("retain real procfs");
             apply(&retained, Some(requested)).expect("apply real OOM score");
+            // SAFETY: PR_GET_DUMPABLE has no pointer arguments.
+            assert_eq!(unsafe { libc::prctl(libc::PR_GET_DUMPABLE) }, 1);
             let actual = std::fs::read_to_string("/proc/self/oom_score_adj")
                 .expect("read applied OOM score")
                 .trim()

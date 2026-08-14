@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v13";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v14";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-rootless-smoke.v4";
@@ -380,12 +380,16 @@ pub struct NativeLinuxSmokeReport {
     pub running_observed: bool,
     /// Whether init read back its exact OCI process.oomScoreAdj value.
     pub init_oom_score_adj_verified: bool,
+    /// Whether init read back its exact OCI process.ioPriority value.
+    pub init_io_priority_verified: bool,
     /// Whether process inventory contained the exact live init and exec processes.
     pub processes_verified: bool,
     /// Whether captured stdout/stderr and piped stdin passed end-to-end.
     pub process_io_verified: bool,
     /// Whether an exec process read back its exact OCI process.oomScoreAdj value.
     pub exec_oom_score_adj_verified: bool,
+    /// Whether an exec process read back its exact OCI process.ioPriority value.
+    pub exec_io_priority_verified: bool,
     /// Whether PTY allocation, resize, interactive I/O, and EOF passed end-to-end.
     pub terminal_io_verified: bool,
     /// Whether binary upload/download and mutation replay passed end-to-end.
@@ -463,9 +467,11 @@ impl NativeLinuxSmokeReport {
             start_released: false,
             running_observed: false,
             init_oom_score_adj_verified: false,
+            init_io_priority_verified: false,
             processes_verified: false,
             process_io_verified: false,
             exec_oom_score_adj_verified: false,
+            exec_io_priority_verified: false,
             terminal_io_verified: false,
             file_transfer_verified: false,
             filesystem_operations_verified: false,
@@ -558,9 +564,11 @@ impl NativeLinuxSmokeReport {
             && self.start_released
             && self.running_observed
             && self.init_oom_score_adj_verified
+            && self.init_io_priority_verified
             && self.processes_verified
             && self.process_io_verified
             && self.exec_oom_score_adj_verified
+            && self.exec_io_priority_verified
             && self.terminal_io_verified
             && self.file_transfer_verified
             && self.filesystem_operations_verified

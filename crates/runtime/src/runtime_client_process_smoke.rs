@@ -25,11 +25,18 @@ pub(crate) async fn exercise_process_io(
         "exec-io",
         "test \"$(ulimit -n)\" = 48; \
          test \"$(/bin/busybox cat /proc/self/oom_score_adj)\" = 200; \
+         test \"$(/bin/busybox ionice -p $$)\" = \"best-effort: prio 5\"; \
          IFS= read -r first; IFS= read -r second; \
          printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
          printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
     )?;
     request.process.set_oom_score_adj(Some(200));
+    let io_priority = serde_json::from_value(serde_json::json!({
+        "class": "IOPRIO_CLASS_BE",
+        "priority": 5
+    }))
+    .map_err(|error| format!("failed to construct exec I/O priority: {error}"))?;
+    request.process.set_io_priority(Some(io_priority));
     request.io = ProcessIo {
         stdin: IoMode::Pipe,
         stdout: IoMode::Capture,

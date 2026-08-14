@@ -13,6 +13,7 @@ use super::capability::CapabilityPlan;
 use super::cgroup::CgroupPlan;
 use super::device::DevicePlan;
 use super::hook::HookSet;
+use super::io_priority::IoPriorityPlan;
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
 use super::rlimit::RlimitPlan;
@@ -37,7 +38,10 @@ pub(super) struct ProcessPlan {
     pub(super) gid: u32,
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
+    #[serde(default)]
     pub(super) oom_score_adj: Option<i32>,
+    #[serde(default)]
+    pub(super) io_priority: Option<IoPriorityPlan>,
     pub(super) no_new_privileges: bool,
     pub(super) terminal: bool,
     pub(super) rlimits: RlimitPlan,
@@ -85,6 +89,7 @@ impl ProcessPlan {
         }
         let capabilities = CapabilityPlan::from_oci(process.capabilities().as_ref())?;
         let rlimits = RlimitPlan::from_oci(process.rlimits().as_deref())?;
+        let io_priority = IoPriorityPlan::from_oci(process.io_priority().as_ref())?;
 
         Ok(Self {
             args,
@@ -95,6 +100,7 @@ impl ProcessPlan {
             additional_gids,
             umask: user.umask(),
             oom_score_adj: process.oom_score_adj(),
+            io_priority,
             no_new_privileges: true,
             terminal,
             rlimits,
@@ -121,6 +127,7 @@ pub(super) struct InitPlan {
     pub(super) additional_gids: Vec<u32>,
     pub(super) umask: Option<u32>,
     pub(super) oom_score_adj: Option<i32>,
+    pub(super) io_priority: Option<IoPriorityPlan>,
     pub(super) no_new_privileges: bool,
     pub(super) terminal: bool,
     pub(super) rlimits: RlimitPlan,
@@ -272,6 +279,7 @@ impl InitPlan {
             additional_gids: process_plan.additional_gids,
             umask: process_plan.umask,
             oom_score_adj: process_plan.oom_score_adj,
+            io_priority: process_plan.io_priority,
             no_new_privileges: process_plan.no_new_privileges,
             terminal: process_plan.terminal,
             rlimits: process_plan.rlimits,
@@ -333,6 +341,7 @@ fn validate_process_profile(process: &Process) -> Result<()> {
             "capabilities",
             "rlimits",
             "oomScoreAdj",
+            "ioPriority",
             "noNewPrivileges",
         ],
     )?;
@@ -391,6 +400,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "capabilities",
             "rlimits",
             "oomScoreAdj",
+            "ioPriority",
             "noNewPrivileges",
         ],
     )?;

@@ -118,7 +118,7 @@ fn native_linux_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v13");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v14");
     assert_ne!(report["status"], "available");
 }
 
@@ -262,7 +262,7 @@ fn native_linux_service_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout)
         .expect("native service smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v13");
+    assert_eq!(report["schema_version"], "a3s.oci.native-linux-smoke.v14");
     assert_ne!(report["status"], "available");
 }
 

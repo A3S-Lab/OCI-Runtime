@@ -740,6 +740,7 @@ fn exec_configured_process(plan: &InitPlan, host_proc: &File) -> Result<()> {
         .collect::<Vec<_>>();
     environment_pointers.push(std::ptr::null());
 
+    super::io_priority::apply(plan.io_priority.as_ref())?;
     super::oom::apply(host_proc, plan.oom_score_adj)?;
     plan.rlimits.apply()?;
     plan.capabilities.prepare_for_credentials(plan.uid)?;

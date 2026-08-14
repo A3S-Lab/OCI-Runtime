@@ -120,7 +120,7 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v13` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v14` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
@@ -146,15 +146,16 @@ following:
 7. start releases `startContainer`, confirms the configured process crossed
    `execve`, runs `poststart`, and returns; the workload verifies exact rootful
    UID/GID maps, monotonic and boottime namespace offsets, and an applied
-   `RLIMIT_NOFILE` soft/hard value of 64 plus the exact configured
-   `oom_score_adj` value of 100, verifies FD 3 and FD 4 are sockets, and
-   writes the exact `a3s-box-native-control-v1\n` bytes through FD 5 before
-   the marker is observed; the host connects to both inherited listeners and
-   reads back the exact log;
+   `RLIMIT_NOFILE` soft/hard value of 64, exact configured `oom_score_adj`
+   value of 100, and best-effort I/O priority 4, verifies FD 3 and FD 4 are
+   sockets, and writes the exact `a3s-box-native-control-v1\n` bytes through
+   FD 5 before the marker is observed; the host connects to both inherited
+   listeners and reads back the exact log;
 8. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48
-   and exact configured `oom_score_adj` value of 200; exec and its retry
-   return the same positive authenticated PID, a duplicate process ID is
-   rejected, and a 50-millisecond process wait returns `DeadlineExceeded`;
+   plus exact configured `oom_score_adj` value of 200 and best-effort I/O
+   priority 5; exec and its retry return the same positive authenticated PID,
+   a duplicate process ID is rejected, and a 50-millisecond process wait
+   returns `DeadlineExceeded`;
 9. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
 10. process inventory returns exactly the live init and second exec process;
@@ -173,9 +174,10 @@ following:
     while delivering `VEOF` to a live terminal reader;
 15. a binary payload containing NUL and non-UTF-8 bytes survives exact-target
     upload and download; upload replay is byte-for-byte stable, reusing its
-    operation ID for a changed destination fails as `Conflict` without creating
-    that file, and mkdir/stat/list/move/recursive-remove each preserve exact
-    metadata, mutation replay, and post-cleanup `NotFound` evidence;
+    operation ID for a changed destination fails as `FailedPrecondition`
+    without creating that file, and mkdir/stat/list/move/recursive-remove each
+    preserve exact metadata, mutation replay, and post-cleanup `NotFound`
+    evidence;
 16. pause and its replay expose a durable frozen state, the progress-producing
     exec remains unchanged for a bounded interval, resume and its replay expose
     a durable thawed state, and that same exec advances again;
@@ -250,7 +252,7 @@ configured with one container ID and duplicates the inherited Box FD 3/4/5
 roles before it opens any workload.
 
 The `native-linux-service-smoke` command reuses the complete
-`a3s.oci.native-linux-smoke.v13` lifecycle assertions over a real `0600` Unix
+`a3s.oci.native-linux-smoke.v14` lifecycle assertions over a real `0600` Unix
 socket. In addition to the 26 lifecycle requirements above, success requires:
 
 1. the service root, state root, and executor parent are real, owner-owned

@@ -219,6 +219,7 @@ async fn exercise_client(
     }
     wait_for_marker(client, &target, marker, report).await?;
     report.init_oom_score_adj_verified = true;
+    report.init_io_priority_verified = true;
     control_descriptors.verify_listeners().await?;
     report.control_listener_connectivity_verified = true;
     control_descriptors.verify_init_log().await?;
@@ -226,6 +227,7 @@ async fn exercise_client(
     process::exercise_process_io(client, &target, nonce).await?;
     report.process_io_verified = true;
     report.exec_oom_score_adj_verified = true;
+    report.exec_io_priority_verified = true;
     process::exercise_terminal_io(client, &target, nonce).await?;
     report.terminal_io_verified = true;
     crate::filesystem_smoke::exercise_runtime(client, &target, nonce).await?;
