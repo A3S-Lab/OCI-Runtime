@@ -18,6 +18,9 @@ use super::faults;
 use super::support::*;
 use super::terminal;
 
+#[path = "rehydration/close.rs"]
+mod close;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Bootstrap {
@@ -39,6 +42,7 @@ struct StdinJournalEvidence {
     schema_version: u64,
     completed_sequence: u64,
     pending: Option<PendingStdinEvidence>,
+    close_state: String,
     output_cursor: u64,
 }
 
@@ -167,7 +171,7 @@ pub(crate) async fn qualify_manual_shim_rehydration(
             .into()),
         };
     }
-    let mut replacement = replacement
+    let replacement = replacement
         .ok_or_else(|| qualification_error("manual shim relaunch omitted its child process"))?;
     let replacement_pid = replacement
         .id()
@@ -195,6 +199,18 @@ pub(crate) async fn qualify_manual_shim_rehydration(
     }
 
     finish_rehydrated_terminal_exec(config, &channel, &id, &mut terminal_exec).await?;
+    let (channel, mut replacement) = close::qualify(
+        config,
+        &id,
+        &bundle,
+        &binary,
+        &bootstrap,
+        &identity,
+        &mut terminal_exec,
+        replacement,
+    )
+    .await?;
+    stop_rehydrated_terminal_exec(config, &channel, &id, &mut terminal_exec).await?;
 
     TasksClient::new(channel.clone())
         .kill(namespaced(
@@ -273,7 +289,7 @@ async fn start_terminal_exec(
         "args": [
             "/bin/sh",
             "-c",
-            "stty -echo; trap 'exit 31' TERM; trap '' WINCH; printf 'rehydrate-ready\\n'; while :; do IFS= read -r line || continue; if [ \"$line\" = __a3s_size__ ]; then stty size; else printf 'stdin:%s\\n' \"$line\"; fi; done"
+            "stty -echo; trap 'exit 31' TERM; trap '' WINCH; printf 'rehydrate-ready\\n'; while IFS= read -r line; do if [ \"$line\" = __a3s_size__ ]; then stty size; else printf 'stdin:%s\\n' \"$line\"; fi; done; printf 'stdin-closed\\n'; while :; do sleep 1; done"
         ],
         "env": [
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -400,13 +416,14 @@ async fn finish_rehydrated_terminal_exec(
         qualification_error("rehydrated terminal stdin path has no bundle parent")
     })?;
     let restored_journal = read_exec_stdin_journal(bundle, exec_id).await?;
-    if restored_journal.schema_version != 4
+    if restored_journal.schema_version != 5
         || restored_journal.completed_sequence != 3
         || restored_journal.pending.is_some()
+        || restored_journal.close_state != "open"
         || restored_journal.output_cursor == 0
     {
         return Err(qualification_error(format!(
-            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 4, completed sequence 3, no pending write, and a nonzero output cursor"
+            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 5, completed sequence 3, no pending write, open stdin, and a nonzero output cursor"
         ))
         .into());
     }
@@ -459,6 +476,16 @@ async fn finish_rehydrated_terminal_exec(
     )
     .await?;
     wait_for_exec_stdin_sequence(bundle, exec_id, 5).await?;
+    Ok(())
+}
+
+async fn stop_rehydrated_terminal_exec(
+    config: &QualificationConfig,
+    channel: &tonic::transport::Channel,
+    id: &str,
+    exec: &mut RehydratedTerminalExec,
+) -> TestResult<()> {
+    let exec_id = "rehydrated-terminal-exec";
     TasksClient::new(channel.clone())
         .kill(namespaced(
             KillRequest {
@@ -606,6 +633,10 @@ async fn read_exec_stdin_journal(bundle: &Path, exec_id: &str) -> TestResult<Std
                 "decode shim metadata pending stdin for exec {exec_id}: {error}"
             ))
         })?,
+        close_state: exec["stdin_close_state"]
+            .as_str()
+            .unwrap_or("open")
+            .to_string(),
         output_cursor: exec["output_cursor"].as_u64().unwrap_or(0),
     })
 }

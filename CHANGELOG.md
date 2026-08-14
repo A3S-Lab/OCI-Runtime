@@ -7,17 +7,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 ### Added
 
 - Durable containerd stdin continuation across live shim replacement. Metadata
-  schema v4 gives init and each exec an independent completed sequence plus one
-  bounded pending payload. The shim persists exact bytes before dispatch,
-  replays a response-loss write with the same SDK operation identity, rejects
-  sequence or payload drift, and resumes new FIFO input at the next sequence.
+  schema v5 gives init and each exec an independent completed sequence, one
+  bounded pending payload, and an explicit Open, Closing, or Closed state. The
+  shim persists exact bytes or close intent before dispatch, replays a lost
+  response with the same SDK operation identity, rejects sequence, payload, or
+  close-state drift, and never reopens a FIFO after close has started.
   The Ubuntu arm64/containerd 2.2.2 release gate now also persists a pending
   exec write, commits that exact operation directly to the Runtime while the
   original shim is frozen, and replaces the shim before its local journal can
   observe the response. The replacement joins the completed operation without
-  duplicating input, resumes at the next sequence, and proves terminal input
-  and output continuation, PTY resize, unchanged process identity, and zero
-  task, container, shim, bundle, process, or cgroup residue.
+  duplicating input and resumes at the next sequence. A second boundary freezes
+  the shim after durable Closing, commits the exact Runtime CloseStdin, kills
+  the shim before it can observe the response, and requires the replacement to
+  replay the operation, commit Closed, avoid reopening the FIFO, and emit the
+  buffered close effect exactly once. The gate proves terminal input and output
+  continuation, PTY resize, unchanged process identity, and zero task,
+  container, shim, bundle, process, or cgroup residue.
 - Rootless Native Linux owner-death recovery qualification. The hidden owner
   and replacement commands now accept the same explicit user-owned cgroup-v2
   delegation and record effective credentials, verified delegation use,

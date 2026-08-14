@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::adapter::{RuntimeAdapter, TaskIdentity};
-use crate::metadata::PendingStdinWrite;
+use crate::metadata::{PendingStdinWrite, StdinCloseState};
 
 const FIFO_BUFFER_BYTES: usize = 64 * 1024;
 const OUTPUT_READ_BYTES: u32 = 64 * 1024;
@@ -75,6 +75,24 @@ enum StdinStartup {
     Stopped,
 }
 
+struct StdinCloseRequest<'a> {
+    adapter: &'a RuntimeAdapter,
+    task: &'a TaskIdentity,
+    generation: Generation,
+    exec_id: Option<&'a str>,
+    target: &'a a3s_oci_sdk::ProcessTarget,
+    journal: Option<&'a dyn StdinJournal>,
+}
+
+struct RestoredStdinClose {
+    adapter: RuntimeAdapter,
+    task: TaskIdentity,
+    generation: Generation,
+    exec_id: Option<String>,
+    target: a3s_oci_sdk::ProcessTarget,
+    journal: Option<Arc<dyn StdinJournal>>,
+}
+
 pub(crate) struct ProcessIoEndpoints<'a> {
     pub(crate) stdin: &'a str,
     pub(crate) stdout: &'a str,
@@ -84,6 +102,7 @@ pub(crate) struct ProcessIoEndpoints<'a> {
     pub(crate) read_stdin_at_activation: bool,
     pub(crate) stdin_sequence: u64,
     pub(crate) pending_stdin_write: Option<PendingStdinWrite>,
+    pub(crate) stdin_close_state: StdinCloseState,
     pub(crate) stdin_journal: Option<Arc<dyn StdinJournal>>,
     pub(crate) output_cursor: u64,
     pub(crate) output_cursor_committer: Option<Arc<dyn OutputCursorCommitter>>,
@@ -107,6 +126,10 @@ pub(crate) trait StdinJournal: Send + Sync {
     async fn prepare(&self, sequence: u64, data: Vec<u8>) -> Result<(), RuntimeError>;
 
     async fn commit(&self, sequence: u64) -> Result<(), RuntimeError>;
+
+    async fn prepare_close(&self) -> Result<(), RuntimeError>;
+
+    async fn commit_close(&self) -> Result<(), RuntimeError>;
 }
 
 impl ProcessPumps {
@@ -217,7 +240,6 @@ pub(crate) fn start_process_pumps(
     let mut tasks = Vec::new();
     let mut stdin_drain = None;
     if !endpoints.stdin.is_empty() {
-        let fifo = open_fifo(endpoints.stdin, true, false)?;
         let (drain_request, drain_requested) = watch::channel(false);
         let (activation_request, activation_requested) = if endpoints.await_start_activation {
             let (request, requested) = watch::channel(false);
@@ -225,26 +247,55 @@ pub(crate) fn start_process_pumps(
         } else {
             (None, None)
         };
-        let (task_handle, drain) = spawn_stdin_pump(
-            failure_sender.clone(),
-            drain_request,
-            activation_request,
-            pump_stdin(
-                adapter.clone(),
-                task,
-                generation,
-                exec_id,
-                target.clone(),
-                fifo,
-                cancellation.subscribe(),
-                drain_requested,
-                activation_requested,
-                endpoints.read_stdin_at_activation,
-                endpoints.stdin_sequence,
-                endpoints.pending_stdin_write,
-                endpoints.stdin_journal,
+        let (task_handle, drain) = match endpoints.stdin_close_state {
+            StdinCloseState::Open => {
+                let fifo = open_fifo(endpoints.stdin, true, false)?;
+                spawn_stdin_pump(
+                    failure_sender.clone(),
+                    drain_request,
+                    activation_request,
+                    pump_stdin(
+                        adapter.clone(),
+                        task,
+                        generation,
+                        exec_id,
+                        target.clone(),
+                        fifo,
+                        cancellation.subscribe(),
+                        drain_requested,
+                        activation_requested,
+                        endpoints.read_stdin_at_activation,
+                        endpoints.stdin_sequence,
+                        endpoints.pending_stdin_write,
+                        endpoints.stdin_journal,
+                    ),
+                )
+            }
+            StdinCloseState::Closing => spawn_stdin_pump(
+                failure_sender.clone(),
+                drain_request,
+                activation_request,
+                finish_stdin_close(
+                    RestoredStdinClose {
+                        adapter: adapter.clone(),
+                        task,
+                        generation,
+                        exec_id,
+                        target: target.clone(),
+                        journal: endpoints.stdin_journal,
+                    },
+                    cancellation.subscribe(),
+                    drain_requested,
+                    activation_requested,
+                ),
             ),
-        );
+            StdinCloseState::Closed => spawn_stdin_pump(
+                failure_sender.clone(),
+                drain_request,
+                activation_request,
+                async { Ok(StdinPumpOutcome::Drained) },
+            ),
+        };
         tasks.push(task_handle);
         stdin_drain = Some(drain);
     }
@@ -296,7 +347,9 @@ fn validate_process_io_endpoints(endpoints: &ProcessIoEndpoints<'_>) -> Result<(
         .for_operation("containerd-stdio"));
     }
     if endpoints.stdin.is_empty()
-        && (endpoints.stdin_sequence != 0 || endpoints.pending_stdin_write.is_some())
+        && (endpoints.stdin_sequence != 0
+            || endpoints.pending_stdin_write.is_some()
+            || endpoints.stdin_close_state != StdinCloseState::Open)
     {
         return Err(RuntimeError::new(
             ErrorCode::FailedPrecondition,
@@ -304,7 +357,18 @@ fn validate_process_io_endpoints(endpoints: &ProcessIoEndpoints<'_>) -> Result<(
         )
         .for_operation("containerd-stdio"));
     }
-    if (endpoints.stdin_sequence != 0 || endpoints.pending_stdin_write.is_some())
+    if endpoints.stdin_close_state != StdinCloseState::Open
+        && endpoints.pending_stdin_write.is_some()
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::FailedPrecondition,
+            "containerd stdin cannot retain a pending write after close has started",
+        )
+        .for_operation("containerd-stdio"));
+    }
+    if (endpoints.stdin_sequence != 0
+        || endpoints.pending_stdin_write.is_some()
+        || endpoints.stdin_close_state != StdinCloseState::Open)
         && endpoints.stdin_journal.is_none()
     {
         return Err(RuntimeError::new(
@@ -438,11 +502,15 @@ async fn pump_stdin(
                     // it could issue CloseIO.
                     FifoRead::Eof => {
                         return close_runtime_stdin(
-                            &adapter,
-                            &task,
-                            generation,
-                            exec_id.as_deref(),
-                            &target,
+                            StdinCloseRequest {
+                                adapter: &adapter,
+                                task: &task,
+                                generation,
+                                exec_id: exec_id.as_deref(),
+                                target: &target,
+                                journal: stdin_journal.as_deref(),
+                            },
+                            true,
                             &mut cancelled,
                         )
                         .await;
@@ -473,11 +541,15 @@ async fn pump_stdin(
                 }
                 FifoRead::Empty | FifoRead::Eof => {
                     return close_runtime_stdin(
-                        &adapter,
-                        &task,
-                        generation,
-                        exec_id.as_deref(),
-                        &target,
+                        StdinCloseRequest {
+                            adapter: &adapter,
+                            task: &task,
+                            generation,
+                            exec_id: exec_id.as_deref(),
+                            target: &target,
+                            journal: stdin_journal.as_deref(),
+                        },
+                        true,
                         &mut cancelled,
                     )
                     .await;
@@ -508,11 +580,15 @@ async fn pump_stdin(
         };
         if length == 0 {
             return close_runtime_stdin(
-                &adapter,
-                &task,
-                generation,
-                exec_id.as_deref(),
-                &target,
+                StdinCloseRequest {
+                    adapter: &adapter,
+                    task: &task,
+                    generation,
+                    exec_id: exec_id.as_deref(),
+                    target: &target,
+                    journal: stdin_journal.as_deref(),
+                },
+                true,
                 &mut cancelled,
             )
             .await;
@@ -733,30 +809,77 @@ async fn dispatch_stdin_write(
 }
 
 async fn close_runtime_stdin(
-    adapter: &RuntimeAdapter,
-    task: &TaskIdentity,
-    generation: Generation,
-    exec_id: Option<&str>,
-    target: &a3s_oci_sdk::ProcessTarget,
+    request: StdinCloseRequest<'_>,
+    prepare: bool,
     cancelled: &mut watch::Receiver<bool>,
 ) -> Result<StdinPumpOutcome, RuntimeError> {
+    if prepare {
+        if let Some(journal) = request.journal {
+            journal.prepare_close().await?;
+        }
+    }
     let close = cancellable_request(
         cancelled,
         "close runtime stdin after draining the containerd FIFO",
-        adapter.close_stdin(task, generation, exec_id),
+        request
+            .adapter
+            .close_stdin(request.task, request.generation, request.exec_id),
     )
     .await;
-    match close {
-        Ok(Some(())) => Ok(StdinPumpOutcome::Drained),
-        Ok(None) => Ok(StdinPumpOutcome::Stopped),
+    let outcome = match close {
+        Ok(Some(())) => StdinPumpOutcome::Drained,
+        Ok(None) => StdinPumpOutcome::Stopped,
         Err(error) => {
-            match stdin_target_state(adapter, task, generation, target, &error, cancelled).await {
-                StdinTargetState::Exited => Ok(StdinPumpOutcome::Drained),
-                StdinTargetState::Stopped => Ok(StdinPumpOutcome::Stopped),
-                StdinTargetState::LiveOrUnknown => Err(error),
+            match stdin_target_state(
+                request.adapter,
+                request.task,
+                request.generation,
+                request.target,
+                &error,
+                cancelled,
+            )
+            .await
+            {
+                StdinTargetState::Exited => StdinPumpOutcome::Drained,
+                StdinTargetState::Stopped => StdinPumpOutcome::Stopped,
+                StdinTargetState::LiveOrUnknown => return Err(error),
             }
         }
+    };
+    if outcome == StdinPumpOutcome::Drained {
+        if let Some(journal) = request.journal {
+            journal.commit_close().await?;
+        }
     }
+    Ok(outcome)
+}
+
+async fn finish_stdin_close(
+    request: RestoredStdinClose,
+    mut cancelled: watch::Receiver<bool>,
+    mut drain_requested: watch::Receiver<bool>,
+    mut activation_requested: Option<watch::Receiver<bool>>,
+) -> Result<StdinPumpOutcome, RuntimeError> {
+    if let Some(activation) = &mut activation_requested {
+        let startup =
+            wait_for_stdin_activation(activation, &mut cancelled, &mut drain_requested).await?;
+        if startup == StdinStartup::Stopped {
+            return Ok(StdinPumpOutcome::Stopped);
+        }
+    }
+    close_runtime_stdin(
+        StdinCloseRequest {
+            adapter: &request.adapter,
+            task: &request.task,
+            generation: request.generation,
+            exec_id: request.exec_id.as_deref(),
+            target: &request.target,
+            journal: request.journal.as_deref(),
+        },
+        false,
+        &mut cancelled,
+    )
+    .await
 }
 
 async fn stdin_target_state(
@@ -1178,6 +1301,8 @@ mod tests {
     struct RecordingStdinJournal {
         prepared: std::sync::Mutex<Vec<(u64, Vec<u8>)>>,
         committed: std::sync::Mutex<Vec<u64>>,
+        close_prepares: std::sync::atomic::AtomicUsize,
+        close_commits: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait]
@@ -1195,6 +1320,18 @@ mod tests {
                 .lock()
                 .expect("committed stdin journal")
                 .push(sequence);
+            Ok(())
+        }
+
+        async fn prepare_close(&self) -> Result<(), RuntimeError> {
+            self.close_prepares
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn commit_close(&self) -> Result<(), RuntimeError> {
+            self.close_commits
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
     }
@@ -1421,6 +1558,7 @@ mod tests {
             read_stdin_at_activation: true,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             stdin_journal: None,
             output_cursor: 0,
             output_cursor_committer: None,
@@ -1490,6 +1628,7 @@ mod tests {
                 read_stdin_at_activation: false,
                 stdin_sequence: 0,
                 pending_stdin_write: None,
+                stdin_close_state: StdinCloseState::Open,
                 stdin_journal: None,
                 output_cursor: 5,
                 output_cursor_committer: Some(committer.clone()),
@@ -1667,6 +1806,7 @@ mod tests {
                 pending_stdin_write: Some(
                     PendingStdinWrite::new(5, pending_data.clone()).expect("pending stdin write"),
                 ),
+                stdin_close_state: StdinCloseState::Open,
                 stdin_journal: Some(journal.clone()),
                 output_cursor: 0,
                 output_cursor_committer: None,
@@ -1709,6 +1849,114 @@ mod tests {
         pumps.stop().await;
     }
 
+    #[tokio::test]
+    async fn stdin_pump_finishes_a_durable_close_without_reopening_its_fifo() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing_fifo = directory.path().join("already-closed-stdin");
+        let service = BlockingStdinService::default();
+        service.mark_producer_finished();
+        let adapter = RuntimeAdapter::from_client(
+            a3s_oci_sdk::RuntimeClient::new(service.clone()),
+            a3s_oci_sdk::IsolationRequest::SharedHostKernel,
+        );
+        let journal = Arc::new(RecordingStdinJournal::default());
+        let identity = TaskIdentity::new("k8s.io", "closing-stdin").expect("task identity");
+        let mut pumps = start_process_pumps(
+            adapter,
+            identity,
+            Generation(7),
+            None,
+            ProcessIoEndpoints {
+                stdin: missing_fifo.to_str().expect("UTF-8 FIFO path"),
+                stdout: "",
+                stderr: "",
+                terminal: false,
+                await_start_activation: false,
+                read_stdin_at_activation: false,
+                stdin_sequence: 3,
+                pending_stdin_write: None,
+                stdin_close_state: StdinCloseState::Closing,
+                stdin_journal: Some(journal.clone()),
+                output_cursor: 0,
+                output_cursor_committer: None,
+            },
+        )
+        .expect("restore closing stdin pump without a FIFO");
+        let mut drain = pumps.stdin_drain().expect("closing stdin drain");
+        tokio::time::timeout(Duration::from_secs(1), drain.wait_for_completion())
+            .await
+            .expect("closing stdin replay deadline")
+            .expect("closing stdin replay");
+        assert_eq!(
+            service.captured.lock().expect("captured stdin").close_calls,
+            1
+        );
+        assert_eq!(
+            journal
+                .close_prepares
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(
+            journal
+                .close_commits
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(pumps.failure().is_none());
+        pumps.stop().await;
+
+        let closed_service = BlockingStdinService::default();
+        let closed_adapter = RuntimeAdapter::from_client(
+            a3s_oci_sdk::RuntimeClient::new(closed_service.clone()),
+            a3s_oci_sdk::IsolationRequest::SharedHostKernel,
+        );
+        let closed_journal = Arc::new(RecordingStdinJournal::default());
+        let closed_identity = TaskIdentity::new("k8s.io", "closed-stdin").expect("task identity");
+        let mut closed_pumps = start_process_pumps(
+            closed_adapter,
+            closed_identity,
+            Generation(7),
+            None,
+            ProcessIoEndpoints {
+                stdin: missing_fifo.to_str().expect("UTF-8 FIFO path"),
+                stdout: "",
+                stderr: "",
+                terminal: false,
+                await_start_activation: false,
+                read_stdin_at_activation: false,
+                stdin_sequence: 3,
+                pending_stdin_write: None,
+                stdin_close_state: StdinCloseState::Closed,
+                stdin_journal: Some(closed_journal.clone()),
+                output_cursor: 0,
+                output_cursor_committer: None,
+            },
+        )
+        .expect("restore closed stdin pump without a FIFO");
+        let mut closed_drain = closed_pumps.stdin_drain().expect("closed stdin drain");
+        tokio::time::timeout(Duration::from_secs(1), closed_drain.wait_for_completion())
+            .await
+            .expect("closed stdin completion deadline")
+            .expect("closed stdin completion");
+        assert_eq!(
+            closed_service
+                .captured
+                .lock()
+                .expect("captured stdin")
+                .close_calls,
+            0
+        );
+        assert_eq!(
+            closed_journal
+                .close_commits
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert!(closed_pumps.failure().is_none());
+        closed_pumps.stop().await;
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn initial_empty_stdin_closes_at_the_successful_start_boundary() {
@@ -1747,6 +1995,7 @@ mod tests {
                 read_stdin_at_activation: true,
                 stdin_sequence: 0,
                 pending_stdin_write: None,
+                stdin_close_state: StdinCloseState::Open,
                 stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,
@@ -1809,6 +2058,7 @@ mod tests {
                 read_stdin_at_activation: true,
                 stdin_sequence: 0,
                 pending_stdin_write: None,
+                stdin_close_state: StdinCloseState::Open,
                 stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,
@@ -1886,6 +2136,7 @@ mod tests {
                 read_stdin_at_activation: false,
                 stdin_sequence: 0,
                 pending_stdin_write: None,
+                stdin_close_state: StdinCloseState::Open,
                 stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,
@@ -1967,6 +2218,7 @@ mod tests {
                 read_stdin_at_activation: true,
                 stdin_sequence: 0,
                 pending_stdin_write: None,
+                stdin_close_state: StdinCloseState::Open,
                 stdin_journal: None,
                 output_cursor: 0,
                 output_cursor_committer: None,

@@ -270,6 +270,7 @@ fn task_state(bundle: &Path) -> TaskState {
         terminal: false,
         stdin_sequence: 0,
         pending_stdin_write: None,
+        stdin_close_state: StdinCloseState::Open,
         output_cursor: 0,
         control_gate: Arc::new(Mutex::new(())),
         control_sequence: 0,
@@ -416,6 +417,7 @@ async fn exec_wait_can_arrive_before_start_and_completes_from_the_recorded_exit(
             terminal: false,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: 0,
             stage: ExecStage::Added,
             record: None,
@@ -535,6 +537,7 @@ async fn rehydration_reuses_a_starting_exec_already_in_runtime_inventory() {
             terminal: false,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: 0,
             stage: ExecStage::Starting,
             record: None,
@@ -611,6 +614,7 @@ async fn output_cursor_commits_are_durable_for_init_and_exec() {
             terminal: true,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: 0,
             stage: ExecStage::Started,
             record: None,
@@ -832,6 +836,7 @@ async fn stdin_journal_prepare_and_commit_are_durable_for_init_and_exec() {
             terminal: false,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: 0,
             stage: ExecStage::Started,
             record: None,
@@ -892,6 +897,38 @@ async fn stdin_journal_prepare_and_commit_are_durable_for_init_and_exec() {
             .code,
         ErrorCode::Conflict
     );
+
+    init.prepare_close()
+        .await
+        .expect("prepare init stdin close");
+    init.prepare_close()
+        .await
+        .expect("replay init stdin close prepare");
+    let closing = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+        .expect("load closing metadata")
+        .expect("closing metadata exists");
+    assert_eq!(closing.stdin_close_state(), StdinCloseState::Closing);
+    assert_eq!(
+        init.prepare(2, b"late".to_vec())
+            .await
+            .expect_err("write after init stdin close must fail")
+            .code,
+        ErrorCode::FailedPrecondition
+    );
+    init.commit_close().await.expect("commit init stdin close");
+    init.commit_close()
+        .await
+        .expect("replay init stdin close commit");
+
+    exec.prepare_close()
+        .await
+        .expect("prepare exec stdin close");
+    exec.commit_close().await.expect("commit exec stdin close");
+    let closed = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+        .expect("load closed metadata")
+        .expect("closed metadata exists");
+    assert_eq!(closed.stdin_close_state(), StdinCloseState::Closed);
+    assert_eq!(closed.execs()[0].stdin_close_state, StdinCloseState::Closed);
 }
 
 #[test]
@@ -915,6 +952,7 @@ fn task_metadata_round_trip_preserves_terminal_evidence() {
             terminal: false,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: 0,
             stage: ExecStage::Exited,
             record: None,
@@ -971,6 +1009,7 @@ fn exec_delete_metadata_commit_precedes_in_memory_removal() {
             terminal: false,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: 0,
             stage: ExecStage::Exited,
             record: None,

@@ -19,7 +19,7 @@ use crate::adapter::{self, RuntimeAdapter, TaskIdentity};
 use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
 use crate::metadata::{
     ControlOperationKind, ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata,
-    PendingControlOperation, PendingStdinWrite, ShimCreateIntent, ShimMetadata,
+    PendingControlOperation, PendingStdinWrite, ShimCreateIntent, ShimMetadata, StdinCloseState,
 };
 
 mod control;
@@ -44,6 +44,7 @@ struct TaskState {
     terminal: bool,
     stdin_sequence: u64,
     pending_stdin_write: Option<PendingStdinWrite>,
+    stdin_close_state: StdinCloseState,
     output_cursor: u64,
     control_gate: Arc<Mutex<()>>,
     control_sequence: u64,
@@ -65,6 +66,7 @@ struct ExecState {
     terminal: bool,
     stdin_sequence: u64,
     pending_stdin_write: Option<PendingStdinWrite>,
+    stdin_close_state: StdinCloseState,
     output_cursor: u64,
     stage: ExecStage,
     record: Option<ProcessRecord>,
@@ -225,7 +227,14 @@ impl io::StdinJournal for DurableStdinJournal {
                     false,
                 )
             })?;
-            let (completed, current) = stdin_state_mut(task, self.exec_id.as_deref())?;
+            let (completed, current, close_state) = stdin_state_mut(task, self.exec_id.as_deref())?;
+            if *close_state != StdinCloseState::Open {
+                return Err(stdin_journal_error(
+                    ErrorCode::FailedPrecondition,
+                    "containerd stdin cannot prepare a write after close has started",
+                    false,
+                ));
+            }
             if let Some(current) = current.as_ref() {
                 if current == &pending {
                     return Ok(());
@@ -255,7 +264,7 @@ impl io::StdinJournal for DurableStdinJournal {
         if let Err(error) = metadata_from_task(&task_snapshot).store() {
             let mut state = state.lock().await;
             if let Some(task) = state.tasks.get_mut(&self.task_id) {
-                if let Ok((_, current)) = stdin_state_mut(task, self.exec_id.as_deref()) {
+                if let Ok((_, current, _)) = stdin_state_mut(task, self.exec_id.as_deref()) {
                     if current.as_ref() == Some(&pending) {
                         *current = None;
                     }
@@ -294,7 +303,7 @@ impl io::StdinJournal for DurableStdinJournal {
                     false,
                 )
             })?;
-            let (completed, current) = stdin_state_mut(task, self.exec_id.as_deref())?;
+            let (completed, current, _) = stdin_state_mut(task, self.exec_id.as_deref())?;
             if *completed == sequence && current.is_none() {
                 return Ok(());
             }
@@ -324,10 +333,123 @@ impl io::StdinJournal for DurableStdinJournal {
         if let Err(error) = metadata_from_task(&task_snapshot).store() {
             let mut state = state.lock().await;
             if let Some(task) = state.tasks.get_mut(&self.task_id) {
-                if let Ok((completed, current)) = stdin_state_mut(task, self.exec_id.as_deref()) {
+                if let Ok((completed, current, _)) = stdin_state_mut(task, self.exec_id.as_deref())
+                {
                     if *completed == sequence && current.is_none() {
                         *completed = previous_sequence;
                         *current = previous_pending;
+                    }
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn prepare_close(&self) -> Result<(), RuntimeError> {
+        let state = self.state.upgrade().ok_or_else(|| {
+            stdin_journal_error(
+                ErrorCode::Unavailable,
+                "containerd shim state closed before stdin close prepare",
+                true,
+            )
+        })?;
+        let metadata_gate = self.metadata_gate.upgrade().ok_or_else(|| {
+            stdin_journal_error(
+                ErrorCode::Unavailable,
+                "containerd shim metadata gate closed before stdin close prepare",
+                true,
+            )
+        })?;
+        let _guard = metadata_gate.lock().await;
+        let task_snapshot = {
+            let mut state = state.lock().await;
+            let task = state.tasks.get_mut(&self.task_id).ok_or_else(|| {
+                stdin_journal_error(
+                    ErrorCode::NotFound,
+                    format!(
+                        "containerd task {} disappeared before stdin close prepare",
+                        self.task_id
+                    ),
+                    false,
+                )
+            })?;
+            let (_, pending, close_state) = stdin_state_mut(task, self.exec_id.as_deref())?;
+            if *close_state != StdinCloseState::Open {
+                return Ok(());
+            }
+            if pending.is_some() {
+                return Err(stdin_journal_error(
+                    ErrorCode::Conflict,
+                    "containerd stdin cannot close while a write remains pending",
+                    false,
+                ));
+            }
+            *close_state = StdinCloseState::Closing;
+            task.clone()
+        };
+        if let Err(error) = metadata_from_task(&task_snapshot).store() {
+            let mut state = state.lock().await;
+            if let Some(task) = state.tasks.get_mut(&self.task_id) {
+                if let Ok((_, _, close_state)) = stdin_state_mut(task, self.exec_id.as_deref()) {
+                    if *close_state == StdinCloseState::Closing {
+                        *close_state = StdinCloseState::Open;
+                    }
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn commit_close(&self) -> Result<(), RuntimeError> {
+        let state = self.state.upgrade().ok_or_else(|| {
+            stdin_journal_error(
+                ErrorCode::Unavailable,
+                "containerd shim state closed before stdin close commit",
+                true,
+            )
+        })?;
+        let metadata_gate = self.metadata_gate.upgrade().ok_or_else(|| {
+            stdin_journal_error(
+                ErrorCode::Unavailable,
+                "containerd shim metadata gate closed before stdin close commit",
+                true,
+            )
+        })?;
+        let _guard = metadata_gate.lock().await;
+        let task_snapshot = {
+            let mut state = state.lock().await;
+            let task = state.tasks.get_mut(&self.task_id).ok_or_else(|| {
+                stdin_journal_error(
+                    ErrorCode::NotFound,
+                    format!(
+                        "containerd task {} disappeared before stdin close commit",
+                        self.task_id
+                    ),
+                    false,
+                )
+            })?;
+            let (_, pending, close_state) = stdin_state_mut(task, self.exec_id.as_deref())?;
+            if *close_state == StdinCloseState::Closed {
+                return Ok(());
+            }
+            if *close_state != StdinCloseState::Closing || pending.is_some() {
+                return Err(stdin_journal_error(
+                    ErrorCode::Conflict,
+                    "containerd stdin close was not prepared from a fully committed write stream",
+                    false,
+                ));
+            }
+            *close_state = StdinCloseState::Closed;
+            task.clone()
+        };
+        if let Err(error) = metadata_from_task(&task_snapshot).store() {
+            let mut state = state.lock().await;
+            if let Some(task) = state.tasks.get_mut(&self.task_id) {
+                if let Ok((_, _, close_state)) = stdin_state_mut(task, self.exec_id.as_deref()) {
+                    if *close_state == StdinCloseState::Closed {
+                        *close_state = StdinCloseState::Closing;
                     }
                 }
             }
@@ -340,7 +462,14 @@ impl io::StdinJournal for DurableStdinJournal {
 fn stdin_state_mut<'a>(
     task: &'a mut TaskState,
     exec_id: Option<&str>,
-) -> Result<(&'a mut u64, &'a mut Option<PendingStdinWrite>), RuntimeError> {
+) -> Result<
+    (
+        &'a mut u64,
+        &'a mut Option<PendingStdinWrite>,
+        &'a mut StdinCloseState,
+    ),
+    RuntimeError,
+> {
     if let Some(exec_id) = exec_id {
         let exec = task.execs.get_mut(exec_id).ok_or_else(|| {
             stdin_journal_error(
@@ -349,9 +478,17 @@ fn stdin_state_mut<'a>(
                 false,
             )
         })?;
-        Ok((&mut exec.stdin_sequence, &mut exec.pending_stdin_write))
+        Ok((
+            &mut exec.stdin_sequence,
+            &mut exec.pending_stdin_write,
+            &mut exec.stdin_close_state,
+        ))
     } else {
-        Ok((&mut task.stdin_sequence, &mut task.pending_stdin_write))
+        Ok((
+            &mut task.stdin_sequence,
+            &mut task.pending_stdin_write,
+            &mut task.stdin_close_state,
+        ))
     }
 }
 
@@ -490,6 +627,7 @@ impl Service {
             terminal: metadata.terminal(),
             stdin_sequence: metadata.stdin_sequence(),
             pending_stdin_write: metadata.pending_stdin_write().cloned(),
+            stdin_close_state: metadata.stdin_close_state(),
             output_cursor: metadata.output_cursor(),
             control_gate: Arc::new(Mutex::new(())),
             control_sequence: metadata.control_sequence(),
@@ -514,6 +652,7 @@ impl Service {
                     terminal: exec.terminal,
                     stdin_sequence: exec.stdin_sequence,
                     pending_stdin_write: exec.pending_stdin_write.clone(),
+                    stdin_close_state: exec.stdin_close_state,
                     output_cursor: exec.output_cursor,
                     stage: exec.stage,
                     record: exec.record.clone(),
@@ -542,6 +681,7 @@ impl Service {
                         read_stdin_at_activation: false,
                         stdin_sequence: task.stdin_sequence,
                         pending_stdin_write: task.pending_stdin_write.clone(),
+                        stdin_close_state: task.stdin_close_state,
                         stdin_journal: Some(self.stdin_journal(expected_task_id, None)),
                         output_cursor: task.output_cursor,
                         output_cursor_committer: Some(
@@ -617,6 +757,7 @@ impl Service {
                         read_stdin_at_activation: false,
                         stdin_sequence: pump_exec.stdin_sequence,
                         pending_stdin_write: pump_exec.pending_stdin_write.clone(),
+                        stdin_close_state: pump_exec.stdin_close_state,
                         stdin_journal: Some(self.stdin_journal(expected_task_id, Some(&exec_id))),
                         output_cursor: pump_exec.output_cursor,
                         output_cursor_committer: Some(
@@ -1498,7 +1639,11 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
         task.pending_control.clone(),
         task.last_update_digest.clone(),
     );
-    metadata.set_stdin_state(task.stdin_sequence, task.pending_stdin_write.clone());
+    metadata.set_stdin_state(
+        task.stdin_sequence,
+        task.pending_stdin_write.clone(),
+        task.stdin_close_state,
+    );
     metadata.set_exit(
         task.exit.clone(),
         task.exited_at.and_then(system_time_to_unix_nanos),
@@ -1519,6 +1664,7 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
                 metadata.stage = exec.stage;
                 metadata.stdin_sequence = exec.stdin_sequence;
                 metadata.pending_stdin_write = exec.pending_stdin_write.clone();
+                metadata.stdin_close_state = exec.stdin_close_state;
                 metadata.output_cursor = exec.output_cursor;
                 metadata.exit = exec.exit.clone();
                 metadata.exited_at_unix_nanos = exec.exited_at.and_then(system_time_to_unix_nanos);

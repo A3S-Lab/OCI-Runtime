@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -19,17 +19,18 @@ the packaged shim, SDK, host service, agent, and selected driver.
 
 The August 14, 2026 arm64 requalification used containerd 2.2.2 and the
 release-built shim SHA-256
-`2d03eca60f1cbf098f038811fda61c6c353c7a0f85c6cc64ac422feaf5f0fb18`.
+`856913e536c231449dd5423b0810306c7402dbeaae78f1aede6bb34e28a0575d`.
 The host CLI, agent, and qualification executable SHA-256 values were
 `9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
 `0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
-and `cbdbf266c6a889b0bfcec4f9cb04b04f4c4891f4224d94bd623835b784de2ce3`.
-The 40.52-second matrix passed two distinct resource updates, two complete
+and `d79a57091f4fd0c422fc9f2e4c18fc793cf3ab864fd7e48d7c3b12a12afaf0bc`.
+The 42.31-second matrix passed two distinct resource updates, two complete
 pause/resume cycles, durable terminal stdin before and after live shim
 replacement, replay of a remotely committed write whose exact payload was
-still locally pending, every retained restart and shim-crash boundary, and its
-post-run audit with no task, container, shim, bundle, active runtime container,
-workload process, or workload cgroup member left behind.
+still locally pending, replay of a remotely committed CloseStdin while the
+shim still recorded Closing, every retained restart and shim-crash boundary,
+and its post-run audit with no task, container, shim, bundle, active runtime
+container, workload process, or workload cgroup member left behind.
 
 ## Runtime type and package layout
 
@@ -89,15 +90,17 @@ mutation. Every live request carries the exact runtime generation.
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v4 records the last completed init and exec stdin
-sequence, an optional in-flight sequence plus its exact bounded payload, and
-the last output cursor only after the corresponding FIFO write succeeds. It
+any drift. Metadata schema v5 records the last completed init and exec stdin
+sequence, an optional in-flight sequence plus its exact bounded payload, the
+Open, Closing, or Closed state of each stdin stream, and the last output cursor
+only after the corresponding FIFO write succeeds. It
 also records the last completed per-task control sequence, an optional
 in-flight Pause, Resume, or Update, and the last completed Update request
 digest. Schema-v1 records default input sequences, output cursors, and control
-state to empty. Schema-v2 records preserve output cursors, and schema-v3 adds
-the control journal. All three legacy schemas default the new stdin journal to
-empty and are rewritten as schema v4 on the next metadata commit.
+state to empty. Schema-v2 records preserve output cursors, schema-v3 adds the
+control journal, and schema-v4 adds sequenced writes. Schemas v1 through v4
+default stdin close state to Open and are rewritten as schema v5 on the next
+metadata commit.
 
 Before dispatching Create, the shim separately commits a schema-v1 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
@@ -165,6 +168,16 @@ finish, commits that same operation through the Runtime, and replaces the shim
 while its journal still records the payload as pending. The replacement must
 join the completed operation, emit the input effect exactly once, clear the
 pending entry, and continue from the following sequence.
+
+CloseStdin uses a separate durable state machine. The shim commits Closing only
+after every FIFO byte and pending write has completed, then dispatches the
+stable process-scoped `close-stdin` operation. A successful response commits
+Closed. A replacement that loads Closing replays that exact operation without
+opening the FIFO and commits Closed; a replacement that loads Closed returns a
+completed CloseIO result without opening the FIFO or dispatching another SDK
+operation. The retained arm64 gate freezes the original shim in Closing,
+commits the Runtime effect while its response cannot be observed, replaces the
+shim, and requires one terminal EOF marker plus a successful repeated CloseIO.
 
 ## Restart and cleanup contract
 

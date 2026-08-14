@@ -1525,12 +1525,16 @@ Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
 separate stdout/stderr plus stdin from empty input through 4 MiB,
 Created/Running/Stopped daemon-restart boundaries, terminal exec resize before
-and after daemon restart, schema-v4 durable init/exec stdin sequences, exact
-pending input payloads, output cursors, and per-task control sequencing, live
+and after daemon restart, schema-v5 durable init/exec stdin sequences, exact
+pending input payloads, Open/Closing/Closed stdin state, output cursors, and
+per-task control sequencing, live
 terminal-exec input and output continuation without replay after manual shim
 replacement, including a pending WriteStdin operation committed remotely
 before the replacement can observe its response and replayed with exactly one
-input effect, stale task incarnation and runtime-generation replacement, a
+input effect, plus a committed CloseStdin boundary that persists Closing,
+loses the original response, replays through the replacement, commits Closed,
+and delivers one terminal EOF effect without reopening its FIFO, stale task
+incarnation and runtime-generation replacement, a
 four-task parallel Create/Start/running-restart/137-cleanup matrix, and exact
 cleanup after shim
 `SIGKILL` with init Created or Running and exec Added or Running. A durable
@@ -1571,9 +1575,9 @@ metadata reopen. Canonical JSON request fingerprints keep unordered resource
 maps stable across shim, host, and guest reconstruction. Runtime operation
 schema v2 records that encoding explicitly while retaining schema-v1 retry
 validation with the legacy serializer. The August 14, 2026
-Ubuntu arm64/containerd 2.2.2 release build passed the complete 40.52-second
+Ubuntu arm64/containerd 2.2.2 release build passed the complete 42.31-second
 matrix with installed shim SHA-256
-`2d03eca60f1cbf098f038811fda61c6c353c7a0f85c6cc64ac422feaf5f0fb18`.
+`856913e536c231449dd5423b0810306c7402dbeaae78f1aede6bb34e28a0575d`.
 The qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, or bundle. The R7 items remain open until the version and

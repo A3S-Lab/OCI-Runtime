@@ -18,7 +18,7 @@ pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 4;
+const METADATA_SCHEMA_VERSION: u32 = 5;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_INCARNATION_BYTES: u64 = 64;
@@ -45,6 +45,8 @@ pub(crate) struct ShimMetadata {
     stdin_sequence: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_stdin_write: Option<PendingStdinWrite>,
+    #[serde(default, skip_serializing_if = "StdinCloseState::is_open")]
+    stdin_close_state: StdinCloseState,
     #[serde(default, skip_serializing_if = "is_zero")]
     output_cursor: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -75,6 +77,8 @@ pub(crate) struct ExecMetadata {
     pub(crate) stdin_sequence: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pending_stdin_write: Option<PendingStdinWrite>,
+    #[serde(default, skip_serializing_if = "StdinCloseState::is_open")]
+    pub(crate) stdin_close_state: StdinCloseState,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) output_cursor: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +111,21 @@ pub(crate) enum ControlOperationKind {
 pub(crate) struct PendingStdinWrite {
     sequence: u64,
     data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum StdinCloseState {
+    #[default]
+    Open,
+    Closing,
+    Closed,
+}
+
+impl StdinCloseState {
+    pub(crate) fn is_open(&self) -> bool {
+        *self == Self::Open
+    }
 }
 
 impl PendingStdinWrite {
@@ -225,6 +244,7 @@ impl ExecMetadata {
             terminal,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: 0,
             record: None,
             exit: None,
@@ -271,6 +291,7 @@ impl ShimMetadata {
             terminal: value.terminal,
             stdin_sequence: 0,
             pending_stdin_write: None,
+            stdin_close_state: StdinCloseState::Open,
             output_cursor: value.output_cursor,
             control_sequence: 0,
             pending_control: None,
@@ -471,6 +492,10 @@ impl ShimMetadata {
         self.pending_stdin_write.as_ref()
     }
 
+    pub(crate) fn stdin_close_state(&self) -> StdinCloseState {
+        self.stdin_close_state
+    }
+
     pub(crate) fn control_sequence(&self) -> u64 {
         self.control_sequence
     }
@@ -519,9 +544,15 @@ impl ShimMetadata {
         self.last_update_digest = last_update_digest;
     }
 
-    pub(crate) fn set_stdin_state(&mut self, sequence: u64, pending: Option<PendingStdinWrite>) {
+    pub(crate) fn set_stdin_state(
+        &mut self,
+        sequence: u64,
+        pending: Option<PendingStdinWrite>,
+        close_state: StdinCloseState,
+    ) {
         self.stdin_sequence = sequence;
         self.pending_stdin_write = pending;
+        self.stdin_close_state = close_state;
     }
 
     fn validate(&self, path: &Path) -> Result<()> {
@@ -561,12 +592,28 @@ impl ShimMetadata {
                 self.schema_version
             )));
         }
+        if self.schema_version < 5
+            && (self.stdin_close_state != StdinCloseState::Open
+                || self
+                    .execs
+                    .iter()
+                    .any(|exec| exec.stdin_close_state != StdinCloseState::Open))
+        {
+            return Err(metadata_error(format!(
+                "shim metadata schema {} cannot contain schema-v5 stdin close state",
+                self.schema_version
+            )));
+        }
         validate_stdin_state(
             self.stdin_sequence,
             self.pending_stdin_write.as_ref(),
+            self.stdin_close_state,
             "task",
         )?;
-        if self.stdin.is_empty() && (self.stdin_sequence != 0 || self.pending_stdin_write.is_some())
+        if self.stdin.is_empty()
+            && (self.stdin_sequence != 0
+                || self.pending_stdin_write.is_some()
+                || self.stdin_close_state != StdinCloseState::Open)
         {
             return Err(metadata_error(
                 "task stdin journal state requires a configured stdin FIFO",
@@ -620,10 +667,13 @@ impl ShimMetadata {
             validate_stdin_state(
                 exec.stdin_sequence,
                 exec.pending_stdin_write.as_ref(),
+                exec.stdin_close_state,
                 &format!("exec {}", exec.exec_id),
             )?;
             if exec.stdin.is_empty()
-                && (exec.stdin_sequence != 0 || exec.pending_stdin_write.is_some())
+                && (exec.stdin_sequence != 0
+                    || exec.pending_stdin_write.is_some()
+                    || exec.stdin_close_state != StdinCloseState::Open)
             {
                 return Err(metadata_error(format!(
                     "exec {} stdin journal state requires a configured stdin FIFO",
@@ -639,8 +689,14 @@ impl ShimMetadata {
 fn validate_stdin_state(
     completed_sequence: u64,
     pending: Option<&PendingStdinWrite>,
+    close_state: StdinCloseState,
     context: &str,
 ) -> Result<()> {
+    if close_state != StdinCloseState::Open && pending.is_some() {
+        return Err(metadata_error(format!(
+            "containerd {context} stdin cannot retain a pending write while it is {close_state:?}"
+        )));
+    }
     let Some(pending) = pending else {
         return Ok(());
     };
@@ -1028,6 +1084,7 @@ mod tests {
         expected.set_stdin_state(
             4,
             Some(PendingStdinWrite::new(5, b"task-pending".to_vec()).expect("task stdin")),
+            StdinCloseState::Open,
         );
         let process: Process = serde_json::from_value(serde_json::json!({
             "terminal": false,
@@ -1048,6 +1105,7 @@ mod tests {
         exec.pending_stdin_write =
             Some(PendingStdinWrite::new(9, b"exec-pending".to_vec()).expect("exec stdin"));
         expected.set_execs(vec![exec]);
+        expected.schema_version = 4;
 
         expected.store().expect("store schema-v4 metadata");
         let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
@@ -1057,11 +1115,49 @@ mod tests {
         assert_eq!(loaded.schema_version, 4);
         assert_eq!(loaded.stdin_sequence(), 4);
         assert_eq!(loaded.pending_stdin_write(), expected.pending_stdin_write());
+        assert_eq!(loaded.stdin_close_state(), StdinCloseState::Open);
         assert_eq!(loaded.execs()[0].stdin_sequence, 8);
         assert_eq!(
             loaded.execs()[0].pending_stdin_write,
             expected.execs()[0].pending_stdin_write
         );
+        assert_eq!(loaded.execs()[0].stdin_close_state, StdinCloseState::Open);
+    }
+
+    #[test]
+    fn schema_v5_metadata_round_trip_preserves_task_and_exec_stdin_close_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        expected.set_stdin_state(4, None, StdinCloseState::Closing);
+        let process: Process = serde_json::from_value(serde_json::json!({
+            "terminal": true,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/sh"],
+            "cwd": "/"
+        }))
+        .expect("OCI process");
+        let mut exec = ExecMetadata::new(
+            "exec-closed".to_string(),
+            process,
+            "exec-in".to_string(),
+            "exec-out".to_string(),
+            String::new(),
+            true,
+        );
+        exec.stdin_sequence = 8;
+        exec.stdin_close_state = StdinCloseState::Closed;
+        expected.set_execs(vec![exec]);
+
+        expected.store().expect("store schema-v5 metadata");
+        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load schema-v5 metadata")
+            .expect("metadata exists");
+
+        assert_eq!(loaded.schema_version, 5);
+        assert_eq!(loaded.stdin_sequence(), 4);
+        assert_eq!(loaded.stdin_close_state(), StdinCloseState::Closing);
+        assert_eq!(loaded.execs()[0].stdin_sequence, 8);
+        assert_eq!(loaded.execs()[0].stdin_close_state, StdinCloseState::Closed);
     }
 
     #[test]
@@ -1115,6 +1211,7 @@ mod tests {
         legacy_with_stdin.set_stdin_state(
             0,
             Some(PendingStdinWrite::new(1, b"pending".to_vec()).expect("pending stdin")),
+            StdinCloseState::Open,
         );
         assert_eq!(
             legacy_with_stdin
@@ -1124,10 +1221,36 @@ mod tests {
             ErrorCode::FailedPrecondition
         );
 
+        let mut legacy_with_close = metadata(directory.path());
+        legacy_with_close.schema_version = 4;
+        legacy_with_close.set_stdin_state(0, None, StdinCloseState::Closing);
+        assert_eq!(
+            legacy_with_close
+                .store()
+                .expect_err("schema-v4 stdin close state must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut closing_with_pending = metadata(directory.path());
+        closing_with_pending.set_stdin_state(
+            0,
+            Some(PendingStdinWrite::new(1, b"pending".to_vec()).expect("pending stdin")),
+            StdinCloseState::Closing,
+        );
+        assert_eq!(
+            closing_with_pending
+                .store()
+                .expect_err("closing stdin with a pending write must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
         let mut skipped_sequence = metadata(directory.path());
         skipped_sequence.set_stdin_state(
             4,
             Some(PendingStdinWrite::new(6, b"pending".to_vec()).expect("pending stdin")),
+            StdinCloseState::Open,
         );
         assert_eq!(
             skipped_sequence
