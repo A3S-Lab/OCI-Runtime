@@ -1061,7 +1061,7 @@ function Assert-PositiveReport {
     if ($Result.Report.schema_version -ne 'a3s.oci.oci-vm-smoke.v9' -or
         $Result.Report.platform -ne 'windows' -or
         $Result.Report.status -ne 'available') {
-        throw "$Label did not return an available Windows v9 report"
+        throw "$Label did not return an available Windows report"
     }
     $trueFields = @(
         'bundle_loaded',
@@ -1102,14 +1102,15 @@ function Assert-PositiveReport {
     if ($Result.Report.bridge.status -ne 'available' -or
         $Result.Report.bridge.protocol_negotiated -ne $true -or
         $Result.Report.bridge.shim_report_verified -ne $true -or
-        $Result.Report.bridge.selected_protocol -ne 9) {
+        $Result.Report.bridge.selected_protocol -ne 10) {
         throw "$Label did not retain a successful authenticated bridge"
     }
     $operations = @($Result.Report.bridge.advertised_operations) -join ','
     $expectedOperations = (
         'create,state,start,kill,delete,wait,exec,signal-process,' +
         'wait-process,pause,resume,processes,update,stats,read-output,' +
-        'write-stdin,close-stdin,resize,file,filesystem'
+        'write-stdin,close-stdin,resize,file,filesystem,' +
+        'acknowledge-operations'
     )
     if ($operations -ne $expectedOperations) {
         throw "$Label advertised unexpected guest operations: $operations"

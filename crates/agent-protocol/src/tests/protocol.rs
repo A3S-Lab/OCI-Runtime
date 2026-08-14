@@ -534,7 +534,10 @@ async fn rejects_wrong_session_tokens_and_incompatible_versions() {
 
     let (host, guest) = tokio::io::duplex(64 * 1024);
     let server = spawn_server(guest, token(9));
-    let error = AgentClient::connect_for_test(host, token(9), 10, 10)
+    let unsupported = crate::AGENT_PROTOCOL_VERSION_MAX
+        .checked_add(1)
+        .expect("protocol version space");
+    let error = AgentClient::connect_for_test(host, token(9), unsupported, unsupported)
         .await
         .expect_err("incompatible version must fail");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);

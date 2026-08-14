@@ -143,7 +143,7 @@ impl AgentTransportFaultInjector for FailOnceTransportInjector {
 
 #[test]
 fn transport_fault_registries_cover_every_current_operation_and_stage() {
-    assert_eq!(crate::AgentOperation::ALL.len(), 20);
+    assert_eq!(crate::AgentOperation::ALL.len(), 21);
     assert_eq!(AgentTransportOperationStage::ALL.len(), 9);
     assert_eq!(AgentTransportShutdownStage::ALL.len(), 2);
     for operation in crate::AgentOperation::ALL {

@@ -196,9 +196,9 @@ each one. `WaitRequest`
 targets one exact generation, accepts an optional
 millisecond timeout, and returns an `ExitStatus` containing either an exit
 code in `0..=255` or a positive signal. Repeated waits must return the same
-terminal result. The native Linux driver and the protocol-v9 utility-VM guest
+terminal result. The native Linux driver and the protocol-v10 utility-VM guest
 path implement this contract while retaining agent protocol-v1 through
-protocol-v8 compatibility; unsupported drivers fail before dispatch.
+protocol-v9 compatibility; unsupported drivers fail before dispatch.
 
 Poll from the beginning with cursor zero, then pass each returned
 `next_sequence` to the next request. A filter without a generation follows
@@ -229,7 +229,7 @@ async fn poll_events(
 }
 ```
 
-The protocol-v9 shared Linux executor implements exact-target exec,
+The protocol-v10 shared Linux executor implements exact-target exec,
 pidfd-backed per-process signal, stable per-process wait, cgroup-v2
 pause/resume, exact live process inventory, partial live CPU/memory/cpuset/PID
 updates, normalized resource statistics, piped stdin, and bounded captured
@@ -247,9 +247,19 @@ pause, resume, update, write-stdin, close-stdin, and resize mutations, and
 caches terminal results. SDK stdin writes larger than the guest's 4 MiB bound
 are split into chunks with stable derived operation IDs, so a retried driver
 call replays completed chunks without duplicating their bytes. Native Linux
-exposes that complete path through `RuntimeClient`. Utility-VM host drivers
-still need to opt into these process, control, resource, and I/O operations
-before their host services may advertise them.
+exposes that complete path through `RuntimeClient`; the HVF and WHPX adapters
+map the same 20 workload operations when their platform driver is live.
+
+After the Host durably commits a journaled success or terminal failure, it
+invokes the driver's idempotent acknowledgement hook. Native Linux releases
+the local replay record directly. Protocol-v10 utility-VM drivers send a
+bounded `acknowledge-operations` maintenance request; large stdin writes map
+the parent Host identity back to every derived Guest chunk identity. A lost
+acknowledgement is retryable, and replaying the completed Host operation sends
+it again without redispatching the workload mutation. Protocol-v1 through
+protocol-v9 Guests retain a compatibility no-op. File and filesystem Host
+mutations do not yet have a durable Host operation journal, so they are not
+included in this reclamation boundary.
 
 File downloads and uploads are limited to 32 MiB decoded payloads. Directory
 listings are limited to depth 64, 4,096 entries, and a 12 MiB serialized

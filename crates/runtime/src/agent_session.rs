@@ -1149,28 +1149,7 @@ async fn sha256_path(path: &Path) -> Result<String, String> {
 }
 
 fn expected_operations() -> Vec<AgentOperation> {
-    vec![
-        AgentOperation::Create,
-        AgentOperation::State,
-        AgentOperation::Start,
-        AgentOperation::Kill,
-        AgentOperation::Delete,
-        AgentOperation::Wait,
-        AgentOperation::Exec,
-        AgentOperation::SignalProcess,
-        AgentOperation::WaitProcess,
-        AgentOperation::Pause,
-        AgentOperation::Resume,
-        AgentOperation::Processes,
-        AgentOperation::Update,
-        AgentOperation::Stats,
-        AgentOperation::ReadOutput,
-        AgentOperation::WriteStdin,
-        AgentOperation::CloseStdin,
-        AgentOperation::Resize,
-        AgentOperation::File,
-        AgentOperation::Filesystem,
-    ]
+    AgentOperation::ALL.to_vec()
 }
 
 const fn expected_guest_architecture(platform: HostPlatform) -> &'static str {

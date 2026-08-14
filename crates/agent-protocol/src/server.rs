@@ -357,6 +357,12 @@ async fn dispatch(service: &dyn GuestAgentService, request: AgentRequest) -> Res
             .filesystem(request)
             .await
             .map(AgentResponse::Filesystem),
+        AgentRequest::AcknowledgeOperations(request) => {
+            service
+                .acknowledge_operations(&request.operation_ids)
+                .await?;
+            Ok(AgentResponse::OperationsAcknowledged)
+        }
     }
 }
 

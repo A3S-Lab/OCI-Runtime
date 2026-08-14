@@ -106,14 +106,15 @@ async fn exercise_delete_reopen(index: usize, stage: AgentTransportOperationStag
     assert_eq!(metrics.kill_dispatches(), 1, "{stage:?}");
 
     let first_result = first_service.delete(delete.clone()).await;
-    if response_reached_host(stage) {
-        first_result
-            .unwrap_or_else(|error| panic!("written delete response for {stage:?}: {error}"));
-    } else {
-        let error = first_result.expect_err("delete fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error =
+        first_result.expect_err("delete transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&delete.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.delete_dispatches(), 1, "{stage:?}");
 
     let active = first_service
@@ -181,6 +182,11 @@ async fn exercise_delete_reopen(index: usize, stage: AgentTransportOperationStag
         .await
         .unwrap_or_else(|error| panic!("list after resumed delete for {stage:?}: {error}"));
     assert!(remaining.is_empty(), "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&delete.context.operation_id),
+        1,
+        "{stage:?}"
+    );
 
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {

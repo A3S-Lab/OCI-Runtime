@@ -54,6 +54,7 @@ use a3s_oci_agent_protocol::{
     AgentReadOutputRequest, AgentRecoveryRecord, AgentResizeRequest, AgentSignalProcessRequest,
     AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest, AgentUpdateRequest,
     AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, GuestAgentService,
+    AGENT_MAX_ACKNOWLEDGED_OPERATIONS,
 };
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
@@ -116,7 +117,7 @@ impl RootlessDevicePolicyBootstrap {
 
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_OPERATION_RECORDS: usize = 4_096;
+const MAX_OPERATION_RECORDS: usize = AGENT_MAX_ACKNOWLEDGED_OPERATIONS;
 const MAX_INTERNAL_PROCESS_IO_BYTES: usize = 1_024;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 

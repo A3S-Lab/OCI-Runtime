@@ -103,6 +103,17 @@ generation. The shared executor bounds decoded payloads, path/user text,
 listing depth and response size, and resolves paths from the retained rootfs
 descriptor with `openat2` plus descriptor-relative mutation syscalls.
 
+Protocol version 10 adds `acknowledge-operations` as a maintenance operation.
+It does not add a public `RuntimeOperation`; the public workload surface stays
+at 20 operations. A request carries 1..=4,096 unique completed Guest operation
+identities. The Guest removes their replay records atomically only when every
+known identity has finished; unknown identities are already released and
+succeed. The Host sends this request only after it has durably committed the
+corresponding success or terminal failure. Prepared and retryable operations
+are not acknowledged. Protocol-v1 through protocol-v9 clients, and v10 Guests
+that do not advertise the maintenance operation, retain the historical no-op
+behavior.
+
 The client breaks a long init or process wait into bounded 25-millisecond
 guest requests. The single correlated connection therefore remains available
 to query or control another container between polls. Negotiation filters
@@ -118,13 +129,17 @@ operations. Protocol-v1 through protocol-v6 peers neither advertise nor accept
 the version-7 terminal resize operation. Protocol-v1 through protocol-v7 peers
 reject version-8 process-I/O mutation context. Protocol-v1 through protocol-v8
 peers neither advertise nor accept version-9 file or filesystem operations.
+Protocol-v1 through protocol-v9 peers neither advertise nor accept the
+version-10 maintenance acknowledgement.
 
 Protocol support and executor capability remain separate. The current shared
-Linux executor negotiates version 9 and advertises the exact twenty
-implemented operations: the six lifecycle/init-wait operations; exec,
+Linux executor negotiates version 10 and advertises the exact 20 workload
+operations plus one maintenance acknowledgement: the six
+lifecycle/init-wait operations; exec,
 per-process signal, and per-process wait; pause, resume, and processes; update
 and stats; captured-output polling, stdin write/close, and terminal resize;
-plus file transfer and filesystem metadata/mutations. It
+file transfer and filesystem metadata/mutations; and
+`acknowledge-operations`. It
 retains an exact-generation process registry, one pidfd per authenticated init
 or exec process, the private controller-enabled cgroup-v2 root and owned
 workload target, stable replay and wait results, exact session-local
@@ -134,14 +149,15 @@ session cleanup. The target is one leaf by default; the opt-in
 management envelope. The native host driver gives every bounded chunk of a
 larger SDK stdin write a stable derived operation ID. The host can now ask an
 exact recorded driver to reconcile durable state during startup. This does not
-make session-local agent replay durable: restart-stable operation and exit
-evidence remains a separate release gate.
+make session-local agent replay durable across an Agent restart. Protocol v10
+bounds the lifetime of completed session-local records; restart-stable
+operation and exit evidence remains a separate release gate.
 
 `AgentClient` also implements the same `GuestAgentService` contract as the
 in-process executor. One runtime adapter therefore performs target, digest,
 state, process, stats, chunked-I/O, and filesystem mapping for both native
 Linux and WHPX; the transport boundary cannot grow a second interpretation of
-the twenty operations.
+the 20 workload operations or their maintenance acknowledgement.
 
 OCI hooks do not add guest protocol operations: they travel inside the exact
 digest-bound `config.json` and execute in the shared Linux executor. Native
@@ -157,7 +173,7 @@ Production connections install a no-op fault injector. Qualification can use
 `AgentClient::connect_with_fault_injector` and
 `serve_agent_connection_with_fault_injector` to interrupt one explicit point
 without changing framing or service behavior. Every operation point carries
-the negotiated protocol version and one of the complete twenty-operation
+the negotiated protocol version and one of the complete 21-operation Guest
 registry entries.
 
 The host exposes four ordered stages: before and after request write, then
@@ -169,9 +185,9 @@ has separate before-shutdown and after-shutdown points. An injected host error
 poisons the clone-shared client and releases its stream before returning.
 
 The exhaustive in-memory matrix opens a fresh authenticated session for every
-one of the twenty operations at each of the nine request/response stages. All
-180 pairs must be unique, the selected point must be crossed exactly once, and
-the connection must reject its next request. A fault before the response is
+one of the 21 Guest operations at each of the nine request/response stages.
+All 189 pairs must be unique. The selected point must be crossed exactly once,
+and the connection must reject its next request. A fault before the response is
 fully written fails the current request. A fault immediately after the complete
 response write preserves the delivered response and makes the disconnect
 visible on the following request.
@@ -351,6 +367,8 @@ In-memory duplex tests cover:
   missing-context rejection, and rejection of v8 context by protocol-v7 peers;
 - protocol-v9 file upload and filesystem-list round trips with exact target
   correlation, plus protocol-v8 capability filtering;
+- protocol-v10 acknowledgement routing, pre-v10 no-op compatibility, and
+  non-empty, duplicate-free, 4,096-identity batch validation;
 - filtering and pre-dispatch rejection of forged version-3 process operations
   on a protocol-v2 connection;
 - rejection of a forged protocol-v1 wait before service dispatch;
@@ -363,7 +381,7 @@ In-memory duplex tests cover:
   and response-shape mismatch, with permanent connection poisoning and
   immediate transport release while client clones remain;
 - the complete versioned fault-point registry, all four ordered host operation
-  stages, all five guest operation stages, all 180 current operation-stage
+  stages, all five guest operation stages, all 189 current operation-stage
   pairs, both host shutdown stages, guest validation-error response stages, and
   post-dispatch create-response loss followed by authenticated exact replay
   with one service effect;
@@ -398,11 +416,11 @@ shim. An unrelated peer is rejected before protocol bytes are read. A direct
 child with the wrong token is rejected during the following authentication
 step.
 
-The real WHPX `agent-vm-smoke` additionally boots the static musl Linux agent,
-carries its CID-host port 4093 connection through libkrun to that protected
-pipe, authenticates the token, negotiates protocol version 9, and retains
-bounded host and shim evidence. The current guest must advertise the exact
-twenty operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
+The retained real WHPX `agent-vm-smoke` additionally boots the static musl
+Linux agent, carries its CID-host port 4093 connection through libkrun to that
+protected pipe, authenticates the token, negotiates protocol version 9, and
+retains bounded host and shim evidence. That qualified v9 guest advertises the exact
+20 workload operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
 `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
 `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
 `file`, and `filesystem`.
@@ -452,8 +470,9 @@ explicitly.
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in `a3s.oci.agent-vm-smoke.v9`. The signed path must negotiate protocol version
-9 and the exact twenty implemented operations. The missing-entitlement path
+in the stable `a3s.oci.agent-vm-smoke.v9` report schema. The current signed
+path negotiates protocol version 10 and the exact 20 workload operations plus
+`acknowledge-operations`. The missing-entitlement path
 must exit with status `2`, report no negotiation, terminate the shim process
 group, and leave no private endpoint residue. Both paths also retain
 in-process evidence that the exact runtime-owned endpoint was removed, the

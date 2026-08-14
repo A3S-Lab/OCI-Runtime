@@ -117,14 +117,15 @@ async fn exercise_resize_reopen(index: usize, stage: AgentTransportOperationStag
     };
 
     let first_result = first_service.resize(resize.clone()).await;
-    if response_reached_host(stage) {
-        first_result
-            .unwrap_or_else(|error| panic!("written resize response for {stage:?}: {error}"));
-    } else {
-        let error = first_result.expect_err("resize fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error =
+        first_result.expect_err("resize transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&resize.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.resize_dispatches(), 1, "{stage:?}");
     drop(first_service);
     drop(first_driver);
@@ -170,6 +171,11 @@ async fn exercise_resize_reopen(index: usize, stage: AgentTransportOperationStag
         .resize(resize.clone())
         .await
         .unwrap_or_else(|error| panic!("resume terminal resize after {stage:?}: {error}"));
+    assert_eq!(
+        guest.acknowledgement_count(&resize.context.operation_id),
+        1,
+        "{stage:?}"
+    );
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {
         1

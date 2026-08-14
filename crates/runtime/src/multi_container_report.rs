@@ -909,28 +909,7 @@ mod tests {
         report.selected_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
         report.agent_version = Some(env!("CARGO_PKG_VERSION").into());
         report.guest_architecture = Some("x86_64".into());
-        report.advertised_operations = vec![
-            AgentOperation::Create,
-            AgentOperation::State,
-            AgentOperation::Start,
-            AgentOperation::Kill,
-            AgentOperation::Delete,
-            AgentOperation::Wait,
-            AgentOperation::Exec,
-            AgentOperation::SignalProcess,
-            AgentOperation::WaitProcess,
-            AgentOperation::Pause,
-            AgentOperation::Resume,
-            AgentOperation::Processes,
-            AgentOperation::Update,
-            AgentOperation::Stats,
-            AgentOperation::ReadOutput,
-            AgentOperation::WriteStdin,
-            AgentOperation::CloseStdin,
-            AgentOperation::Resize,
-            AgentOperation::File,
-            AgentOperation::Filesystem,
-        ];
+        report.advertised_operations = AgentOperation::ALL.to_vec();
         report.shim_report_verified = true;
         report.shim_exit_code = Some(0);
         report.console_created = true;

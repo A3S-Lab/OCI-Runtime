@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
@@ -9,15 +10,43 @@ use a3s_oci_sdk::{
 };
 
 use crate::model::{
-    protocol_error, AgentBundle, AgentCloseStdinRequest, AgentContainerOperationRequest,
-    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
-    AgentProcess, AgentProcessExit, AgentProcessSignal, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentRequest, AgentResizeRequest, AgentResponse,
+    protocol_error, AgentAcknowledgeOperationsRequest, AgentBundle, AgentCloseStdinRequest,
+    AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
+    AgentHello, AgentKillRequest, AgentProcess, AgentProcessExit, AgentProcessSignal,
+    AgentProcessesRequest, AgentReadOutputRequest, AgentRequest, AgentResizeRequest, AgentResponse,
     AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
     AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
-    ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome, AGENT_MAX_FRAME_BYTES,
-    AGENT_MAX_IO_PAYLOAD_BYTES,
+    ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    AGENT_MAX_ACKNOWLEDGED_OPERATIONS, AGENT_MAX_FRAME_BYTES, AGENT_MAX_IO_PAYLOAD_BYTES,
 };
+
+impl AgentAcknowledgeOperationsRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.operation_ids.is_empty() {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                "agent operation acknowledgement must contain at least one identity",
+            ));
+        }
+        if self.operation_ids.len() > AGENT_MAX_ACKNOWLEDGED_OPERATIONS {
+            return Err(protocol_error(
+                ErrorCode::ResourceExhausted,
+                format!(
+                    "agent operation acknowledgement contains {} identities; maximum is {AGENT_MAX_ACKNOWLEDGED_OPERATIONS}",
+                    self.operation_ids.len()
+                ),
+            ));
+        }
+        let unique = self.operation_ids.iter().collect::<BTreeSet<_>>();
+        if unique.len() != self.operation_ids.len() {
+            return Err(protocol_error(
+                ErrorCode::InvalidArgument,
+                "agent operation acknowledgement contains a duplicate identity",
+            ));
+        }
+        Ok(())
+    }
+}
 
 impl AgentBundle {
     pub(crate) fn validate(&self) -> Result<OciBundle> {
@@ -250,6 +279,7 @@ impl AgentRequest {
                 request.validate()?;
                 validate_exact_target(&request.target)
             }
+            Self::AcknowledgeOperations(request) => request.validate(),
         }
     }
 
@@ -290,6 +320,7 @@ impl AgentRequest {
             Self::ReadOutput(_) | Self::WriteStdin(_) | Self::CloseStdin(_) => 6,
             Self::Resize(_) => 7,
             Self::File(_) | Self::Filesystem(_) => 9,
+            Self::AcknowledgeOperations(_) => 10,
         }
     }
 }
@@ -378,6 +409,7 @@ impl AgentResponse {
             | Self::TerminalResized(target) => validate_exact_process_target(target),
             Self::File(response) => validate_exact_target(&response.target),
             Self::Filesystem(response) => validate_exact_target(&response.target),
+            Self::OperationsAcknowledged => Ok(()),
         }
     }
 
@@ -391,6 +423,7 @@ impl AgentResponse {
             Self::Output(_) | Self::StdinWritten(_) | Self::StdinClosed(_) => 6,
             Self::TerminalResized(_) => 7,
             Self::File(_) | Self::Filesystem(_) => 9,
+            Self::OperationsAcknowledged => 10,
         };
         if selected_version < minimum_version {
             return Err(protocol_error(

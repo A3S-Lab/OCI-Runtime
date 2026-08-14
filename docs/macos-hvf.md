@@ -52,11 +52,11 @@ removes only the exact socket inode it created. Graceful SIGINT or SIGTERM
 closes active transports and invokes the idempotent HVF shutdown path so every
 live VM owner is reaped exactly once.
 
-SDK `features()` through this socket reports the 20 protocol-v9 driver
-operations plus `features`, `list`, and `events`, and requires the versioned
-runtime bundle-handoff extension. This is the integration boundary for A3S
-Box; the direct VM harnesses below remain evidence tools rather than a second
-product lifecycle.
+SDK `features()` through this socket reports 20 public driver operations over
+the protocol-v10 Guest plus `features`, `list`, and `events`, and requires the
+versioned runtime bundle-handoff extension. This is the integration boundary
+for A3S Box; the direct VM harnesses below remain evidence tools rather than a
+second product lifecycle.
 
 ## Entitlement and signing
 
@@ -330,11 +330,12 @@ The host runtime establishes the trust chain in this order:
 8. remove the socket and private directory while retaining the accepted
    stream;
 9. send the token only after process identity verification, negotiate protocol
-   version 9, and require the static arm64 guest to advertise exactly
+   version 10, and require the static arm64 guest to advertise exactly
    `create`, `state`, `start`, `kill`, `delete`, `wait`, `exec`,
    `signal-process`, `wait-process`, `pause`, `resume`, `processes`, `update`,
    `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`, `file`, and
-   `filesystem`.
+   `filesystem`, plus the non-public `acknowledge-operations` maintenance
+   operation.
 
 The parent shim validates the rootfs, fixed
 `/usr/bin/a3s-oci-agent`, console, and protected socket before spawning the
@@ -369,11 +370,13 @@ Use the signed relocatable shim prepared above:
 target/debug/a3s-oci agent-vm-smoke \
   --shim "$smoke_dir/a3s-oci-krun-shim" \
   --rootfs "$rootfs" \
+  --system-image-manifest "$system_image_manifest" \
   --console "$asset_dir/agent-console.log"
 ```
 
-The top-level report is `a3s.oci.agent-vm-smoke.v9`. A successful Apple Silicon
-qualification must retain the following contract:
+The top-level report keeps the stable `a3s.oci.agent-vm-smoke.v9` schema name;
+the negotiated protocol is reported independently. A successful current Apple
+Silicon qualification must retain the following contract:
 
 ```json
 {
@@ -387,8 +390,8 @@ qualification must retain the following contract:
   "bridge_process_id": 12346,
   "shim_client_verified": true,
   "protocol_negotiated": true,
-  "selected_protocol": 9,
-  "agent_version": "0.1.0",
+  "selected_protocol": 10,
+  "agent_version": "0.2.0",
   "guest_architecture": "aarch64",
   "advertised_operations": [
     "create",
@@ -410,7 +413,8 @@ qualification must retain the following contract:
     "close-stdin",
     "resize",
     "file",
-    "filesystem"
+    "filesystem",
+    "acknowledge-operations"
   ],
   "shim_report_verified": true,
   "shim_exit_code": 0,

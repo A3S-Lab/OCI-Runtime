@@ -30,7 +30,8 @@ The runtime:
    Linux rootfs, and verifies a guest-written marker through virtiofs;
 9. boots `/usr/bin/a3s-oci-agent`, carries its host-CID port 4093 connection
    through libkrun to the protected pipe, authenticates the exact shim PID and
-   one-time token, negotiates protocol version 9, and waits for zero
+   one-time token, negotiates protocol version 10, advertises 20 workload
+   operations plus the maintenance acknowledgement, and waits for zero
    guest/shim exit;
 10. runs a fixed OCI bundle through distinct create, start, init signal/wait,
     exact-target exec, process signal/wait, live resource update and stats,
@@ -313,7 +314,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 The default profile requires:
 
-- 25 consecutive full protocol-v9 OCI lifecycles;
+- 25 consecutive full protocol-v10 OCI lifecycles;
 - three waves of two independent VMs and three two-container lifecycles inside
   one authenticated VM;
 - cleanup without a normal delete after create, start, and kill;

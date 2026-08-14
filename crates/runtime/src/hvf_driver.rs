@@ -8,8 +8,8 @@ use a3s_oci_core::{CapabilityStatus, DriverCapability, DriverReadiness, Isolatio
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats,
     ContainerTarget, Error, ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest,
-    FilesystemResponse, OciBundle, OutputChunk, ProcessRecord, Result, RuntimeOperation,
-    RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+    FilesystemResponse, OciBundle, OperationId, OutputChunk, ProcessRecord, Result,
+    RuntimeOperation, RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -410,6 +410,23 @@ impl RuntimeDriver for HvfRuntimeDriver {
                 vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
             )
             .expect("the fixed HVF bundle-handoff extension is valid")
+    }
+
+    async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        let clients = self
+            .sessions
+            .lock()
+            .await
+            .values()
+            .filter_map(|attachment| match attachment {
+                HvfAttachment::Live(session) => Some(session.client.clone()),
+                HvfAttachment::RecoveredStopped { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        for client in clients {
+            client.acknowledge_operation(operation_id).await?;
+        }
+        Ok(())
     }
 
     async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {

@@ -75,13 +75,13 @@ run_lifecycle_fault() {
        and .marker_removed and .guest_runtime_clean
        and .bridge.status == "available"
        and .bridge.protocol_negotiated
-       and .bridge.selected_protocol == 9
+       and .bridge.selected_protocol == 10
        and .bridge.advertised_operations
            == ["create", "state", "start", "kill", "delete", "wait",
                "exec", "signal-process", "wait-process", "pause",
                "resume", "processes", "update", "stats",
                "read-output", "write-stdin", "close-stdin", "resize",
-               "file", "filesystem"]
+               "file", "filesystem", "acknowledge-operations"]
        and .bridge.shim_report_verified
        and .bridge.shim_exit_code == 0
        and .bridge.macos_cleanup.endpoint_removed
@@ -143,12 +143,12 @@ run_transport_fault() {
        and .requested_operation == "create"
        and (.qualification_operation_id | startswith("transport-fault-"))
        and .requested_stage == $stage
-       and .negotiated_protocol == 9
+       and .negotiated_protocol == 10
        and .injected_point
            == (if ($stage | endswith("-shutdown")) then
-                 "agent-v9." + $stage
+                 "agent-v10." + $stage
                else
-                 "agent-v9.create-" + $stage
+                 "agent-v10.create-" + $stage
                end)
        and .fault_crossings == 1
        and .observed_error_code == "unavailable"
@@ -187,7 +187,7 @@ run_transport_fault() {
        and .guest_runtime_clean
        and .bridge.status == "available"
        and .bridge.protocol_negotiated
-       and .bridge.selected_protocol == 9
+       and .bridge.selected_protocol == 10
        and .bridge.shim_report_verified
        and .bridge.shim_exit_code == 0
        and .bridge.macos_cleanup.endpoint_removed

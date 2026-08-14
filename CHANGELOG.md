@@ -6,6 +6,26 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Utility-VM replay-journal acknowledgement over guest protocol v10. The
+  existing 20 public workload operations are unchanged; a twenty-first
+  maintenance operation releases a non-empty, duplicate-free batch of at most
+  4,096 completed Guest operation identities after the Host outcome is
+  durable. Protocol-v1 through protocol-v9 peers preserve the previous no-op
+  compatibility behavior. HVF and WHPX snapshot their live session clients
+  before sending acknowledgements, so no session lock is held across a
+  transport await, and unknown identities remain safe during fan-out or
+  replay. The protocol fault matrix now covers all 189 operation/stage pairs.
+  The portable Host reopen matrix proves all 20 workload operations across all
+  nine transport stages; for a connection lost after response write, the first
+  call exposes the retryable acknowledgement failure and the reopened Host
+  returns the already-durable result without redispatch before acknowledging
+  it exactly once. macOS and Ubuntu arm64 workspace tests pass, as does strict
+  all-feature Clippy. A real Apple Silicon HVF Guest negotiated protocol 10,
+  advertised all 21 Guest operations, exited cleanly, restored the 11-FD Host
+  baseline, and left no endpoint or owner process. Its immutable system-image
+  and manifest SHA-256 values were
+  `1dc03afe727242cc124a9f80553b2f3f1b5bbcab333391c869e4eca01e55e570`
+  and `01ba5cb1fd71c114e5e7e98a601181504b895fcf6a679e23c93b1fc6443632e5`.
 - Bounded Native Linux guest replay-journal reclamation. The Host now asks a
   driver to release mutation replay evidence only after the corresponding
   success or terminal failure is durable, and repeats that acknowledgement

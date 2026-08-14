@@ -15,12 +15,13 @@ use a3s_oci_sdk::{
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
 
 use crate::model::{
-    AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest,
-    AgentExecRequest, AgentHello, AgentKillRequest, AgentProcess, AgentProcessesRequest,
-    AgentReadOutputRequest, AgentRequest, AgentResizeRequest, AgentResponse,
-    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
-    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
-    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    AgentAcknowledgeOperationsRequest, AgentCloseStdinRequest, AgentContainerOperationRequest,
+    AgentCreateRequest, AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest,
+    AgentProcess, AgentProcessesRequest, AgentReadOutputRequest, AgentRequest, AgentResizeRequest,
+    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
+    AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest,
+    AgentWriteStdinRequest, HelloOutcome, HostHello, ProtocolRange, RequestEnvelope,
+    ResponseEnvelope, ResponseOutcome,
 };
 use crate::wire::{read_frame, read_frame_for_test, write_frame};
 use crate::{
@@ -28,6 +29,7 @@ use crate::{
     SessionToken,
 };
 
+mod acknowledgement;
 mod fault_matrix;
 mod process;
 mod protocol;
@@ -52,6 +54,7 @@ struct TestAgent {
     state: Mutex<TestAgentState>,
     wait_dispatches: AtomicUsize,
     exec_dispatches: AtomicUsize,
+    acknowledgements: Mutex<Vec<Vec<OperationId>>>,
 }
 
 #[derive(Debug, Default)]
@@ -94,9 +97,18 @@ impl GuestAgentService for TestAgent {
                 crate::AgentOperation::Resize,
                 crate::AgentOperation::File,
                 crate::AgentOperation::Filesystem,
+                crate::AgentOperation::AcknowledgeOperations,
             ],
         )
         .expect("valid test capabilities")
+    }
+
+    async fn acknowledge_operations(&self, operation_ids: &[OperationId]) -> Result<()> {
+        self.acknowledgements
+            .lock()
+            .expect("acknowledgement lock")
+            .push(operation_ids.to_vec());
+        Ok(())
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {

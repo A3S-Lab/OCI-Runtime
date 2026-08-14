@@ -83,7 +83,7 @@ field and platform feature is implemented.
 | --- | --- | --- |
 | M0 - Boundary freeze | Generic public contracts, attachment schemas, driver/isolation vocabulary, and state ownership | Box depends only on `a3s-oci-sdk`; runtime behavior does not depend on Box types |
 | M1 - Host service | Multi-driver registry, secure Unix/Windows service endpoints, durable routing, state migration, restart reconciliation, and reattachment/cleanup | A service restart at every lifecycle boundary preserves or safely terminates the exact workload |
-| M2 - Windows experimental | Launch-ready WHPX driver, protected runtime storage, pinned kernel, immutable system root, authenticated protocol-v9 agent, and leak gates | A fresh Windows host passes complete SDK lifecycle, I/O, filesystem, resource, recovery, and multi-container suites |
+| M2 - Windows experimental | Launch-ready WHPX driver, protected runtime storage, pinned kernel, immutable system root, authenticated protocol-v10 agent, and leak gates | A fresh Windows host passes complete SDK lifecycle, I/O, filesystem, resource, recovery, and multi-container suites |
 | M3 - Box cutover | Stable SDK surface and Linux/KVM/HVF drivers needed by the unified Box adapter | Box routes `microvm` and `sandbox` through the SDK with no silent fallback |
 | M4 - containerd | Runtime-v2 shim using OCI bundles and SDK operations directly | containerd task, restart, I/O, and cleanup suites pass without invoking the Box CLI |
 | M5 - parity extensions | Storage/network attachments, reusable guest sessions, checkpoint/restore, and TEE mechanisms | Box storage, networking, warm-pool, snapshot, and security gates pass through public extensions |
@@ -133,7 +133,8 @@ Completed:
   reap, providing the ownership boundary required by a long-lived VM driver;
 - single-owner utility-VM sessions with clone-safe guest access and idempotent
   retained cleanup evidence, exercised by WHPX/HVF lifecycle harnesses;
-- one shared twenty-operation guest-to-driver adapter, including exact-target
+- one shared 20-workload-operation guest-to-driver adapter, including
+  exact-target
   file transfer and filesystem metadata/mutations, plus a
   qualification-only WHPX `RuntimeDriver` candidate that owns one VM per
   exact dedicated-VM generation, serializes same-ID launch without blocking
@@ -158,8 +159,9 @@ Completed:
   host-visible marker verification, bounded worker reap, and marker cleanup;
 - real macOS static arm64 guest-agent boot through AF_VSOCK and a private Unix
   socket, with `LOCAL_PEERPID`, direct shim-worker parent verification,
-  one-time token authentication, protocol-v9 negotiation, exact
-  twenty-operation advertisement, process-group termination, exact endpoint
+  one-time token authentication, protocol-v10 negotiation, exact advertisement
+  of 20 workload operations plus one maintenance acknowledgement,
+  process-group termination, exact endpoint
   removal, observed PID reap, and in-process descriptor-inventory restoration;
 - real macOS fixed-bundle create/state/start/kill/wait/delete evidence using
   the shared Windows lifecycle harness, including exact mutation retries,
@@ -347,14 +349,16 @@ Completed:
   pause, resume, and live process inventory, protocol-v5 update and stats,
   protocol-v6 bounded process I/O, protocol-v7 terminal resize, and
   protocol-v8 durable process-I/O mutation contexts with exact session replay,
-  plus protocol-v9 descriptor-confined file and filesystem sessions;
-- an exhaustive negotiated-version fault registry for all twenty guest
+  plus protocol-v9 descriptor-confined file and filesystem sessions and
+  protocol-v10 bounded Host acknowledgement of completed Guest replay records;
+- an exhaustive negotiated-version fault registry for all 21 guest
   operations, spanning four host request/response stages, five guest
   read/dispatch/write stages, and two host shutdown stages. An authenticated
-  in-memory matrix injects every one of the 180 operation-stage pairs, proves
+  in-memory matrix injects every one of the 189 operation-stage pairs, proves
   one crossing and terminal disconnect per point. A portable agent-backed
   `RuntimeDriver` matrix also arms each of the nine transport stages exactly
-  once for all twenty operations across durable `HostRuntimeService` reopen.
+  once for all 20 public workload operations across durable
+  `HostRuntimeService` reopen.
   Pre-dispatch faults defer the
   guest request until the replacement connection; post-dispatch mutation faults
   replay the guest journal while read-only state and uncached wait observations
@@ -494,6 +498,16 @@ enforce it. No property is silently ignored.
   chunk identity; and reject mixed pending/completed acknowledgement batches
   atomically. Unit evidence fills all 4,096 guest slots before releasing them,
   and three complete containerd matrices pass through one unchanged Host PID.
+- [x] Carry the same post-commit reclamation boundary across utility-VM
+  protocol v10. Keep protocol-v1 through protocol-v9 acknowledgement as a
+  compatibility no-op, bound each v10 batch to 1..=4,096 unique operation
+  identities, and fan out safely across live HVF/WHPX sessions without holding
+  session locks across transport I/O. The protocol matrix covers all 189
+  operation/stage pairs; the 20-operation Host reopen matrix proves that a
+  response-write disconnect returns a retryable acknowledgement error, then
+  replays the durable result without redispatch and acknowledges it once after
+  reopen. A real Apple Silicon Guest negotiates v10 and advertises the exact 20
+  workload operations plus the maintenance acknowledgement.
 - [x] Reconcile interrupted core lifecycle operations and quarantine failed
   create/delete state.
 - [x] Implement driver-independent `create`, `state`, `start`, `kill`, and
@@ -523,8 +537,8 @@ enforce it. No property is silently ignored.
     response is lost can reconnect over a newly authenticated stream and replay
     the exact `OperationId` and request with one effect, while changed content
     under that ID fails with `Conflict`.
-  - [x] Arm and cross all 180 current operation-stage pairs over authenticated
-    in-memory streams. Require each selected point exactly once, disconnect the
+  - [x] Arm and cross all 189 current Guest operation-stage pairs over
+    authenticated in-memory streams. Require each selected point exactly once, disconnect the
     session after every injected failure, and prove that a fault after a fully
     written response preserves that response but fails the next request.
   - [x] Carry the post-dispatch create-response-loss case through a portable
@@ -1109,7 +1123,9 @@ then may WHPX become `experimental`.
   `ee7099e367c91b70a1c84cc6f8921da67e7aec4805e6b5c99b6aa683e7544ed1`.
 - [x] Establish the private macOS Unix endpoint and AF_VSOCK guest-agent
   bridge, verify that the peer is the shim's direct VM worker child, and
-  authenticate protocol-v9 negotiation with a one-time token.
+  authenticate version-negotiated protocol with a one-time token. The current
+  immutable Guest negotiates protocol v10; retained v9 evidence remains valid
+  for backward compatibility.
 - [x] Run the same fixed create/state/start/kill/wait/delete OCI lifecycle used
   by WHPX, including bounded running wait, exact repeated exit status,
   pause/resume, live process inventory, resource update, and normalized stats.

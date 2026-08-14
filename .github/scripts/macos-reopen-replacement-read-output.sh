@@ -52,8 +52,8 @@ run_read_output_stage() {
            == .read_output_max_bytes
        and .expected_output_chunks[0].sequence
            == .read_output_max_bytes
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.read-output-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.read-output-" + $stage)
        and .fault_crossings == 1
        and .first_operation_error_code == "unavailable"
        and .first_operation_error_retryable

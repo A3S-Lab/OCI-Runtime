@@ -102,15 +102,15 @@ async fn exercise_exec_reopen(index: usize, stage: AgentTransportOperationStage)
     assert_eq!(guest.start_effect_count(), 1, "{stage:?}");
 
     let first_result = first_service.exec(exec.clone()).await;
-    if response_reached_host(stage) {
-        let process = first_result
-            .unwrap_or_else(|error| panic!("written exec response for {stage:?}: {error}"));
-        assert_process(&process, &expected_target, stage);
-    } else {
-        let error = first_result.expect_err("exec fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error =
+        first_result.expect_err("exec transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&exec.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.exec_dispatches(), 1, "{stage:?}");
     drop(first_service);
     drop(first_driver);
@@ -157,6 +157,11 @@ async fn exercise_exec_reopen(index: usize, stage: AgentTransportOperationStage)
         .await
         .unwrap_or_else(|error| panic!("resume exec after {stage:?}: {error}"));
     assert_process(&process, &expected_target, stage);
+    assert_eq!(
+        guest.acknowledgement_count(&exec.context.operation_id),
+        1,
+        "{stage:?}"
+    );
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {
         1

@@ -100,16 +100,15 @@ async fn exercise_signal_process_reopen(index: usize, stage: AgentTransportOpera
     assert_eq!(metrics.exec_dispatches(), 1, "{stage:?}");
 
     let first_result = first_service.signal_process(signal.clone()).await;
-    if response_reached_host(stage) {
-        first_result.unwrap_or_else(|error| {
-            panic!("written signal-process response for {stage:?}: {error}")
-        });
-    } else {
-        let error =
-            first_result.expect_err("signal-process fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error = first_result
+        .expect_err("signal-process transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&signal.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.signal_process_dispatches(), 1, "{stage:?}");
     drop(first_service);
     drop(first_driver);
@@ -155,6 +154,11 @@ async fn exercise_signal_process_reopen(index: usize, stage: AgentTransportOpera
         .signal_process(signal.clone())
         .await
         .unwrap_or_else(|error| panic!("resume process signal after {stage:?}: {error}"));
+    assert_eq!(
+        guest.acknowledgement_count(&signal.context.operation_id),
+        1,
+        "{stage:?}"
+    );
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {
         1

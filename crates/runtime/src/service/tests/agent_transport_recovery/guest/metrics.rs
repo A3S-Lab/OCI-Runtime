@@ -1,6 +1,19 @@
+use a3s_oci_sdk::OperationId;
+
 use super::JournaledLifecycleGuest;
 
 impl JournaledLifecycleGuest {
+    pub(in super::super) fn acknowledgement_count(&self, operation_id: &OperationId) -> usize {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .acknowledgements
+            .iter()
+            .flatten()
+            .filter(|acknowledged| *acknowledged == operation_id)
+            .count()
+    }
+
     pub(in super::super) fn create_request_count(&self) -> usize {
         self.journal
             .lock()

@@ -274,8 +274,16 @@ processes, update, stats, read-output, write-stdin, close-stdin, resize, file,
 and filesystem, retaining all 180 operation-stage pairs. Durably journaled host
 mutations distinguish pre-dispatch execution, post-dispatch guest replay, and
 completed durable-host replay while preserving the same generation and one
-effect. Exec additionally preserves its exact process ID, guest PID, and
-terminal mode;
+effect. After a success or terminal failure is durable, the Host invokes the
+driver acknowledgement hook. Native Linux releases the local replay record;
+protocol-v10 utility-VM drivers send the exact Guest identity or every derived
+stdin chunk identity. If the operation response reached the Host but the
+connection closed before acknowledgement completed, the first API call returns
+a retryable transport error even though the Host result is durable. Reopen
+replays that result without driver dispatch and retries the acknowledgement on
+the replacement connection. Protocol-v1 through protocol-v9 Guests keep the
+compatibility no-op. Exec additionally preserves its exact process ID, guest
+PID, and terminal mode;
 signal-process preserves that exact process target and the delivered signal;
 pause and resume preserve the running state and commit the matching freezer
 flag exactly once, including when the first guest effect preceded the lost
@@ -286,7 +294,9 @@ exact process target and operation context with one close effect; resize
 preserves the exact terminal process target, operation context, dimensions, and
 one resize effect.
 File uploads and filesystem mutations remain session-scoped operations rather
-than durable host journal entries. Every retry after reopen, including one after
+than durable Host journal entries and therefore do not yet have a safe
+post-commit acknowledgement boundary. Every retry after reopen, including one
+after
 a fully written first response, resolves and dispatches the same
 exact-generation request. The guest journals return the same upload
 acknowledgement or directory metadata and keep one mutation effect; changed

@@ -83,15 +83,15 @@ async fn exercise_close_stdin_reopen(index: usize, stage: AgentTransportOperatio
     };
 
     let first_result = first_service.close_stdin(close.clone()).await;
-    if response_reached_host(stage) {
-        first_result
-            .unwrap_or_else(|error| panic!("written close-stdin response for {stage:?}: {error}"));
-    } else {
-        let error =
-            first_result.expect_err("close-stdin fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error = first_result
+        .expect_err("close-stdin transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&close.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.close_stdin_dispatches(), 1, "{stage:?}");
     drop(first_service);
     drop(first_driver);
@@ -137,6 +137,11 @@ async fn exercise_close_stdin_reopen(index: usize, stage: AgentTransportOperatio
         .close_stdin(close.clone())
         .await
         .unwrap_or_else(|error| panic!("resume stdin close after {stage:?}: {error}"));
+    assert_eq!(
+        guest.acknowledgement_count(&close.context.operation_id),
+        1,
+        "{stage:?}"
+    );
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {
         1

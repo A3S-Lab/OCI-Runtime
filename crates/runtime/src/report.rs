@@ -328,29 +328,7 @@ impl AgentVmSmokeReport {
             && self.selected_protocol == Some(AGENT_PROTOCOL_VERSION_MAX)
             && self.agent_version.as_deref() == Some(env!("CARGO_PKG_VERSION"))
             && self.guest_architecture.as_deref() == expected_architecture
-            && self.advertised_operations
-                == [
-                    AgentOperation::Create,
-                    AgentOperation::State,
-                    AgentOperation::Start,
-                    AgentOperation::Kill,
-                    AgentOperation::Delete,
-                    AgentOperation::Wait,
-                    AgentOperation::Exec,
-                    AgentOperation::SignalProcess,
-                    AgentOperation::WaitProcess,
-                    AgentOperation::Pause,
-                    AgentOperation::Resume,
-                    AgentOperation::Processes,
-                    AgentOperation::Update,
-                    AgentOperation::Stats,
-                    AgentOperation::ReadOutput,
-                    AgentOperation::WriteStdin,
-                    AgentOperation::CloseStdin,
-                    AgentOperation::Resize,
-                    AgentOperation::File,
-                    AgentOperation::Filesystem,
-                ]
+            && self.advertised_operations.as_slice() == AgentOperation::ALL.as_slice()
             && self.shim_report_verified
             && self.shim_exit_code == Some(0)
             && self.console_created

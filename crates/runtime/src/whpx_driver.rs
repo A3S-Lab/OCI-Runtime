@@ -14,7 +14,7 @@ use a3s_oci_sdk::{
     async_trait, runtime_bundle_handoff_directory, runtime_bundle_handoff_root,
     AttachmentCapabilities, ContainerId, ContainerRecord, ContainerStats, ContainerTarget, Error,
     ErrorCode, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
-    OciBundle, OutputChunk, ProcessRecord, Result, RuntimeOperation,
+    OciBundle, OperationId, OutputChunk, ProcessRecord, Result, RuntimeOperation,
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
     RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
 };
@@ -774,6 +774,23 @@ impl RuntimeDriver for WhpxRuntimeDriver {
                 vec![RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION],
             )
             .expect("the fixed WHPX bundle-handoff extension is valid")
+    }
+
+    async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        let clients = self
+            .sessions
+            .lock()
+            .await
+            .values()
+            .filter_map(|attachment| match attachment {
+                WhpxAttachment::Live(session) => Some(session.client.clone()),
+                WhpxAttachment::RecoveredStopped { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        for client in clients {
+            client.acknowledge_operation(operation_id).await?;
+        }
+        Ok(())
     }
 
     async fn prepare_create_bundle(&self, request: &DriverCreateRequest) -> Result<OciBundle> {

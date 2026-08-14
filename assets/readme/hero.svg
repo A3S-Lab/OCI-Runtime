@@ -101,7 +101,7 @@
       <text x="198" y="46" fill="#67c8ff" font-size="26" font-weight="760">63</text>
       <path d="M408 3v48" stroke="#263746" stroke-width="1.5"/>
       <text x="432" y="20" fill="#90a2b3" font-size="17" font-weight="700">PROTOCOL</text>
-      <text x="432" y="46" fill="#f4f7fa" font-size="26" font-weight="760">v9</text>
+      <text x="432" y="46" fill="#f4f7fa" font-size="26" font-weight="760">v10</text>
     </g>
   </g>
 </svg>

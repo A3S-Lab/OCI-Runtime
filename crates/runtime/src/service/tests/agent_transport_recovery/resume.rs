@@ -89,15 +89,15 @@ async fn exercise_resume_reopen(index: usize, stage: AgentTransportOperationStag
     };
 
     let first_result = first_service.resume(resume.clone()).await;
-    if response_reached_host(stage) {
-        let running = first_result
-            .unwrap_or_else(|error| panic!("written resume response for {stage:?}: {error}"));
-        assert_running(&running, created.generation, false, stage);
-    } else {
-        let error = first_result.expect_err("resume fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error =
+        first_result.expect_err("resume transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&resume.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.resume_dispatches(), 1, "{stage:?}");
 
     let active = first_service
@@ -156,6 +156,11 @@ async fn exercise_resume_reopen(index: usize, stage: AgentTransportOperationStag
         .await
         .unwrap_or_else(|error| panic!("resume thaw after {stage:?}: {error}"));
     assert_running(&running, created.generation, false, stage);
+    assert_eq!(
+        guest.acknowledgement_count(&resume.context.operation_id),
+        1,
+        "{stage:?}"
+    );
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {
         1

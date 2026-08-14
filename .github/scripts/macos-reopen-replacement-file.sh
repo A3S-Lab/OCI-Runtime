@@ -44,8 +44,8 @@ run_file_stage() {
        and (.setup_exec_operation_id == null)
        and (.setup_kill_operation_id == null)
        and (.container_id | startswith("smoke-file-reopen-"))
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.file-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.file-" + $stage)
        and .fault_crossings == 1
        and .first_operation_error_code == "unavailable"
        and .first_operation_error_retryable
@@ -134,8 +134,8 @@ run_file_stage() {
        and .state_root_removed
        and .first_vm.status == "available"
        and .replacement_vm.status == "available"
-       and .first_vm.selected_protocol == 9
-       and .replacement_vm.selected_protocol == 9
+       and .first_vm.selected_protocol == 10
+       and .replacement_vm.selected_protocol == 10
        and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
        and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
        and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)

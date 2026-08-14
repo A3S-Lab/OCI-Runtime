@@ -350,8 +350,13 @@ Exact request retries are fingerprinted by `OperationId`, and reused IDs with
 different requests fail. This includes pause, resume, and resource update.
 Generation fences remain in memory after delete.
 
-All guest registry, generation, and idempotency state is session-local. The
-host releases the shared transport immediately after a terminal request-write,
+All guest registry, generation, and idempotency state is session-local.
+Protocol v10 adds a bounded maintenance acknowledgement so completed mutation
+records can be removed after the Host outcome is durable. The Guest rejects a
+batch containing any still-pending known identity without removing the
+completed records in that batch; unknown identities are safe. Protocol-v1
+through protocol-v9 retain no-op compatibility. The host releases the shared
+transport immediately after a terminal request-write,
 response-read, correlation, or response-shape failure, even when other client
 clones remain. The resulting closed host connection force-stops remaining
 configured processes, exec process groups and helpers, and namespace
@@ -359,10 +364,11 @@ supervisors, then removes the agent-owned runtime root. Agent restart recovery
 is not implemented yet.
 
 Qualification can now interrupt an exact negotiated-version boundary for any
-of the twenty guest operations: four host request/response stages, five guest
+of the 21 Guest operations: 20 workload operations plus the maintenance
+acknowledgement, across four host request/response stages, five guest
 read/dispatch/write stages, and two explicit host shutdown stages. Production
 uses a no-op injector. An authenticated in-memory matrix injects every one of
-the 180 operation-stage pairs, requires one exact crossing, and proves the
+the 189 operation-stage pairs, requires one exact crossing, and proves the
 connection terminates after each fault. Separate evidence completes one create
 dispatch, drops the response before it is written, authenticates a new
 connection, and replays the identical `OperationId` and request without a
@@ -371,8 +377,8 @@ portable agent-backed `RuntimeDriver` matrix now carries all nine create,
 state, start, kill, delete, wait, exec, signal-process, wait-process, pause,
 resume, processes, update, stats, read-output, write-stdin, close-stdin, resize,
 file, and filesystem stages through `HostRuntimeService` reopen: all 180
-operation-stage pairs. Faults before guest dispatch leave a mutation resumable
-and perform its first effect on the replacement connection.
+public workload operation-stage pairs. Faults before guest dispatch leave a
+mutation resumable and perform its first effect on the replacement connection.
 Faults after dispatch replay the cached mutation response, including a guest
 that reached `running` while the durable host still records `created`, reached
 `stopped` while the durable host still records `running`, removed the generation
@@ -400,8 +406,10 @@ wait forms are reissued only until the host durably caches the guest's stable
 exact terminal result. A fully written wait response and every later retry
 avoid a second driver or guest dispatch. All six observations resolve a current
 host target to the exact generation and reject stale host and guest targets. A
-fault after a durably journaled host mutation response write lets the completed
-host journal answer the retry without a second driver dispatch; completed
+fault after a durably journaled host mutation response write commits the Host
+result, then exposes the retryable acknowledgement failure. After reopen, the
+completed Host journal answers the retry without a second driver dispatch and
+the replacement connection acknowledges the exact operation once; completed
 delete also leaves no live record to send through driver recovery. File and
 filesystem mutations are session-scoped and are dispatched again after every
 reopen, including after a fully written response; the guest journals return the
@@ -610,7 +618,8 @@ cargo zigbuild -p a3s-oci-agent --release `
 
 `a3s-oci agent-vm-smoke` proves the authenticated
 guest-AF_VSOCK/libkrun/Windows-named-pipe path and verifies the exact
-twenty-operation advertisement, including `file` and `filesystem`.
+20 workload operations, including `file` and `filesystem`, plus the
+protocol-v10 maintenance acknowledgement.
 `a3s-oci oci-vm-smoke` additionally loads a
 bundle below the VM rootfs and proves the distinct create/start barrier, state
 observation, exact create/kill/delete replay, bounded running wait, exact

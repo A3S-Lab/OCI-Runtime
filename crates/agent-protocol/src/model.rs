@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest,
-    FileResponse, FilesystemRequest, FilesystemResponse, OciBundle, OperationContext, OutputChunk,
-    ProcessIo, ProcessRecord, ProcessTarget, Result, Signal, TerminalSize,
+    FileResponse, FilesystemRequest, FilesystemResponse, OciBundle, OperationContext, OperationId,
+    OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, Signal, TerminalSize,
 };
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -13,7 +13,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// Oldest host-to-guest protocol version implemented by this build.
 pub const AGENT_PROTOCOL_VERSION_MIN: u16 = 1;
 /// Newest host-to-guest protocol version implemented by this build.
-pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 9;
+pub const AGENT_PROTOCOL_VERSION_MAX: u16 = 10;
 /// Maximum encoded host-to-guest frame size.
 pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// Maximum binary process-I/O payload carried by one agent request or response.
@@ -22,6 +22,8 @@ pub const AGENT_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// the encoded frame limit. Host drivers may split larger SDK writes and reads
 /// across multiple agent calls.
 pub const AGENT_MAX_IO_PAYLOAD_BYTES: u32 = 4 * 1024 * 1024;
+/// Maximum completed mutation identities released by one Host acknowledgement.
+pub const AGENT_MAX_ACKNOWLEDGED_OPERATIONS: usize = 4_096;
 /// Required session-token entropy supplied by the host.
 pub const AGENT_SESSION_TOKEN_BYTES: usize = 32;
 /// Environment key used for the protected host-to-shim bootstrap.
@@ -293,11 +295,13 @@ pub enum AgentOperation {
     File,
     /// Descriptor-confined filesystem metadata and mutations. Available from protocol version 9.
     Filesystem,
+    /// Release completed mutation replay records. Available from protocol version 10.
+    AcknowledgeOperations,
 }
 
 impl AgentOperation {
     /// Complete current operation registry in protocol order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Create,
         Self::State,
         Self::Start,
@@ -318,6 +322,7 @@ impl AgentOperation {
         Self::Resize,
         Self::File,
         Self::Filesystem,
+        Self::AcknowledgeOperations,
     ];
 
     /// First protocol version that carries this operation.
@@ -331,6 +336,7 @@ impl AgentOperation {
             Self::ReadOutput | Self::WriteStdin | Self::CloseStdin => 6,
             Self::Resize => 7,
             Self::File | Self::Filesystem => 9,
+            Self::AcknowledgeOperations => 10,
         }
     }
 
@@ -357,6 +363,7 @@ impl AgentOperation {
             Self::Resize => "resize",
             Self::File => "file",
             Self::Filesystem => "filesystem",
+            Self::AcknowledgeOperations => "acknowledge-operations",
         }
     }
 
@@ -373,7 +380,8 @@ impl AgentOperation {
             | Self::WaitProcess
             | Self::Processes
             | Self::Stats
-            | Self::ReadOutput => false,
+            | Self::ReadOutput
+            | Self::AcknowledgeOperations => false,
             Self::WriteStdin | Self::CloseStdin | Self::Resize => protocol_version >= 8,
             Self::Create
             | Self::Start
@@ -559,6 +567,14 @@ impl AgentHello {
     pub const fn capabilities(&self) -> &AgentCapabilities {
         &self.capabilities
     }
+}
+
+/// Completed guest mutation identities released after a durable Host outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentAcknowledgeOperationsRequest {
+    /// Non-empty, duplicate-free batch of completed operation identities.
+    pub operation_ids: Vec<OperationId>,
 }
 
 /// OCI create input sent to the guest executor.
@@ -783,6 +799,7 @@ pub enum AgentRequest {
     Resize(AgentResizeRequest),
     File(FileRequest),
     Filesystem(FilesystemRequest),
+    AcknowledgeOperations(AgentAcknowledgeOperationsRequest),
 }
 
 impl AgentRequest {
@@ -810,6 +827,7 @@ impl AgentRequest {
             Self::Resize(_) => AgentOperation::Resize,
             Self::File(_) => AgentOperation::File,
             Self::Filesystem(_) => AgentOperation::Filesystem,
+            Self::AcknowledgeOperations(_) => AgentOperation::AcknowledgeOperations,
         }
     }
 
@@ -850,7 +868,8 @@ impl AgentRequest {
             | Self::WaitProcess(_)
             | Self::Processes(_)
             | Self::Stats(_)
-            | Self::ReadOutput(_) => None,
+            | Self::ReadOutput(_)
+            | Self::AcknowledgeOperations(_) => None,
         }
     }
 }
@@ -1040,6 +1059,7 @@ pub enum AgentResponse {
     TerminalResized(ProcessTarget),
     File(FileResponse),
     Filesystem(FilesystemResponse),
+    OperationsAcknowledged,
 }
 
 const fn is_false(value: &bool) -> bool {

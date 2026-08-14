@@ -16,7 +16,7 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerRecord, ContainerStats, ContainerTarget, Error, ErrorCode, ExitStatus,
     FileRequest, FileResponse, FilesystemRequest, FilesystemResponse, OciBundle, OperationContext,
-    OutputChunk, ProcessIo, ProcessRecord, Result, RuntimeOperation,
+    OperationId, OutputChunk, ProcessIo, ProcessRecord, Result, RuntimeOperation,
 };
 use tokio::io::DuplexStream;
 
@@ -85,6 +85,12 @@ impl RuntimeDriver for AgentLifecycleDriver {
 
     fn operations(&self) -> &[RuntimeOperation] {
         &DRIVER_OPERATIONS
+    }
+
+    async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        self.client
+            .acknowledge_operations(std::slice::from_ref(operation_id))
+            .await
     }
 
     async fn recover(&self, _record: &ContainerRecord) -> Result<DriverRecovery> {

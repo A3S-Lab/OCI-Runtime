@@ -10,7 +10,8 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerStats, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest,
-    FileResponse, FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
+    FileResponse, FilesystemRequest, FilesystemResponse, OperationId, OutputChunk, ProcessRecord,
+    Result,
 };
 
 use super::guest_journal::{already_exists, changed_request, OperationJournal};
@@ -45,6 +46,7 @@ struct LifecycleJournal {
     resize: OperationJournal<AgentResizeRequest, ()>,
     file: OperationJournal<FileRequest, FileResponse>,
     filesystem: OperationJournal<FilesystemRequest, FilesystemResponse>,
+    acknowledgements: Vec<Vec<OperationId>>,
     init_exit_status: Option<ExitStatus>,
     exec_exit_status: Option<ExitStatus>,
     current: Option<AgentState>,
@@ -62,28 +64,7 @@ impl JournaledLifecycleGuest {
             capabilities: AgentCapabilities::new(
                 "host-service-reopen-test",
                 std::env::consts::ARCH,
-                vec![
-                    AgentOperation::Create,
-                    AgentOperation::State,
-                    AgentOperation::Start,
-                    AgentOperation::Kill,
-                    AgentOperation::Delete,
-                    AgentOperation::Wait,
-                    AgentOperation::Exec,
-                    AgentOperation::SignalProcess,
-                    AgentOperation::WaitProcess,
-                    AgentOperation::Pause,
-                    AgentOperation::Resume,
-                    AgentOperation::Processes,
-                    AgentOperation::Update,
-                    AgentOperation::Stats,
-                    AgentOperation::ReadOutput,
-                    AgentOperation::WriteStdin,
-                    AgentOperation::CloseStdin,
-                    AgentOperation::Resize,
-                    AgentOperation::File,
-                    AgentOperation::Filesystem,
-                ],
+                AgentOperation::ALL.to_vec(),
             )
             .expect("test guest capabilities"),
             journal: Mutex::new(LifecycleJournal::default()),
@@ -95,6 +76,15 @@ impl JournaledLifecycleGuest {
 impl GuestAgentService for JournaledLifecycleGuest {
     fn capabilities(&self) -> AgentCapabilities {
         self.capabilities.clone()
+    }
+
+    async fn acknowledge_operations(&self, operation_ids: &[OperationId]) -> Result<()> {
+        self.journal
+            .lock()
+            .expect("guest journal lock")
+            .acknowledgements
+            .push(operation_ids.to_vec());
+        Ok(())
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {

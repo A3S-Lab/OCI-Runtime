@@ -55,19 +55,14 @@ async fn exercise_create_reopen(index: usize, stage: AgentTransportOperationStag
     .unwrap_or_else(|error| panic!("open first host runtime for {stage:?}: {error}"));
 
     let first_result = first_service.create(request.clone()).await;
-    if response_reached_host(stage) {
-        let created = first_result
-            .unwrap_or_else(|error| panic!("written response must complete {stage:?}: {error}"));
-        assert_eq!(
-            *created.state.status(),
-            ContainerState::Created,
-            "{stage:?}"
-        );
-    } else {
-        let error = first_result.expect_err("fault must remain visible before response delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error = first_result.expect_err("transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&request.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.create_dispatches(), 1, "{stage:?}");
 
     let active = first_service
@@ -137,6 +132,11 @@ async fn exercise_create_reopen(index: usize, stage: AgentTransportOperationStag
         "{stage:?}"
     );
     assert_eq!(*created.state.pid(), Some(6_101), "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&request.context.operation_id),
+        1,
+        "{stage:?}"
+    );
 
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {

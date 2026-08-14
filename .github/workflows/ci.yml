@@ -289,7 +289,7 @@ jobs:
                and (.bridge_process_id > 0)
                and (.bridge_process_id != .shim_process_id)
                and .shim_client_verified and .protocol_negotiated
-               and .selected_protocol == 9
+               and .selected_protocol == 10
                and .agent_version == $agent_version
                and .guest_architecture == "aarch64"
                and .advertised_operations
@@ -297,7 +297,7 @@ jobs:
                        "exec", "signal-process", "wait-process", "pause",
                        "resume", "processes", "update", "stats",
                        "read-output", "write-stdin", "close-stdin", "resize",
-                       "file", "filesystem"]
+                       "file", "filesystem", "acknowledge-operations"]
                and .shim_report_verified and .shim_exit_code == 0
                and .console_created
                and .shim_report.platform == "macos"
@@ -444,14 +444,14 @@ jobs:
                     != .bridge.shim_process_id)
                and .bridge.shim_client_verified
                and .bridge.protocol_negotiated
-               and .bridge.selected_protocol == 9
+               and .bridge.selected_protocol == 10
                and .bridge.guest_architecture == "aarch64"
                and .bridge.advertised_operations
                    == ["create", "state", "start", "kill", "delete", "wait",
                        "exec", "signal-process", "wait-process", "pause",
                        "resume", "processes", "update", "stats",
                        "read-output", "write-stdin", "close-stdin", "resize",
-                       "file", "filesystem"]
+                       "file", "filesystem", "acknowledge-operations"]
                and .bridge.shim_report_verified
                and .bridge.shim_exit_code == 0
                and .bridge.console_created
@@ -648,13 +648,13 @@ jobs:
                and .bridge.platform == "macos"
                and .bridge.status == "available"
                and .bridge.protocol_negotiated
-               and .bridge.selected_protocol == 9
+               and .bridge.selected_protocol == 10
                and .bridge.advertised_operations
                    == ["create", "state", "start", "kill", "delete", "wait",
                        "exec", "signal-process", "wait-process", "pause",
                        "resume", "processes", "update", "stats",
                        "read-output", "write-stdin", "close-stdin", "resize",
-                       "file", "filesystem"]
+                       "file", "filesystem", "acknowledge-operations"]
                and .bridge.shim_report_verified
                and .bridge.shim_exit_code == 0
                and .bridge.macos_cleanup.endpoint_removed

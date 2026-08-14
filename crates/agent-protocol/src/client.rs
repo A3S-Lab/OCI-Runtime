@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     async_trait, ContainerStats, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
-    FilesystemRequest, FilesystemResponse, OutputChunk, ProcessRecord, Result,
+    FilesystemRequest, FilesystemResponse, OperationId, OutputChunk, ProcessRecord, Result,
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
@@ -15,13 +15,14 @@ use crate::fault::{
     AgentTransportShutdownStage, NoAgentTransportFaultInjector,
 };
 use crate::model::{
-    protocol_error, AgentCloseStdinRequest, AgentContainerOperationRequest, AgentCreateRequest,
-    AgentDeleteRequest, AgentExecRequest, AgentHello, AgentKillRequest, AgentOperation,
-    AgentProcess, AgentProcessesRequest, AgentReadOutputRequest, AgentRequest, AgentResizeRequest,
-    AgentResponse, AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest,
-    AgentStatsRequest, AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest,
-    AgentWriteStdinRequest, HelloOutcome, HostHello, ProtocolRange, RequestEnvelope,
-    ResponseEnvelope, ResponseOutcome, SessionToken,
+    protocol_error, AgentAcknowledgeOperationsRequest, AgentCloseStdinRequest,
+    AgentContainerOperationRequest, AgentCreateRequest, AgentDeleteRequest, AgentExecRequest,
+    AgentHello, AgentKillRequest, AgentOperation, AgentProcess, AgentProcessesRequest,
+    AgentReadOutputRequest, AgentRequest, AgentResizeRequest, AgentResponse,
+    AgentSignalProcessRequest, AgentStartRequest, AgentState, AgentStateRequest, AgentStatsRequest,
+    AgentUpdateRequest, AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest,
+    HelloOutcome, HostHello, ProtocolRange, RequestEnvelope, ResponseEnvelope, ResponseOutcome,
+    SessionToken,
 };
 use crate::server::GuestAgentService;
 use crate::wire::{read_frame, write_frame};
@@ -183,6 +184,38 @@ where
         });
         drop(stream);
         shutdown_result.and(after_result)
+    }
+
+    /// Release completed guest mutation records after their Host outcomes are durable.
+    ///
+    /// Protocol versions before v10 and guests that do not advertise the maintenance
+    /// operation preserve their historical no-op behavior.
+    pub async fn acknowledge_operations(&self, operation_ids: &[OperationId]) -> Result<()> {
+        if operation_ids.is_empty()
+            || self.hello.selected_version()
+                < AgentOperation::AcknowledgeOperations.minimum_protocol_version()
+            || !self
+                .hello
+                .capabilities()
+                .operations()
+                .contains(&AgentOperation::AcknowledgeOperations)
+        {
+            return Ok(());
+        }
+        match self
+            .call(AgentRequest::AcknowledgeOperations(
+                AgentAcknowledgeOperationsRequest {
+                    operation_ids: operation_ids.to_vec(),
+                },
+            ))
+            .await?
+        {
+            AgentResponse::OperationsAcknowledged => Ok(()),
+            _ => Err(protocol_error(
+                ErrorCode::Internal,
+                "guest returned the wrong response for an operation acknowledgement",
+            )),
+        }
     }
 
     /// Perform OCI create without releasing the configured user process.
@@ -546,7 +579,7 @@ where
 ///
 /// Runtime drivers can therefore share one executor adapter between an
 /// in-process Linux executor and a utility-VM protocol connection without
-/// duplicating the twenty-operation mapping contract.
+/// duplicating the twenty workload-operation mapping contract.
 #[async_trait]
 impl<T> GuestAgentService for AgentClient<T>
 where
@@ -554,6 +587,10 @@ where
 {
     fn capabilities(&self) -> crate::AgentCapabilities {
         self.hello().capabilities().clone()
+    }
+
+    async fn acknowledge_operations(&self, operation_ids: &[OperationId]) -> Result<()> {
+        AgentClient::acknowledge_operations(self, operation_ids).await
     }
 
     async fn create(&self, request: AgentCreateRequest) -> Result<AgentState> {
@@ -821,6 +858,7 @@ fn validate_response_for_request(request: &AgentRequest, response: &AgentRespons
         (AgentRequest::Filesystem(request), AgentResponse::Filesystem(response)) => {
             validate_container_target(&request.target, &response.target)
         }
+        (AgentRequest::AcknowledgeOperations(_), AgentResponse::OperationsAcknowledged) => Ok(()),
         (request, response) => Err(protocol_error(
             ErrorCode::Internal,
             format!(

@@ -61,7 +61,7 @@ async fn every_current_operation_crosses_every_versioned_transport_fault_stage()
                 .map(move |stage| (operation, stage))
         })
         .collect::<Vec<_>>();
-    assert_eq!(registry.len(), 20 * 9);
+    assert_eq!(registry.len(), 21 * 9);
     assert_eq!(
         registry.iter().copied().collect::<HashSet<_>>().len(),
         registry.len(),
@@ -393,6 +393,11 @@ fn request_for_operation(
             user: None,
             context: None,
         }),
+        crate::AgentOperation::AcknowledgeOperations => {
+            AgentRequest::AcknowledgeOperations(AgentAcknowledgeOperationsRequest {
+                operation_ids: vec![operation_id(&format!("{case}-acknowledged"))],
+            })
+        }
     }
 }
 

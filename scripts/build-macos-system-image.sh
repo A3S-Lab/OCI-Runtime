@@ -151,7 +151,7 @@ install -m 0644 "$image" "$output_dir/a3s-oci-system.ext4"
 install -m 0644 "$archive" "$output_dir/a3s-oci-system.ext4.xz"
 jq --null-input --sort-keys \
   --arg schema_version 'a3s.oci.macos-system-image.v1' \
-  --arg compatibility_level 'a3s-oci-runtime-0.2.0-agent-protocol-v9' \
+  --arg compatibility_level 'a3s-oci-runtime-0.2.0-agent-protocol-v10' \
   --arg architecture 'aarch64' \
   --arg image_name 'a3s-oci-system.ext4' \
   --arg image_sha256 "$image_sha256" \

@@ -78,15 +78,15 @@ async fn exercise_update_reopen(index: usize, stage: AgentTransportOperationStag
     );
 
     let first_result = first_service.update(update.clone()).await;
-    if response_reached_host(stage) {
-        let updated = first_result
-            .unwrap_or_else(|error| panic!("written update response for {stage:?}: {error}"));
-        assert_running(&updated, created.generation, stage);
-    } else {
-        let error = first_result.expect_err("update fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error =
+        first_result.expect_err("update transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(&update.context.operation_id),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.update_dispatches(), 1, "{stage:?}");
 
     let active = first_service
@@ -140,6 +140,11 @@ async fn exercise_update_reopen(index: usize, stage: AgentTransportOperationStag
         .await
         .unwrap_or_else(|error| panic!("resume update after {stage:?}: {error}"));
     assert_running(&updated, created.generation, stage);
+    assert_eq!(
+        guest.acknowledgement_count(&update.context.operation_id),
+        1,
+        "{stage:?}"
+    );
     let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
     let expected_guest_requests = if response_reached_host(stage) {
         1

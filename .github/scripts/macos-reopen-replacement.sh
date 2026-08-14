@@ -126,8 +126,8 @@ run_create_stage() {
        and .requested_stage == $stage
        and (.qualification_operation_id | startswith("reopen-"))
        and (.container_id | startswith("smoke-reopen-"))
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.create-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.create-" + $stage)
        and .fault_crossings == 1
        and .first_create_error_code == "unavailable"
        and .first_create_error_retryable
@@ -186,8 +186,8 @@ run_create_stage() {
        and .state_root_removed
        and .first_vm.status == "available"
        and .replacement_vm.status == "available"
-       and .first_vm.selected_protocol == 9
-       and .replacement_vm.selected_protocol == 9
+       and .first_vm.selected_protocol == 10
+       and .replacement_vm.selected_protocol == 10
        and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
        and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
        and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)
@@ -250,8 +250,8 @@ run_state_stage() {
        and (.setup_create_operation_id | startswith("state-reopen-"))
        and (.qualification_operation_id != .setup_create_operation_id)
        and (.container_id | startswith("smoke-state-reopen-"))
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.state-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.state-" + $stage)
        and .fault_crossings == 1
        and .first_operation_error_code == "unavailable"
        and .first_operation_error_retryable
@@ -302,8 +302,8 @@ run_state_stage() {
        and .state_root_removed
        and .first_vm.status == "available"
        and .replacement_vm.status == "available"
-       and .first_vm.selected_protocol == 9
-       and .replacement_vm.selected_protocol == 9
+       and .first_vm.selected_protocol == 10
+       and .replacement_vm.selected_protocol == 10
        and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
        and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
        and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)
@@ -367,8 +367,8 @@ run_start_stage() {
        and (.setup_create_operation_id | startswith("start-reopen-"))
        and (.qualification_operation_id != .setup_create_operation_id)
        and (.container_id | startswith("smoke-start-reopen-"))
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.start-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.start-" + $stage)
        and .fault_crossings == 1
        and .first_operation_error_code == "unavailable"
        and .first_operation_error_retryable
@@ -432,8 +432,8 @@ run_start_stage() {
        and .state_root_removed
        and .first_vm.status == "available"
        and .replacement_vm.status == "available"
-       and .first_vm.selected_protocol == 9
-       and .replacement_vm.selected_protocol == 9
+       and .first_vm.selected_protocol == 10
+       and .replacement_vm.selected_protocol == 10
        and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
        and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
        and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)
@@ -499,8 +499,8 @@ run_kill_stage() {
        and (.setup_create_operation_id | startswith("kill-reopen-"))
        and (.qualification_operation_id != .setup_create_operation_id)
        and (.container_id | startswith("smoke-kill-reopen-"))
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.kill-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.kill-" + $stage)
        and .fault_crossings == 1
        and .first_operation_error_code == "unavailable"
        and .first_operation_error_retryable
@@ -571,8 +571,8 @@ run_kill_stage() {
        and .state_root_removed
        and .first_vm.status == "available"
        and .replacement_vm.status == "available"
-       and .first_vm.selected_protocol == 9
-       and .replacement_vm.selected_protocol == 9
+       and .first_vm.selected_protocol == 10
+       and .replacement_vm.selected_protocol == 10
        and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
        and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
        and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)
@@ -641,8 +641,8 @@ run_delete_stage() {
        and (.setup_create_operation_id | startswith("delete-reopen-"))
        and (.qualification_operation_id != .setup_create_operation_id)
        and (.container_id | startswith("smoke-delete-reopen-"))
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.delete-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.delete-" + $stage)
        and .fault_crossings == 1
        and .first_operation_error_code == "unavailable"
        and .first_operation_error_retryable
@@ -726,8 +726,8 @@ run_delete_stage() {
        and .state_root_removed
        and .first_vm.status == "available"
        and .replacement_vm.status == "available"
-       and .first_vm.selected_protocol == 9
-       and .replacement_vm.selected_protocol == 9
+       and .first_vm.selected_protocol == 10
+       and .replacement_vm.selected_protocol == 10
        and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
        and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
        and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)
@@ -806,8 +806,8 @@ run_wait_stage() {
        and (.setup_create_operation_id != .setup_kill_operation_id)
        and (.setup_start_operation_id != .setup_kill_operation_id)
        and (.container_id | startswith("smoke-wait-reopen-"))
-       and .negotiated_protocol == 9
-       and .injected_point == ("agent-v9.wait-" + $stage)
+       and .negotiated_protocol == 10
+       and .injected_point == ("agent-v10.wait-" + $stage)
        and .fault_crossings == 1
        and .first_operation_error_code == "unavailable"
        and .first_operation_error_retryable
@@ -893,8 +893,8 @@ run_wait_stage() {
        and .state_root_removed
        and .first_vm.status == "available"
        and .replacement_vm.status == "available"
-       and .first_vm.selected_protocol == 9
-       and .replacement_vm.selected_protocol == 9
+       and .first_vm.selected_protocol == 10
+       and .replacement_vm.selected_protocol == 10
        and (.first_vm.endpoint_name != .replacement_vm.endpoint_name)
        and (.first_vm.shim_process_id != .replacement_vm.shim_process_id)
        and (.first_vm.bridge_process_id != .replacement_vm.bridge_process_id)

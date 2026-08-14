@@ -11,7 +11,7 @@ use crate::macos_assets::{sha256_file, MacosRuntimeProvenance};
 use crate::MacosBootAssetsEvidence;
 
 const SCHEMA_VERSION: &str = "a3s.oci.macos-system-image.v1";
-const COMPATIBILITY_LEVEL: &str = "a3s-oci-runtime-0.2.0-agent-protocol-v9";
+const COMPATIBILITY_LEVEL: &str = "a3s-oci-runtime-0.2.0-agent-protocol-v10";
 const IMAGE_NAME: &str = "a3s-oci-system.ext4";
 const IMAGE_SIZE: u64 = 67_108_864;
 const ARCHITECTURE: &str = "aarch64";
