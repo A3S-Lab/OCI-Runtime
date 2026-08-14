@@ -1529,7 +1529,11 @@ and after daemon restart, schema-v2 durable init/exec output cursors, live
 terminal-exec continuation without replay after manual shim replacement, stale
 task incarnation and runtime-generation replacement, a four-task parallel
 Create/Start/running-restart/137-cleanup matrix, and exact cleanup after shim
-`SIGKILL` with init Created or Running and exec Added or Running. The
+`SIGKILL` with init Created or Running and exec Added or Running. A durable
+pre-generation create intent now also replays an in-flight Create through its
+exact incarnation and operation identity after shim `SIGKILL`, obtains the one
+runtime generation, and force-cleans it without task, process, bundle, or
+runtime-state residue. The
 qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, or bundle. The R7 items remain open until the version and

@@ -153,6 +153,24 @@ impl RuntimeAdapter {
             .await
     }
 
+    pub(crate) async fn replay_create_for_cleanup(
+        &self,
+        task: &TaskIdentity,
+        bundle_directory: &Path,
+        io: ProcessIo,
+    ) -> Result<ContainerRecord> {
+        let deadline = tokio::time::Instant::now() + DELETE_RETRY_TIMEOUT;
+        loop {
+            match self.create(task, bundle_directory, io.clone()).await {
+                Ok(record) => return Ok(record),
+                Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(DELETE_RETRY_INTERVAL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     pub(crate) async fn exact_state(
         &self,
         task: &TaskIdentity,

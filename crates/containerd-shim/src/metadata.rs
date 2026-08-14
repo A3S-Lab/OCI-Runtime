@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use crate::adapter::TaskIdentity;
 use crate::identity::IncarnationId;
 
+mod create_intent;
+
+pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
+
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
 const METADATA_SCHEMA_VERSION: u32 = 2;

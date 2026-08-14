@@ -1,7 +1,8 @@
 use super::*;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process, StateBuilder};
 use a3s_oci_sdk::{
-    async_trait, DriverKind, ExecRequest, Generation, IsolationClass, OciRuntimeService,
+    async_trait, CreateRequest, DeleteMode, DeleteRequest as RuntimeDeleteRequest, DriverKind,
+    ExecRequest, Generation, IsolationClass, KillRequest as RuntimeKillRequest, OciRuntimeService,
     ProcessesRequest, StateRequest, WaitProcessRequest, WaitRequest,
 };
 
@@ -10,6 +11,85 @@ struct RecoveryService {
     record: ContainerRecord,
     processes: Arc<std::sync::Mutex<Vec<ProcessRecord>>>,
     exec_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[derive(Default)]
+struct CreateIntentCleanupCalls {
+    creates: Vec<CreateRequest>,
+    kills: Vec<RuntimeKillRequest>,
+    deletes: Vec<RuntimeDeleteRequest>,
+}
+
+#[derive(Clone)]
+struct CreateIntentCleanupService {
+    record: ContainerRecord,
+    calls: Arc<std::sync::Mutex<CreateIntentCleanupCalls>>,
+    retryable_create_failures: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl OciRuntimeService for CreateIntentCleanupService {
+    async fn features(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::RuntimeInfo> {
+        Err(RuntimeError::unsupported("test-features"))
+    }
+
+    async fn create(&self, request: CreateRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
+        self.calls
+            .lock()
+            .expect("create-intent cleanup calls")
+            .creates
+            .push(request);
+        if self
+            .retryable_create_failures
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(RuntimeError::new(
+                ErrorCode::Conflict,
+                "original Create request is still completing",
+            )
+            .for_operation("test-create")
+            .retryable(true));
+        }
+        Ok(self.record.clone())
+    }
+
+    async fn state(&self, _request: StateRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
+        Ok(self.record.clone())
+    }
+
+    async fn start(
+        &self,
+        _request: a3s_oci_sdk::StartRequest,
+    ) -> a3s_oci_sdk::Result<ContainerRecord> {
+        Err(RuntimeError::unsupported("test-start"))
+    }
+
+    async fn kill(&self, request: RuntimeKillRequest) -> a3s_oci_sdk::Result<ContainerRecord> {
+        self.calls
+            .lock()
+            .expect("create-intent cleanup calls")
+            .kills
+            .push(request);
+        Ok(self.record.clone())
+    }
+
+    async fn delete(&self, request: RuntimeDeleteRequest) -> a3s_oci_sdk::Result<()> {
+        self.calls
+            .lock()
+            .expect("create-intent cleanup calls")
+            .deletes
+            .push(request);
+        Ok(())
+    }
+
+    async fn wait(&self, _request: WaitRequest) -> a3s_oci_sdk::Result<ExitStatus> {
+        ExitStatus::signaled(9, false)
+    }
 }
 
 #[async_trait]
@@ -489,6 +569,84 @@ async fn output_cursor_commits_are_durable_for_init_and_exec() {
         .expect("metadata exists");
     assert_eq!(metadata.output_cursor(), 41);
     assert_eq!(metadata.execs()[0].output_cursor, 73);
+}
+
+#[tokio::test]
+async fn delete_shim_replays_an_in_flight_create_intent_before_exact_cleanup() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    std::fs::create_dir(directory.path().join("rootfs")).expect("create rootfs");
+    std::fs::write(
+        directory.path().join("config.json"),
+        include_str!("../../../../fixtures/native-linux/config.json"),
+    )
+    .expect("write OCI config");
+    let incarnation =
+        crate::identity::IncarnationId::new("03".repeat(32)).expect("task incarnation");
+    let identity =
+        TaskIdentity::with_incarnation("k8s.io", "task-a", incarnation).expect("task identity");
+    let state = StateBuilder::default()
+        .version("1.3.0")
+        .id(identity.container_id.as_str())
+        .status(ContainerState::Created)
+        .pid(4242)
+        .bundle(directory.path())
+        .build()
+        .expect("OCI state");
+    let record = ContainerRecord {
+        state,
+        generation: Generation(7),
+        driver: DriverKind::NativeLinux,
+        isolation: IsolationClass::SharedHostKernel,
+        config_digest: "0".repeat(64),
+        attachments_digest: None,
+    };
+    ShimCreateIntent::new(NewShimCreateIntent {
+        identity: identity.clone(),
+        isolation: IsolationRequest::SharedHostKernel,
+        bundle: directory.path().to_path_buf(),
+        stdin: String::new(),
+        stdout: String::new(),
+        stderr: String::new(),
+        terminal: false,
+        rootfs_mounted: false,
+    })
+    .expect("create intent")
+    .store()
+    .expect("store create intent");
+    let calls = Arc::new(std::sync::Mutex::new(CreateIntentCleanupCalls::default()));
+    let adapter = RuntimeAdapter::from_client(
+        a3s_oci_sdk::RuntimeClient::new(CreateIntentCleanupService {
+            record,
+            calls: calls.clone(),
+            retryable_create_failures: Arc::new(std::sync::atomic::AtomicUsize::new(2)),
+        }),
+        IsolationRequest::SharedHostKernel,
+    );
+    let mut service = recovery_service_instance(directory.path(), adapter);
+
+    let response = service
+        .delete_shim()
+        .await
+        .expect("recover in-flight create intent");
+
+    assert_eq!(response.pid(), 4242);
+    assert_eq!(response.exit_status(), 137);
+    assert!(!ShimCreateIntent::path(directory.path()).exists());
+    let calls = calls.lock().expect("create-intent cleanup calls");
+    assert_eq!(calls.creates.len(), 3);
+    assert!(calls
+        .creates
+        .iter()
+        .all(|request| request.id == identity.container_id));
+    assert!(calls
+        .creates
+        .windows(2)
+        .all(|pair| pair[0].context.operation_id == pair[1].context.operation_id));
+    assert_eq!(calls.kills.len(), 1);
+    assert_eq!(calls.kills[0].target.generation, Some(Generation(7)));
+    assert_eq!(calls.deletes.len(), 1);
+    assert_eq!(calls.deletes[0].mode, DeleteMode::Force);
+    assert_eq!(calls.deletes[0].target.generation, Some(Generation(7)));
 }
 
 #[test]

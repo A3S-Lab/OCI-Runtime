@@ -17,7 +17,9 @@ use tokio::sync::{Mutex, Notify};
 
 use crate::adapter::{self, RuntimeAdapter, TaskIdentity};
 use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
-use crate::metadata::{ExecMetadata, ExecStage, NewShimMetadata, ShimMetadata};
+use crate::metadata::{
+    ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata, ShimCreateIntent, ShimMetadata,
+};
 
 mod task;
 
@@ -206,6 +208,36 @@ impl Service {
         })
     }
 
+    async fn rollback_created_task(
+        &self,
+        adapter: &RuntimeAdapter,
+        identity: &TaskIdentity,
+        generation: a3s_oci_sdk::Generation,
+        bundle: &Path,
+        rootfs_mounted: bool,
+        context: &str,
+    ) {
+        if let Err(error) = adapter.delete(identity, generation, true).await {
+            log::error!(
+                "failed to force-delete runtime generation during {context}; retaining create intent for DeleteShim recovery: {error}"
+            );
+            return;
+        }
+        if let Err(error) = ShimCreateIntent::remove(bundle) {
+            log::error!(
+                "failed to remove create intent after runtime rollback during {context}: {error}"
+            );
+            return;
+        }
+        if rootfs_mounted {
+            if let Err(error) = Self::unmount_rootfs(bundle.join("rootfs")).await {
+                log::error!(
+                    "failed to unmount rootfs after runtime rollback during {context}: {error}"
+                );
+            }
+        }
+    }
+
     async fn persist_task(&self, task_id: &str) -> TtrpcResult<()> {
         let _guard = self.metadata_gate.lock().await;
         let task = self.task_snapshot_unchecked(task_id).await?;
@@ -391,6 +423,7 @@ impl Service {
             }
         }
         metadata_from_task(&task).store()?;
+        ShimCreateIntent::remove(&self.bundle)?;
         let mut state = self.state.lock().await;
         if state.tasks.contains_key(expected_task_id) {
             drop(state);
@@ -1014,6 +1047,8 @@ impl Shim for Service {
                 .delete(&identity, metadata.generation(), true)
                 .await
                 .map_err(|error| Error::Other(error.to_string()))?;
+            ShimCreateIntent::remove(metadata.bundle())
+                .map_err(|error| Error::Other(error.to_string()))?;
             if metadata.rootfs_mounted() {
                 Self::unmount_rootfs(metadata.bundle().join("rootfs"))
                     .await
@@ -1029,6 +1064,54 @@ impl Shim for Service {
                     .and_then(system_time_from_unix_nanos)
                     .unwrap_or_else(SystemTime::now),
             ));
+        } else if let Some(intent) =
+            ShimCreateIntent::load(&ShimCreateIntent::path(&self.bundle))
+                .map_err(|error| Error::FailedPreconditionError(error.to_string()))?
+        {
+            let identity = intent
+                .identity()
+                .map_err(|error| Error::FailedPreconditionError(error.to_string()))?;
+            let adapter = self
+                .adapter()
+                .await
+                .map_err(|error| Error::Other(error.to_string()))?
+                .with_isolation(intent.isolation().clone());
+            let record = adapter
+                .replay_create_for_cleanup(
+                    &identity,
+                    intent.bundle(),
+                    adapter::process_io(
+                        intent.terminal(),
+                        !intent.stdin().is_empty(),
+                        !intent.stdout().is_empty(),
+                        !intent.stderr().is_empty(),
+                    ),
+                )
+                .await
+                .map_err(|error| Error::Other(error.to_string()))?;
+            let pid = record_pid(&record);
+            let _ = adapter.kill(&identity, record.generation, 9, true).await;
+            let exit = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                adapter.wait(&identity, record.generation),
+            )
+            .await
+            .ok()
+            .and_then(|result| result.ok());
+            adapter
+                .delete(&identity, record.generation, true)
+                .await
+                .map_err(|error| Error::Other(error.to_string()))?;
+            ShimCreateIntent::remove(intent.bundle())
+                .map_err(|error| Error::Other(error.to_string()))?;
+            if intent.rootfs_mounted() {
+                Self::unmount_rootfs(intent.bundle().join("rootfs"))
+                    .await
+                    .map_err(Error::from)?;
+            }
+            response.set_pid(pid);
+            response.set_exit_status(exit.as_ref().map_or(137, adapter::exit_code));
+            response.set_exited_at(timestamp_now());
         } else {
             response.set_exited_at(timestamp_now());
         }

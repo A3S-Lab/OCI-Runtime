@@ -27,6 +27,7 @@ const RECONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct QualificationConfig {
     pub(crate) socket: PathBuf,
     pub(crate) ttrpc_address: String,
+    pub(crate) runtime_endpoint: PathBuf,
     state_root: PathBuf,
     pub(crate) namespace: String,
     pub(crate) image: String,
@@ -44,6 +45,10 @@ impl QualificationConfig {
     pub(crate) fn from_environment() -> TestResult<Self> {
         require_environment("A3S_OCI_CONTAINERD_QUALIFY", "1")?;
         require_environment("A3S_OCI_CONTAINERD_ALLOW_RESTART", "1")?;
+        let runtime_endpoint = std::env::var("A3S_OCI_RUNTIME_ENDPOINT")
+            .or_else(|_| std::env::var("A3S_OCI_RUNTIME_SOCKET"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/run/a3s-oci/runtime.sock"));
         Ok(Self {
             socket: environment_path(
                 "A3S_OCI_CONTAINERD_SOCKET",
@@ -53,6 +58,7 @@ impl QualificationConfig {
                 "A3S_OCI_CONTAINERD_TTRPC_ADDRESS",
                 "/run/containerd/containerd.sock.ttrpc",
             ),
+            runtime_endpoint,
             state_root: environment_path(
                 "A3S_OCI_CONTAINERD_STATE_ROOT",
                 "/run/containerd/io.containerd.runtime.v2.task",

@@ -67,8 +67,17 @@ impl Task for Service {
             !req.stdout().is_empty(),
             !req.stderr().is_empty(),
         );
-        let adapter = match self.adapter().await {
-            Ok(adapter) => adapter.with_isolation(isolation),
+        let create_intent = match ShimCreateIntent::new(NewShimCreateIntent {
+            identity: identity.clone(),
+            isolation: isolation.clone(),
+            bundle: bundle.clone(),
+            stdin: req.stdin().to_string(),
+            stdout: req.stdout().to_string(),
+            stderr: req.stderr().to_string(),
+            terminal: req.terminal(),
+            rootfs_mounted,
+        }) {
+            Ok(intent) => intent,
             Err(error) => {
                 if rootfs_mounted {
                     let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
@@ -77,11 +86,47 @@ impl Task for Service {
                 return Err(runtime_error(error));
             }
         };
+        if let Err(error) = create_intent.store() {
+            if rootfs_mounted {
+                let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
+            }
+            self.state.lock().await.creating.remove(&task_id);
+            return Err(runtime_error(error));
+        }
+        let adapter = match self.adapter().await {
+            Ok(adapter) => adapter.with_isolation(isolation),
+            Err(error) => {
+                match ShimCreateIntent::remove(&bundle) {
+                    Ok(()) if rootfs_mounted => {
+                        let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
+                    }
+                    Ok(()) => {}
+                    Err(cleanup_error) => {
+                        log::error!(
+                            "failed to remove pre-dispatch create intent; retaining the mounted rootfs for DeleteShim recovery: {cleanup_error}"
+                        );
+                    }
+                }
+                self.state.lock().await.creating.remove(&task_id);
+                return Err(runtime_error(error));
+            }
+        };
         let record = match adapter.create(&identity, &bundle, io).await {
             Ok(record) => record,
             Err(error) => {
-                if rootfs_mounted {
-                    let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
+                if !error.retryable {
+                    match ShimCreateIntent::remove(&bundle) {
+                        Ok(()) if rootfs_mounted => {
+                            let _ =
+                                Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
+                        }
+                        Ok(()) => {}
+                        Err(cleanup_error) => {
+                            log::error!(
+                                "failed to remove terminal create intent; retaining the mounted rootfs for DeleteShim recovery: {cleanup_error}"
+                            );
+                        }
+                    }
                 }
                 self.state.lock().await.creating.remove(&task_id);
                 return Err(runtime_error(error));
@@ -105,10 +150,15 @@ impl Task for Service {
         ) {
             Ok(pumps) => pumps,
             Err(error) => {
-                let _ = adapter.delete(&identity, record.generation, true).await;
-                if rootfs_mounted {
-                    let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
-                }
+                self.rollback_created_task(
+                    &adapter,
+                    &identity,
+                    record.generation,
+                    &bundle,
+                    rootfs_mounted,
+                    "I/O pump startup failure",
+                )
+                .await;
                 self.state.lock().await.creating.remove(&task_id);
                 return Err(runtime_error(error));
             }
@@ -132,10 +182,15 @@ impl Task for Service {
         if state.tasks.insert(task_id.clone(), task).is_some() {
             drop(state);
             pumps.stop().await;
-            let _ = adapter.delete(&identity, record.generation, true).await;
-            if rootfs_mounted {
-                let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
-            }
+            self.rollback_created_task(
+                &adapter,
+                &identity,
+                record.generation,
+                &bundle,
+                rootfs_mounted,
+                "duplicate task insertion",
+            )
+            .await;
             return Err(ttrpc_error(format!("task {task_id} already exists")));
         }
         state.pumps.insert(Self::pump_key(&task_id, None), pumps);
@@ -143,11 +198,21 @@ impl Task for Service {
         if let Err(error) = self.persist_task(&task_id).await {
             self.stop_task_pumps(&task_id).await;
             self.state.lock().await.tasks.remove(&task_id);
-            let _ = adapter.delete(&identity, record.generation, true).await;
-            if rootfs_mounted {
-                let _ = Self::unmount_rootfs(Path::new(req.bundle()).join("rootfs")).await;
-            }
+            self.rollback_created_task(
+                &adapter,
+                &identity,
+                record.generation,
+                &bundle,
+                rootfs_mounted,
+                "task metadata commit failure",
+            )
+            .await;
             return Err(error);
+        }
+        if let Err(error) = ShimCreateIntent::remove(&bundle) {
+            log::warn!(
+                "task {task_id} committed full shim metadata but retained its redundant create intent: {error}"
+            );
         }
         self.publish_create(&req, pid).await;
         let mut response = api::CreateTaskResponse::new();
@@ -638,6 +703,7 @@ impl Task for Service {
             .await
             .map_err(runtime_error)?;
         self.stop_task_monitors(&task_id).await;
+        ShimCreateIntent::remove(&snapshot.bundle).map_err(runtime_error)?;
         if snapshot.rootfs_mounted {
             Self::unmount_rootfs(snapshot.bundle.join("rootfs")).await?;
         }

@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, controls, daemon restart, live shim replacement with exact output continuation, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, controls, daemon restart, live shim replacement with exact output continuation, in-flight Create plus four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -80,6 +80,15 @@ only after the corresponding FIFO write succeeds. A schema-v1 record remains
 readable, defaults both cursor classes to zero, and is rewritten as schema v2
 on the next metadata commit.
 
+Before dispatching Create, the shim separately commits a schema-v1 create
+intent containing the exact incarnation, isolation request, bundle, I/O shape,
+and rootfs ownership. If the shim dies before it can record the returned
+generation, DeleteShim replays the same digest-bound Create with the same
+operation identity. The runtime either joins the request still in progress or
+returns its completed result, after which DeleteShim kills and force-deletes
+that exact generation. It never guesses a current generation from the stable
+container ID.
+
 ## API mapping
 
 The adapter uses the public `a3s-oci-sdk`; it does not call A3S Box or import a
@@ -136,6 +145,13 @@ produce a new incarnation and generation. Starting a standalone shim while
 containerd's event endpoint is unavailable is not a supported recovery path;
 the safe outcome is complete cleanup rather than an untracked live workload.
 
+The same gate kills the shim while Create is in flight after its durable intent
+commit but before the RPC returns. The host service is suspended at that exact
+boundary and resumed only after the shim dies. Cleanup must converge the
+original operation, delete its one resulting generation, and leave no runtime
+state, task, workload process, bundle, or shim while preserving caller-owned
+container metadata.
+
 ## Run the real qualification
 
 The test is ignored because it is destructive: it requires root, restarts
@@ -163,7 +179,8 @@ test fails if any matching task or container remains.
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
-- extend forced cleanup to mutation-in-flight lifecycle boundaries;
+- extend forced cleanup from the qualified in-flight Create boundary to every
+  remaining lifecycle and process-I/O mutation boundary;
 - run the same suite for every driver profile advertised through containerd;
 - complete OCI conformance, security review, upgrade/rollback, and release
   soak gates.

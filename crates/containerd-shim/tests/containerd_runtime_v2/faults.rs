@@ -1,12 +1,57 @@
 use std::time::Duration;
 
+use a3s_oci_sdk::{
+    ContainerId, ContainerTarget, ErrorCode, LocalIpcEndpoint, RuntimeClient, StateRequest,
+};
 use prost_types::Any;
+use serde::Deserialize;
 
 use super::api::{
     ContainersClient, CreateTaskRequest, DeleteTaskRequest, ExecProcessRequest,
     GetContainerRequest, KillRequest, StartRequest, TasksClient, WaitRequest,
 };
 use super::support::*;
+
+const CREATE_INTENT_FILE_NAME: &str = "a3s-oci-shim-create-v1.json";
+
+#[derive(Deserialize)]
+struct CreateIntentReference {
+    container_id: String,
+}
+
+struct SuspendedProcess {
+    pid: u32,
+    resumed: bool,
+}
+
+impl SuspendedProcess {
+    fn stop(pid: u32, target: &str) -> TestResult<Self> {
+        send_signal(pid, libc::SIGSTOP, target)?;
+        Ok(Self {
+            pid,
+            resumed: false,
+        })
+    }
+
+    fn resume(&mut self, target: &str) -> TestResult<()> {
+        send_signal(self.pid, libc::SIGCONT, target)?;
+        self.resumed = true;
+        Ok(())
+    }
+}
+
+impl Drop for SuspendedProcess {
+    fn drop(&mut self) {
+        if !self.resumed {
+            let Ok(pid) = i32::try_from(self.pid) else {
+                return;
+            };
+            // SAFETY: `kill` does not dereference pointers. The PID was
+            // resolved from the exact listening runtime socket owner.
+            let _ = unsafe { libc::kill(pid, libc::SIGCONT) };
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum PartialShimStage {
@@ -29,6 +74,7 @@ pub(crate) async fn qualify_shim_sigkill(
     config: &QualificationConfig,
     prefix: &str,
 ) -> TestResult<()> {
+    qualify_create_in_flight_shim_sigkill(config, prefix).await?;
     for stage in [
         PartialShimStage::InitCreated,
         PartialShimStage::ExecAdded,
@@ -165,6 +211,83 @@ pub(crate) async fn qualify_shim_sigkill(
     delete_container(config, &id).await
 }
 
+async fn qualify_create_in_flight_shim_sigkill(
+    config: &QualificationConfig,
+    prefix: &str,
+) -> TestResult<()> {
+    let id = format!("{prefix}-shim-kill-create-in-flight");
+    create_container(config, &id).await?;
+    let channel = connect_ready(config).await?;
+    let rootfs = task_rootfs(config, &channel, &id).await?;
+    let host_pid = find_runtime_host_pid(config).await?;
+
+    let create_channel = channel.clone();
+    let create_namespace = config.namespace.clone();
+    let create_id = id.clone();
+    let mut create: tokio::task::JoinHandle<TestResult<super::api::CreateTaskResponse>> =
+        tokio::spawn(async move {
+            TasksClient::new(create_channel)
+                .create(namespaced(
+                    CreateTaskRequest {
+                        container_id: create_id,
+                        rootfs,
+                    },
+                    &create_namespace,
+                )?)
+                .await
+                .map(|response| response.into_inner())
+                .map_err(|error| rpc_error("create in-flight shim-kill task", error).into())
+        });
+
+    let container_id = wait_for_create_intent(config, &id).await?;
+    let mut suspended_host = SuspendedProcess::stop(host_pid, "A3S OCI host service")?;
+    if tokio::time::timeout(Duration::from_millis(100), &mut create)
+        .await
+        .is_ok()
+    {
+        return Err(qualification_error(
+            "Create completed while the exact A3S OCI host service was suspended",
+        )
+        .into());
+    }
+    let shim_pid = find_exact_shim_pid(config, &id).await?;
+    signal_kill(shim_pid)?;
+    suspended_host.resume("A3S OCI host service")?;
+
+    match tokio::time::timeout(Duration::from_secs(10), &mut create).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            return Err(qualification_error(format!(
+                "join Create request after in-flight shim SIGKILL: {error}"
+            ))
+            .into());
+        }
+        Err(_) => {
+            create.abort();
+            return Err(qualification_error(
+                "Create request remained pending for 10 seconds after in-flight shim SIGKILL",
+            )
+            .into());
+        }
+    }
+
+    wait_for_shim_cleanup(config, &channel, &id, shim_pid, &[]).await?;
+    wait_for_runtime_absence(config, container_id).await?;
+    ContainersClient::new(channel)
+        .get(namespaced(
+            GetContainerRequest { id: id.clone() },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| {
+            rpc_error(
+                "read caller-owned metadata after in-flight Create shim SIGKILL",
+                error,
+            )
+        })?;
+    delete_container(config, &id).await
+}
+
 async fn qualify_partial_shim_sigkill(
     config: &QualificationConfig,
     prefix: &str,
@@ -294,6 +417,187 @@ async fn qualify_partial_shim_sigkill(
             )
         })?;
     delete_container(config, &id).await
+}
+
+async fn wait_for_create_intent(config: &QualificationConfig, id: &str) -> TestResult<ContainerId> {
+    let path = config.bundle(id).join(CREATE_INTENT_FILE_NAME);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => {
+                let intent: CreateIntentReference =
+                    serde_json::from_slice(&bytes).map_err(|error| {
+                        qualification_error(format!(
+                            "decode in-flight Create intent {}: {error}",
+                            path.display()
+                        ))
+                    })?;
+                return ContainerId::new(intent.container_id).map_err(|error| {
+                    qualification_error(format!(
+                        "in-flight Create intent {} contains an invalid container ID: {error}",
+                        path.display()
+                    ))
+                    .into()
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(qualification_error(format!(
+                    "read in-flight Create intent {}: {error}",
+                    path.display()
+                ))
+                .into());
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(qualification_error(format!(
+                "shim did not persist {} within 5 seconds of the blocked Create request",
+                path.display()
+            ))
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+async fn find_runtime_host_pid(config: &QualificationConfig) -> TestResult<u32> {
+    let table = tokio::fs::read_to_string("/proc/net/unix")
+        .await
+        .map_err(|error| qualification_error(format!("read Unix socket table: {error}")))?;
+    let endpoint = config.runtime_endpoint.to_string_lossy();
+    let inodes = table
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            (fields.len() >= 8
+                && fields[3] == "00010000"
+                && fields[4] == "0001"
+                && fields[5] == "01"
+                && fields[7] == endpoint)
+                .then(|| fields[6].to_string())
+        })
+        .collect::<Vec<_>>();
+    let [inode] = inodes.as_slice() else {
+        return Err(qualification_error(format!(
+            "expected one listening Unix socket inode for {}, found {inodes:?}",
+            config.runtime_endpoint.display()
+        ))
+        .into());
+    };
+    let expected = format!("socket:[{inode}]");
+    let mut proc_entries = tokio::fs::read_dir("/proc").await.map_err(|error| {
+        qualification_error(format!("inspect procfs for runtime host: {error}"))
+    })?;
+    let mut matches = Vec::new();
+    while let Some(entry) = proc_entries
+        .next_entry()
+        .await
+        .map_err(|error| qualification_error(format!("read procfs entry: {error}")))?
+    {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(mut descriptors) = tokio::fs::read_dir(entry.path().join("fd")).await else {
+            continue;
+        };
+        let mut owns_socket = false;
+        loop {
+            let descriptor = match descriptors.next_entry().await {
+                Ok(Some(descriptor)) => descriptor,
+                Ok(None) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // `/proc/<pid>/fd` can disappear while unrelated short-lived
+                    // processes are enumerated. The listening socket owner is
+                    // required to survive the complete scan and will therefore
+                    // still be found through its own descriptor directory.
+                    break;
+                }
+                Err(error) => {
+                    return Err(qualification_error(format!(
+                        "read process {pid} descriptor: {error}"
+                    ))
+                    .into());
+                }
+            };
+            if tokio::fs::read_link(descriptor.path())
+                .await
+                .is_ok_and(|target| target == std::path::Path::new(&expected))
+            {
+                owns_socket = true;
+                break;
+            }
+        }
+        if owns_socket {
+            matches.push(pid);
+        }
+    }
+    match matches.as_slice() {
+        [pid] => Ok(*pid),
+        [] => Err(qualification_error(format!(
+            "no process owns the listening runtime socket {}",
+            config.runtime_endpoint.display()
+        ))
+        .into()),
+        _ => Err(qualification_error(format!(
+            "multiple processes own the listening runtime socket {}: {matches:?}",
+            config.runtime_endpoint.display()
+        ))
+        .into()),
+    }
+}
+
+async fn wait_for_runtime_absence(
+    config: &QualificationConfig,
+    container_id: ContainerId,
+) -> TestResult<()> {
+    let endpoint =
+        LocalIpcEndpoint::unix_socket(config.runtime_endpoint.clone()).map_err(|error| {
+            qualification_error(format!(
+                "validate A3S OCI runtime endpoint {}: {error}",
+                config.runtime_endpoint.display()
+            ))
+        })?;
+    let client = RuntimeClient::connect(&endpoint).await.map_err(|error| {
+        qualification_error(format!(
+            "connect A3S OCI runtime endpoint {}: {error}",
+            config.runtime_endpoint.display()
+        ))
+    })?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match client
+            .state(StateRequest {
+                target: ContainerTarget::current(container_id.clone()),
+            })
+            .await
+        {
+            Err(error) if error.code == ErrorCode::NotFound => return Ok(()),
+            Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {}
+            Err(error) => {
+                return Err(qualification_error(format!(
+                    "inspect runtime state after in-flight Create cleanup: {error}"
+                ))
+                .into());
+            }
+            Ok(record) if tokio::time::Instant::now() < deadline => {
+                let _ = record;
+            }
+            Ok(record) => {
+                return Err(qualification_error(format!(
+                    "runtime generation {} for {} survived in-flight Create shim cleanup",
+                    record.generation.0,
+                    container_id.as_str()
+                ))
+                .into());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 pub(crate) async fn find_exact_shim_pid(config: &QualificationConfig, id: &str) -> TestResult<u32> {
