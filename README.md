@@ -103,8 +103,9 @@ and `experimental` or `supported` readiness.
 | Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated versioned host/guest protocol, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent |
+| containerd runtime-v2 | SDK-only `containerd-shim-a3s-oci-v2` with durable namespace/task incarnation mapping, lifecycle and exec recovery, schema-v2 init/exec output cursors, bounded FIFO/PTY I/O, live shim replacement without output replay, close-I/O, resize, pause/resume, update, stats, PID inventory, four-state forced shim-crash cleanup, and a four-task parallel restart gate; compatibility, packaging, and cross-driver release gates remain open |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
-| Retained evidence | Schema and normative locks, exhaustive durable and authenticated agent fault matrices, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem transitions through durable service reopen and VM/session-owner replacement, native Linux real-container, soak, and owner-death safe-termination gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
+| Retained evidence | Schema and normative locks, exhaustive durable and authenticated agent fault matrices, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem transitions through durable service reopen and VM/session-owner replacement, native Linux real-container, soak, owner-death safe-termination, and live containerd 2.2 lifecycle/restart/I/O/shim-crash gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
 The current Box adapter at `A3S-Lab/Box@a16772c3` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
@@ -116,6 +117,10 @@ resource request is compiled into one complete OCI `LinuxResources` contract,
 claimed durably before dispatch, and replayed with the same runtime operation
 after a lost response. Runtime acknowledgement updates Box restart intent
 atomically without changing the original create identity.
+
+The exact containerd API, identity, installation, restart, cleanup, and
+qualification boundary is documented in
+[containerd Runtime V2](docs/containerd-runtime-v2.md).
 
 That exact Box revision also validates its managed home, durably prepares the
 snapshot lower, named volumes, and networking, compiles the product-owned OCI
@@ -300,7 +305,7 @@ A3S Box (current Sandbox consumer; explicit Native Linux production route
          owns bundle/resource preparation and uses the long-lived SDK owner;
          default, MicroVM, and cross-platform cutover remain open)
 a3s-oci CLI
-future containerd runtime-v2 shim
+containerd runtime-v2 shim
                          │
                          ▼
                   RuntimeClient
@@ -430,8 +435,8 @@ qualification must all pass before a driver becomes `supported`.
   terminal evidence when a persistent authenticated reaper can retain it;
 - pinned immutable system roots for WHPX and KVM;
 - utility-VM hook recovery and security certification;
-- the default and cross-platform A3S Box cutover and OCI Runtime-owned
-  containerd shim;
+- the default and cross-platform A3S Box cutover, plus the remaining
+  containerd compatibility, packaging, and cross-driver gates;
 - checkpoint/restore and later attachment extensions;
 - signed-package, upgrade, rollback, security, and long-duration release gates.
 

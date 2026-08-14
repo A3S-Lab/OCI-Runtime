@@ -80,7 +80,7 @@ On Linux and macOS, use an absolute Unix-domain-socket path:
 use a3s_oci_sdk::{LocalIpcEndpoint, RuntimeClient};
 
 # async fn connect() -> a3s_oci_sdk::Result<()> {
-let endpoint = LocalIpcEndpoint::unix_socket("/run/a3s/oci-runtime.sock")?;
+let endpoint = LocalIpcEndpoint::unix_socket("/run/a3s-oci/runtime.sock")?;
 let client = RuntimeClient::connect(&endpoint).await?;
 let info = client.features().await?;
 # let _ = info;

@@ -210,20 +210,19 @@ impl InitPlan {
         if cgroup.uses_control_workload_layout() {
             mount::validate_control_workload_cgroup_mount(&mounts)?;
         }
-        let devices = DevicePlan::from_linux(spec.linux().as_ref(), &mounts)?;
-        if devices.requires_setup() && process_plan.capabilities.permits_mknod() {
-            return Err(unsupported(
-                "process.capabilities.effective",
-                "the bounded device profile requires CAP_MKNOD to be absent",
-            ));
-        }
+        let devices = DevicePlan::from_linux(
+            spec.linux().as_ref(),
+            &mounts,
+            process_plan.terminal,
+            namespaces.new_mount(),
+        )?;
         if !mounts.is_empty() && !namespaces.new_mount() {
             return Err(unsupported(
                 "mounts",
                 "the bootstrap executor applies mounts only in a newly created mount namespace",
             ));
         }
-        if devices.requires_setup() && !namespaces.new_mount() {
+        if devices.has_node_setup() && !namespaces.new_mount() {
             return Err(unsupported(
                 "linux.devices",
                 "device creation requires a newly created mount namespace",

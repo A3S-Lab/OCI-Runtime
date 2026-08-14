@@ -4,10 +4,11 @@ use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
 use a3s_oci_core::DriverKind;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
-    ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest,
-    DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus, Generation, IoMode,
-    IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId, ProcessId, ProcessIo,
-    ProcessTarget, Signal, SignalProcessRequest, StartRequest, UpdateRequest, WaitProcessRequest,
+    CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments,
+    CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode, ExecRequest, ExitStatus,
+    Generation, IoMode, IsolationRequest, KillRequest, OciBundle, OperationContext, OperationId,
+    ProcessId, ProcessIo, ProcessTarget, Signal, SignalProcessRequest, StartRequest, UpdateRequest,
+    WaitProcessRequest, WriteStdinRequest,
 };
 use tempfile::TempDir;
 
@@ -537,6 +538,251 @@ async fn core_lifecycle_is_idempotent_and_generation_safe() {
         panic!("recreate must allocate a new generation");
     };
     assert_eq!(recreated.generation, Generation(2));
+}
+
+#[tokio::test]
+async fn init_io_claims_are_disjoint_from_start_and_each_other() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let create = create_request(&bundle_directory, "io-start-container", "io-start-create");
+    let store = DurableStateStore::open(state_root(&temporary))
+        .await
+        .expect("initialize state root");
+    create_container(&store, &create).await;
+    let target = ContainerTarget::exact(create.id, Generation(1));
+    let process = ProcessTarget {
+        container: target.clone(),
+        process_id: ProcessId::init(),
+    };
+    let write = WriteStdinRequest {
+        context: OperationContext::new(operation_id("io-before-start-write")),
+        process: process.clone(),
+        data: vec![0x5a; 64 * 1024],
+    };
+    let close = CloseStdinRequest {
+        context: OperationContext::new(operation_id("io-before-start-close")),
+        process,
+    };
+
+    assert!(matches!(
+        store
+            .prepare_write_stdin(&write)
+            .await
+            .expect("prepare created-state stdin write"),
+        super::ProcessIoPreparation::Prepared(_)
+    ));
+    assert!(matches!(
+        store
+            .prepare_close_stdin(&close)
+            .await
+            .expect("prepare concurrent created-state stdin close"),
+        super::ProcessIoPreparation::Prepared(_)
+    ));
+
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("io-concurrent-start")),
+        target,
+    };
+    assert!(matches!(
+        store
+            .prepare_start(&start)
+            .await
+            .expect("start must not conflict with init I/O"),
+        RecordOperationPreparation::Prepared(_)
+    ));
+
+    store
+        .complete_write_stdin(&write.context.operation_id)
+        .await
+        .expect("complete stdin write while start remains claimed");
+    let after_write = store
+        .load_stored_container(&start.target.id)
+        .await
+        .expect("load concurrent state");
+    assert_eq!(
+        after_write.active_operation.as_ref(),
+        Some(&start.context.operation_id),
+        "stdin completion must preserve the lifecycle claim"
+    );
+    assert_eq!(after_write.init_io_operations.len(), 1);
+
+    store
+        .complete_close_stdin(&close.context.operation_id)
+        .await
+        .expect("complete stdin close");
+    let after_close = store
+        .load_stored_container(&start.target.id)
+        .await
+        .expect("load released I/O state");
+    assert!(after_close.init_io_operations.is_empty());
+    assert_eq!(
+        after_close.active_operation.as_ref(),
+        Some(&start.context.operation_id)
+    );
+
+    store
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+        )
+        .await
+        .expect("complete start after concurrent I/O");
+}
+
+#[tokio::test]
+async fn legacy_init_io_claim_migrates_when_start_arrives_after_reopen() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let create = create_request(
+        &bundle_directory,
+        "legacy-io-start-container",
+        "legacy-io-start-create",
+    );
+    let root = state_root(&temporary);
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+    create_container(&store, &create).await;
+    let target = ContainerTarget::exact(create.id, Generation(1));
+    let write = WriteStdinRequest {
+        context: OperationContext::new(operation_id("legacy-io-before-start-write")),
+        process: ProcessTarget {
+            container: target.clone(),
+            process_id: ProcessId::init(),
+        },
+        data: b"input-before-start".to_vec(),
+    };
+    assert!(matches!(
+        store
+            .prepare_write_stdin(&write)
+            .await
+            .expect("prepare stdin write"),
+        super::ProcessIoPreparation::Prepared(_)
+    ));
+
+    let record_path = store
+        .container_directory(&target.id)
+        .join(super::CONTAINER_RECORD_FILE);
+    let mut legacy = store
+        .load_stored_container(&target.id)
+        .await
+        .expect("load prepared stdin state");
+    assert!(legacy
+        .init_io_operations
+        .remove(&write.context.operation_id));
+    legacy.active_operation = Some(write.context.operation_id.clone());
+    std::fs::write(
+        &record_path,
+        serde_json::to_vec_pretty(&legacy).expect("encode legacy container record"),
+    )
+    .expect("write legacy container record");
+    drop(store);
+
+    let reopened = DurableStateStore::open(&root)
+        .await
+        .expect("reopen legacy state root");
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("legacy-io-direct-start")),
+        target,
+    };
+    assert!(matches!(
+        reopened
+            .prepare_start(&start)
+            .await
+            .expect("start must migrate the old init I/O claim"),
+        RecordOperationPreparation::Prepared(_)
+    ));
+    let migrated = reopened
+        .load_stored_container(&start.target.id)
+        .await
+        .expect("load migrated container record");
+    assert_eq!(
+        migrated.active_operation.as_ref(),
+        Some(&start.context.operation_id)
+    );
+    assert_eq!(
+        migrated.init_io_operations,
+        std::collections::BTreeSet::from([write.context.operation_id.clone()])
+    );
+
+    reopened
+        .complete_write_stdin(&write.context.operation_id)
+        .await
+        .expect("complete migrated stdin operation");
+    let after_write = reopened
+        .load_stored_container(&start.target.id)
+        .await
+        .expect("load state after migrated stdin completion");
+    assert!(after_write.init_io_operations.is_empty());
+    assert_eq!(
+        after_write.active_operation.as_ref(),
+        Some(&start.context.operation_id),
+        "old stdin completion must preserve the newer start claim"
+    );
+    reopened
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+        )
+        .await
+        .expect("complete start after old stdin migration");
+}
+
+#[tokio::test]
+async fn delete_retry_waits_for_every_init_io_claim_to_finish() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let create = create_request(&bundle_directory, "delete-io-container", "delete-io-create");
+    let store = DurableStateStore::open(state_root(&temporary))
+        .await
+        .expect("initialize state root");
+    create_container(&store, &create).await;
+    let target = ContainerTarget::exact(create.id, Generation(1));
+    let write = WriteStdinRequest {
+        context: OperationContext::new(operation_id("delete-io-write")),
+        process: ProcessTarget {
+            container: target.clone(),
+            process_id: ProcessId::init(),
+        },
+        data: b"pending-input".to_vec(),
+    };
+    store
+        .prepare_write_stdin(&write)
+        .await
+        .expect("prepare pending stdin write");
+
+    let delete = DeleteRequest {
+        context: OperationContext::new(operation_id("delete-after-io")),
+        target,
+        mode: DeleteMode::Force,
+    };
+    let first = store
+        .prepare_delete(&delete)
+        .await
+        .expect_err("delete must wait for pending init I/O");
+    assert_eq!(first.code, ErrorCode::Conflict);
+    assert!(first.retryable);
+
+    store
+        .complete_write_stdin(&write.context.operation_id)
+        .await
+        .expect("complete pending stdin write");
+    assert!(matches!(
+        store
+            .prepare_delete(&delete)
+            .await
+            .expect("same delete identity resumes after I/O completion"),
+        super::DeletePreparation::Prepared(_)
+    ));
+    store
+        .complete_delete(&delete.context.operation_id)
+        .await
+        .expect("complete delete after I/O drain");
 }
 
 #[tokio::test]

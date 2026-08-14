@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use a3s_oci_sdk::{
     ContainerId, ContainerRecord, CreateAttachments, Error, ExitStatus, Generation, OperationId,
     ProcessId, ProcessRecord, RuntimeEvent,
@@ -47,6 +49,14 @@ pub(super) struct StoredContainer {
     pub attachments: Option<CreateAttachments>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_operation: Option<OperationId>,
+    /// Process-I/O mutation currently owned by the configured init process.
+    ///
+    /// Init I/O is independent of container lifecycle mutation ownership so
+    /// containerd may forward input between create and start without blocking
+    /// the start transition. Exec processes retain the equivalent claim in
+    /// their own [`StoredProcess`] record.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub init_io_operations: BTreeSet<OperationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub init_exit_status: Option<ExitStatus>,
 }
@@ -58,6 +68,8 @@ pub(super) struct StoredProcess {
     pub record: ProcessRecord,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_operation: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub active_io_operations: BTreeSet<OperationId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_status: Option<ExitStatus>,
 }

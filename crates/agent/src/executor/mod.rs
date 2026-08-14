@@ -45,6 +45,7 @@ mod terminal;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use a3s_oci_agent_protocol::{
@@ -116,6 +117,7 @@ impl RootlessDevicePolicyBootstrap {
 const DEFAULT_RUNTIME_PARENT: &str = "/run";
 const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_OPERATION_RECORDS: usize = 4_096;
+const MAX_INTERNAL_PROCESS_IO_BYTES: usize = 1_024;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,7 +166,7 @@ pub struct LinuxExecutor {
     rootfs_scope: RootfsScope,
     user_mapping_runtime: namespace::UserMappingRuntime,
     rootless_cgroup_delegation: Option<RootlessCgroupDelegation>,
-    state: Mutex<ExecutorState>,
+    state: Arc<Mutex<ExecutorState>>,
 }
 
 impl LinuxExecutor {
@@ -424,7 +426,7 @@ impl LinuxExecutor {
             rootfs_scope,
             user_mapping_runtime,
             rootless_cgroup_delegation: None,
-            state: Mutex::new(ExecutorState::default()),
+            state: Arc::new(Mutex::new(ExecutorState::default())),
         })
     }
 
@@ -555,7 +557,7 @@ impl LinuxExecutor {
                     "rootless linux.cgroupsPath requires an explicit verified cgroup-v2 delegation",
                 ));
             }
-            if plan.devices.requires_setup()
+            if plan.devices.has_access_policy()
                 && self
                     .rootless_cgroup_delegation
                     .as_ref()
@@ -603,7 +605,7 @@ impl LinuxExecutor {
             return Err(error);
         }
         let rootless_device_mounts =
-            if self.user_mapping_runtime.is_rootless() && plan.devices.requires_setup() {
+            if self.user_mapping_runtime.is_rootless() && plan.devices.has_node_setup() {
                 match self
                     .rootless_cgroup_delegation
                     .as_ref()
@@ -1332,6 +1334,7 @@ mod kill_tests {
 mod rootless_device_tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use a3s_oci_agent_protocol::{AgentBundle, AgentCreateRequest, GuestPath};
     use a3s_oci_sdk::OciBundle;
@@ -1422,7 +1425,7 @@ mod rootless_device_tests {
                 newgidmap: PathBuf::from("/usr/bin/newgidmap"),
             },
             rootless_cgroup_delegation: None,
-            state: Mutex::new(ExecutorState::default()),
+            state: Arc::new(Mutex::new(ExecutorState::default())),
         };
 
         let error = executor
@@ -1506,7 +1509,7 @@ mod rootless_device_tests {
                 newgidmap: PathBuf::from("/usr/bin/newgidmap"),
             },
             rootless_cgroup_delegation: None,
-            state: Mutex::new(ExecutorState::default()),
+            state: Arc::new(Mutex::new(ExecutorState::default())),
         };
 
         let error = executor

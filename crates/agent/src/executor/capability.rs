@@ -67,10 +67,6 @@ impl CapabilityPlan {
         }
     }
 
-    pub(super) const fn permits_mknod(self) -> bool {
-        self.effective & (1_u64 << capability_number(Capability::Mknod)) != 0
-    }
-
     pub(super) fn prepare_for_credentials(self, target_uid: u32) -> Result<()> {
         let last_capability = read_last_capability()?;
         for capability in 0..=last_capability {

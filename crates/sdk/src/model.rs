@@ -727,6 +727,9 @@ pub const IO_READ_BYTES_METRIC: &str = "io.read_bytes";
 /// Aggregate bytes written by the workload across all block devices.
 pub const IO_WRITE_BYTES_METRIC: &str = "io.write_bytes";
 
+/// Effective cgroup process limit, with [`u64::MAX`] representing `pids.max=max`.
+pub const PIDS_LIMIT_METRIC: &str = "pids.limit";
+
 /// Runtime resource snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerStats {

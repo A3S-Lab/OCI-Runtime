@@ -38,7 +38,7 @@ impl CgroupHandle {
             return Ok(());
         };
         if let Some(device_filter) = &mut self.delegated_device_filter {
-            let next_active = next_devices.requires_setup();
+            let next_active = next_devices.has_access_policy();
             let result = match (device_filter.active, next_active) {
                 (false, false) => Ok(()),
                 (false, true) => device_filter.authority.install(

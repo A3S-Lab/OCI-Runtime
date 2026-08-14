@@ -16,7 +16,7 @@ mod process_recovery;
 mod start;
 mod update;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -332,6 +332,7 @@ impl DurableStateStore {
             record,
             attachments: Some(request.attachments.clone()),
             active_operation: Some(request.context.operation_id.clone()),
+            init_io_operations: BTreeSet::new(),
             init_exit_status: None,
         };
         self.write_json(
@@ -868,9 +869,14 @@ async fn claim_active_operation(
     mutation: DurableMutation,
     operation: &'static str,
 ) -> Result<()> {
-    match stored.active_operation.as_ref() {
-        Some(active) if active == operation_id => return Ok(()),
-        Some(active) => {
+    if stored.active_operation.as_ref() == Some(operation_id) {
+        return Ok(());
+    }
+    if let Some(active) = stored.active_operation.clone() {
+        if process_io::migrate_legacy_init_io_claim(store, stored)
+            .await?
+            .is_none()
+        {
             return Err(state_error(
                 ErrorCode::Conflict,
                 operation,
@@ -880,8 +886,19 @@ async fn claim_active_operation(
                 ),
             ));
         }
-        None => stored.active_operation = Some(operation_id.clone()),
+        if mutation == DurableMutation::ClaimDeleteOperation {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                operation,
+                format!(
+                    "container {} init process is owned by active I/O operation {active}",
+                    stored.id
+                ),
+            )
+            .retryable(true));
+        }
     }
+    stored.active_operation = Some(operation_id.clone());
     store
         .write_json(
             mutation,

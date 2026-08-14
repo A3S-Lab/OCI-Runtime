@@ -62,6 +62,8 @@ impl DurableStateStore {
                             let mut stored = self
                                 .load_stored_exact(&operation.container_id, operation.generation)
                                 .await?;
+                            self.ensure_no_active_process_operations(&stored, "prepare-delete")
+                                .await?;
                             claim_active_operation(
                                 self,
                                 &mut stored,

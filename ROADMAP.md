@@ -1280,7 +1280,7 @@ leak. Only then may KVM become `experimental`.
   owner.
 - [x] Enforce the bounded A3S Box static device-node profile with
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
-  CAP_MKNOD exclusion, and verified device-node creation.
+  cgroup-controlled `mknod`, and verified device-node creation.
 - [ ] Complete the remaining process and rootless configuration boundary.
   - [x] Enforce or explicitly reject supplementary credentials, scheduler,
     I/O priority, CPU affinity, and unsupported rootless ID-mapping shapes
@@ -1520,6 +1520,21 @@ evidence.
   tasks against every advertised driver profile.
 - [ ] Publish the shim with signed or checksummed runtime packages and retain
   the exact containerd, shim, SDK, runtime, and driver compatibility record.
+
+Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
+exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
+separate stdout/stderr plus stdin from empty input through 4 MiB,
+Created/Running/Stopped daemon-restart boundaries, terminal exec resize before
+and after daemon restart, schema-v2 durable init/exec output cursors, live
+terminal-exec continuation without replay after manual shim replacement, stale
+task incarnation and runtime-generation replacement, a four-task parallel
+Create/Start/running-restart/137-cleanup matrix, and exact cleanup after shim
+`SIGKILL` with init Created or Running and exec Added or Running. The
+qualification recreates the killed task ID with a new
+incarnation and generation and leaves no matching task, container, shim,
+workload process, or bundle. The R7 items remain open until the version and
+package contract, remaining failure boundaries, every advertised driver
+profile, and release-artifact record pass.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,

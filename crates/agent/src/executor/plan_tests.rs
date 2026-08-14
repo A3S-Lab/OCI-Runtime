@@ -330,7 +330,7 @@ fn exec_process_planning_enforces_capabilities_and_rejects_unsupported_io() {
 }
 
 #[test]
-fn bounded_device_profiles_reject_cap_mknod() {
+fn device_access_policy_accepts_cap_mknod_for_bpf_enforcement() {
     let mut config: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
     config["process"]["capabilities"] = serde_json::json!({
@@ -347,10 +347,9 @@ fn bounded_device_profiles_reject_cap_mknod() {
         }
     });
     let config = serde_json::to_string(&config).expect("encode device configuration");
-    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
-        .expect_err("CAP_MKNOD would bypass the bounded device profile");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("CAP_MKNOD"));
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("CAP_MKNOD is governed by the device BPF m permission");
+    assert!(plan.devices.has_access_policy());
 }
 
 #[test]

@@ -89,7 +89,7 @@ impl PreparedProcess {
         validate_rootless_device_mounts(
             &rootless_device_mounts,
             rootless,
-            plan.devices.requires_setup(),
+            plan.devices.has_node_setup(),
         )?;
         let mut cgroup = CgroupHandle::create(&plan.cgroup, &plan.devices, cgroup_manager)?;
         let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
@@ -105,6 +105,22 @@ impl PreparedProcess {
         let (listener, control_name) = bind_control_listener()?;
         // SAFETY: getpid has no preconditions and cannot fail.
         let expected_owner_pid = unsafe { libc::getpid() };
+        let process_io_json = serde_json::to_string(io).map_err(|error| {
+            process_error(
+                ErrorCode::Internal,
+                format!("failed to encode prepared init process I/O: {error}"),
+            )
+        })?;
+        if process_io_json.len() > super::MAX_INTERNAL_PROCESS_IO_BYTES {
+            return Err(process_error(
+                ErrorCode::Internal,
+                format!(
+                    "encoded prepared init process I/O is {} bytes; maximum is {}",
+                    process_io_json.len(),
+                    super::MAX_INTERNAL_PROCESS_IO_BYTES
+                ),
+            ));
+        }
         let mut command = Command::new(init_executable);
         command
             .arg("container-init")
@@ -115,6 +131,7 @@ impl PreparedProcess {
             .arg(rootfs_scope.internal_argument())
             .arg(expected_owner_pid.to_string())
             .arg(if rootless { "rootless" } else { "privileged" })
+            .arg(process_io_json)
             .env_clear()
             .kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;

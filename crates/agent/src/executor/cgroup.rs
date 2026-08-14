@@ -639,7 +639,7 @@ fn install_device_filter(
     manager: &CgroupManager,
 ) -> Result<(Option<OwnedFd>, Option<DelegatedDeviceFilter>)> {
     let Some(authority) = manager.device_policy_authority() else {
-        if !devices.requires_setup() {
+        if !devices.has_access_policy() {
             return Ok((None, None));
         }
         return devices
@@ -648,7 +648,7 @@ fn install_device_filter(
     };
     let relative = manager.relative_to_authority(cgroup)?;
     let key = relative.to_string_lossy().into_owned();
-    let active = devices.requires_setup();
+    let active = devices.has_access_policy();
     if active {
         authority.install(&key, &relative, devices)?;
     }

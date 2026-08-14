@@ -13,10 +13,10 @@ use super::model::{
 };
 use super::operation::{request_digest, validate_deadline};
 use super::process::{
-    claim_active_process_operation, ensure_container_unclaimed, exact_process_target,
-    required_operation_process_id, validate_process_retry, validate_requested_generation,
+    exact_process_target, required_operation_process_id, validate_process_retry,
+    validate_requested_generation,
 };
-use super::{claim_active_operation, DurableStateStore, ErrorCode, ProcessIoPreparation};
+use super::{DurableStateStore, ErrorCode, ProcessIoPreparation};
 
 #[derive(Serialize)]
 struct WriteStdinFingerprint<'a> {
@@ -179,8 +179,14 @@ impl DurableStateStore {
         validate_deadline(context, operation_name)?;
         let container = self.load_stored_container(&requested.container.id).await?;
         validate_requested_generation(&container, &requested.container, operation_name)?;
-        ensure_container_unclaimed(&container, operation_name)?;
         let target = exact_process_target(&container, requested.process_id.clone());
+        if target.process_id.is_init() {
+            self.ensure_init_io_lifecycle_compatible(&container, operation_name)
+                .await?;
+        } else {
+            self.ensure_process_io_lifecycle_compatible(&container, operation_name)
+                .await?;
+        }
         self.validate_process_io_target(&container, &target, operation_name)
             .await?;
 
@@ -245,27 +251,48 @@ impl DurableStateStore {
         let process_id = required_operation_process_id(operation, profile.name)?.clone();
         let target = exact_process_target(&container, process_id);
         if target.process_id.is_init() {
-            claim_active_operation(
-                self,
-                &mut container,
-                &operation.operation_id,
-                profile.claim,
-                profile.name,
-            )
-            .await?;
+            self.ensure_init_io_lifecycle_compatible(&container, profile.name)
+                .await?;
+            claim_init_io_operation(self, &mut container, operation, profile).await?;
         } else {
-            ensure_container_unclaimed(&container, profile.name)?;
+            self.ensure_process_io_lifecycle_compatible(&container, profile.name)
+                .await?;
             let mut process = self.load_stored_process(&target).await?;
-            claim_active_process_operation(
-                self,
-                &mut process,
-                &operation.operation_id,
-                profile.claim,
-                profile.name,
-            )
-            .await?;
+            claim_process_io_operation(self, &mut process, operation, profile).await?;
         }
         Ok(target)
+    }
+
+    async fn ensure_init_io_lifecycle_compatible(
+        &self,
+        container: &super::model::StoredContainer,
+        operation_name: &'static str,
+    ) -> Result<()> {
+        let Some(active_id) = container.active_operation.as_ref() else {
+            return Ok(());
+        };
+        let active = self.load_operation(active_id).await?;
+        if active.kind == StoredOperationKind::Delete {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                operation_name,
+                format!(
+                    "container {} is being deleted by active operation {active_id}",
+                    container.id
+                ),
+            )
+            .retryable(true));
+        }
+        Ok(())
+    }
+
+    async fn ensure_process_io_lifecycle_compatible(
+        &self,
+        container: &super::model::StoredContainer,
+        operation_name: &'static str,
+    ) -> Result<()> {
+        self.ensure_init_io_lifecycle_compatible(container, operation_name)
+            .await
     }
 
     async fn complete_process_io_operation(
@@ -317,4 +344,153 @@ impl DurableStateStore {
         )
         .await
     }
+}
+
+async fn claim_init_io_operation(
+    store: &DurableStateStore,
+    container: &mut super::model::StoredContainer,
+    operation: &StoredOperation,
+    profile: ProcessIoOperation,
+) -> Result<()> {
+    if container
+        .init_io_operations
+        .contains(&operation.operation_id)
+    {
+        return Ok(());
+    }
+
+    if container.active_operation.as_ref() == Some(&operation.operation_id) {
+        // A previous release used the lifecycle slot for init I/O. Move the
+        // exact prepared claim instead of leaving start permanently blocked.
+        container.active_operation = None;
+    }
+    container
+        .init_io_operations
+        .insert(operation.operation_id.clone());
+    store
+        .write_json(
+            profile.claim,
+            &store
+                .container_directory(&container.id)
+                .join(super::CONTAINER_RECORD_FILE),
+            container,
+        )
+        .await
+}
+
+async fn claim_process_io_operation(
+    store: &DurableStateStore,
+    process: &mut super::model::StoredProcess,
+    operation: &StoredOperation,
+    profile: ProcessIoOperation,
+) -> Result<()> {
+    if process
+        .active_io_operations
+        .contains(&operation.operation_id)
+    {
+        return Ok(());
+    }
+    if process.active_operation.as_ref() == Some(&operation.operation_id) {
+        // Migrate a prepared exec-I/O claim written by an older release.
+        process.active_operation = None;
+    }
+    process
+        .active_io_operations
+        .insert(operation.operation_id.clone());
+    store
+        .write_json(
+            profile.claim,
+            &store.process_path(&process.record.target),
+            process,
+        )
+        .await
+}
+
+pub(super) async fn migrate_legacy_init_io_claim(
+    store: &DurableStateStore,
+    container: &mut super::model::StoredContainer,
+) -> Result<Option<OperationId>> {
+    let Some(operation_id) = container.active_operation.clone() else {
+        return Ok(None);
+    };
+    let operation = store.load_operation(&operation_id).await?;
+    if !is_process_io_kind(operation.kind) {
+        return Ok(None);
+    }
+    validate_legacy_io_operation(&operation, &container.id, container.record.generation, true)?;
+    container.active_operation = None;
+    container.init_io_operations.insert(operation_id.clone());
+    Ok(Some(operation_id))
+}
+
+pub(super) async fn migrate_legacy_process_io_claim(
+    store: &DurableStateStore,
+    process: &mut super::model::StoredProcess,
+) -> Result<Option<OperationId>> {
+    let Some(operation_id) = process.active_operation.clone() else {
+        return Ok(None);
+    };
+    let operation = store.load_operation(&operation_id).await?;
+    if !is_process_io_kind(operation.kind) {
+        return Ok(None);
+    }
+    let generation = process.record.target.container.generation.ok_or_else(|| {
+        state_error(
+            ErrorCode::FailedPrecondition,
+            "migrate-process-io-claim",
+            "legacy process I/O claim does not have an exact container generation",
+        )
+    })?;
+    validate_legacy_io_operation(
+        &operation,
+        &process.record.target.container.id,
+        generation,
+        process.record.target.process_id.is_init(),
+    )?;
+    if operation.process_id.as_ref() != Some(&process.record.target.process_id) {
+        return Err(state_error(
+            ErrorCode::FailedPrecondition,
+            "migrate-process-io-claim",
+            format!("legacy process I/O operation {operation_id} targets a different process"),
+        ));
+    }
+    process.active_operation = None;
+    process.active_io_operations.insert(operation_id.clone());
+    Ok(Some(operation_id))
+}
+
+fn validate_legacy_io_operation(
+    operation: &StoredOperation,
+    container_id: &a3s_oci_sdk::ContainerId,
+    generation: a3s_oci_sdk::Generation,
+    init: bool,
+) -> Result<()> {
+    let process_matches = operation
+        .process_id
+        .as_ref()
+        .is_some_and(|process_id| process_id.is_init() == init);
+    if operation.container_id != *container_id
+        || operation.generation != generation
+        || !process_matches
+        || !matches!(operation.outcome, StoredOperationStatus::Prepared)
+    {
+        return Err(state_error(
+            ErrorCode::FailedPrecondition,
+            "migrate-process-io-claim",
+            format!(
+                "legacy process I/O operation {} does not match its active durable claim",
+                operation.operation_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
+const fn is_process_io_kind(kind: StoredOperationKind) -> bool {
+    matches!(
+        kind,
+        StoredOperationKind::WriteStdin
+            | StoredOperationKind::CloseStdin
+            | StoredOperationKind::Resize
+    )
 }

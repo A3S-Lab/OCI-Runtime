@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,6 +7,7 @@ use a3s_oci_sdk::{Error, ErrorCode, IoMode, OutputChunk, OutputStream, ProcessIo
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{watch, Mutex};
+use tokio::task::JoinHandle;
 use tokio::time::{timeout_at, Instant};
 
 use super::terminal::{TerminalHandle, TerminalSetup};
@@ -27,6 +29,8 @@ pub(super) struct ProcessIoHandle {
 struct ProcessIoInner {
     stdin_mode: IoMode,
     stdin: Mutex<Option<ProcessStdin>>,
+    next_stdin_operation: AtomicU64,
+    serving_stdin_operation: watch::Sender<u64>,
     output: Option<Arc<OutputBuffer>>,
     terminal: Option<TerminalHandle>,
 }
@@ -35,6 +39,13 @@ struct ProcessIoInner {
 enum ProcessStdin {
     Pipe(ChildStdin),
     Terminal(TerminalHandle),
+}
+
+/// One stdin mutation reserved in caller order before any backpressured I/O.
+#[derive(Debug)]
+struct ReservedStdinOperation {
+    inner: Arc<ProcessIoInner>,
+    sequence: u64,
 }
 
 /// Process descriptors prepared before `Command::spawn`.
@@ -94,11 +105,14 @@ impl ProcessIoHandle {
         if let Some(terminal) = setup.terminal {
             let terminal = terminal.attach()?;
             let output = Arc::new(OutputBuffer::new(1));
+            let (serving_stdin_operation, _) = watch::channel(0);
             spawn_terminal_reader(terminal.clone(), Arc::clone(&output));
             return Ok(Self {
                 inner: Arc::new(ProcessIoInner {
                     stdin_mode: IoMode::Terminal,
                     stdin: Mutex::new(Some(ProcessStdin::Terminal(terminal.clone()))),
+                    next_stdin_operation: AtomicU64::new(0),
+                    serving_stdin_operation,
                     output: Some(output),
                     terminal: Some(terminal),
                 }),
@@ -145,10 +159,13 @@ impl ProcessIoHandle {
             spawn_output_reader(reader, OutputStream::Stderr, Arc::clone(buffer));
         }
 
+        let (serving_stdin_operation, _) = watch::channel(0);
         Ok(Self {
             inner: Arc::new(ProcessIoInner {
                 stdin_mode: io.stdin,
                 stdin: Mutex::new(stdin),
+                next_stdin_operation: AtomicU64::new(0),
+                serving_stdin_operation,
                 output,
                 terminal: None,
             }),
@@ -172,13 +189,48 @@ impl ProcessIoHandle {
             .await
     }
 
-    pub(super) async fn write_stdin(&self, data: &[u8]) -> Result<()> {
+    #[cfg(test)]
+    async fn write_stdin(&self, data: &[u8]) -> Result<()> {
+        self.spawn_write_stdin(data.to_vec())?
+            .await
+            .map_err(stdin_operation_task_error)?
+    }
+
+    /// Reserve and detach one ordered stdin write before returning its waiter.
+    ///
+    /// Dropping the caller's future therefore cannot abandon a reserved
+    /// sequence and permanently block every later stdin mutation.
+    pub(super) fn spawn_write_stdin(&self, data: Vec<u8>) -> Result<JoinHandle<Result<()>>> {
+        let operation = self.reserve_stdin_operation()?;
+        Ok(tokio::spawn(async move { operation.write(&data).await }))
+    }
+
+    fn reserve_stdin_operation(&self) -> Result<ReservedStdinOperation> {
         if !matches!(self.inner.stdin_mode, IoMode::Pipe | IoMode::Terminal) {
             return Err(io_error(
                 ErrorCode::FailedPrecondition,
                 "process stdin was not configured as a pipe or terminal",
             ));
         }
+        let sequence = self
+            .inner
+            .next_stdin_operation
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .map_err(|_| {
+                io_error(
+                    ErrorCode::ResourceExhausted,
+                    "process stdin operation sequence space is exhausted",
+                )
+            })?;
+        Ok(ReservedStdinOperation {
+            inner: Arc::clone(&self.inner),
+            sequence,
+        })
+    }
+
+    async fn write_stdin_reserved(&self, data: &[u8]) -> Result<()> {
         let mut stdin = self.inner.stdin.lock().await;
         let stdin = stdin.as_mut().ok_or_else(|| {
             io_error(
@@ -197,13 +249,13 @@ impl ProcessIoHandle {
         }
     }
 
-    pub(super) async fn close_stdin(&self) -> Result<()> {
-        if !matches!(self.inner.stdin_mode, IoMode::Pipe | IoMode::Terminal) {
-            return Err(io_error(
-                ErrorCode::FailedPrecondition,
-                "process stdin was not configured as a pipe or terminal",
-            ));
-        }
+    /// Reserve and detach an ordered stdin close before returning its waiter.
+    pub(super) fn spawn_close_stdin(&self) -> Result<JoinHandle<Result<()>>> {
+        let operation = self.reserve_stdin_operation()?;
+        Ok(tokio::spawn(async move { operation.close().await }))
+    }
+
+    async fn close_stdin_reserved(&self) -> Result<()> {
         let mut stdin = self.inner.stdin.lock().await;
         if let Some(ProcessStdin::Terminal(terminal)) = stdin.as_ref() {
             terminal.close_input().await.map_err(stdin_write_error)?;
@@ -223,6 +275,67 @@ impl ProcessIoHandle {
                 )
             })?
             .resize(size)
+    }
+}
+
+impl ReservedStdinOperation {
+    pub(super) async fn write(self, data: &[u8]) -> Result<()> {
+        let io = ProcessIoHandle {
+            inner: Arc::clone(&self.inner),
+        };
+        let _turn = self.wait_for_turn().await?;
+        io.write_stdin_reserved(data).await
+    }
+
+    pub(super) async fn close(self) -> Result<()> {
+        let io = ProcessIoHandle {
+            inner: Arc::clone(&self.inner),
+        };
+        let _turn = self.wait_for_turn().await?;
+        io.close_stdin_reserved().await
+    }
+
+    async fn wait_for_turn(&self) -> Result<StdinOperationTurn> {
+        let mut serving = self.inner.serving_stdin_operation.subscribe();
+        loop {
+            let current = *serving.borrow_and_update();
+            if current == self.sequence {
+                return Ok(StdinOperationTurn {
+                    inner: Arc::clone(&self.inner),
+                    sequence: self.sequence,
+                });
+            }
+            if current > self.sequence {
+                return Err(io_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "process stdin operation {} was skipped at sequence {current}",
+                        self.sequence
+                    ),
+                ));
+            }
+            serving.changed().await.map_err(|_| {
+                io_error(
+                    ErrorCode::Internal,
+                    "process stdin operation sequencer closed unexpectedly",
+                )
+            })?;
+        }
+    }
+}
+
+struct StdinOperationTurn {
+    inner: Arc<ProcessIoInner>,
+    sequence: u64,
+}
+
+impl Drop for StdinOperationTurn {
+    fn drop(&mut self) {
+        if *self.inner.serving_stdin_operation.borrow() == self.sequence {
+            self.inner
+                .serving_stdin_operation
+                .send_replace(self.sequence.saturating_add(1));
+        }
     }
 }
 
@@ -536,6 +649,14 @@ fn stdin_write_error(error: std::io::Error) -> Error {
     io_error(code, format!("failed to write process stdin: {error}"))
 }
 
+#[cfg(test)]
+fn stdin_operation_task_error(error: tokio::task::JoinError) -> Error {
+    io_error(
+        ErrorCode::Internal,
+        format!("process stdin operation task failed: {error}"),
+    )
+}
+
 fn sequence_exhausted() -> Error {
     io_error(
         ErrorCode::ResourceExhausted,
@@ -552,6 +673,8 @@ mod tests {
     use std::sync::Arc;
 
     use a3s_oci_sdk::{ErrorCode, IoMode, OutputStream, ProcessIo};
+    use tokio::io::AsyncReadExt;
+    use tokio::time::{timeout, Duration};
 
     use super::{OutputBuffer, ProcessIoHandle, OUTPUT_BUFFER_BYTES};
 
@@ -588,6 +711,128 @@ mod tests {
                 .code,
             ErrorCode::FailedPrecondition
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reserved_stdin_mutations_keep_claim_order_under_backpressure() {
+        let io = ProcessIo {
+            stdin: IoMode::Pipe,
+            stdout: IoMode::Null,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        };
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", "sleep 0.15; cat"]);
+        command.stdout(std::process::Stdio::piped());
+        let setup = ProcessIoHandle::configure(&mut command, &io)
+            .expect("configure piped process descriptors");
+        command.stdout(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("spawn delayed stdin reader");
+        let mut stdout = child.stdout.take().expect("test stdout pipe");
+        let handle = ProcessIoHandle::attach(setup, &mut child, &io)
+            .expect("attach piped process descriptors");
+
+        let first_data = vec![b'a'; 256 * 1024];
+        let first_length = first_data.len();
+        let first_task = handle
+            .spawn_write_stdin(first_data)
+            .expect("spawn first stdin operation");
+        let second_task = handle
+            .spawn_write_stdin(b"tail".to_vec())
+            .expect("spawn second stdin operation");
+        let close_task = handle.spawn_close_stdin().expect("spawn stdin close");
+
+        timeout(Duration::from_secs(5), first_task)
+            .await
+            .expect("first write timeout")
+            .expect("first write task")
+            .expect("first write");
+        timeout(Duration::from_secs(5), second_task)
+            .await
+            .expect("second write timeout")
+            .expect("second write task")
+            .expect("second write");
+        timeout(Duration::from_secs(5), close_task)
+            .await
+            .expect("close timeout")
+            .expect("close task")
+            .expect("close stdin");
+
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), stdout.read_to_end(&mut output))
+            .await
+            .expect("stdout read timeout")
+            .expect("read stdout");
+        assert_eq!(output.len(), first_length + 4);
+        assert!(output[..first_length].iter().all(|byte| *byte == b'a'));
+        assert_eq!(&output[first_length..], b"tail");
+        assert!(child.wait().await.expect("wait delayed reader").success());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_stdin_caller_cannot_leave_a_sequence_hole() {
+        let io = ProcessIo {
+            stdin: IoMode::Pipe,
+            stdout: IoMode::Null,
+            stderr: IoMode::Null,
+            terminal_size: None,
+        };
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", "sleep 0.15; cat"]);
+        command.stdout(std::process::Stdio::piped());
+        let setup = ProcessIoHandle::configure(&mut command, &io)
+            .expect("configure piped process descriptors");
+        command.stdout(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("spawn delayed stdin reader");
+        let mut stdout = child.stdout.take().expect("test stdout pipe");
+        let handle = ProcessIoHandle::attach(setup, &mut child, &io)
+            .expect("attach piped process descriptors");
+
+        let first_length = 256 * 1024;
+        let cancelled_handle = handle.clone();
+        let cancelled = tokio::spawn(async move {
+            cancelled_handle
+                .write_stdin(&vec![b'a'; first_length])
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancelled.abort();
+        assert!(
+            cancelled
+                .await
+                .expect_err("caller must be cancelled")
+                .is_cancelled(),
+            "the detached stdin mutation must outlive only its cancelled caller"
+        );
+
+        let tail = handle
+            .spawn_write_stdin(b"tail".to_vec())
+            .expect("spawn trailing stdin operation");
+        let close = handle
+            .spawn_close_stdin()
+            .expect("spawn trailing stdin close");
+        timeout(Duration::from_secs(5), tail)
+            .await
+            .expect("tail write timeout")
+            .expect("tail write task")
+            .expect("tail write");
+        timeout(Duration::from_secs(5), close)
+            .await
+            .expect("close timeout")
+            .expect("close task")
+            .expect("close stdin");
+
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), stdout.read_to_end(&mut output))
+            .await
+            .expect("stdout read timeout")
+            .expect("read stdout");
+        assert_eq!(output.len(), first_length + 4);
+        assert!(output[..first_length].iter().all(|byte| *byte == b'a'));
+        assert_eq!(&output[first_length..], b"tail");
+        assert!(child.wait().await.expect("wait delayed reader").success());
     }
 
     #[tokio::test]

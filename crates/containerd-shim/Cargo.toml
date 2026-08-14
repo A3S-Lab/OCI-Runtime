@@ -1,0 +1,40 @@
+[package]
+name = "a3s-oci-containerd-shim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "containerd runtime-v2 shim backed exclusively by the A3S OCI SDK"
+
+[[bin]]
+name = "containerd-shim-a3s-oci-v2"
+path = "src/main.rs"
+
+[dependencies]
+a3s-oci-sdk = { path = "../sdk" }
+async-trait.workspace = true
+getrandom.workspace = true
+log = "0.4"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["process", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+containerd-shim = { version = "0.11", features = ["async"] }
+containerd-shim-protos = { version = "0.11", features = ["async"] }
+libc = "0.2"
+
+[dev-dependencies]
+http = "1"
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+prost = "0.14"
+prost-types = "0.14"
+tempfile = "3.20"
+tonic = { version = "0.14", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[lints]
+workspace = true

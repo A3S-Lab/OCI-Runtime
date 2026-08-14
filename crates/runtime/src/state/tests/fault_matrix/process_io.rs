@@ -254,7 +254,7 @@ async fn assert_init_unclaimed(store: &DurableStateStore, target: &ContainerTarg
         .await
         .expect("load process-I/O container state");
     assert!(
-        container.active_operation.is_none(),
+        container.init_io_operations.is_empty(),
         "process-I/O operation retained its init-process claim"
     );
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, Process};
 use a3s_oci_sdk::{
@@ -20,9 +20,8 @@ use super::model::{
 use super::oci_state::rebuild_state;
 use super::operation::{request_digest, validate_deadline, validate_retry};
 use super::{
-    claim_active_operation, ensure_active_operation, generation_conflict, DurableStateStore,
-    ProcessOperationPreparation, ProcessWaitPreparation, SignalProcessPreparation,
-    CONTAINER_RECORD_FILE,
+    claim_active_operation, generation_conflict, DurableStateStore, ProcessOperationPreparation,
+    ProcessWaitPreparation, SignalProcessPreparation, CONTAINER_RECORD_FILE,
 };
 
 #[derive(Serialize)]
@@ -50,7 +49,6 @@ impl DurableStateStore {
         let _guard = self.gate.lock().await;
         let container = self.load_stored_container(&requested.container.id).await?;
         validate_requested_generation(&container, &requested.container, operation)?;
-        ensure_container_unclaimed(&container, operation)?;
         let target = exact_process_target(&container, requested.process_id.clone());
         if target.process_id.is_init() {
             if *container.record.state.status() == ContainerState::Creating {
@@ -261,6 +259,7 @@ impl DurableStateStore {
                 terminal,
             },
             active_operation: Some(operation.operation_id.clone()),
+            active_io_operations: BTreeSet::new(),
             exit_status: None,
         };
         self.write_json(DurableMutation::StoreExecutingProcess, &path, &process)
@@ -783,9 +782,15 @@ impl DurableStateStore {
         let process_id = required_operation_process_id(operation, operation_name)?.clone();
         let target = exact_process_target(&container, process_id);
         if target.process_id.is_init() {
-            ensure_active_operation(&container, operation_id, operation_name)?;
-            if container.active_operation.is_some() {
-                container.active_operation = None;
+            ensure_active_init_io_operation(&container, operation_id, operation_name)?;
+            if container.init_io_operations.remove(operation_id)
+                || container.active_operation.as_ref() == Some(operation_id)
+            {
+                if container.active_operation.as_ref() == Some(operation_id) {
+                    // Migrate and release process-I/O journals written by a
+                    // release that stored the init claim as a lifecycle claim.
+                    container.active_operation = None;
+                }
                 self.write_json(
                     mutation,
                     &self
@@ -799,9 +804,13 @@ impl DurableStateStore {
         }
 
         let mut process = self.load_stored_process(&target).await?;
-        ensure_active_process_operation(&process, operation_id, operation_name)?;
-        if process.active_operation.is_some() {
-            process.active_operation = None;
+        ensure_active_process_io_operation(&process, operation_id, operation_name)?;
+        if process.active_io_operations.remove(operation_id)
+            || process.active_operation.as_ref() == Some(operation_id)
+        {
+            if process.active_operation.as_ref() == Some(operation_id) {
+                process.active_operation = None;
+            }
             self.write_json(mutation, &self.process_path(&target), &process)
                 .await?;
         }
@@ -813,6 +822,37 @@ impl DurableStateStore {
         container: &StoredContainer,
         operation: &'static str,
     ) -> Result<()> {
+        if !container.init_io_operations.is_empty() {
+            return Err(state_error(
+                ErrorCode::Conflict,
+                operation,
+                format!(
+                    "container {} init process is owned by {} active I/O operation(s)",
+                    container.id,
+                    container.init_io_operations.len()
+                ),
+            )
+            .retryable(true));
+        }
+        if let Some(operation_id) = container.active_operation.as_ref() {
+            let operation_record = self.load_operation(operation_id).await?;
+            if matches!(
+                operation_record.kind,
+                StoredOperationKind::WriteStdin
+                    | StoredOperationKind::CloseStdin
+                    | StoredOperationKind::Resize
+            ) {
+                return Err(state_error(
+                    ErrorCode::Conflict,
+                    operation,
+                    format!(
+                        "container {} init process is owned by active I/O operation {operation_id}",
+                        container.id
+                    ),
+                )
+                .retryable(true));
+            }
+        }
         let directory = self.process_directory(&container.id);
         if !path_exists(&directory).await? {
             return Ok(());
@@ -866,13 +906,15 @@ impl DurableStateStore {
                 })?;
             let target = exact_process_target(container, process_id);
             let process = self.load_stored_process(&target).await?;
-            if let Some(active) = process.active_operation {
+            if process.active_operation.is_some() || !process.active_io_operations.is_empty() {
                 return Err(state_error(
                     ErrorCode::Conflict,
                     operation,
                     format!(
-                        "container {} process {} is owned by active operation {active}",
-                        container.id, target.process_id
+                        "container {} process {} is owned by an active mutation or {} active I/O operation(s)",
+                        container.id,
+                        target.process_id,
+                        process.active_io_operations.len()
                     ),
                 )
                 .retryable(true));
@@ -888,6 +930,50 @@ impl DurableStateStore {
         } else {
             create_private_directory(&directory).await
         }
+    }
+}
+
+pub(super) fn ensure_active_init_io_operation(
+    container: &StoredContainer,
+    operation_id: &OperationId,
+    operation: &'static str,
+) -> Result<()> {
+    if container.init_io_operations.contains(operation_id) {
+        Ok(())
+    } else if container.active_operation.as_ref() == Some(operation_id) {
+        // Backward compatibility for a prepared process-I/O operation
+        // written before init I/O had a disjoint durable claim.
+        Ok(())
+    } else {
+        Err(state_error(
+            ErrorCode::Conflict,
+            operation,
+            format!(
+                "container {} init I/O is not owned by operation {operation_id}",
+                container.id
+            ),
+        ))
+    }
+}
+
+fn ensure_active_process_io_operation(
+    process: &StoredProcess,
+    operation_id: &OperationId,
+    operation: &'static str,
+) -> Result<()> {
+    if process.active_io_operations.contains(operation_id)
+        || process.active_operation.as_ref() == Some(operation_id)
+    {
+        Ok(())
+    } else {
+        Err(state_error(
+            ErrorCode::Conflict,
+            operation,
+            format!(
+                "process {} I/O is not owned by operation {operation_id}",
+                process.record.target.process_id
+            ),
+        ))
     }
 }
 
@@ -1077,9 +1163,14 @@ pub(super) async fn claim_active_process_operation(
     mutation: DurableMutation,
     operation: &'static str,
 ) -> Result<()> {
-    match process.active_operation.as_ref() {
-        Some(active) if active == operation_id => return Ok(()),
-        Some(active) => {
+    if process.active_operation.as_ref() == Some(operation_id) {
+        return Ok(());
+    }
+    if let Some(active) = process.active_operation.clone() {
+        if super::process_io::migrate_legacy_process_io_claim(store, process)
+            .await?
+            .is_none()
+        {
             return Err(state_error(
                 ErrorCode::Conflict,
                 operation,
@@ -1089,8 +1180,8 @@ pub(super) async fn claim_active_process_operation(
                 ),
             ));
         }
-        None => process.active_operation = Some(operation_id.clone()),
     }
+    process.active_operation = Some(operation_id.clone());
     store
         .write_json(
             mutation,

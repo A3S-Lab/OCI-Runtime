@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{SocketAddr as StdSocketAddr, UnixStream};
 use std::path::{Path, PathBuf};
 
-use a3s_oci_sdk::{Error, ErrorCode, IoMode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
+use a3s_oci_sdk::{Error, ErrorCode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
 use super::control::{
     receive_device_mounts, write_create_hooks_ready, write_ready, write_rejection,
@@ -26,6 +26,17 @@ use super::RootfsScope;
 
 mod supervision;
 
+struct ContainerInitInvocation {
+    config_snapshot: PathBuf,
+    bundle_directory: PathBuf,
+    control_name: std::ffi::OsString,
+    container_id: String,
+    rootfs_scope: RootfsScope,
+    expected_owner_pid: libc::pid_t,
+    rootless: bool,
+    process_io: ProcessIo,
+}
+
 pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let mut arguments = std::env::args_os().skip(1);
     if arguments.next().as_deref() != Some(OsStr::new("container-init")) {
@@ -38,6 +49,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
     let rootfs_scope = arguments.next();
     let expected_owner_pid = arguments.next();
     let mapping_mode = arguments.next();
+    let process_io = arguments.next();
     let extra = arguments.next();
     let (
         Some(config_snapshot),
@@ -47,6 +59,7 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         Some(rootfs_scope),
         Some(expected_owner_pid),
         Some(mapping_mode),
+        Some(process_io),
         None,
     ) = (
         config_snapshot,
@@ -56,12 +69,13 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         rootfs_scope,
         expected_owner_pid,
         mapping_mode,
+        process_io,
         extra,
     )
     else {
         return Some(Err(init_error(
             ErrorCode::InvalidArgument,
-            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID MAPPING_MODE and no extra arguments",
+            "container-init requires CONFIG BUNDLE CONTROL ID ROOTFS_SCOPE OWNER_PID MAPPING_MODE PROCESS_IO and no extra arguments",
         )));
     };
     let container_id = match container_id.into_string() {
@@ -102,7 +116,36 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
             )));
         }
     };
-    Some(run_container_init(
+    let process_io = match process_io.to_str() {
+        Some(encoded) if encoded.len() <= super::MAX_INTERNAL_PROCESS_IO_BYTES => {
+            match serde_json::from_str::<ProcessIo>(encoded) {
+                Ok(process_io) => process_io,
+                Err(error) => {
+                    return Some(Err(init_error(
+                        ErrorCode::InvalidArgument,
+                        format!("container-init received invalid process I/O: {error}"),
+                    )));
+                }
+            }
+        }
+        Some(encoded) => {
+            return Some(Err(init_error(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "container-init process I/O is {} bytes; maximum is {}",
+                    encoded.len(),
+                    super::MAX_INTERNAL_PROCESS_IO_BYTES
+                ),
+            )));
+        }
+        None => {
+            return Some(Err(init_error(
+                ErrorCode::InvalidArgument,
+                "container-init process I/O must be valid UTF-8",
+            )));
+        }
+    };
+    Some(run_container_init(ContainerInitInvocation {
         config_snapshot,
         bundle_directory,
         control_name,
@@ -110,18 +153,21 @@ pub(crate) fn run_container_init_if_requested() -> Option<Result<()>> {
         rootfs_scope,
         expected_owner_pid,
         rootless,
-    ))
+        process_io,
+    }))
 }
 
-fn run_container_init(
-    config_snapshot: PathBuf,
-    bundle_directory: PathBuf,
-    control_name: std::ffi::OsString,
-    container_id: String,
-    rootfs_scope: RootfsScope,
-    expected_owner_pid: libc::pid_t,
-    rootless: bool,
-) -> Result<()> {
+fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
+    let ContainerInitInvocation {
+        config_snapshot,
+        bundle_directory,
+        control_name,
+        container_id,
+        rootfs_scope,
+        expected_owner_pid,
+        rootless,
+        process_io,
+    } = invocation;
     pid_supervisor::verify_and_arm_parent_death_signal(expected_owner_pid, "container launcher")?;
     let runtime_directory = config_snapshot
         .parent()
@@ -150,12 +196,16 @@ fn run_container_init(
         Ok(process_group) => process_group,
         Err(error) => return reject_before_ready(&mut control, error),
     };
-    let (plan, canonical_bundle, rootfs, rootfs_file, host_proc) =
-        match prepare_container_init(config_snapshot, bundle_directory, rootfs_scope) {
-            Ok(prepared) => prepared,
-            Err(error) => return reject_before_ready(&mut control, error),
-        };
-    let expected_device_mount_count = usize::from(rootless && plan.devices.requires_setup())
+    let (plan, canonical_bundle, rootfs, rootfs_file, host_proc) = match prepare_container_init(
+        config_snapshot,
+        bundle_directory,
+        rootfs_scope,
+        &process_io,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
+    let expected_device_mount_count = usize::from(rootless && plan.devices.has_node_setup())
         * super::device::ROOTLESS_DEVICE_MOUNT_COUNT;
     let rootless_device_mount_descriptors =
         match receive_device_mounts(&control, expected_device_mount_count) {
@@ -374,6 +424,7 @@ fn prepare_container_init(
     config_snapshot: PathBuf,
     bundle_directory: PathBuf,
     rootfs_scope: RootfsScope,
+    process_io: &ProcessIo,
 ) -> Result<(InitPlan, PathBuf, PathBuf, File, File)> {
     let config_json = read_bounded_config(&config_snapshot)?;
     let bundle = OciBundle::from_json(bundle_directory, config_json)?;
@@ -382,7 +433,7 @@ fn prepare_container_init(
         .root()
         .as_ref()
         .is_some_and(|root| root.path().is_absolute());
-    let plan = InitPlan::from_bundle(&bundle, &null_io())?;
+    let plan = InitPlan::from_bundle(&bundle, process_io)?;
     let canonical_bundle = plan.bundle_directory.canonicalize().map_err(|error| {
         init_error(
             ErrorCode::InvalidArgument,
@@ -737,15 +788,6 @@ fn cstring_vector(values: &[String], field: &str) -> Result<Vec<CString>> {
         .collect()
 }
 
-fn null_io() -> ProcessIo {
-    ProcessIo {
-        stdin: IoMode::Null,
-        stdout: IoMode::Null,
-        stderr: IoMode::Null,
-        terminal_size: None,
-    }
-}
-
 fn last_os_error(operation: &str) -> Error {
     init_error(
         ErrorCode::Internal,
@@ -761,7 +803,7 @@ fn init_error(code: ErrorCode, message: impl Into<String>) -> Error {
 mod tests {
     use std::path::Path;
 
-    use a3s_oci_sdk::ErrorCode;
+    use a3s_oci_sdk::{ErrorCode, IoMode, ProcessIo, TerminalSize};
     use tempfile::tempdir;
 
     use super::{prepare_container_init, RootfsScope};
@@ -799,9 +841,13 @@ mod tests {
         std::fs::create_dir(&rootfs).expect("external rootfs directory");
         let config = write_configuration(temporary.path(), &rootfs);
 
-        let (_, canonical_bundle, canonical_rootfs, _, _) =
-            prepare_container_init(config, bundle.clone(), RootfsScope::NativeAbsolute)
-                .expect("native absolute rootfs");
+        let (_, canonical_bundle, canonical_rootfs, _, _) = prepare_container_init(
+            config,
+            bundle.clone(),
+            RootfsScope::NativeAbsolute,
+            &ProcessIo::default(),
+        )
+        .expect("native absolute rootfs");
 
         assert_eq!(
             canonical_bundle,
@@ -822,8 +868,13 @@ mod tests {
         std::fs::create_dir(&rootfs).expect("external rootfs directory");
         let config = write_configuration(temporary.path(), &rootfs);
 
-        let error = prepare_container_init(config, bundle, RootfsScope::BundleOnly)
-            .expect_err("guest rootfs must remain bundle-confined");
+        let error = prepare_container_init(
+            config,
+            bundle,
+            RootfsScope::BundleOnly,
+            &ProcessIo::default(),
+        )
+        .expect_err("guest rootfs must remain bundle-confined");
 
         assert_eq!(error.code, ErrorCode::PermissionDenied);
         assert!(error.message.contains("escapes its guest bundle"));
@@ -840,10 +891,52 @@ mod tests {
             .expect("escaping rootfs symlink");
         let config = write_configuration(temporary.path(), Path::new("rootfs"));
 
-        let error = prepare_container_init(config, bundle, RootfsScope::NativeAbsolute)
-            .expect_err("relative rootfs must remain bundle-confined");
+        let error = prepare_container_init(
+            config,
+            bundle,
+            RootfsScope::NativeAbsolute,
+            &ProcessIo::default(),
+        )
+        .expect_err("relative rootfs must remain bundle-confined");
 
         assert_eq!(error.code, ErrorCode::PermissionDenied);
         assert!(error.message.contains("escapes its guest bundle"));
+    }
+
+    #[test]
+    fn prepared_init_reloads_terminal_bundle_with_forwarded_process_io() {
+        let temporary = tempdir().expect("temporary rootfs fixture");
+        let bundle = temporary.path().join("sandbox/bundle");
+        let rootfs = temporary.path().join("rootfs");
+        std::fs::create_dir_all(&bundle).expect("bundle directory");
+        std::fs::create_dir(&rootfs).expect("external rootfs directory");
+        let mut config: serde_json::Value =
+            serde_json::from_str(&configuration(&rootfs)).expect("decode configuration");
+        config["process"]["terminal"] = serde_json::Value::Bool(true);
+        let config_path = temporary.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec(&config).expect("encode terminal configuration"),
+        )
+        .expect("write terminal configuration");
+        let terminal_io = ProcessIo {
+            stdin: IoMode::Terminal,
+            stdout: IoMode::Terminal,
+            stderr: IoMode::Terminal,
+            terminal_size: Some(TerminalSize {
+                width: 120,
+                height: 40,
+            }),
+        };
+
+        let (plan, _, _, _, _) = prepare_container_init(
+            config_path,
+            bundle,
+            RootfsScope::NativeAbsolute,
+            &terminal_io,
+        )
+        .expect("prepared terminal init");
+
+        assert!(plan.terminal);
     }
 }

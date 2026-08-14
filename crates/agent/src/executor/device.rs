@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -10,15 +10,18 @@ use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use a3s_oci_sdk::oci_spec::runtime::{
-    Linux, LinuxDevice, LinuxDeviceCgroup, LinuxDeviceType, LinuxResources,
-};
+use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxDevice, LinuxDeviceType, LinuxResources};
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use serde::{Deserialize, Serialize};
 
 use super::mount::MountPlan;
 use super::namespace::NamespacePlan;
 use super::recovery::read_json_record;
+
+mod access;
+
+pub(super) use access::LoadedDeviceProgram;
+use access::{DeviceAccessKind, DeviceAccessPolicy};
 
 const MAX_DEVICES: usize = 256;
 const MAX_SCANNED_ROOTFS_ENTRIES: usize = 1_000_000;
@@ -37,17 +40,15 @@ const ROOTLESS_SAFE_DEVICES: [(&str, DeviceKind, u32, u32); ROOTLESS_DEVICE_MOUN
     ("/dev/urandom", DeviceKind::Character, 1, 9),
     ("/dev/tty", DeviceKind::Character, 5, 0),
 ];
+const DEFAULT_DEVICE_MODE: u32 = 0o666;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct DevicePlan {
     nodes: Vec<DeviceNode>,
-    allow_access_masks: Vec<u8>,
-    enforce_allowlist: bool,
+    access_policy: Option<DeviceAccessPolicy>,
+    terminal: bool,
 }
-
-#[derive(Debug)]
-pub(super) struct LoadedDeviceProgram(OwnedFd);
 
 #[derive(Debug)]
 pub(super) struct PreparedDeviceSources {
@@ -200,14 +201,30 @@ enum DeviceKind {
     Fifo,
 }
 
+fn default_device_nodes() -> Vec<DeviceNode> {
+    ROOTLESS_SAFE_DEVICES
+        .iter()
+        .map(|(path, kind, major, minor)| DeviceNode {
+            path: PathBuf::from(path),
+            kind: *kind,
+            major: *major,
+            minor: *minor,
+            mode: DEFAULT_DEVICE_MODE,
+            uid: 0,
+            gid: 0,
+        })
+        .collect()
+}
+
 impl DevicePlan {
-    pub(super) fn from_linux(linux: Option<&Linux>, mounts: &[MountPlan]) -> Result<Self> {
+    pub(super) fn from_linux(
+        linux: Option<&Linux>,
+        mounts: &[MountPlan],
+        terminal: bool,
+        mount_namespace_isolated: bool,
+    ) -> Result<Self> {
         let Some(linux) = linux else {
-            return Ok(Self {
-                nodes: Vec::new(),
-                allow_access_masks: Vec::new(),
-                enforce_allowlist: false,
-            });
+            return Ok(Self::default());
         };
         let devices = linux.devices().as_deref().unwrap_or_default();
         let rules = linux
@@ -221,13 +238,27 @@ impl DevicePlan {
                 devices.len()
             )));
         }
-        let nodes = devices
+        let mut explicit_nodes = devices
             .iter()
             .enumerate()
             .map(|(index, device)| DeviceNode::from_oci(index, device))
             .collect::<Result<Vec<_>>>()?;
+        let mut nodes = if mount_namespace_isolated {
+            default_device_nodes()
+        } else {
+            Vec::new()
+        };
+        for explicit in explicit_nodes.drain(..) {
+            if let Some(default) = nodes
+                .iter_mut()
+                .find(|default| default.path == explicit.path)
+            {
+                *default = explicit;
+            } else {
+                nodes.push(explicit);
+            }
+        }
         let mut unique_paths = BTreeSet::new();
-        let mut unique_numbers = BTreeSet::new();
         for node in &nodes {
             if !unique_paths.insert(node.path.clone()) {
                 return Err(invalid(format!(
@@ -235,29 +266,20 @@ impl DevicePlan {
                     node.path.display()
                 )));
             }
-            if !unique_numbers.insert((node.kind, node.major, node.minor)) {
-                return Err(invalid(format!(
-                    "linux.devices contains duplicate {} {}:{}",
-                    node.kind.description(),
-                    node.major,
-                    node.minor
-                )));
-            }
         }
-        let allow_access_masks = validate_device_policy(&nodes, Some(rules))?;
-        let enforce_allowlist = !nodes.is_empty() || !rules.is_empty();
-        if enforce_allowlist {
+        let access_policy = DeviceAccessPolicy::from_oci(rules)?;
+        if access_policy.is_some() {
             validate_bind_mounts_are_nodev(mounts)?;
         }
         Ok(Self {
             nodes,
-            allow_access_masks,
-            enforce_allowlist,
+            access_policy,
+            terminal,
         })
     }
 
     pub(super) fn validate_rootfs(&self, rootfs: &Path) -> Result<()> {
-        if !self.enforce_allowlist {
+        if self.nodes.is_empty() && self.access_policy.is_none() {
             return Ok(());
         }
         let allowed = self
@@ -478,6 +500,7 @@ impl DevicePlan {
         for node in &self.nodes {
             node.create()?;
         }
+        ensure_ptmx_link()?;
         Ok(())
     }
 
@@ -486,40 +509,47 @@ impl DevicePlan {
     }
 
     pub(super) fn requires_setup(&self) -> bool {
-        self.enforce_allowlist
+        self.has_node_setup() || self.has_access_policy() || self.terminal
+    }
+
+    pub(super) fn has_node_setup(&self) -> bool {
+        !self.nodes.is_empty()
+    }
+
+    pub(super) fn has_access_policy(&self) -> bool {
+        self.access_policy.is_some()
     }
 
     pub(super) fn update_from_resources(&self, resources: &LinuxResources) -> Result<Option<Self>> {
         let Some(rules) = resources.devices().as_deref() else {
             return Ok(None);
         };
-        if rules.is_empty() {
-            return Ok(Some(Self {
-                nodes: self.nodes.clone(),
-                allow_access_masks: Vec::new(),
-                enforce_allowlist: false,
-            }));
-        }
-        let allow_access_masks = validate_device_policy(&self.nodes, Some(rules))?;
+        let access_policy = DeviceAccessPolicy::from_oci(rules)?;
         Ok(Some(Self {
             nodes: self.nodes.clone(),
-            allow_access_masks,
-            enforce_allowlist: !self.nodes.is_empty() || !rules.is_empty(),
+            access_policy,
+            terminal: self.terminal,
         }))
     }
 
     pub(super) fn load_cgroup_device_program(&self) -> Result<Option<OwnedFd>> {
-        if !self.enforce_allowlist {
-            return Ok(None);
-        }
-        let program = build_cgroup_device_program(&self.nodes, &self.allow_access_masks)?;
-        load_cgroup_device_program_fd(&program).map(Some)
+        self.access_policy
+            .as_ref()
+            .map(DeviceAccessPolicy::load)
+            .transpose()
     }
 
     pub(super) fn load_device_program(&self) -> Result<LoadedDeviceProgram> {
         self.validate_serialized_policy()?;
-        let program = build_cgroup_device_program(&self.nodes, &self.allow_access_masks)?;
-        load_cgroup_device_program_fd(&program).map(LoadedDeviceProgram)
+        self.access_policy
+            .as_ref()
+            .ok_or_else(|| {
+                device_error(
+                    ErrorCode::PermissionDenied,
+                    "serialized rootless device policy has no active access policy",
+                )
+            })?
+            .load_for_rootless_helper()
     }
 
     fn has_rootless_safe_nodes(&self) -> bool {
@@ -538,14 +568,7 @@ impl DevicePlan {
     }
 
     fn validate_serialized_policy(&self) -> Result<()> {
-        if !self.enforce_allowlist
-            || !self.has_rootless_safe_nodes()
-            || self.nodes.len() != self.allow_access_masks.len()
-            || self
-                .allow_access_masks
-                .iter()
-                .any(|mask| *mask == 0 || *mask & !0b111 != 0)
-        {
+        if !self.has_rootless_safe_nodes() || !self.has_rootless_safe_access_policy() {
             return Err(device_error(
                 ErrorCode::PermissionDenied,
                 "serialized rootless device policy is not a bounded active allowlist",
@@ -555,7 +578,10 @@ impl DevicePlan {
     }
 
     pub(super) fn validate_rootless_device_set(&self) -> Result<()> {
-        if !self.has_rootless_safe_nodes() {
+        if !self.has_rootless_safe_nodes()
+            || self.terminal
+            || !self.has_rootless_safe_access_policy()
+        {
             Err(device_error(
                 ErrorCode::Unsupported,
                 "rootless device policy requires the exact six-node A3S Box safe-device profile",
@@ -595,7 +621,7 @@ impl DevicePlan {
         cgroup_path: &Path,
         loaded: &OwnedFd,
     ) -> Result<()> {
-        attach_loaded_cgroup_device_program(cgroup_path, loaded)
+        access::attach_loaded_cgroup_device_program(cgroup_path, loaded)
     }
 
     pub(super) fn replace_loaded_cgroup_device_program(
@@ -604,7 +630,7 @@ impl DevicePlan {
         loaded: &OwnedFd,
         replaced: &OwnedFd,
     ) -> Result<()> {
-        replace_loaded_cgroup_device_program(cgroup_path, loaded, replaced)
+        access::replace_loaded_cgroup_device_program(cgroup_path, loaded, replaced)
     }
 
     pub(super) fn detach_loaded_cgroup_device_program(
@@ -612,14 +638,14 @@ impl DevicePlan {
         cgroup_path: &Path,
         attached: &OwnedFd,
     ) -> Result<()> {
-        detach_loaded_cgroup_device_program(cgroup_path, attached)
+        access::detach_loaded_cgroup_device_program(cgroup_path, attached)
     }
 
     pub(super) fn install_cgroup_device_filter(
         &self,
         cgroup_path: &Path,
     ) -> Result<Option<OwnedFd>> {
-        if !self.enforce_allowlist {
+        if self.access_policy.is_none() {
             return Ok(None);
         }
         let Some(loaded) = self.load_cgroup_device_program()? else {
@@ -629,27 +655,18 @@ impl DevicePlan {
         Ok(Some(loaded))
     }
 
+    fn has_rootless_safe_access_policy(&self) -> bool {
+        let expected = ROOTLESS_SAFE_DEVICES.map(|(_, kind, major, minor)| {
+            (kind.access_kind().expect("safe device kind"), major, minor)
+        });
+        self.access_policy
+            .as_ref()
+            .is_some_and(|policy| policy.is_exact_rootless_allowlist(&expected))
+    }
+
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.nodes.len()
-    }
-}
-
-impl LoadedDeviceProgram {
-    pub(super) fn attach_to_fd(&self, cgroup: RawFd) -> Result<()> {
-        attach_cgroup_device_program_fd(cgroup, &self.0, None)
-    }
-
-    pub(super) fn replace_on_fd(
-        &self,
-        cgroup: RawFd,
-        replaced: &LoadedDeviceProgram,
-    ) -> Result<()> {
-        attach_cgroup_device_program_fd(cgroup, &self.0, Some(&replaced.0))
-    }
-
-    pub(super) fn detach_from_fd(&self, cgroup: RawFd) -> Result<()> {
-        detach_cgroup_device_program_fd(cgroup, &self.0)
     }
 }
 
@@ -1721,6 +1738,49 @@ fn is_rootless_safe_device(node: &DeviceNode) -> bool {
             })
 }
 
+fn ensure_ptmx_link() -> Result<()> {
+    let path = Path::new("/dev/ptmx");
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target = fs::read_link(path).map_err(|error| {
+                device_error(
+                    ErrorCode::FailedPrecondition,
+                    format!("failed to read the required /dev/ptmx link: {error}"),
+                )
+            })?;
+            if target == Path::new("pts/ptmx") {
+                return Ok(());
+            }
+            return Err(device_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "/dev/ptmx must link to pts/ptmx, found {}",
+                    target.display()
+                ),
+            ));
+        }
+        Ok(_) => {
+            return Err(device_error(
+                ErrorCode::FailedPrecondition,
+                "/dev/ptmx already exists and is not the required symlink",
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(device_error(
+                ErrorCode::FailedPrecondition,
+                format!("failed to inspect /dev/ptmx: {error}"),
+            ));
+        }
+    }
+    std::os::unix::fs::symlink("pts/ptmx", path).map_err(|error| {
+        device_error(
+            ErrorCode::PermissionDenied,
+            format!("failed to create the required /dev/ptmx link: {error}"),
+        )
+    })
+}
+
 impl DeviceKind {
     fn from_oci(index: usize, kind: LinuxDeviceType) -> Result<Self> {
         match kind {
@@ -1733,555 +1793,13 @@ impl DeviceKind {
         }
     }
 
-    const fn description(self) -> &'static str {
+    const fn access_kind(self) -> Option<DeviceAccessKind> {
         match self {
-            Self::Block => "block device",
-            Self::Character => "character device",
-            Self::Fifo => "FIFO",
+            Self::Block => Some(DeviceAccessKind::Block),
+            Self::Character => Some(DeviceAccessKind::Character),
+            Self::Fifo => None,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-struct BpfInsn {
-    code: u8,
-    regs: u8,
-    off: i16,
-    imm: i32,
-}
-
-const BPF_ALU64: u32 = 0x07;
-const BPF_MOV: u32 = 0xb0;
-const BPF_AND: u32 = 0x50;
-const BPF_RSH: u32 = 0x70;
-const BPF_JNE: u32 = 0x50;
-const BPF_EXIT: u32 = 0x90;
-const BPF_REG_0: u8 = 0;
-const BPF_REG_1: u8 = 1;
-const BPF_REG_2: u8 = 2;
-const BPF_REG_3: u8 = 3;
-const BPF_REG_4: u8 = 4;
-const BPF_REG_5: u8 = 5;
-const BPF_PROG_LOAD: u32 = 5;
-const BPF_PROG_ATTACH: u32 = 8;
-const BPF_PROG_DETACH: u32 = 9;
-const BPF_F_ALLOW_MULTI: u32 = 1 << 1;
-const BPF_F_REPLACE: u32 = 1 << 2;
-const BPF_PROG_TYPE_CGROUP_DEVICE: u32 = 15;
-const BPF_CGROUP_DEVICE: u32 = 6;
-const BPF_DEVCG_ACC_MKNOD: u32 = 1;
-const BPF_DEVCG_ACC_READ: u32 = 2;
-const BPF_DEVCG_ACC_WRITE: u32 = 4;
-const BPF_DEVCG_DEV_BLOCK: u32 = 1;
-const BPF_DEVCG_DEV_CHAR: u32 = 2;
-const MAX_BPF_LOG_BYTES: usize = 64 * 1024;
-
-#[repr(C)]
-struct BpfProgLoadAttr {
-    prog_type: u32,
-    insn_cnt: u32,
-    insns: u64,
-    license: u64,
-    log_level: u32,
-    log_size: u32,
-    log_buf: u64,
-    kern_version: u32,
-    prog_flags: u32,
-    prog_name: [u8; 16],
-    prog_ifindex: u32,
-    expected_attach_type: u32,
-}
-
-#[repr(C)]
-struct BpfProgAttachAttr {
-    target_fd: u32,
-    attach_bpf_fd: u32,
-    attach_type: u32,
-    attach_flags: u32,
-    replace_bpf_fd: u32,
-}
-
-fn build_cgroup_device_program(
-    nodes: &[DeviceNode],
-    allow_access_masks: &[u8],
-) -> Result<Vec<BpfInsn>> {
-    if nodes.len() != allow_access_masks.len() {
-        return Err(device_error(
-            ErrorCode::Internal,
-            "device access mask count does not match the OCI device node count",
-        ));
-    }
-
-    let allow_rules = nodes
-        .iter()
-        .zip(allow_access_masks.iter().copied())
-        .filter_map(|(node, access_mask)| match node.kind {
-            DeviceKind::Block => Some((BPF_DEVCG_DEV_BLOCK, node.major, node.minor, access_mask)),
-            DeviceKind::Character => {
-                Some((BPF_DEVCG_DEV_CHAR, node.major, node.minor, access_mask))
-            }
-            DeviceKind::Fifo => None,
-        })
-        .collect::<Vec<_>>();
-
-    if allow_rules.is_empty() {
-        return Ok(vec![mov64_imm(BPF_REG_0, 0), exit_insn()]);
-    }
-
-    let mut program = vec![
-        ldx_mem(libc::BPF_W, BPF_REG_2, BPF_REG_1, 0),
-        alu32_imm(BPF_AND, BPF_REG_2, 0xFFFF),
-        ldx_mem(libc::BPF_W, BPF_REG_3, BPF_REG_1, 0),
-        alu32_imm(BPF_RSH, BPF_REG_3, 16),
-        ldx_mem(libc::BPF_W, BPF_REG_4, BPF_REG_1, 4),
-        ldx_mem(libc::BPF_W, BPF_REG_5, BPF_REG_1, 8),
-    ];
-    let mut rule_starts = Vec::with_capacity(allow_rules.len());
-    let mut mismatch_jumps = Vec::with_capacity(allow_rules.len());
-
-    for (device_type, major, minor, access_mask) in allow_rules {
-        rule_starts.push(program.len());
-        let mut rule_jumps = Vec::with_capacity(4);
-        rule_jumps.push(push_jne_imm(&mut program, BPF_REG_2, device_type as i32));
-        if access_mask != (BPF_DEVCG_ACC_READ | BPF_DEVCG_ACC_WRITE | BPF_DEVCG_ACC_MKNOD) as u8 {
-            program.push(mov64_reg(BPF_REG_1, BPF_REG_3));
-            program.push(alu32_imm(BPF_AND, BPF_REG_1, i32::from(access_mask)));
-            rule_jumps.push(push_jne_reg(&mut program, BPF_REG_1, BPF_REG_3));
-        }
-        rule_jumps.push(push_jne_imm(&mut program, BPF_REG_4, major as i32));
-        rule_jumps.push(push_jne_imm(&mut program, BPF_REG_5, minor as i32));
-        program.push(mov64_imm(BPF_REG_0, 1));
-        program.push(exit_insn());
-        mismatch_jumps.push(rule_jumps);
-    }
-
-    let reject_start = program.len();
-    program.push(mov64_imm(BPF_REG_0, 0));
-    program.push(exit_insn());
-
-    for (rule_index, rule_jumps) in mismatch_jumps.iter().enumerate() {
-        let target = rule_starts
-            .get(rule_index + 1)
-            .copied()
-            .unwrap_or(reject_start);
-        for &jump_index in rule_jumps {
-            let jump = program.get_mut(jump_index).ok_or_else(|| {
-                device_error(
-                    ErrorCode::Internal,
-                    "cgroup device BPF program lost a patch target",
-                )
-            })?;
-            let offset = target as isize - jump_index as isize - 1;
-            jump.off = i16::try_from(offset).map_err(|error| {
-                device_error(
-                    ErrorCode::ResourceExhausted,
-                    format!("cgroup device BPF program exceeds jump limits: {error}"),
-                )
-            })?;
-        }
-    }
-
-    Ok(program)
-}
-
-fn attach_loaded_cgroup_device_program(cgroup_path: &Path, loaded: &OwnedFd) -> Result<()> {
-    attach_cgroup_device_program(cgroup_path, loaded, None)
-}
-
-fn replace_loaded_cgroup_device_program(
-    cgroup_path: &Path,
-    loaded: &OwnedFd,
-    replaced: &OwnedFd,
-) -> Result<()> {
-    attach_cgroup_device_program(cgroup_path, loaded, Some(replaced))
-}
-
-fn attach_cgroup_device_program(
-    cgroup_path: &Path,
-    loaded: &OwnedFd,
-    replaced: Option<&OwnedFd>,
-) -> Result<()> {
-    let cgroup = open_cgroup_descriptor(cgroup_path)?;
-    attach_cgroup_device_program_fd(cgroup.as_raw_fd(), loaded, replaced).map_err(|error| {
-        Error::new(
-            error.code,
-            format!(
-                "failed to attach cgroup device BPF program to {}: {}",
-                cgroup_path.display(),
-                error.message
-            ),
-        )
-        .for_operation("enforce-container-devices")
-        .retryable(error.retryable)
-    })
-}
-
-fn attach_cgroup_device_program_fd(
-    cgroup: RawFd,
-    loaded: &OwnedFd,
-    replaced: Option<&OwnedFd>,
-) -> Result<()> {
-    let mut attr = BpfProgAttachAttr {
-        target_fd: cgroup as u32,
-        attach_bpf_fd: loaded.as_raw_fd() as u32,
-        attach_type: BPF_CGROUP_DEVICE,
-        attach_flags: BPF_F_ALLOW_MULTI | if replaced.is_some() { BPF_F_REPLACE } else { 0 },
-        replace_bpf_fd: replaced.map_or(0, |program| program.as_raw_fd() as u32),
-    };
-    // SAFETY: the cgroup and program descriptors are live owned fds and the
-    // attribute struct matches the kernel layout for BPF_PROG_ATTACH.
-    let attached = unsafe {
-        libc::syscall(
-            libc::SYS_bpf,
-            BPF_PROG_ATTACH,
-            &mut attr as *mut _ as *mut libc::c_void,
-            std::mem::size_of::<BpfProgAttachAttr>(),
-        )
-    };
-    if attached != 0 {
-        return Err(bpf_last_os_error(
-            "failed to attach cgroup device BPF program",
-        ));
-    }
-    Ok(())
-}
-
-fn detach_loaded_cgroup_device_program(cgroup_path: &Path, attached: &OwnedFd) -> Result<()> {
-    let cgroup = open_cgroup_descriptor(cgroup_path)?;
-    detach_cgroup_device_program_fd(cgroup.as_raw_fd(), attached).map_err(|error| {
-        Error::new(
-            error.code,
-            format!(
-                "failed to detach cgroup device BPF program from {}: {}",
-                cgroup_path.display(),
-                error.message
-            ),
-        )
-        .for_operation("enforce-container-devices")
-        .retryable(error.retryable)
-    })
-}
-
-fn detach_cgroup_device_program_fd(cgroup: RawFd, attached: &OwnedFd) -> Result<()> {
-    let mut attr = BpfProgAttachAttr {
-        target_fd: cgroup as u32,
-        attach_bpf_fd: attached.as_raw_fd() as u32,
-        attach_type: BPF_CGROUP_DEVICE,
-        attach_flags: 0,
-        replace_bpf_fd: 0,
-    };
-    // SAFETY: the cgroup and program descriptors are live owned fds and the
-    // attribute struct matches the kernel layout for BPF_PROG_DETACH.
-    let detached = unsafe {
-        libc::syscall(
-            libc::SYS_bpf,
-            BPF_PROG_DETACH,
-            &mut attr as *mut _ as *mut libc::c_void,
-            std::mem::size_of::<BpfProgAttachAttr>(),
-        )
-    };
-    if detached != 0 {
-        return Err(bpf_last_os_error(
-            "failed to detach cgroup device BPF program",
-        ));
-    }
-    Ok(())
-}
-
-fn load_cgroup_device_program_fd(program: &[BpfInsn]) -> Result<OwnedFd> {
-    let insn_cnt = u32::try_from(program.len()).map_err(|error| {
-        device_error(
-            ErrorCode::ResourceExhausted,
-            format!("cgroup device BPF program exceeds the kernel instruction limit: {error}"),
-        )
-    })?;
-    let license = c"GPL";
-    let mut log = Vec::new();
-    let mut with_log = false;
-    loop {
-        let mut attr = BpfProgLoadAttr {
-            prog_type: BPF_PROG_TYPE_CGROUP_DEVICE,
-            insn_cnt,
-            insns: program.as_ptr() as u64,
-            license: license.as_ptr() as u64,
-            log_level: if with_log { 1 } else { 0 },
-            log_size: log.len() as u32,
-            log_buf: if with_log { log.as_mut_ptr() as u64 } else { 0 },
-            kern_version: 0,
-            prog_flags: 0,
-            prog_name: [0; 16],
-            prog_ifindex: 0,
-            expected_attach_type: BPF_CGROUP_DEVICE,
-        };
-        // SAFETY: the attribute struct is fully initialized and the program
-        // and license pointers stay live for the duration of the syscall.
-        let loaded = unsafe {
-            libc::syscall(
-                libc::SYS_bpf,
-                BPF_PROG_LOAD,
-                &mut attr as *mut _ as *mut libc::c_void,
-                std::mem::size_of::<BpfProgLoadAttr>(),
-            )
-        };
-        if loaded >= 0 {
-            let fd = i32::try_from(loaded).map_err(|error| {
-                device_error(
-                    ErrorCode::Internal,
-                    format!("BPF_PROG_LOAD returned an invalid descriptor: {error}"),
-                )
-            })?;
-            // SAFETY: `fd` is a fresh owned descriptor returned by BPF_PROG_LOAD.
-            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
-        }
-
-        let error = io::Error::last_os_error();
-        if !with_log {
-            bump_memlock_limit();
-            log.resize(16 * 1024, 0);
-            with_log = true;
-            continue;
-        }
-        if error.raw_os_error() == Some(libc::ENOSPC) && log.len() < MAX_BPF_LOG_BYTES {
-            let next = (log.len().max(16 * 1024) * 2).min(MAX_BPF_LOG_BYTES);
-            log.resize(next, 0);
-            continue;
-        }
-        return Err(bpf_load_failure(error, &log));
-    }
-}
-
-fn open_cgroup_descriptor(path: &Path) -> Result<OwnedFd> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|error| {
-            device_error(
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "failed to open cgroup directory {}: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-    let raw = file.into_raw_fd();
-    // SAFETY: `raw` is a live owned descriptor from OpenOptions.
-    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
-}
-
-fn bump_memlock_limit() {
-    let mut current = libc::rlimit {
-        rlim_cur: libc::RLIM_INFINITY,
-        rlim_max: libc::RLIM_INFINITY,
-    };
-    // SAFETY: the pointed-to structure is valid and owned by this function.
-    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &current) } == 0 {
-        return;
-    }
-    // SAFETY: the pointed-to structure is valid and owned by this function.
-    if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut current) } != 0 {
-        return;
-    }
-    current.rlim_cur = current.rlim_max;
-    // SAFETY: the pointed-to structure is valid and owned by this function.
-    let _ = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &current) };
-}
-
-fn bpf_load_failure(error: io::Error, log: &[u8]) -> Error {
-    let message = if let Some(verifier_log) = verifier_log(log) {
-        format!("failed to load cgroup device BPF program: {error}: {verifier_log}")
-    } else {
-        format!("failed to load cgroup device BPF program: {error}")
-    };
-    device_error(bpf_error_code(&error), message)
-}
-
-fn bpf_last_os_error(message: impl Into<String>) -> Error {
-    let error = io::Error::last_os_error();
-    device_error(
-        bpf_error_code(&error),
-        format!("{}: {error}", message.into()),
-    )
-}
-
-fn bpf_error_code(error: &io::Error) -> ErrorCode {
-    match error.raw_os_error() {
-        Some(code) if code == libc::EPERM || code == libc::EACCES => ErrorCode::PermissionDenied,
-        Some(code) if code == libc::ENOMEM => ErrorCode::ResourceExhausted,
-        Some(code)
-            if code == libc::EINVAL
-                || code == libc::EOPNOTSUPP
-                || code == libc::ENOSYS
-                || code == libc::ENOTSUP =>
-        {
-            ErrorCode::Unsupported
-        }
-        _ => ErrorCode::FailedPrecondition,
-    }
-}
-
-fn verifier_log(log: &[u8]) -> Option<String> {
-    let end = log.iter().rposition(|byte| *byte != 0)?;
-    let log = String::from_utf8_lossy(&log[..=end]).trim().to_string();
-    if log.is_empty() {
-        None
-    } else {
-        Some(log)
-    }
-}
-
-fn ldx_mem(size: u32, dst: u8, src: u8, off: i16) -> BpfInsn {
-    BpfInsn {
-        code: (libc::BPF_LDX | size | libc::BPF_MEM) as u8,
-        regs: pack_regs(dst, src),
-        off,
-        imm: 0,
-    }
-}
-
-fn alu32_imm(op: u32, dst: u8, imm: i32) -> BpfInsn {
-    BpfInsn {
-        code: (libc::BPF_ALU | op | libc::BPF_K) as u8,
-        regs: pack_regs(dst, 0),
-        off: 0,
-        imm,
-    }
-}
-
-fn mov64_reg(dst: u8, src: u8) -> BpfInsn {
-    BpfInsn {
-        code: (BPF_ALU64 | BPF_MOV | libc::BPF_X) as u8,
-        regs: pack_regs(dst, src),
-        off: 0,
-        imm: 0,
-    }
-}
-
-fn push_jne_imm(program: &mut Vec<BpfInsn>, dst: u8, imm: i32) -> usize {
-    let index = program.len();
-    program.push(BpfInsn {
-        code: (libc::BPF_JMP | BPF_JNE | libc::BPF_K) as u8,
-        regs: pack_regs(dst, 0),
-        off: 0,
-        imm,
-    });
-    index
-}
-
-fn push_jne_reg(program: &mut Vec<BpfInsn>, dst: u8, src: u8) -> usize {
-    let index = program.len();
-    program.push(BpfInsn {
-        code: (libc::BPF_JMP | BPF_JNE | libc::BPF_X) as u8,
-        regs: pack_regs(dst, src),
-        off: 0,
-        imm: 0,
-    });
-    index
-}
-
-fn mov64_imm(dst: u8, imm: i32) -> BpfInsn {
-    BpfInsn {
-        code: (BPF_ALU64 | BPF_MOV | libc::BPF_K) as u8,
-        regs: pack_regs(dst, 0),
-        off: 0,
-        imm,
-    }
-}
-
-fn exit_insn() -> BpfInsn {
-    BpfInsn {
-        code: (libc::BPF_JMP | BPF_EXIT) as u8,
-        regs: 0,
-        off: 0,
-        imm: 0,
-    }
-}
-
-fn pack_regs(dst: u8, src: u8) -> u8 {
-    (dst & 0x0f) | ((src & 0x0f) << 4)
-}
-
-fn validate_device_policy(
-    nodes: &[DeviceNode],
-    rules: Option<&[LinuxDeviceCgroup]>,
-) -> Result<Vec<u8>> {
-    let rules = rules.unwrap_or_default();
-    if nodes.is_empty() && rules.is_empty() {
-        return Ok(Vec::new());
-    }
-    let Some(default_deny) = rules.first() else {
-        return Err(unsupported(
-            "linux.resources.devices",
-            "explicit devices require a default-deny policy",
-        ));
-    };
-    if default_deny.allow()
-        || default_deny.typ().is_some()
-        || default_deny.major().is_some()
-        || default_deny.minor().is_some()
-        || default_deny.access().as_deref() != Some("rwm")
-    {
-        return Err(unsupported(
-            "linux.resources.devices[0]",
-            "the supported policy starts with deny-all rwm",
-        ));
-    }
-    if rules.len() != nodes.len() + 1 {
-        return Err(unsupported(
-            "linux.resources.devices",
-            "the allow rules must exactly match the created device nodes",
-        ));
-    }
-    let mut allow_access_masks = Vec::with_capacity(nodes.len());
-    for (index, (node, rule)) in nodes.iter().zip(&rules[1..]).enumerate() {
-        let expected_type = match node.kind {
-            DeviceKind::Block => LinuxDeviceType::B,
-            DeviceKind::Character => LinuxDeviceType::C,
-            DeviceKind::Fifo => LinuxDeviceType::P,
-        };
-        let access_mask = parse_device_access_mask(
-            &format!("linux.resources.devices[{}].access", index + 1),
-            rule.access().as_deref(),
-        )?;
-        if !rule.allow()
-            || rule.typ() != Some(expected_type)
-            || rule.major() != Some(i64::from(node.major))
-            || rule.minor() != Some(i64::from(node.minor))
-        {
-            return Err(unsupported(
-                &format!("linux.resources.devices[{}]", index + 1),
-                "the rule must allow a matching created device",
-            ));
-        }
-        allow_access_masks.push(access_mask);
-    }
-    Ok(allow_access_masks)
-}
-
-fn parse_device_access_mask(field: &str, value: Option<&str>) -> Result<u8> {
-    let Some(value) = value else {
-        return Err(invalid(format!("{field} is required for allow rules")));
-    };
-    let mut mask = 0_u8;
-    for access in value.chars() {
-        match access {
-            'r' => mask |= BPF_DEVCG_ACC_READ as u8,
-            'w' => mask |= BPF_DEVCG_ACC_WRITE as u8,
-            'm' => mask |= BPF_DEVCG_ACC_MKNOD as u8,
-            _ => {
-                return Err(invalid(format!(
-                    "{field} must contain only `r`, `w`, and `m`"
-                )));
-            }
-        }
-    }
-    if mask == 0 {
-        return Err(invalid(format!(
-            "{field} must not be empty for a device allow rule"
-        )));
-    }
-    Ok(mask)
 }
 
 fn validate_bind_mounts_are_nodev(mounts: &[MountPlan]) -> Result<()> {
@@ -2447,10 +1965,10 @@ mod tests {
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        build_cgroup_device_program, cleanup_device_target_manifest, load_device_target_manifest,
+        cleanup_device_target_manifest, load_device_target_manifest,
         load_device_target_manifest_from, write_device_target_manifest, DeviceKind, DeviceNode,
-        DevicePlan, DeviceTargetManifest, DeviceTargetRecord, PreparedDeviceSources, BPF_ALU64,
-        BPF_DEVCG_ACC_READ, BPF_MOV, DEVICE_TARGETS_RECORD_NAME, DEVICE_TARGETS_SCHEMA_VERSION,
+        DevicePlan, DeviceTargetManifest, DeviceTargetRecord, PreparedDeviceSources,
+        DEVICE_TARGETS_RECORD_NAME, DEVICE_TARGETS_SCHEMA_VERSION,
     };
     use crate::executor::mount;
     use crate::executor::namespace::NamespacePlan;
@@ -2826,7 +2344,7 @@ mod tests {
             &namespaces,
         )
         .expect("mount plan");
-        let plan = DevicePlan::from_linux(Some(&linux), &mounts).expect("device plan");
+        let plan = DevicePlan::from_linux(Some(&linux), &mounts, false, true).expect("device plan");
         assert_eq!(plan.len(), 6);
         plan.validate_rootless_device_set()
             .expect("A3S Box fixture is the fixed rootless device set");
@@ -2837,10 +2355,18 @@ mod tests {
         let mut config: serde_json::Value =
             serde_json::from_str(include_str!("../../../../fixtures/a3s-box/config.json"))
                 .expect("decode fixture");
-        config["linux"]["devices"][0]["path"] = serde_json::json!("/dev/sda");
+        config["linux"]["devices"][0] = serde_json::json!({
+            "path": "/dev/sda",
+            "type": "b",
+            "major": 8,
+            "minor": 0,
+            "fileMode": 438,
+            "uid": 0,
+            "gid": 0
+        });
         let linux: Linux =
             serde_json::from_value(config["linux"].clone()).expect("decode Linux config");
-        let plan = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
+        let plan = DevicePlan::from_linux(Some(&linux), &[], false, true).expect("device plan");
         let error = plan
             .validate_rootless_device_set()
             .expect_err("device outside the fixed safe set must be rejected");
@@ -2869,9 +2395,9 @@ mod tests {
             }
         }))
         .expect("decode read-only device policy");
-        let plan = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
+        let plan = DevicePlan::from_linux(Some(&linux), &[], false, true).expect("device plan");
         assert!(plan.requires_setup());
-        assert_eq!(plan.len(), 1);
+        assert_eq!(plan.len(), 6);
     }
 
     #[test]
@@ -2882,26 +2408,23 @@ mod tests {
             }
         }))
         .expect("decode deny-only device policy");
-        let plan = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
+        let plan = DevicePlan::from_linux(Some(&linux), &[], false, true).expect("device plan");
         assert!(plan.requires_setup());
-        assert_eq!(plan.len(), 0);
+        assert_eq!(plan.len(), 6);
     }
 
     #[test]
     fn replans_device_access_masks_for_live_updates() {
-        let current = DevicePlan {
-            nodes: vec![DeviceNode {
-                path: std::path::PathBuf::from("/dev/null"),
-                kind: DeviceKind::Character,
-                major: 1,
-                minor: 3,
-                mode: 0o660,
-                uid: 0,
-                gid: 0,
-            }],
-            allow_access_masks: vec![7],
-            enforce_allowlist: true,
-        };
+        let linux: Linux = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "devices": [
+                    {"allow": false, "access": "rwm"},
+                    {"allow": true, "type": "c", "major": 1, "minor": 3, "access": "rwm"}
+                ]
+            }
+        }))
+        .expect("decode initial device policy");
+        let current = DevicePlan::from_linux(Some(&linux), &[], false, true).expect("device plan");
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "devices": [
                 {"allow": false, "access": "rwm"},
@@ -2914,17 +2437,13 @@ mod tests {
             .expect("live device update should replan")
             .expect("live device update should produce a new plan");
         assert_eq!(updated.nodes, current.nodes);
-        assert_eq!(updated.allow_access_masks, vec![BPF_DEVCG_ACC_READ as u8]);
+        assert_ne!(updated.access_policy, current.access_policy);
         assert!(updated.requires_setup());
     }
 
     #[test]
     fn replans_to_disable_device_enforcement_when_rules_are_cleared() {
-        let current = DevicePlan {
-            nodes: Vec::new(),
-            allow_access_masks: Vec::new(),
-            enforce_allowlist: true,
-        };
+        let current = DevicePlan::default();
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "devices": []
         }))
@@ -2933,8 +2452,8 @@ mod tests {
             .update_from_resources(&resources)
             .expect("cleared device policy should replan")
             .expect("cleared device policy should produce a new plan");
-        assert_eq!(updated, DevicePlan::default());
-        assert!(!updated.requires_setup());
+        assert_eq!(updated.access_policy, None);
+        assert_eq!(updated.nodes, current.nodes);
     }
 
     #[test]
@@ -2944,7 +2463,7 @@ mod tests {
                 .expect("decode fixture");
         let linux: Linux =
             serde_json::from_value(config["linux"].clone()).expect("decode Linux config");
-        let current = DevicePlan::from_linux(Some(&linux), &[]).expect("device plan");
+        let current = DevicePlan::from_linux(Some(&linux), &[], false, true).expect("device plan");
         let disabled: LinuxResources =
             serde_json::from_value(serde_json::json!({"devices": []})).expect("disabled policy");
         let disabled = current
@@ -2952,7 +2471,7 @@ mod tests {
             .expect("disable policy")
             .expect("updated policy");
         assert_eq!(disabled.nodes, current.nodes);
-        assert!(!disabled.requires_setup());
+        assert!(disabled.requires_setup());
 
         let resources = linux.resources().clone().expect("fixture resources");
         let reenabled = disabled
@@ -2960,12 +2479,12 @@ mod tests {
             .expect("reenable policy")
             .expect("updated policy");
         assert_eq!(reenabled.nodes, current.nodes);
-        assert_eq!(reenabled.allow_access_masks, current.allow_access_masks);
+        assert_eq!(reenabled.access_policy, current.access_policy);
         assert!(reenabled.requires_setup());
     }
 
     #[test]
-    fn rejects_device_allowlist_rules_that_do_not_match_the_created_nodes() {
+    fn keeps_device_access_rules_independent_from_created_nodes() {
         let mut config: serde_json::Value =
             serde_json::from_str(include_str!("../../../../fixtures/a3s-box/config.json"))
                 .expect("decode fixture");
@@ -2987,108 +2506,9 @@ mod tests {
         config["linux"]["resources"]["devices"][2]["minor"] = serde_json::json!(6);
         let mutated_linux: Linux =
             serde_json::from_value(config["linux"].clone()).expect("decode mutated Linux config");
-        let error = DevicePlan::from_linux(Some(&mutated_linux), &mounts)
-            .expect_err("mismatched allowlist must fail");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains("matching created device"));
-    }
-
-    #[test]
-    fn builds_cgroup_device_bpf_for_block_and_char_devices_only() {
-        let nodes = vec![
-            DeviceNode {
-                path: std::path::PathBuf::from("/dev/ttyS0"),
-                kind: DeviceKind::Character,
-                major: 4,
-                minor: 64,
-                mode: 0o660,
-                uid: 0,
-                gid: 0,
-            },
-            DeviceNode {
-                path: std::path::PathBuf::from("/dev/loop0"),
-                kind: DeviceKind::Block,
-                major: 7,
-                minor: 0,
-                mode: 0o660,
-                uid: 0,
-                gid: 0,
-            },
-            DeviceNode {
-                path: std::path::PathBuf::from("/tmp/fifo"),
-                kind: DeviceKind::Fifo,
-                major: 0,
-                minor: 0,
-                mode: 0o600,
-                uid: 0,
-                gid: 0,
-            },
-        ];
-        let program = build_cgroup_device_program(&nodes, &[7, 7, 7]).expect("device BPF program");
-        assert_eq!(program.len(), 18);
-        assert_eq!(
-            program[0].code,
-            (libc::BPF_LDX | libc::BPF_W | libc::BPF_MEM) as u8
-        );
-        assert_eq!(program[1].imm, 0xFFFF);
-        assert_eq!(
-            program[2].code,
-            (libc::BPF_LDX | libc::BPF_W | libc::BPF_MEM) as u8
-        );
-        assert_eq!(program[3].imm, 16);
-        assert_eq!(program[6].imm, 2);
-        assert_eq!(program[6].off, 4);
-        assert_eq!(program[11].imm, 1);
-        assert_eq!(program[11].off, 4);
-        assert_eq!(program[16].imm, 0);
-        assert_eq!(program[17].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
-    }
-
-    #[test]
-    fn fifo_only_device_plans_fall_back_to_reject_all() {
-        let nodes = vec![DeviceNode {
-            path: std::path::PathBuf::from("/tmp/fifo"),
-            kind: DeviceKind::Fifo,
-            major: 0,
-            minor: 0,
-            mode: 0o600,
-            uid: 0,
-            gid: 0,
-        }];
-        let program = build_cgroup_device_program(&nodes, &[7]).expect("device BPF program");
-        assert_eq!(program.len(), 2);
-        assert_eq!(program[0].imm, 0);
-        assert_eq!(program[1].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
-    }
-
-    #[test]
-    fn builds_cgroup_device_bpf_with_access_subsets() {
-        let nodes = vec![DeviceNode {
-            path: std::path::PathBuf::from("/dev/null"),
-            kind: DeviceKind::Character,
-            major: 1,
-            minor: 3,
-            mode: 0o660,
-            uid: 0,
-            gid: 0,
-        }];
-        let program = build_cgroup_device_program(&nodes, &[BPF_DEVCG_ACC_READ as u8])
-            .expect("device BPF program");
-        assert_eq!(program.len(), 16);
-        assert_eq!(
-            program[2].code,
-            (libc::BPF_LDX | libc::BPF_W | libc::BPF_MEM) as u8
-        );
-        assert_eq!(program[3].imm, 16);
-        assert_eq!(program[6].imm, 2);
-        assert_eq!(program[7].code, (BPF_ALU64 | BPF_MOV | libc::BPF_X) as u8);
-        assert_eq!(program[8].imm, BPF_DEVCG_ACC_READ as i32);
-        assert_eq!(program[9].off, 4);
-        assert_eq!(program[10].off, 3);
-        assert_eq!(program[11].off, 2);
-        assert_eq!(program[12].imm, 1);
-        assert_eq!(program[13].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
-        assert_eq!(program[14].imm, 0);
-        assert_eq!(program[15].code, (libc::BPF_JMP | super::BPF_EXIT) as u8);
+        let plan = DevicePlan::from_linux(Some(&mutated_linux), &mounts, false, true)
+            .expect("independent access rule");
+        assert_eq!(plan.len(), 6);
+        assert!(plan.access_policy.is_some());
     }
 }

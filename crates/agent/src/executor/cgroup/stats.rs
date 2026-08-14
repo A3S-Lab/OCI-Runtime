@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use a3s_oci_sdk::{
     ContainerStats, ContainerTarget, CpuStats, MemoryStats, Result, IO_READ_BYTES_METRIC,
-    IO_WRITE_BYTES_METRIC,
+    IO_WRITE_BYTES_METRIC, PIDS_LIMIT_METRIC,
 };
 
 use super::{parse_max_value, parse_u64_value, read_required, stats_error, CgroupHandle};
@@ -48,6 +48,11 @@ impl CgroupHandle {
             "pids.current",
             &read_required(&self.leaf, "pids.current", STATS_OPERATION).await?,
         )?;
+        let process_limit = parse_max_value(
+            "pids.max",
+            &read_required(&self.leaf, "pids.max", STATS_OPERATION).await?,
+        )?
+        .unwrap_or(u64::MAX);
 
         let mut metrics = BTreeMap::new();
         for (name, value) in cpu_values {
@@ -68,6 +73,7 @@ impl CgroupHandle {
             "pids.events",
             &read_required(&self.leaf, "pids.events", STATS_OPERATION).await?,
         )?;
+        metrics.insert(PIDS_LIMIT_METRIC.to_string(), process_limit);
         match tokio::fs::read_to_string(self.leaf.join("io.stat")).await {
             Ok(value) => {
                 if let Some((read_bytes, write_bytes)) = parse_io_stat_bytes(&value)? {
@@ -261,6 +267,7 @@ fn record_io_stat_counter(
 mod tests {
     use a3s_oci_sdk::{
         ContainerId, ContainerTarget, Generation, IO_READ_BYTES_METRIC, IO_WRITE_BYTES_METRIC,
+        PIDS_LIMIT_METRIC,
     };
 
     use super::{parse_io_stat_bytes, CgroupHandle};
@@ -278,6 +285,7 @@ mod tests {
             ("memory.peak", "2048\n"),
             ("memory.events", "low 0\nhigh 1\nmax 2\noom 0\noom_kill 0\n"),
             ("pids.current", "2\n"),
+            ("pids.max", "64\n"),
             ("pids.events", "max 1\n"),
             (
                 "io.stat",
@@ -312,11 +320,54 @@ mod tests {
         assert_eq!(stats.memory.limit_bytes, Some(4_096));
         assert_eq!(stats.memory.peak_bytes, Some(2_048));
         assert_eq!(stats.process_count, 2);
+        assert_eq!(stats.metrics[PIDS_LIMIT_METRIC], 64);
         assert_eq!(stats.metrics["cpu.stat.nr_throttled"], 1);
         assert_eq!(stats.metrics["memory.events.max"], 2);
         assert_eq!(stats.metrics["pids.events.max"], 1);
         assert_eq!(stats.metrics[IO_READ_BYTES_METRIC], 4_608);
         assert_eq!(stats.metrics[IO_WRITE_BYTES_METRIC], 3_072);
+    }
+
+    #[tokio::test]
+    async fn represents_an_unbounded_process_limit_without_ambiguity() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        for (name, value) in [
+            (
+                "cpu.stat",
+                "usage_usec 3\nuser_usec 1\nsystem_usec 2\nthrottled_usec 0\n",
+            ),
+            ("memory.current", "1\n"),
+            ("memory.max", "max\n"),
+            ("memory.events", "oom_kill 0\n"),
+            ("pids.current", "1\n"),
+            ("pids.max", "max\n"),
+            ("pids.events", "max 0\n"),
+            ("cgroup.procs", ""),
+        ] {
+            std::fs::write(directory.path().join(name), value).expect("write cgroup fixture");
+        }
+        let procs = std::fs::OpenOptions::new()
+            .write(true)
+            .open(directory.path().join("cgroup.procs"))
+            .expect("open cgroup.procs");
+        let handle = CgroupHandle {
+            created: Vec::new(),
+            leaf: directory.path().to_path_buf(),
+            init_procs: procs,
+            control_workload: None,
+            devices: crate::executor::device::DevicePlan::default(),
+            device_filter_path: directory.path().to_path_buf(),
+            device_filter: None,
+            delegated_device_filter: None,
+        };
+        let target = ContainerTarget::exact(
+            ContainerId::new("unbounded-pids").expect("container ID"),
+            Generation(1),
+        );
+
+        let stats = handle.stats(target).await.expect("stats");
+
+        assert_eq!(stats.metrics[PIDS_LIMIT_METRIC], u64::MAX);
     }
 
     #[test]
