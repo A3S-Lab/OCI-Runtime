@@ -1542,10 +1542,14 @@ generation before killing the shim, then proves DeleteShim treats only that
 generation's `NotFound` result plus a successful replay of its stable normal or
 force Delete identity as a completed remote effect. It then finishes local
 metadata, rootfs, and bundle cleanup without touching caller-owned container
-metadata; unconfirmed state loss fails closed. A post-commit Kill boundary also
-submits the exact stable SIGSTOP mutation against a running generation, kills
-the shim while the stopped process remains live, and proves bounded cleanup
-delivers the terminal signal and reaps the exact PID. Post-commit Pause,
+metadata; unconfirmed state loss fails closed. A post-commit Exec boundary
+submits the exact stable generation-scoped process identity while shim metadata
+still records the exec as Added, verifies its live PID, then proves DeleteShim
+reaps both init and exec and removes the exact generation without touching
+caller-owned metadata. A post-commit Kill boundary also submits the exact
+stable SIGSTOP mutation against a running generation, kills the shim while the
+stopped process remains live, and proves bounded cleanup delivers the terminal
+signal and reaps the exact PID. Post-commit Pause,
 Resume, and PID-limit Update boundaries retain the same exact generation,
 verify the real paused state or applied `pids.max`, then kill the shim and prove
 the same bounded cleanup converges without leaked cgroups or processes. Paused
