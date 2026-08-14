@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
@@ -30,6 +30,7 @@ mod tests;
 const DEFAULT_ENDPOINT: &str = "/run/a3s-oci/runtime.sock";
 #[cfg(windows)]
 const DEFAULT_ENDPOINT: &str = r"\\.\pipe\a3s-oci-runtime";
+const DELETE_SHIM_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 struct TaskState {
@@ -1056,7 +1057,13 @@ impl Shim for Service {
                     let _ = adapter
                         .kill(&identity, metadata.generation(), 9, true)
                         .await;
-                    exit = adapter.wait(&identity, metadata.generation()).await.ok();
+                    exit = tokio::time::timeout(
+                        DELETE_SHIM_WAIT_TIMEOUT,
+                        adapter.wait(&identity, metadata.generation()),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|result| result.ok());
                 }
                 adapter
                     .delete(&identity, metadata.generation(), true)
@@ -1108,7 +1115,7 @@ impl Shim for Service {
             let pid = record_pid(&record);
             let _ = adapter.kill(&identity, record.generation, 9, true).await;
             let exit = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
+                DELETE_SHIM_WAIT_TIMEOUT,
                 adapter.wait(&identity, record.generation),
             )
             .await
