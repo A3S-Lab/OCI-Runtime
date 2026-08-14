@@ -1,9 +1,19 @@
+use std::path::Path;
+
 use a3s_oci_agent_protocol::AgentTransportOperationStage;
-use a3s_oci_sdk::{ContainerTarget, Error, ErrorCode, FilesystemEntryKind, FilesystemResponse};
+use a3s_oci_sdk::{
+    ContainerTarget, Error, ErrorCode, FilesystemEntryKind, FilesystemRequest, FilesystemResponse,
+};
 
 use super::super::{QualificationHvfDriver, FAULT_OPERATION};
 use crate::transport_cleanup_report::is_retryable_disconnect_operation;
 use crate::OciVmOperationReopenReplacementReport;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FilesystemMutationJournalStatus {
+    Prepared,
+    Succeeded(Box<FilesystemResponse>),
+}
 
 pub(super) fn directory_response_matches(
     response: &FilesystemResponse,
@@ -53,4 +63,131 @@ pub(super) fn record_recovery_evidence(
 ) {
     super::super::exec::support::record_recovery_evidence(report, driver);
     report.replacement_rehydrated_filesystem = driver.rehydrated_filesystem();
+}
+
+pub(super) async fn filesystem_mutation_journal_status(
+    state_root: &Path,
+    request: &FilesystemRequest,
+    target: &ContainerTarget,
+) -> std::result::Result<FilesystemMutationJournalStatus, String> {
+    let operation_id = &request
+        .context
+        .as_ref()
+        .ok_or_else(|| "Filesystem qualification request has no operation context".to_string())?
+        .operation_id;
+    let path = state_root
+        .join("operations")
+        .join(format!("{}.json", operation_id.as_str()));
+    let contents = tokio::fs::read(&path).await.map_err(|error| {
+        format!(
+            "failed to read durable Filesystem journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
+        format!(
+            "failed to decode durable Filesystem journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let expected_generation = serde_json::to_value(target.generation)
+        .map_err(|error| format!("failed to encode expected Filesystem generation: {error}"))?;
+    let retained_request: FilesystemRequest = serde_json::from_value(
+        value
+            .get("request")
+            .and_then(|retained| retained.get("request"))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "durable Filesystem journal {} has no retained request",
+                    path.display()
+                )
+            })?,
+    )
+    .map_err(|error| {
+        format!(
+            "failed to decode durable Filesystem request {}: {error}",
+            path.display()
+        )
+    })?;
+    let identity_matches = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
+        && value.get("operationId").and_then(serde_json::Value::as_str)
+            == Some(operation_id.as_str())
+        && value.get("kind").and_then(serde_json::Value::as_str) == Some("filesystem")
+        && value.get("containerId").and_then(serde_json::Value::as_str) == Some(target.id.as_str())
+        && value.get("generation") == Some(&expected_generation)
+        && value.get("processId").is_none()
+        && value
+            .get("request")
+            .and_then(|retained| retained.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("filesystem")
+        && retained_request == *request
+        && value
+            .get("requestDigest")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|digest| !digest.is_empty());
+    if !identity_matches {
+        return Err(format!(
+            "durable Filesystem journal {} did not retain the exact request and generation",
+            path.display()
+        ));
+    }
+    let outcome = value.get("outcome").ok_or_else(|| {
+        format!(
+            "durable Filesystem journal {} has no outcome",
+            path.display()
+        )
+    })?;
+    match outcome.get("status").and_then(serde_json::Value::as_str) {
+        Some("prepared") => Ok(FilesystemMutationJournalStatus::Prepared),
+        Some("succeeded-filesystem") => {
+            let response_wrapper = outcome.get("response").ok_or_else(|| {
+                format!(
+                    "durable Filesystem journal {} has no response",
+                    path.display()
+                )
+            })?;
+            if response_wrapper
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                != Some("filesystem")
+            {
+                return Err(format!(
+                    "durable Filesystem journal {} contains the wrong response kind",
+                    path.display()
+                ));
+            }
+            let response: FilesystemResponse = serde_json::from_value(
+                response_wrapper.get("response").cloned().ok_or_else(|| {
+                    format!(
+                        "durable Filesystem journal {} has no Filesystem response",
+                        path.display()
+                    )
+                })?,
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to decode durable Filesystem response {}: {error}",
+                    path.display()
+                )
+            })?;
+            if response.target != *target {
+                return Err(format!(
+                    "durable Filesystem response {} changed its exact target",
+                    path.display()
+                ));
+            }
+            Ok(FilesystemMutationJournalStatus::Succeeded(Box::new(
+                response,
+            )))
+        }
+        status => Err(format!(
+            "durable Filesystem journal {} had unexpected status {status:?}",
+            path.display()
+        )),
+    }
 }

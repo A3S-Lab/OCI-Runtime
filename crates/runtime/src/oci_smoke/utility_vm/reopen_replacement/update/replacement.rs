@@ -480,7 +480,7 @@ pub(super) async fn run(
     let changed_host = UpdateRequest {
         context: qualification.update.context.clone(),
         target: qualification.update.target.clone(),
-        resources: changed_resources.clone(),
+        resources: changed_resources,
     };
     let calls_before_changed_host = driver.update_calls();
     match service.update(changed_host).await {
@@ -496,30 +496,6 @@ pub(super) async fn run(
         ),
         Ok(_) => append_failure(&mut failure, "reopened Host accepted changed Update"),
     }
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().update(AgentUpdateRequest {
-            context: qualification.update.context.clone(),
-            target: qualification.update.target.clone(),
-            resources: changed_resources,
-        }),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed Update error: {error}"),
-        ),
-        Ok(Ok(_)) => append_failure(&mut failure, "replacement Guest accepted changed Update"),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed Update check timed out",
-        ),
-    }
-
     let stale_target = match stale_target(&qualification.update.target) {
         Ok(target) => target,
         Err(reason) => {

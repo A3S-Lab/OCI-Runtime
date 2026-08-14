@@ -107,8 +107,8 @@ impl OciVmOperationReopenReplacementReport {
             && self.first_operation_error_code == Some(a3s_oci_sdk::ErrorCode::Unavailable)
             && expected_error_operation
             && self.first_operation_error_retryable
-            && self.first_operation_response_received == response_delivered
-            && self.disconnect_probe_attempted == response_delivered
+            && !self.first_operation_response_received
+            && !self.disconnect_probe_attempted
             && self.first_response_matches_durable_record == response_delivered
             && !self.first_response_matches_expected_exit
             && !self.durable_created_retained
@@ -154,7 +154,7 @@ impl OciVmOperationReopenReplacementReport {
             && self.host_stale_generation_rejected
             && self.guest_stale_generation_rejected
             && self.host_changed_request_rejected
-            && self.guest_changed_request_rejected
+            && !self.guest_changed_request_rejected
             && self.marker_reset_before_replacement
             && self.replacement_workload_verified
             && self.first_exec_marker_verified
@@ -239,7 +239,6 @@ mod tests {
         report.host_stale_generation_rejected = true;
         report.guest_stale_generation_rejected = true;
         report.host_changed_request_rejected = true;
-        report.guest_changed_request_rejected = true;
         report.marker_reset_before_replacement = true;
         report.replacement_workload_verified = true;
         report.first_exec_marker_verified = true;
@@ -272,8 +271,6 @@ mod tests {
                     stage_report.qualification_operation_id.clone();
             }
             if stage == AgentTransportOperationStage::GuestAfterResponseWrite {
-                stage_report.first_operation_response_received = true;
-                stage_report.disconnect_probe_attempted = true;
                 stage_report.first_response_matches_durable_record = true;
                 stage_report.exec_journal_prepared_before_reopen = false;
                 stage_report.exec_journal_succeeded_before_reopen = true;
@@ -294,7 +291,7 @@ mod tests {
                 ..report.clone()
             },
             OciVmOperationReopenReplacementReport {
-                guest_changed_request_rejected: false,
+                guest_changed_request_rejected: true,
                 ..report.clone()
             },
             OciVmOperationReopenReplacementReport {

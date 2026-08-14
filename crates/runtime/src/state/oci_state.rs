@@ -26,7 +26,9 @@ pub(super) fn build_state(
                 format!("OCI annotation {PAUSED_STATE_ANNOTATION} is reserved for runtime state"),
             ));
         }
-        builder = builder.annotations(annotations);
+        if !annotations.is_empty() {
+            builder = builder.annotations(annotations);
+        }
     }
     builder.build().map_err(|error| {
         state_error(
@@ -54,7 +56,9 @@ pub(super) fn rebuild_state(
         if status == ContainerState::Stopped {
             annotations.remove(PAUSED_STATE_ANNOTATION);
         }
-        builder = builder.annotations(annotations);
+        if !annotations.is_empty() {
+            builder = builder.annotations(annotations);
+        }
     }
     builder.build().map_err(|error| {
         state_error(
@@ -87,8 +91,10 @@ pub(super) fn rebuild_paused_state(state: &State, paused: bool) -> Result<State>
         .version(state.version())
         .id(state.id())
         .status(*state.status())
-        .bundle(state.bundle().clone())
-        .annotations(annotations);
+        .bundle(state.bundle().clone());
+    if !annotations.is_empty() {
+        builder = builder.annotations(annotations);
+    }
     if let Some(pid) = state.pid() {
         builder = builder.pid(*pid);
     }
@@ -118,5 +124,59 @@ pub(super) const fn container_state(state: LifecycleState) -> ContainerState {
         LifecycleState::Created => ContainerState::Created,
         LifecycleState::Running => ContainerState::Running,
         LifecycleState::Stopped => ContainerState::Stopped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use a3s_oci_sdk::oci_spec::runtime::{ContainerState, StateBuilder};
+
+    use super::rebuild_paused_state;
+
+    #[test]
+    fn resume_restores_absent_annotations_instead_of_retaining_an_empty_map() {
+        let running = StateBuilder::default()
+            .version("1.3.0")
+            .id("annotation-free-container")
+            .status(ContainerState::Running)
+            .pid(42)
+            .bundle("/bundle")
+            .build()
+            .expect("running state");
+
+        let paused = rebuild_paused_state(&running, true).expect("pause state");
+        let resumed = rebuild_paused_state(&paused, false).expect("resume state");
+
+        assert_eq!(resumed.annotations(), &None);
+    }
+
+    #[test]
+    fn resume_preserves_non_freezer_annotations() {
+        let running = StateBuilder::default()
+            .version("1.3.0")
+            .id("annotated-container")
+            .status(ContainerState::Running)
+            .pid(42)
+            .bundle("/bundle")
+            .annotations(HashMap::from([(
+                "dev.a3s.test".to_string(),
+                "retained".to_string(),
+            )]))
+            .build()
+            .expect("running state");
+
+        let paused = rebuild_paused_state(&running, true).expect("pause state");
+        let resumed = rebuild_paused_state(&paused, false).expect("resume state");
+
+        assert_eq!(
+            resumed
+                .annotations()
+                .as_ref()
+                .and_then(|annotations| annotations.get("dev.a3s.test"))
+                .map(String::as_str),
+            Some("retained")
+        );
     }
 }

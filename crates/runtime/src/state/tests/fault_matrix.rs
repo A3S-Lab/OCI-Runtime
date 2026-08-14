@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use a3s_oci_sdk::ContainerRecord;
 
+mod filesystem_mutation;
 mod process;
 mod process_io;
 
@@ -15,6 +16,9 @@ use crate::fault::{DurableMutation, FaultInjector, FaultPoint, FileCommitStage};
 use crate::state::model::{StoredContainer, StoredGeneration};
 use crate::state::oci_state::{rebuild_paused_state, rebuild_state};
 use crate::state::DeletePreparation;
+use filesystem_mutation::{
+    exercise_filesystem_mutation_failure, exercise_filesystem_mutation_success,
+};
 use process::{
     exercise_exec_claim_recovery, exercise_exec_failure, exercise_exec_reconcile,
     exercise_process_success, exercise_recreated_exec_recovery, exercise_signal_process_failure,
@@ -48,6 +52,8 @@ enum Scenario {
     SignalProcessFailure,
     ProcessIoSuccess,
     ProcessIoFailure,
+    FilesystemMutationSuccess,
+    FilesystemMutationFailure,
 }
 
 struct Fixture {
@@ -79,7 +85,7 @@ async fn every_registered_durable_commit_stage_recovers_after_reopen() {
     let registry = FaultPoint::durable_registry();
     assert_eq!(
         registry.len(),
-        657,
+        741,
         "update the durable fault contract when the registry changes"
     );
     for point in registry {
@@ -484,6 +490,18 @@ const fn scenario_for(mutation: DurableMutation) -> Scenario {
         | DurableMutation::RecordCloseStdinFailure
         | DurableMutation::ReleaseFailedResizeClaim
         | DurableMutation::RecordResizeFailure => Scenario::ProcessIoFailure,
+        DurableMutation::PrepareFileOperation
+        | DurableMutation::ClaimFileOperation
+        | DurableMutation::CompleteFileContainer
+        | DurableMutation::CompleteFileOperation
+        | DurableMutation::PrepareFilesystemOperation
+        | DurableMutation::ClaimFilesystemOperation
+        | DurableMutation::CompleteFilesystemContainer
+        | DurableMutation::CompleteFilesystemOperation => Scenario::FilesystemMutationSuccess,
+        DurableMutation::ReleaseFailedFileClaim
+        | DurableMutation::RecordFileFailure
+        | DurableMutation::ReleaseFailedFilesystemClaim
+        | DurableMutation::RecordFilesystemFailure => Scenario::FilesystemMutationFailure,
         DurableMutation::AllocateGeneration
         | DurableMutation::AdvanceEventSequence
         | DurableMutation::ClaimRuntimeEvent
@@ -571,6 +589,8 @@ async fn exercise(scenario: Scenario, point: FaultPoint) {
         Scenario::SignalProcessFailure => exercise_signal_process_failure(point).await,
         Scenario::ProcessIoSuccess => exercise_process_io_success(point).await,
         Scenario::ProcessIoFailure => exercise_process_io_failure(point).await,
+        Scenario::FilesystemMutationSuccess => exercise_filesystem_mutation_success(point).await,
+        Scenario::FilesystemMutationFailure => exercise_filesystem_mutation_failure(point).await,
     }
 }
 

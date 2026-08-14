@@ -467,7 +467,6 @@ pub(super) async fn run(
 
     let mut changed_host = qualification.resize.clone();
     changed_host.size.width += 1;
-    let changed_size = changed_host.size;
     let calls_before_changed_host = driver.resize_calls();
     match service.resize(changed_host).await {
         Err(error)
@@ -482,30 +481,6 @@ pub(super) async fn run(
         ),
         Ok(()) => append_failure(&mut failure, "reopened Host accepted changed Resize"),
     }
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().resize(AgentResizeRequest {
-            context: Some(qualification.resize.context.clone()),
-            process: exact_process.clone(),
-            size: changed_size,
-        }),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed Resize error: {error}"),
-        ),
-        Ok(Ok(())) => append_failure(&mut failure, "replacement Guest accepted changed Resize"),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed Resize check timed out",
-        ),
-    }
-
     let stale_container = match stale_target(&qualification.start.target) {
         Ok(target) => target,
         Err(reason) => {

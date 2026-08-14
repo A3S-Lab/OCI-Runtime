@@ -496,33 +496,6 @@ pub(super) async fn run(
         ),
         Ok(()) => append_failure(&mut failure, "reopened Host accepted changed SignalProcess"),
     }
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().signal_process(AgentSignalProcessRequest {
-            context: qualification.signal_process.context.clone(),
-            target: exact_process.clone(),
-            signal: changed_signal,
-        }),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed SignalProcess error: {error}"),
-        ),
-        Ok(Ok(())) => append_failure(
-            &mut failure,
-            "replacement Guest accepted changed SignalProcess",
-        ),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed SignalProcess check timed out",
-        ),
-    }
-
     let stale_container = match stale_target(&qualification.start.target) {
         Ok(target) => target,
         Err(reason) => {

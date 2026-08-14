@@ -6,7 +6,7 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_core::{DriverKind, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ListRequest, OciRuntimeService, StateRequest};
+use a3s_oci_sdk::{ListRequest, OciRuntimeService};
 use tokio::time::timeout;
 
 use super::super::super::transport_fault_cleanup::{
@@ -315,49 +315,9 @@ pub(super) async fn run(
     )
     .await
     {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_interruption(report, error, qualification.stage) {
                 append_failure(&mut first_failure, reason);
-            }
-        }
-        Ok(Err(error)) => append_failure(
-            &mut first_failure,
-            format!(
-                "{} did not deliver its completed SignalProcess response: {error}",
-                qualification.stage.as_str()
-            ),
-        ),
-        Ok(Ok(())) if response_delivered => {
-            report.first_operation_response_received = true;
-            report.disconnect_probe_attempted = true;
-            match timeout(
-                QUALIFICATION_TIMEOUT,
-                service.state(StateRequest {
-                    target: qualification.start.target.clone(),
-                }),
-            )
-            .await
-            {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_interruption(report, error, qualification.stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe unexpectedly succeeded",
-                        qualification.stage.as_str()
-                    ),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        qualification.stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
             }
         }
         Ok(Ok(())) => append_failure(
@@ -439,7 +399,7 @@ pub(super) async fn run(
             if !response_delivered {
                 append_failure(
                     &mut first_failure,
-                    "SignalProcess journal succeeded without a delivered response",
+                    "SignalProcess Host journal committed before its response boundary",
                 );
             }
         }

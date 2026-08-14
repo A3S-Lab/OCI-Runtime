@@ -10,7 +10,7 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
     IoMode, IsolationRequest, ListRequest, OciBundle, OciRuntimeService, OperationContext,
-    OperationId, ProcessIo, StartRequest, StateRequest,
+    OperationId, ProcessIo, StartRequest,
 };
 use tokio::time::timeout;
 
@@ -22,8 +22,9 @@ use super::super::{
     unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
 };
 use super::{
-    append_failure, create_qualification_state_root, owner_identities_are_distinct,
-    wait_for_replacement_marker, QualificationHvfDriver, FAULT_OPERATION, QUALIFICATION_TIMEOUT,
+    append_failure, container_operation_journal_status, create_qualification_state_root,
+    owner_identities_are_distinct, wait_for_replacement_marker, ContainerOperationJournalStatus,
+    QualificationHvfDriver, FAULT_OPERATION, QUALIFICATION_TIMEOUT,
 };
 use crate::agent_session::UtilityVmSession;
 use crate::host_cleanup::MacosHostCleanupTracker;
@@ -340,65 +341,16 @@ async fn exercise(
         target: ContainerTarget::exact(create.id.clone(), created.generation),
     };
     let response_delivered = stage == AgentTransportOperationStage::GuestAfterResponseWrite;
-    let mut first_response = None;
     let mut first_failure = None;
     match timeout(QUALIFICATION_TIMEOUT, first_service.start(start.clone())).await {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_interruption(report, error, stage) {
                 append_failure(&mut first_failure, reason);
             }
         }
-        Ok(Err(error)) => append_failure(
+        Ok(Ok(record)) => append_failure(
             &mut first_failure,
-            format!(
-                "{} did not deliver its completed Start response: {error}",
-                stage.as_str()
-            ),
-        ),
-        Ok(Ok(record)) if response_delivered => {
-            report.first_operation_response_received = true;
-            if *record.state.status() != ContainerState::Running {
-                append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} returned {} instead of running",
-                        stage.as_str(),
-                        record.state.status()
-                    ),
-                );
-            }
-            first_response = Some(record);
-            report.disconnect_probe_attempted = true;
-            match timeout(
-                QUALIFICATION_TIMEOUT,
-                first_service.state(StateRequest {
-                    target: start.target.clone(),
-                }),
-            )
-            .await
-            {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_interruption(report, error, stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!("{} disconnect probe unexpectedly succeeded", stage.as_str()),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
-            }
-        }
-        Ok(Ok(_)) => append_failure(
-            &mut first_failure,
-            "first Start unexpectedly completed before owner replacement",
+            format!("first Start unexpectedly completed before owner replacement: {record:?}"),
         ),
         Err(_) => append_failure(
             &mut first_failure,
@@ -408,6 +360,46 @@ async fn exercise(
             ),
         ),
     }
+    let first_response = match container_operation_journal_status(
+        state_root,
+        &start.context.operation_id,
+        "start",
+        &start.target,
+    )
+    .await
+    {
+        Ok(ContainerOperationJournalStatus::Prepared) if !response_delivered => None,
+        Ok(ContainerOperationJournalStatus::Succeeded(response)) if response_delivered => {
+            if *response.state.status() != ContainerState::Running {
+                append_failure(
+                    &mut first_failure,
+                    format!(
+                        "completed Start Host journal retained {} instead of running",
+                        response.state.status()
+                    ),
+                );
+            }
+            Some(response)
+        }
+        Ok(ContainerOperationJournalStatus::Prepared) => {
+            append_failure(
+                &mut first_failure,
+                "completed Start response left its Host journal prepared",
+            );
+            None
+        }
+        Ok(ContainerOperationJournalStatus::Succeeded(response)) => {
+            append_failure(
+                &mut first_failure,
+                format!("Start Host journal committed before its response boundary: {response:?}"),
+            );
+            None
+        }
+        Err(reason) => {
+            append_failure(&mut first_failure, reason);
+            None
+        }
+    };
     report.first_operation_dispatches = first_driver.start_calls();
     if stage.is_host() {
         report.negotiated_protocol = faults.protocol_version();

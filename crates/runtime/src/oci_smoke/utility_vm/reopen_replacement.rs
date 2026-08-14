@@ -19,8 +19,8 @@ use a3s_oci_sdk::{
     ExecRequest, ExitStatus, FileRequest, FileResponse, FilesystemRequest, FilesystemResponse,
     IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle, OciRuntimeService,
     OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget,
-    ResizeRequest, Result, RuntimeOperation, SignalProcessRequest, StartRequest, StateRequest,
-    UpdateRequest, WriteStdinRequest,
+    ResizeRequest, Result, RuntimeOperation, SignalProcessRequest, StartRequest, UpdateRequest,
+    WriteStdinRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -387,57 +387,14 @@ async fn exercise(
     let response_delivered = matches!(stage, AgentTransportOperationStage::GuestAfterResponseWrite);
     let mut first_failure = None;
     match timeout(QUALIFICATION_TIMEOUT, first_service.create(request.clone())).await {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_first_interruption(report, error, stage) {
                 append_failure(&mut first_failure, reason);
             }
         }
-        Ok(Err(error)) => append_failure(
+        Ok(Ok(record)) => append_failure(
             &mut first_failure,
-            format!(
-                "{} did not deliver its completed Create response: {error}",
-                stage.as_str()
-            ),
-        ),
-        Ok(Ok(record)) if response_delivered => {
-            report.first_create_response_received = true;
-            if *record.state.status() != ContainerState::Created {
-                append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} returned {} instead of created",
-                        stage.as_str(),
-                        record.state.status()
-                    ),
-                );
-            }
-            report.disconnect_probe_attempted = true;
-            let probe = StateRequest {
-                target: ContainerTarget::exact(request.id.clone(), record.generation),
-            };
-            match timeout(QUALIFICATION_TIMEOUT, first_service.state(probe)).await {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_first_interruption(report, error, stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!("{} disconnect probe unexpectedly succeeded", stage.as_str()),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
-            }
-        }
-        Ok(Ok(_)) => append_failure(
-            &mut first_failure,
-            "first create unexpectedly completed before owner replacement",
+            format!("first Create unexpectedly completed before owner replacement: {record:?}"),
         ),
         Err(_) => append_failure(
             &mut first_failure,
@@ -453,9 +410,9 @@ async fn exercise(
         report.fault_crossings = faults.crossing_count();
     }
 
-    match first_service.list(ListRequest::default()).await {
+    let durable = match first_service.list(ListRequest::default()).await {
         Ok(records) if records.len() == 1 => {
-            let record = &records[0];
+            let record = records.into_iter().next().expect("one record");
             report.generation_before_reopen = Some(record.generation);
             let exact_record = record.state.id() == request.id.as_str()
                 && record.driver == DriverKind::LibkrunHvf
@@ -486,18 +443,51 @@ async fn exercise(
                     ),
                 );
             }
+            Some(record)
         }
-        Ok(records) => append_failure(
-            &mut first_failure,
-            format!(
-                "interrupted create retained {} durable records instead of one",
-                records.len()
+        Ok(records) => {
+            append_failure(
+                &mut first_failure,
+                format!(
+                    "interrupted create retained {} durable records instead of one",
+                    records.len()
+                ),
+            );
+            None
+        }
+        Err(error) => {
+            append_failure(
+                &mut first_failure,
+                format!("failed to inspect the interrupted durable create: {error}"),
+            );
+            None
+        }
+    };
+    if let Some(record) = durable.as_ref() {
+        let target = ContainerTarget::exact(request.id.clone(), record.generation);
+        match container_operation_journal_status(
+            state_root,
+            &request.context.operation_id,
+            "create",
+            &target,
+        )
+        .await
+        {
+            Ok(ContainerOperationJournalStatus::Prepared) if !response_delivered => {}
+            Ok(ContainerOperationJournalStatus::Succeeded(response))
+                if response_delivered && response == *record => {}
+            Ok(ContainerOperationJournalStatus::Prepared) => append_failure(
+                &mut first_failure,
+                "completed Create response left its Host journal prepared",
             ),
-        ),
-        Err(error) => append_failure(
-            &mut first_failure,
-            format!("failed to inspect the interrupted durable create: {error}"),
-        ),
+            Ok(ContainerOperationJournalStatus::Succeeded(response)) => append_failure(
+                &mut first_failure,
+                format!(
+                    "Create Host journal committed before its response boundary or retained a mismatched response: {response:?}"
+                ),
+            ),
+            Err(reason) => append_failure(&mut first_failure, reason),
+        }
     }
     drop(first_service);
     report.first_vm = first_driver.shutdown().await;
@@ -2451,6 +2441,10 @@ impl RuntimeDriver for QualificationHvfDriver {
         &QUALIFICATION_HVF_OPERATIONS
     }
 
+    async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
+        self.client.acknowledge_operation(operation_id).await
+    }
+
     async fn recover(&self, record: &ContainerRecord) -> Result<DriverRecovery> {
         let recovery_state_supported = matches!(
             record.state.status(),
@@ -3001,6 +2995,91 @@ async fn create_qualification_state_root(path: &Path) -> std::result::Result<(),
         ));
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContainerOperationJournalStatus {
+    Prepared,
+    Succeeded(ContainerRecord),
+}
+
+async fn container_operation_journal_status(
+    state_root: &Path,
+    operation_id: &OperationId,
+    kind: &str,
+    target: &ContainerTarget,
+) -> std::result::Result<ContainerOperationJournalStatus, String> {
+    let path = state_root
+        .join("operations")
+        .join(format!("{}.json", operation_id.as_str()));
+    let contents = tokio::fs::read(&path).await.map_err(|error| {
+        format!(
+            "failed to read durable {kind} journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
+        format!(
+            "failed to decode durable {kind} journal {}: {error}",
+            path.display()
+        )
+    })?;
+    let expected_generation = serde_json::to_value(target.generation)
+        .map_err(|error| format!("failed to encode expected {kind} generation: {error}"))?;
+    let identity_matches = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_str)
+        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
+        && value.get("operationId").and_then(serde_json::Value::as_str)
+            == Some(operation_id.as_str())
+        && value.get("kind").and_then(serde_json::Value::as_str) == Some(kind)
+        && value.get("containerId").and_then(serde_json::Value::as_str) == Some(target.id.as_str())
+        && value.get("generation") == Some(&expected_generation)
+        && value.get("processId").is_none()
+        && value
+            .get("requestDigest")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|digest| !digest.is_empty());
+    if !identity_matches {
+        return Err(format!(
+            "durable {kind} journal {} did not match the exact operation and generation",
+            path.display()
+        ));
+    }
+    let outcome = value
+        .get("outcome")
+        .ok_or_else(|| format!("durable {kind} journal {} has no outcome", path.display()))?;
+    match outcome.get("status").and_then(serde_json::Value::as_str) {
+        Some("prepared") => Ok(ContainerOperationJournalStatus::Prepared),
+        Some("succeeded") => {
+            let response: ContainerRecord =
+                serde_json::from_value(outcome.get("response").cloned().ok_or_else(|| {
+                    format!(
+                        "durable {kind} journal {} has no container response",
+                        path.display()
+                    )
+                })?)
+                .map_err(|error| {
+                    format!(
+                        "failed to decode durable {kind} response {}: {error}",
+                        path.display()
+                    )
+                })?;
+            if response.state.id() != target.id.as_str()
+                || response.generation != target.generation.unwrap_or(response.generation)
+            {
+                return Err(format!(
+                    "durable {kind} response {} changed its exact target",
+                    path.display()
+                ));
+            }
+            Ok(ContainerOperationJournalStatus::Succeeded(response))
+        }
+        status => Err(format!(
+            "durable {kind} journal {} had unexpected status {status:?}",
+            path.display()
+        )),
+    }
 }
 
 fn owner_identities_are_distinct(

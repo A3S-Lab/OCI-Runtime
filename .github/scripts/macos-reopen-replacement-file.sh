@@ -67,20 +67,17 @@ run_file_stage() {
               and (.guest_evidence_operation_id == null)
             end)
        and (if $stage == "guest-after-response-write" then
-              .first_operation_response_received
-              and .disconnect_probe_attempted
-              and .first_file_response_verified
+              .first_response_matches_durable_record
               and .replacement_rehydrated_file
-              and .replacement_operation_dispatches == 3
+              and .operation_replayed_without_driver_dispatch
             else
-              (.first_operation_response_received | not)
-              and (.disconnect_probe_attempted | not)
-              and (.first_file_response_verified | not)
+              (.first_response_matches_durable_record | not)
               and (.replacement_rehydrated_file | not)
-              and .replacement_operation_dispatches == 2
+              and (.operation_replayed_without_driver_dispatch | not)
             end)
-       and (.first_response_matches_durable_record | not)
-       and (.operation_replayed_without_driver_dispatch | not)
+       and (.first_operation_response_received | not)
+       and (.disconnect_probe_attempted | not)
+       and (.first_file_response_verified | not)
        and (.durable_created_retained | not)
        and .durable_running_retained
        and (.durable_stopped_retained | not)
@@ -102,7 +99,7 @@ run_file_stage() {
        and .generation_after_reopen == .generation_before_reopen
        and (.replacement_created_pid > 0)
        and (.replacement_exec_pid == null)
-       and (.replacement_response_matches_durable_record | not)
+       and .replacement_response_matches_durable_record
        and .replacement_file_response_verified
        and .file_response_replayed
        and .replacement_file_effect_verified
@@ -116,8 +113,9 @@ run_file_stage() {
        and (.exec_response_rebound | not)
        and .file_request_identity_reused
        and .first_operation_dispatches == 1
+       and .replacement_operation_dispatches == 1
        and .host_changed_request_rejected
-       and .guest_changed_request_rejected
+       and (.guest_changed_request_rejected | not)
        and .host_stale_generation_rejected
        and .guest_stale_generation_rejected
        and .marker_reset_before_replacement

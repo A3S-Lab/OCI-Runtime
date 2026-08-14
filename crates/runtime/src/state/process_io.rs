@@ -165,7 +165,8 @@ impl DurableStateStore {
                 StoredOperationStatus::SucceededEmpty => Ok(ProcessIoPreparation::Replayed),
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
                 StoredOperationStatus::Succeeded { .. }
-                | StoredOperationStatus::SucceededProcess { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededFilesystem { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     operation_name,
                     format!(
@@ -197,6 +198,7 @@ impl DurableStateStore {
             container_id: container.id.clone(),
             generation: container.record.generation,
             process_id: Some(target.process_id.clone()),
+            request: None,
             request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
@@ -317,7 +319,8 @@ impl DurableStateStore {
             StoredOperationStatus::SucceededEmpty => return Ok(()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
-            | StoredOperationStatus::SucceededProcess { .. } => {
+            | StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededFilesystem { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     profile.name,

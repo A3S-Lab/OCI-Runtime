@@ -70,8 +70,8 @@ run_close_stdin_stage() {
               and (.guest_evidence_operation_id == null)
             end)
        and (if $stage == "guest-after-response-write" then
-              .first_operation_response_received
-              and .disconnect_probe_attempted
+              (.first_operation_response_received | not)
+              and (.disconnect_probe_attempted | not)
               and .first_response_matches_durable_record
               and (.close_stdin_journal_prepared_before_reopen | not)
               and .close_stdin_journal_succeeded_before_reopen
@@ -121,7 +121,7 @@ run_close_stdin_stage() {
        and .first_operation_dispatches == 1
        and .replacement_operation_dispatches == 1
        and .host_changed_request_rejected
-       and .guest_changed_request_rejected
+       and (.guest_changed_request_rejected | not)
        and .host_stale_generation_rejected
        and .guest_stale_generation_rejected
        and .marker_reset_before_replacement

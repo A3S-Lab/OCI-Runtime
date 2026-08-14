@@ -1,16 +1,178 @@
 use a3s_oci_core::DriverKind;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
-    ContainerOperationRequest, ContainerTarget, Generation, OperationContext, StartRequest,
-    UpdateRequest,
+    ContainerOperationRequest, ContainerTarget, FileOp, FileRequest, FilesystemOp,
+    FilesystemRequest, Generation, OperationContext, StartRequest, UpdateRequest,
 };
 
+use crate::state::FilesystemMutationPreparation;
 use crate::DriverState;
 
 use super::{
     create_container, create_request, operation_id, state_root, DurableStateStore,
     RecordOperationPreparation,
 };
+
+#[tokio::test]
+async fn recreated_running_process_preserves_prepared_file_mutation() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let create = create_request(
+        &bundle_directory,
+        "prepared-file-recovery-container",
+        "prepared-file-recovery-create",
+    );
+    let store = DurableStateStore::open(state_root(&temporary))
+        .await
+        .expect("initialize state root");
+    create_container(&store, &create).await;
+    let target = ContainerTarget::exact(create.id.clone(), Generation(1));
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("prepared-file-recovery-start")),
+        target: target.clone(),
+    };
+    store.prepare_start(&start).await.expect("prepare start");
+    store
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+        )
+        .await
+        .expect("complete start");
+    let file = FileRequest {
+        target: target.clone(),
+        op: FileOp::Upload,
+        path: "/tmp/recovered-file".to_string(),
+        data: Some("AA==".to_string()),
+        user: None,
+        context: Some(OperationContext::new(operation_id(
+            "prepared-file-recovery-upload",
+        ))),
+    };
+    store
+        .prepare_file_mutation(&file)
+        .await
+        .expect("prepare File upload");
+
+    let recovered = store
+        .observe_recreated_running_process(
+            &target,
+            DriverState::running(5_151).expect("replacement running state"),
+        )
+        .await
+        .expect("rebind running process while File remains prepared");
+    assert_eq!(*recovered.state.pid(), Some(5_151));
+
+    let RecordOperationPreparation::Replayed(created) = store
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .expect("replay rebound Create")
+    else {
+        panic!("Create must replay");
+    };
+    assert_eq!(*created.state.pid(), Some(5_151));
+
+    let RecordOperationPreparation::Replayed(started) = store
+        .prepare_start(&start)
+        .await
+        .expect("replay rebound Start")
+    else {
+        panic!("Start must replay");
+    };
+    assert_eq!(*started.state.pid(), Some(5_151));
+
+    let FilesystemMutationPreparation::Resume(resumed) = store
+        .prepare_file_mutation(&file)
+        .await
+        .expect("resume prepared File upload")
+    else {
+        panic!("File upload must remain prepared");
+    };
+    assert_eq!(resumed, target);
+}
+
+#[tokio::test]
+async fn recreated_running_process_preserves_prepared_filesystem_mutation() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let create = create_request(
+        &bundle_directory,
+        "prepared-filesystem-recovery-container",
+        "prepared-filesystem-recovery-create",
+    );
+    let store = DurableStateStore::open(state_root(&temporary))
+        .await
+        .expect("initialize state root");
+    create_container(&store, &create).await;
+    let target = ContainerTarget::exact(create.id.clone(), Generation(1));
+    let start = StartRequest {
+        context: OperationContext::new(operation_id("prepared-filesystem-recovery-start")),
+        target: target.clone(),
+    };
+    store.prepare_start(&start).await.expect("prepare start");
+    store
+        .complete_start(
+            &start.context.operation_id,
+            ContainerState::Running,
+            Some(4_242),
+        )
+        .await
+        .expect("complete start");
+    let filesystem = FilesystemRequest {
+        target: target.clone(),
+        op: FilesystemOp::MakeDir,
+        path: "/tmp/recovered-directory".to_string(),
+        destination: None,
+        depth: 0,
+        user: None,
+        context: Some(OperationContext::new(operation_id(
+            "prepared-filesystem-recovery-mkdir",
+        ))),
+    };
+    store
+        .prepare_filesystem_mutation(&filesystem)
+        .await
+        .expect("prepare Filesystem mkdir");
+
+    let recovered = store
+        .observe_recreated_running_process(
+            &target,
+            DriverState::running(5_151).expect("replacement running state"),
+        )
+        .await
+        .expect("rebind running process while Filesystem remains prepared");
+    assert_eq!(*recovered.state.pid(), Some(5_151));
+
+    let RecordOperationPreparation::Replayed(created) = store
+        .prepare_create(&create, DriverKind::LibkrunWhpx)
+        .await
+        .expect("replay rebound Create")
+    else {
+        panic!("Create must replay");
+    };
+    assert_eq!(*created.state.pid(), Some(5_151));
+
+    let RecordOperationPreparation::Replayed(started) = store
+        .prepare_start(&start)
+        .await
+        .expect("replay rebound Start")
+    else {
+        panic!("Start must replay");
+    };
+    assert_eq!(*started.state.pid(), Some(5_151));
+
+    let FilesystemMutationPreparation::Resume(resumed) = store
+        .prepare_filesystem_mutation(&filesystem)
+        .await
+        .expect("resume prepared Filesystem mkdir")
+    else {
+        panic!("Filesystem mkdir must remain prepared");
+    };
+    assert_eq!(resumed, target);
+}
 
 #[tokio::test]
 async fn recreated_running_process_preserves_prepared_pause_and_rebinds_setup_journals() {

@@ -60,6 +60,13 @@ source directory, and removes it as soon as Create is ready. This keeps Linux
 device type and major/minor validation exact without interpreting macOS
 virtiofs metadata as a Linux device node.
 
+Agent shutdown also consumes every live device-target manifest before it
+clears container state or removes the Guest runtime root. That sweep removes
+rootfs placeholders such as `dev/null` when a VM owner is replaced without an
+API Delete. A replacement VM can therefore prepare the same bundle without an
+`EEXIST` collision; failed manifest cleanup retains the runtime root and makes
+shutdown fail closed.
+
 SDK `features()` through this socket reports 20 public driver operations over
 the protocol-v10 Guest plus `features`, `list`, and `events`, and requires the
 versioned runtime bundle-handoff extension. This is the integration boundary
@@ -771,13 +778,14 @@ reopen or a replacement VM owner.
 
 `oci-vm-reopen-replacement` carries all nine Host/Guest transitions for Create,
 State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause,
-Resume, Processes, Update, and Stats through the durable Host service instead
-of calling the diagnostic Agent client directly:
+Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize,
+File, and Filesystem through the durable Host service instead of calling the
+diagnostic Agent client directly:
 
 ```sh
 reopen_dir="$(mktemp -d)"
 for operation in \
-  create state start kill delete wait exec signal-process wait-process pause resume processes update stats
+  create state start kill delete wait exec signal-process wait-process pause resume processes update stats read-output write-stdin close-stdin resize file filesystem
 do
   for fault_stage in \
     host-before-request-write \
@@ -812,12 +820,23 @@ state root around a fresh VM/session owner. Its recovery hook accepts that one
 record, and retrying the unchanged request completes the same generation.
 
 `guest-after-response-write` has a separate contract because the first Create
-response has already reached durable `created`. A State probe observes the
-closed connection. The replacement driver rebuilds the pre-start Guest process
-inside `recover`, returns `DriverRecovery::recreated_created`, and permits only
-that recovery path to reconcile a changed PID. The next Create replay repairs
-its cached response from the recovered record. Ordinary state and recovery
-observations still reject PID replacement.
+response has already reached the Host and durable state is `created`. The Host
+then acknowledges the Guest replay record, observes the closed connection, and
+returns retryable `Unavailable` to the API caller. The replacement driver
+rebuilds the pre-start Guest process inside `recover`, returns
+`DriverRecovery::recreated_created`, and permits only that recovery path to
+reconcile a changed PID. The next Create replay repairs its cached response,
+returns without another API-driven dispatch, and retries acknowledgement.
+Ordinary state and recovery observations still reject PID replacement.
+
+The same Host-first commit rule applies to all 14 journaled mutations. The
+completed Guest response is not reported as API success until Guest
+acknowledgement succeeds. After owner replacement, recovery reconstructs any
+VM-local committed effect, the durable Host journal serves the exact result,
+and the replacement connection releases the Guest replay record. Changed
+requests remain fenced by the Host journal after that record is gone. Read-only
+operations still deliver the completed first response and use a follow-up call
+to expose the disconnect.
 
 `a3s.oci.oci-vm-reopen-replacement.v2` retains nonce-bound Guest evidence and
 both nested VM reports, and fails unless the endpoint, shim PID, and direct
@@ -1042,23 +1061,25 @@ rejection, stale generation fencing, fresh-owner PID rebinding, and cleanup
 passed all nine stages on Apple Silicon.
 
 File now uses
-`a3s.oci.oci-vm-operation-reopen-replacement.v18`. Upload remains
-session-scoped and every retry reaches the replacement driver. If the first
-owner delivered its response, recovery rebuilds the exact binary upload and
-Guest journal in a fresh tmpfs before Host open; the API retry then receives
-the cached Guest response without another upload effect. Changed-content and
-stale-generation rejection, byte-for-byte download, explicit removal, and
-cleanup passed all nine stages on Apple Silicon.
+`a3s.oci.oci-vm-operation-reopen-replacement.v18`. Its v3 Host journal retains
+the exact binary upload and typed response. Prepared work dispatches once after
+reopen. At the completed-response point, the first API call exposes the
+acknowledgement disconnect; recovery rebuilds the upload in a fresh tmpfs, and
+the Host retry replays without another driver dispatch. Permanent
+changed-content fencing, stale-generation rejection, byte-for-byte download,
+explicit removal, and cleanup passed all nine stages on Apple Silicon on
+August 15, 2026.
 
 Filesystem now uses
-`a3s.oci.oci-vm-operation-reopen-replacement.v19`. MakeDir remains
-session-scoped and every retry reaches the replacement driver. If the first
-owner delivered its response, recovery rebuilds the exact directory and Guest
-journal in a fresh tmpfs before Host open; the API retry then receives the
-cached Guest response without another mkdir effect. Changed-path and
-stale-generation rejection, replacement Stat, explicit Remove, and cleanup
-passed all nine stages on Apple Silicon. The real-HVF replacement matrix now
-covers all 180 operation-stage paths across all 20 protocol-v9 operations.
+`a3s.oci.oci-vm-operation-reopen-replacement.v19`. Its v3 Host journal retains
+the exact MakeDir request and typed metadata response. Prepared work dispatches
+once after reopen. At the completed-response point, the first API call exposes
+the acknowledgement disconnect; recovery rebuilds the directory in a fresh
+tmpfs, and the Host retry replays without another driver dispatch. Permanent
+changed-path fencing, stale-generation rejection, replacement Stat, explicit
+Remove, and cleanup passed all nine stages on Apple Silicon on August 15,
+2026. The real-HVF replacement matrix covers all 180 operation-stage paths
+across all 20 workload operations.
 
 ## Qualification result
 
@@ -1069,6 +1090,18 @@ fault points, 180/180 operation reopen/replacement paths, negative asset and
 authentication cases, and 25/25 fresh-VM soak waves. The soak completed 75
 primary generations with unique endpoints and a stable descriptor count of
 10. The HVF capability therefore reports `experimental`.
+
+The August 15, 2026 focused rerun passed all 14 journaled
+`guest-after-response-write` cases with the Host-first acknowledgement
+contract. File and Filesystem passed their complete nine-stage matrices, 18/18
+paths, using agent SHA-256
+`eea01813858f5dd16bed70cbfba87221da6daebb4201b7a628665aad3f615a7d`,
+system-image SHA-256
+`e888c52e35ba8ed8f747d55bdc32316190dc317865e6919014e434a1e644e6ef`,
+archive SHA-256
+`3a23de1e0136eb948399068cdd7a02b987cdd69fbdff243c4a05e0373e24d501`,
+and manifest SHA-256
+`8627a44c344019c42c1d13c783fde3fd331973b2ab68b05bf25a3b1d6f5fce88`.
 
 Those results qualify the historical direct R2M harness. A separate August 13,
 2026 run closed the public `macos-hvf-host-service` product-path gates. It used

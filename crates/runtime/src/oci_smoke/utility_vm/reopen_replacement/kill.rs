@@ -10,7 +10,7 @@ use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
     ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
     IoMode, IsolationRequest, KillRequest, ListRequest, OciBundle, OciRuntimeService,
-    OperationContext, OperationId, ProcessIo, Signal, StartRequest, StateRequest,
+    OperationContext, OperationId, ProcessIo, Signal, StartRequest,
 };
 use tokio::time::timeout;
 
@@ -22,8 +22,9 @@ use super::super::{
     unique_nonce, GUEST_RUNTIME_PREFIX, MARKER_NAME,
 };
 use super::{
-    append_failure, create_qualification_state_root, owner_identities_are_distinct,
-    wait_for_replacement_marker, QualificationHvfDriver, FAULT_OPERATION, QUALIFICATION_TIMEOUT,
+    append_failure, container_operation_journal_status, create_qualification_state_root,
+    owner_identities_are_distinct, wait_for_replacement_marker, ContainerOperationJournalStatus,
+    QualificationHvfDriver, FAULT_OPERATION, QUALIFICATION_TIMEOUT,
 };
 use crate::agent_session::UtilityVmSession;
 use crate::host_cleanup::MacosHostCleanupTracker;
@@ -409,66 +410,16 @@ async fn exercise(
         all: true,
     };
     let response_delivered = stage == AgentTransportOperationStage::GuestAfterResponseWrite;
-    let mut first_response = None;
     let mut first_failure = None;
     match timeout(QUALIFICATION_TIMEOUT, first_service.kill(kill.clone())).await {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_interruption(report, error, stage) {
                 append_failure(&mut first_failure, reason);
             }
         }
-        Ok(Err(error)) => append_failure(
+        Ok(Ok(record)) => append_failure(
             &mut first_failure,
-            format!(
-                "{} did not deliver its completed Kill response: {error}",
-                stage.as_str()
-            ),
-        ),
-        Ok(Ok(record)) if response_delivered => {
-            report.first_operation_response_received = true;
-            if *record.state.status() != ContainerState::Stopped || record.state.pid().is_some() {
-                append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} returned {} with PID {:?} instead of stopped",
-                        stage.as_str(),
-                        record.state.status(),
-                        record.state.pid()
-                    ),
-                );
-            }
-            first_response = Some(record);
-            report.disconnect_probe_attempted = true;
-            match timeout(
-                QUALIFICATION_TIMEOUT,
-                first_service.state(StateRequest {
-                    target: kill.target.clone(),
-                }),
-            )
-            .await
-            {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_interruption(report, error, stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!("{} disconnect probe unexpectedly succeeded", stage.as_str()),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
-            }
-        }
-        Ok(Ok(_)) => append_failure(
-            &mut first_failure,
-            "first Kill unexpectedly completed before owner replacement",
+            format!("first Kill unexpectedly completed before owner replacement: {record:?}"),
         ),
         Err(_) => append_failure(
             &mut first_failure,
@@ -478,6 +429,48 @@ async fn exercise(
             ),
         ),
     }
+    let first_response = match container_operation_journal_status(
+        state_root,
+        &kill.context.operation_id,
+        "kill",
+        &kill.target,
+    )
+    .await
+    {
+        Ok(ContainerOperationJournalStatus::Prepared) if !response_delivered => None,
+        Ok(ContainerOperationJournalStatus::Succeeded(response)) if response_delivered => {
+            if *response.state.status() != ContainerState::Stopped || response.state.pid().is_some()
+            {
+                append_failure(
+                    &mut first_failure,
+                    format!(
+                        "completed Kill Host journal retained {} with PID {:?} instead of stopped",
+                        response.state.status(),
+                        response.state.pid()
+                    ),
+                );
+            }
+            Some(response)
+        }
+        Ok(ContainerOperationJournalStatus::Prepared) => {
+            append_failure(
+                &mut first_failure,
+                "completed Kill response left its Host journal prepared",
+            );
+            None
+        }
+        Ok(ContainerOperationJournalStatus::Succeeded(response)) => {
+            append_failure(
+                &mut first_failure,
+                format!("Kill Host journal committed before its response boundary: {response:?}"),
+            );
+            None
+        }
+        Err(reason) => {
+            append_failure(&mut first_failure, reason);
+            None
+        }
+    };
     report.first_operation_dispatches = first_driver.kill_calls();
     if stage.is_host() {
         report.negotiated_protocol = faults.protocol_version();

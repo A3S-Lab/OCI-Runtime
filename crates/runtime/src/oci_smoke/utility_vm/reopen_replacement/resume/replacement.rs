@@ -501,29 +501,6 @@ pub(super) async fn run(
     match timeout(
         QUALIFICATION_TIMEOUT,
         session.client().resume(AgentContainerOperationRequest {
-            context: qualification.resume.context.clone(),
-            target: changed_target.clone(),
-        }),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed Resume error: {error}"),
-        ),
-        Ok(Ok(_)) => append_failure(&mut failure, "replacement Guest accepted changed Resume"),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed Resume check timed out",
-        ),
-    }
-
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().resume(AgentContainerOperationRequest {
             context: OperationContext::new(qualification.stale_guest_operation_id.clone()),
             target: changed_target.clone(),
         }),

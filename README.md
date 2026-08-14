@@ -100,9 +100,9 @@ and `experimental` or `supported` readiness.
 | --- | --- |
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
-| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals, replay, generation fencing, startup recovery, quarantine, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
+| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals including File upload and Filesystem mkdir/move/remove, replay, generation fencing, startup recovery, quarantine, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, a bounded Host-acknowledged mutation replay journal, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
-| Utility-VM boundary | Isolated libkrun shim, authenticated protocol v10 with v1-v9 compatibility, 20 public workload operations plus one bounded maintenance acknowledgement, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent. Durable recovery records remain on the per-generation share, while privileged OCI device sources are created only on Guest-local devtmpfs and removed at the Create barrier |
+| Utility-VM boundary | Isolated libkrun shim, authenticated protocol v10 with v1-v9 compatibility, 20 public workload operations plus one bounded maintenance acknowledgement, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent. Durable recovery records remain on the per-generation share, privileged OCI device sources are created only on Guest-local devtmpfs and removed at the Create barrier, and shutdown consumes every retained device-target manifest before deleting the Guest runtime root |
 | containerd runtime-v2 | SDK-only `containerd-shim-a3s-oci-v2` with durable namespace/task identity, lifecycle and exec recovery, and schema-v8 metadata. A retained per-task exec sequence gives every `Exec` incarnation fresh SDK process and operation identities, so `DeleteProcess` can be followed by reuse of the same containerd exec ID across daemon restart without replaying the deleted process. Init/exec input, signal, and terminal-resize journals retain Open/Closing/Closed stdin state, output cursors, independent per-process signal and resize sequences, and a per-task control sequence. The shim also provides process/task-scoped serialization, cross-process-stable request fingerprints, bounded FIFO/PTY I/O, live replacement with exact stdin continuation, committed pending-write, close, signal, and resize replay without duplicate effects, correct `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` transitions, same-size resize suppression, correct `A→B→A` terminal restoration, no output replay, repeated pause/resume and update, stats, PID inventory, in-flight Create and committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty recovery, post-commit Native Linux guest-journal reclamation, four-state forced shim-crash cleanup, and a four-task parallel restart gate; compatibility, packaging, and cross-driver release gates remain open |
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
 | Retained evidence | Schema and normative locks, 189-pair authenticated protocol fault coverage, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen with exact post-commit acknowledgement, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem transitions through durable service reopen and VM/session-owner replacement, a real protocol-v10 Apple Silicon Guest boot, native Linux real-container, soak, owner-death safe-termination, and three consecutive same-Host live containerd 2.2 lifecycle/restart/I/O matrices with deleted exec-ID reuse, post-commit guest-journal reclamation, and committed WriteStdin/CloseStdin/SignalProcess/ResizePty shim-replacement gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
@@ -117,6 +117,14 @@ resource request is compiled into one complete OCI `LinuxResources` contract,
 claimed durably before dispatch, and replayed with the same runtime operation
 after a lost response. Runtime acknowledgement updates Box restart intent
 atomically without changing the original create identity.
+
+New mutation records use `a3s.oci.operation.v3`. File uploads and Filesystem
+mkdir/move/remove retain their exact validated request and typed response in
+the Host journal. The Host commits the result before acknowledging the Guest
+replay record, so an acknowledgement disconnect returns a retryable error and
+the next owner replays the Host result without dispatching the mutation again.
+The Host journal remains the permanent changed-request fence after the Guest
+record has been released.
 
 The exact containerd API, identity, installation, restart, cleanup, and
 qualification boundary is documented in
@@ -293,6 +301,15 @@ Linux discovery and Native Linux development must work when `/dev/kvm` is
 missing or unusable. KVM is an optional utility-VM driver, never a prerequisite
 for host-kernel execution.
 
+On August 15, 2026, a focused Apple Silicon rerun passed all 14 journaled
+`guest-after-response-write` mutation cases with post-commit Guest
+acknowledgement. File and Filesystem also passed their complete nine-stage
+reopen and real owner-replacement matrices, 18/18 paths in total. The run used
+agent SHA-256
+`eea01813858f5dd16bed70cbfba87221da6daebb4201b7a628665aad3f615a7d`
+and system-image SHA-256
+`e888c52e35ba8ed8f747d55bdc32316190dc317865e6919014e434a1e644e6ef`.
+
 The latest WHPX owner-death gate emitted
 `a3s.oci.whpx-recovery-smoke-run.v1` from clean runtime commit `2d91cd0`.
 That closes the service-restart evidence item; it does not promote the public
@@ -388,7 +405,7 @@ The repository turns release claims into checked inventories:
 | --- | ---: |
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
-| Registered durable commit fault stages | 657 |
+| Registered durable commit fault stages | 741 |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
@@ -411,9 +428,10 @@ The repository turns release claims into checked inventories:
 | Real HVF durable WriteStdin reopen plus VM/session-owner replacement paths | 9 |
 | Real HVF durable CloseStdin reopen plus VM/session-owner replacement paths | 9 |
 | Real HVF durable Resize reopen plus VM/session-owner replacement paths | 9 |
-| Real HVF session-scoped File reopen plus VM/session-owner replacement paths | 9 |
-| Real HVF session-scoped Filesystem reopen plus VM/session-owner replacement paths | 9 |
+| Real HVF durable File reopen plus VM/session-owner replacement paths | 9 |
+| Real HVF durable Filesystem reopen plus VM/session-owner replacement paths | 9 |
 | Real HVF operation replacement coverage | 180 / 180 paths (20 / 20 operations) |
+| Real HVF journaled post-response acknowledgement rerun | 14 / 14 mutations on August 15, 2026 |
 | Real HVF lifecycle/transport cleanup fault points | 14 / 14 |
 | Real HVF immutable-system-image soak | 25 / 25 fresh VMs (75 primary generations) |
 | macOS HVF R2M implementation gates | 15 / 15 |

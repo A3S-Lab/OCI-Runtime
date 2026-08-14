@@ -76,8 +76,6 @@ impl OciVmOperationReopenReplacementReport {
             .is_some_and(|((filesystem, create), start)| {
                 filesystem != create && filesystem != start && create != start
             });
-        let expected_replacement_dispatches = if response_delivered { 3 } else { 2 };
-
         matches!(self.platform, HostPlatform::Macos)
             && self.first_vm.platform == self.platform
             && self.replacement_vm.platform == self.platform
@@ -115,10 +113,10 @@ impl OciVmOperationReopenReplacementReport {
             && self.first_operation_error_code == Some(a3s_oci_sdk::ErrorCode::Unavailable)
             && expected_error_operation
             && self.first_operation_error_retryable
-            && self.first_operation_response_received == response_delivered
-            && self.disconnect_probe_attempted == response_delivered
-            && !self.first_response_matches_durable_record
-            && self.first_filesystem_response_verified == response_delivered
+            && !self.first_operation_response_received
+            && !self.disconnect_probe_attempted
+            && self.first_response_matches_durable_record == response_delivered
+            && !self.first_filesystem_response_verified
             && self.durable_running_retained
             && !self.durable_created_retained
             && !self.durable_stopped_retained
@@ -142,7 +140,7 @@ impl OciVmOperationReopenReplacementReport {
             && self.generation_before_reopen == self.generation_after_reopen
             && self.replacement_created_pid.is_some_and(|pid| pid > 0)
             && self.replacement_exec_pid.is_none()
-            && !self.replacement_response_matches_durable_record
+            && self.replacement_response_matches_durable_record
             && self.replacement_filesystem_response_verified
             && self.filesystem_response_replayed
             && self.replacement_filesystem_effect_verified
@@ -155,13 +153,13 @@ impl OciVmOperationReopenReplacementReport {
             && self.setup_start_response_rebound
             && !self.exec_response_rebound
             && self.filesystem_request_identity_reused
-            && !self.operation_replayed_without_driver_dispatch
+            && self.operation_replayed_without_driver_dispatch == response_delivered
             && self.first_operation_dispatches == 1
-            && self.replacement_operation_dispatches == expected_replacement_dispatches
+            && self.replacement_operation_dispatches == 1
             && self.host_stale_generation_rejected
             && self.guest_stale_generation_rejected
             && self.host_changed_request_rejected
-            && self.guest_changed_request_rejected
+            && !self.guest_changed_request_rejected
             && self.marker_reset_before_replacement
             && self.replacement_workload_verified
             && self.force_delete_completed
@@ -193,7 +191,7 @@ mod tests {
     use crate::report::{AgentVmSmokeReport, MacosHostCleanupEvidence};
 
     #[test]
-    fn filesystem_report_requires_session_replay_identity_effect_and_cleanup() {
+    fn filesystem_report_requires_durable_replay_identity_effect_and_cleanup() {
         let mut report = OciVmOperationReopenReplacementReport::initial_filesystem(
             HostPlatform::Macos,
             AgentTransportOperationStage::HostBeforeRequestWrite,
@@ -227,6 +225,7 @@ mod tests {
         report.operation_completed_after_reopen = true;
         report.generation_after_reopen = Some(Generation(1));
         report.replacement_created_pid = Some(42);
+        report.replacement_response_matches_durable_record = true;
         report.replacement_filesystem_response_verified = true;
         report.filesystem_response_replayed = true;
         report.replacement_filesystem_effect_verified = true;
@@ -238,11 +237,10 @@ mod tests {
         report.setup_start_response_rebound = true;
         report.filesystem_request_identity_reused = true;
         report.first_operation_dispatches = 1;
-        report.replacement_operation_dispatches = 2;
+        report.replacement_operation_dispatches = 1;
         report.host_stale_generation_rejected = true;
         report.guest_stale_generation_rejected = true;
         report.host_changed_request_rejected = true;
-        report.guest_changed_request_rejected = true;
         report.marker_reset_before_replacement = true;
         report.replacement_workload_verified = true;
         report.force_delete_completed = true;
@@ -265,11 +263,9 @@ mod tests {
         delivered.first_operation_error_operation = Some("read-agent-frame-header".to_string());
         delivered.guest_evidence_verified = true;
         delivered.guest_evidence_operation_id = delivered.qualification_operation_id.clone();
-        delivered.first_operation_response_received = true;
-        delivered.disconnect_probe_attempted = true;
-        delivered.first_filesystem_response_verified = true;
+        delivered.first_response_matches_durable_record = true;
         delivered.replacement_rehydrated_filesystem = true;
-        delivered.replacement_operation_dispatches = 3;
+        delivered.operation_replayed_without_driver_dispatch = true;
         assert!(delivered.is_success());
 
         let incomplete = OciVmOperationReopenReplacementReport {

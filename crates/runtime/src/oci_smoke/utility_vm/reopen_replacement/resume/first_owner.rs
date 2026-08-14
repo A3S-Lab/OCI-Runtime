@@ -6,7 +6,7 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_core::{DriverKind, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ListRequest, OciRuntimeService, StateRequest};
+use a3s_oci_sdk::{ListRequest, OciRuntimeService};
 use tokio::time::timeout;
 
 use super::super::super::transport_fault_cleanup::{
@@ -294,7 +294,6 @@ pub(super) async fn run(
 
     let response_delivered = qualification.stage
         == a3s_oci_agent_protocol::AgentTransportOperationStage::GuestAfterResponseWrite;
-    let mut first_response = None;
     let mut first_failure = None;
     match timeout(
         QUALIFICATION_TIMEOUT,
@@ -302,69 +301,14 @@ pub(super) async fn run(
     )
     .await
     {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_interruption(report, error, qualification.stage) {
                 append_failure(&mut first_failure, reason);
             }
         }
-        Ok(Err(error)) => append_failure(
+        Ok(Ok(record)) => append_failure(
             &mut first_failure,
-            format!(
-                "{} did not deliver its completed Resume response: {error}",
-                qualification.stage.as_str()
-            ),
-        ),
-        Ok(Ok(record))
-            if response_delivered
-                && *record.state.status() == ContainerState::Running
-                && !record.is_paused()
-                && *record.state.pid() == report.first_created_pid =>
-        {
-            report.first_operation_response_received = true;
-            report.disconnect_probe_attempted = true;
-            first_response = Some(record);
-            match timeout(
-                QUALIFICATION_TIMEOUT,
-                service.state(StateRequest {
-                    target: qualification.start.target.clone(),
-                }),
-            )
-            .await
-            {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_interruption(report, error, qualification.stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe unexpectedly succeeded",
-                        qualification.stage.as_str()
-                    ),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        qualification.stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
-            }
-        }
-        Ok(Ok(record)) if response_delivered => append_failure(
-            &mut first_failure,
-            format!(
-                "delivered Resume response returned invalid {} record with PID {:?} and paused={}",
-                record.state.status(),
-                record.state.pid(),
-                record.is_paused()
-            ),
-        ),
-        Ok(Ok(_)) => append_failure(
-            &mut first_failure,
-            "first Resume unexpectedly completed before owner replacement",
+            format!("first Resume unexpectedly completed before owner replacement: {record:?}"),
         ),
         Err(_) => append_failure(
             &mut first_failure,
@@ -460,19 +404,18 @@ pub(super) async fn run(
         }
         Ok(FreezerJournalStatus::Succeeded(journal)) => {
             report.resume_journal_succeeded_before_reopen = true;
-            report.first_response_matches_durable_record = response_delivered
-                && first_response.as_ref() == Some(&journal)
-                && durable.as_ref() == Some(&journal);
+            report.first_response_matches_durable_record =
+                response_delivered && durable.as_ref() == Some(&journal);
             if !report.first_response_matches_durable_record {
                 append_failure(
                     &mut first_failure,
-                    "completed Resume journal did not match its response and durable record",
+                    "completed Resume Host journal did not match its durable record",
                 );
             }
             if !response_delivered {
                 append_failure(
                     &mut first_failure,
-                    "Resume journal succeeded without a delivered response",
+                    "Resume Host journal committed before its response boundary",
                 );
             }
         }

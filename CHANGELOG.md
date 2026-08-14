@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Durable Host journals for File upload and Filesystem mkdir, move, and remove.
+  `a3s.oci.operation.v3` retains each complete validated request and typed
+  response, keeps prepared work resumable, replays completed results without a
+  second driver dispatch, and permanently rejects changed OperationId reuse
+  after the Guest record is acknowledged. Host state files now allow 64 MiB so
+  the bounded 32 MiB decoded upload and its base64 request fit the journal. The
+  typed durability registry grows from 657 to 741 commit fault points. On
+  August 15, 2026, File and Filesystem passed all 18 real Apple Silicon HVF
+  reopen/owner-replacement paths, and all 14 journaled mutations passed the
+  `guest-after-response-write` Host-first acknowledgement gate.
 - Utility-VM replay-journal acknowledgement over guest protocol v10. The
   existing 20 public workload operations are unchanged; a twenty-first
   maintenance operation releases a non-empty, duplicate-free batch of at most
@@ -302,6 +312,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Clean every live device-target manifest during Linux executor shutdown
+  before removing the Guest runtime root. VM owner replacement now removes OCI
+  rootfs placeholders such as `dev/null`, so the fresh Guest can prepare the
+  same bundle without `EEXIST`; cleanup failure retains the runtime root and
+  fails shutdown closed. Prepared File/Filesystem recovery also rebinds the
+  replacement Guest PID, and completed Create/Start responses are repaired to
+  that PID.
+- Normalize absent OCI annotations across Pause/Resume recovery. Removing the
+  reserved freezer annotation now restores `None` instead of retaining an empty
+  map, while unrelated annotations remain unchanged, so exact durable response
+  replay survives owner replacement.
 - Create privileged OCI device nodes for utility-VM workloads from a private,
   per-container directory on the Guest's local `/dev` devtmpfs instead of the
   host-backed virtiofs runtime share. The exact durable device-target cleanup

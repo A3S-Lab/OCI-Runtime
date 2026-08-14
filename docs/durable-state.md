@@ -18,7 +18,7 @@ The state root:
 - rejects a root, layout directory, record, or transaction file that is a
   symbolic link or a Windows reparse point;
 - permits exactly one runtime writer through a cross-process exclusive lock;
-- bounds every state file to 16 MiB;
+- bounds every state file to 64 MiB;
 - uses `0700` directories and `0600` transaction files on Unix;
 - creates Windows directories with the runtime principal as owner and a
   protected DACL, grants full access only to that principal and LocalSystem,
@@ -106,8 +106,9 @@ for a different request or omitting a previously attached schema fails with
 generation; a matching completed operation returns its exact recorded
 response.
 
-Start, kill, pause, resume, update, and delete use the same global journal and
-request fingerprinting. Each accepted mutation claims the target record so a
+Start, kill, pause, resume, update, delete, File upload, and Filesystem
+mkdir/move/remove use the same global journal and request fingerprinting. Each
+accepted mutation claims the target record so a
 second mutation cannot race the driver call. Start revalidates the durable
 configuration snapshot, not the caller's mutable source bundle, before
 recording an intent. Pause and resume preserve the standard OCI `running`
@@ -117,18 +118,21 @@ complete OCI `LinuxResources` patch and returns the exact observed container
 record on replay. Delete atomically moves the owned container directory into
 quarantine rather than recursively deleting an unresolved path.
 
-New journals use `a3s.oci.operation.v2` and SHA-256 over canonical JSON with
+New journals use `a3s.oci.operation.v3` and SHA-256 over canonical JSON with
 every object key sorted, so unordered OCI resource maps retain the same
-identity after process reconstruction. Existing `a3s.oci.operation.v1`
-journals remain loadable and validate retries with their original JSON
-encoding; the schema version therefore selects the fingerprint algorithm
-instead of silently changing the meaning of a persisted digest.
+identity after process reconstruction. Version 3 also retains the complete
+validated request and typed response for File and Filesystem mutations; those
+records cannot be represented by an older schema. Existing
+`a3s.oci.operation.v1` and `a3s.oci.operation.v2` lifecycle and process
+journals remain loadable and validate retries with their original digest
+algorithm.
 
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
 exactly; it releases a start, kill, pause, resume, update, delete, exec, or
-per-process signal, write-stdin, close-stdin, or resize claim, while a failed
-create is moved out of the live namespace before its ID can be reused.
+per-process signal, write-stdin, close-stdin, resize, File, or Filesystem claim,
+while a failed create is moved out of the live namespace before its ID can be
+reused.
 
 Exec uses the same global operation journal. Preparation reserves the
 generation-scoped process ID before driver dispatch, so duplicate IDs fail
@@ -152,6 +156,15 @@ claimed before driver dispatch; successful and terminal outcomes release the
 claim and replay unchanged after host-service reopen. A retryable error keeps
 the intent resumable. Drivers receive the same `OperationContext` and must
 deduplicate a call that completed before the host committed its outcome.
+
+File upload and Filesystem mkdir/move/remove retain the complete validated SDK
+request because a replacement utility-VM owner may need it to reconstruct an
+effect that was committed in the previous VM. Read-only File download and
+Filesystem stat/list remain direct observations. A completed mutation stores
+its typed response and acknowledges the driver only after that response is
+durable. Reusing the OperationId with any changed path, user, payload, target,
+or operation is rejected by the Host even after the Guest replay record has
+been acknowledged and reclaimed.
 
 Queries may target the current container generation or provide an exact
 generation fence. A stale fence fails with `conflict`. `list` takes the same
@@ -212,6 +225,8 @@ handles these interrupted states:
   resumed without allocating another process identity;
 - an interrupted write-stdin, close-stdin, or resize intent resumes through an
   idempotent driver, while a committed result replays without driver dispatch;
+- an interrupted File or Filesystem mutation resumes from its retained exact
+  request, while a committed typed response replays without driver dispatch;
 - cached init and exec terminal results survive host-service reopen;
 - a terminal create failure completes quarantine before replaying its exact
   error;
@@ -220,7 +235,7 @@ handles these interrupted states:
 ## Fault Injection Contract
 
 Every lifecycle write is routed through one typed `DurableMutation` registry.
-The registry currently contains 95 semantic mutations. Ninety-three atomic
+The registry currently contains 107 semantic mutations. One hundred five atomic
 file replacements are exercised at all seven commit stages:
 
 1. temporary file creation;
@@ -232,7 +247,7 @@ file replacements are exercised at all seven commit stages:
 7. parent-directory sync.
 
 The delete and failed-create quarantine moves are each exercised after the
-rename, source-parent sync, and destination-parent sync. This expands to 657
+rename, source-parent sync, and destination-parent sync. This expands to 741
 durable fault points. The host matrix separately injects before and after all
 22 `RuntimeDriver` boundaries, including capability discovery, startup
 recovery, file transfer, and filesystem operations, for another 44 boundaries.
@@ -292,16 +307,22 @@ exact resource effect; write-stdin preserves the exact process target,
 operation context, input bytes, and one input effect; close-stdin preserves the
 exact process target and operation context with one close effect; resize
 preserves the exact terminal process target, operation context, dimensions, and
-one resize effect.
-File uploads and filesystem mutations remain session-scoped operations rather
-than durable Host journal entries and therefore do not yet have a safe
-post-commit acknowledgement boundary. Every retry after reopen, including one
-after
-a fully written first response, resolves and dispatches the same
-exact-generation request. The guest journals return the same upload
-acknowledgement or directory metadata and keep one mutation effect; changed
-content under the same operation ID conflicts, while stale generations fail
-before host dispatch and at the guest boundary.
+one resize effect. File upload and Filesystem mkdir/move/remove now use that
+same Host boundary: their v3 records retain the exact request and typed result,
+their Guest replay records are released only after the Host commit, and a
+completed Host result survives service and VM-owner replacement without a
+second API-driven dispatch. The Host keeps the permanent request fingerprint,
+so changed content or paths fail with `failed-precondition` after Guest
+acknowledgement; stale generations fail before Host dispatch and at the Guest
+boundary.
+
+For journaled mutations, `guest-after-response-write` means the Guest response
+reached the Host driver, not the public caller. The Host commits that result,
+then the acknowledgement observes the closed connection and the public call
+returns retryable `unavailable`. A replacement owner reconstructs any
+VM-local committed effect during recovery, serves the exact Host result, and
+acknowledges the recovered Guest record. Read-only operations still deliver
+their first response before a follow-up request exposes the disconnect.
 Read-only state, process inventory, normalized stats, and captured-output polls
 resolve a current target to the exact durable generation and are safely
 reissued after reopen, including after a fully written first response. Process
@@ -329,13 +350,14 @@ eleven stages in eleven fresh VMs.
 All nine Host/Guest Create transitions now pass through the durable layer on
 real HVF. Eight paths close the first VM while the original OperationId and
 generation remain in `creating`; a new `HostRuntimeService` and distinct
-VM/session owner reopen that record and complete the same Create. The fully
-written Guest response is different: it leaves a completed `created` record,
-then a follow-up State request exposes the disconnect. Replacement recovery
-rebuilds that pre-start process and uses the explicit
-`DriverRecovery::recreated_created` contract to reconcile its exact PID. The
-next Create replay repairs and returns the same recovered record instead of the
-stale cached response. Ordinary recovery observations still reject PID drift.
+VM/session owner reopen that record and complete the same Create. At
+`guest-after-response-write`, the Host has committed `created`, but its Guest
+acknowledgement observes the closed connection and the API returns retryable
+`unavailable`. Replacement recovery rebuilds that pre-start process and uses
+the explicit `DriverRecovery::recreated_created` contract to reconcile its
+exact PID. The next Create replay repairs and returns the recovered record
+without a second API-driven Create dispatch, then retries acknowledgement.
+Ordinary recovery observations still reject PID drift.
 Both the record rebind and journal repair recover across every durable
 file-commit fault stage.
 Every `a3s.oci.oci-vm-reopen-replacement.v2` path then force-deletes the
@@ -541,22 +563,29 @@ stale generations, and fresh-owner PID rebinding fail or pass as required. All
 nine Apple Silicon stages passed in 18 fresh VMs on August 11, 2026.
 
 Real File recovery uses
-`a3s.oci.oci-vm-operation-reopen-replacement.v18`. Uploads remain outside the
-Host journal, so both the first retry and later replay dispatch through the
-replacement driver. A delivered first response causes driver recovery to
-rebuild the upload and its Guest journal in the fresh session filesystem before
-Host open. The API retry then receives the cached Guest response without a
-second upload effect. Exact binary bytes, changed content, stale generations,
-explicit removal, and owner cleanup passed all nine Apple Silicon stages in 18
-fresh VMs on August 11, 2026.
+`a3s.oci.oci-vm-operation-reopen-replacement.v18`. The Host v3 journal retains
+the exact upload. Prepared paths dispatch it once through the replacement
+driver. At `guest-after-response-write`, the first Host commits the typed
+response and returns the retryable acknowledgement failure; recovery rebuilds
+the upload in the fresh session filesystem, and the API retry replays the Host
+response without another driver dispatch. Exact binary bytes, permanent
+changed-content fencing, stale generations, explicit removal, and owner cleanup
+passed all nine Apple Silicon stages in 18 fresh VMs on August 15, 2026.
 
 Real Filesystem recovery uses
-`a3s.oci.oci-vm-operation-reopen-replacement.v19`. MakeDir remains outside the
-Host journal, so both the first retry and later replay dispatch through the
-replacement driver. A delivered first response causes driver recovery to
-rebuild the directory and its Guest journal in the fresh session filesystem
-before Host open. The API retry then receives the cached Guest response without
-a second mkdir effect. Exact directory metadata, replacement Stat, changed
-paths, stale generations, explicit Remove, and owner cleanup passed all nine
-Apple Silicon stages in 18 fresh VMs on August 11, 2026. This completes all 180
-real-HVF operation-stage paths across the 20 protocol-v9 operations.
+`a3s.oci.oci-vm-operation-reopen-replacement.v19`. The Host v3 journal retains
+the exact MakeDir request. Prepared paths dispatch it once through the
+replacement driver. At `guest-after-response-write`, the first Host commits
+the typed metadata response and returns the retryable acknowledgement failure;
+recovery rebuilds the directory in the fresh session filesystem, and the API
+retry replays the Host response without another driver dispatch. Exact
+directory metadata, replacement Stat, permanent changed-path fencing, stale
+generations, explicit Remove, and owner cleanup passed all nine Apple Silicon
+stages in 18 fresh VMs on August 15, 2026. This completes all 180 real-HVF
+operation-stage paths across the 20 protocol-v9 operations.
+
+The same August 15 focused rerun passed `guest-after-response-write` for all 14
+journaled HVF mutations. In every case the first API call exposed the
+acknowledgement disconnect, the replacement owner reconstructed any VM-local
+effect, the Host replayed its durable result without redispatch, and the Guest
+record was released only after the Host commit.

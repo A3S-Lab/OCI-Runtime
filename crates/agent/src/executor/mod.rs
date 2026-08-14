@@ -537,6 +537,18 @@ impl LinuxExecutor {
             }
             poststop.push(record.process.poststop_plan());
         }
+        let device_targets_clean = match cleanup_shutdown_device_targets(
+            state
+                .containers
+                .values()
+                .map(|record| record.runtime_directory.as_path()),
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                first_error.get_or_insert(error);
+                false
+            }
+        };
         state.containers.clear();
         let cgroup_manager = state.cgroup_manager.take();
         if let Some(delegation) = &self.rootless_cgroup_delegation {
@@ -549,19 +561,21 @@ impl LinuxExecutor {
                 first_error.get_or_insert(error);
             }
         }
-        match tokio::fs::remove_dir_all(&self.runtime_root).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                first_error.get_or_insert_with(|| {
-                    executor_error(
-                        ErrorCode::Internal,
-                        format!(
-                            "failed to remove guest runtime root {}: {error}",
-                            self.runtime_root.display()
-                        ),
-                    )
-                });
+        if device_targets_clean {
+            match tokio::fs::remove_dir_all(&self.runtime_root).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    first_error.get_or_insert_with(|| {
+                        executor_error(
+                            ErrorCode::Internal,
+                            format!(
+                                "failed to remove guest runtime root {}: {error}",
+                                self.runtime_root.display()
+                            ),
+                        )
+                    });
+                }
             }
         }
         if self.device_source_root != self.runtime_root {
@@ -1439,6 +1453,18 @@ fn cleanup_device_targets(runtime_directory: &Path) -> Result<()> {
     device::cleanup_device_target_manifest(&manifest)
 }
 
+fn cleanup_shutdown_device_targets<'a>(
+    runtime_directories: impl IntoIterator<Item = &'a Path>,
+) -> Result<()> {
+    let mut first_error = None;
+    for runtime_directory in runtime_directories {
+        if let Err(error) = cleanup_device_targets(runtime_directory) {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
 async fn remove_process_directory(container_directory: &Path, directory: &Path) -> Result<()> {
     if directory.parent() != Some(container_directory) || directory == container_directory {
         return Err(executor_error(
@@ -1503,6 +1529,68 @@ mod kill_tests {
         assert!(!confirms_terminal_kill(
             Signal::new(libc::SIGTERM).expect("SIGTERM")
         ));
+    }
+}
+
+#[cfg(test)]
+mod shutdown_device_tests {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    use tempfile::tempdir;
+
+    use super::cleanup_shutdown_device_targets;
+
+    #[test]
+    fn shutdown_cleanup_removes_every_recorded_device_placeholder() {
+        let temporary = tempdir().expect("shutdown device workspace");
+        let mut runtime_directories = Vec::new();
+        let mut targets = Vec::new();
+        for index in 0..2 {
+            let rootfs = temporary.path().join(format!("rootfs-{index}"));
+            let target = rootfs.join("dev/null");
+            std::fs::create_dir_all(target.parent().expect("device parent"))
+                .expect("device parent directory");
+            std::fs::write(&target, []).expect("device placeholder");
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+                .expect("device placeholder permissions");
+            let rootfs = rootfs.canonicalize().expect("canonical rootfs");
+            let rootfs_metadata = std::fs::symlink_metadata(&rootfs).expect("rootfs metadata");
+            let target_metadata = std::fs::symlink_metadata(&target).expect("target metadata");
+            let runtime_directory = temporary.path().join(format!("runtime-{index}"));
+            std::fs::create_dir(&runtime_directory).expect("runtime directory");
+            let manifest = serde_json::json!({
+                "schemaVersion": "a3s.oci.native-linux-device-targets.v2",
+                "rootfs": {
+                    "canonicalPath": rootfs,
+                    "dev": rootfs_metadata.dev(),
+                    "ino": rootfs_metadata.ino()
+                },
+                "targets": [{
+                    "relativePath": "dev/null",
+                    "dev": target_metadata.dev(),
+                    "ino": target_metadata.ino(),
+                    "mode": target_metadata.mode() & 0o7777,
+                    "uid": target_metadata.uid(),
+                    "gid": target_metadata.gid()
+                }]
+            });
+            let manifest_path = runtime_directory.join("device-targets.json");
+            std::fs::write(
+                &manifest_path,
+                serde_json::to_vec_pretty(&manifest).expect("device manifest"),
+            )
+            .expect("write device manifest");
+            std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o600))
+                .expect("device manifest permissions");
+            runtime_directories.push(runtime_directory);
+            targets.push(target);
+        }
+
+        cleanup_shutdown_device_targets(runtime_directories.iter().map(|path| path.as_path()))
+            .expect("shutdown device cleanup");
+
+        assert!(targets.iter().all(|target| !target.exists()));
+        assert!(runtime_directories.iter().all(|path| path.is_dir()));
     }
 }
 

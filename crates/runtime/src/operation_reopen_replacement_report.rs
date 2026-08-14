@@ -72,11 +72,11 @@ pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_CLOSE_STDIN_SCHEMA_VERSION: &str =
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_RESIZE_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v17";
 
-/// File schema with a session-scoped upload rebuilt in the replacement Guest.
+/// File schema with a durable Host upload rebuilt in the replacement Guest.
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_FILE_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v18";
 
-/// Filesystem schema with a session-scoped mkdir rebuilt in the replacement Guest.
+/// Filesystem schema with a durable Host mkdir rebuilt in the replacement Guest.
 pub const OCI_VM_OPERATION_REOPEN_REPLACEMENT_FILESYSTEM_SCHEMA_VERSION: &str =
     "a3s.oci.oci-vm-operation-reopen-replacement.v19";
 
@@ -104,9 +104,9 @@ const QUALIFICATION_FAULT_OPERATION: &str = "oci-vm-transport-qualification-faul
 /// fresh-owner `stats` query after committed Update reconstruction, version 14
 /// adds rebuilt captured-output evidence, version 15 adds committed stdin-write
 /// replay, version 16 adds committed stdin-close replay, and version 17 adds
-/// committed terminal-resize replay, and version 18 adds session-scoped file
-/// upload reconstruction, and version 19 adds session-scoped directory
-/// reconstruction. Earlier operations continue to emit their compatible schema.
+/// committed terminal-resize replay, version 18 adds durable file-upload
+/// reconstruction, and version 19 adds durable directory reconstruction.
+/// Earlier operations continue to emit their compatible schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OciVmOperationReopenReplacementReport {
     /// Version of this JSON-compatible schema.
@@ -252,7 +252,7 @@ pub struct OciVmOperationReopenReplacementReport {
     pub first_operation_response_received: bool,
     /// Whether a follow-up request exposed a post-response disconnect.
     pub disconnect_probe_attempted: bool,
-    /// Whether a delivered first response exactly matched the durable record.
+    /// Whether the first driver's completed response exactly matched the durable record.
     pub first_response_matches_durable_record: bool,
     /// Whether a delivered first Wait response matched the required exit result.
     #[serde(default)]
@@ -469,7 +469,7 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether the replacement File response matched the exact upload.
     #[serde(default)]
     pub replacement_file_response_verified: bool,
-    /// Whether a repeated replacement upload returned the same Guest-journal response.
+    /// Whether a repeated replacement upload returned the same durable Host response.
     #[serde(default)]
     pub file_response_replayed: bool,
     /// Whether a replacement download observed the exact uploaded bytes.
@@ -481,7 +481,7 @@ pub struct OciVmOperationReopenReplacementReport {
     /// Whether the replacement Filesystem response matched the exact mkdir.
     #[serde(default)]
     pub replacement_filesystem_response_verified: bool,
-    /// Whether a repeated replacement mkdir returned the same Guest-journal response.
+    /// Whether a repeated replacement mkdir returned the same durable Host response.
     #[serde(default)]
     pub filesystem_response_replayed: bool,
     /// Whether replacement Stat observed the exact created directory.

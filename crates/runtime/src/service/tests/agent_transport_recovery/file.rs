@@ -84,16 +84,23 @@ async fn exercise_file_reopen(index: usize, stage: AgentTransportOperationStage)
         )))),
     };
 
-    let first_result = first_service.file(upload.clone()).await;
-    if response_reached_host(stage) {
-        let response = first_result
-            .unwrap_or_else(|error| panic!("written file response for {stage:?}: {error}"));
-        assert_upload(&response, &exact_target, stage);
-    } else {
-        let error = first_result.expect_err("file fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error = first_service
+        .file(upload.clone())
+        .await
+        .expect_err("file transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(
+            &upload
+                .context
+                .as_ref()
+                .expect("upload context")
+                .operation_id
+        ),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.file_dispatches(), 1, "{stage:?}");
     drop(first_service);
     drop(first_driver);
@@ -140,10 +147,31 @@ async fn exercise_file_reopen(index: usize, stage: AgentTransportOperationStage)
         .await
         .unwrap_or_else(|error| panic!("repeat file upload after {stage:?}: {error}"));
     assert_upload(&response, &exact_target, stage);
-    assert_eq!(metrics.file_dispatches(), 2, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(
+            &upload
+                .context
+                .as_ref()
+                .expect("upload context")
+                .operation_id
+        ),
+        1,
+        "{stage:?}"
+    );
+    let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
+    let expected_guest_requests = if response_reached_host(stage) {
+        1
+    } else {
+        first_guest_dispatches + 1
+    };
+    assert_eq!(
+        metrics.file_dispatches(),
+        expected_driver_dispatches,
+        "{stage:?}"
+    );
     assert_eq!(
         guest.file_request_count(),
-        first_guest_dispatches + 1,
+        expected_guest_requests,
         "{stage:?}"
     );
     assert_eq!(
@@ -165,10 +193,14 @@ async fn exercise_file_reopen(index: usize, stage: AgentTransportOperationStage)
         .await
         .unwrap_or_else(|error| panic!("replay file upload after {stage:?}: {error}"));
     assert_upload(&replayed, &exact_target, stage);
-    assert_eq!(metrics.file_dispatches(), 3, "{stage:?}");
+    assert_eq!(
+        metrics.file_dispatches(),
+        expected_driver_dispatches,
+        "{stage:?}"
+    );
     assert_eq!(
         guest.file_request_count(),
-        first_guest_dispatches + 2,
+        expected_guest_requests,
         "{stage:?}"
     );
     assert_eq!(guest.file_effect_count(), 1, "{stage:?}");
@@ -232,10 +264,10 @@ async fn verify_changed_and_stale_file_requests_fail_closed(
     let host_conflict = service
         .file(changed)
         .await
-        .expect_err("changed host file upload must fail through the guest journal");
-    assert_eq!(host_conflict.code, ErrorCode::Conflict);
-    assert_eq!(metrics.file_dispatches(), driver_dispatches + 1);
-    assert_eq!(guest.file_request_count(), request_count + 2);
+        .expect_err("changed durable File upload must fail before driver dispatch");
+    assert_eq!(host_conflict.code, ErrorCode::FailedPrecondition);
+    assert_eq!(metrics.file_dispatches(), driver_dispatches);
+    assert_eq!(guest.file_request_count(), request_count + 1);
     assert_eq!(guest.file_effect_count(), 1);
 
     let stale_target = ContainerTarget::exact(
@@ -257,14 +289,14 @@ async fn verify_changed_and_stale_file_requests_fail_closed(
         .await
         .expect_err("stale guest file target must fail closed");
     assert_eq!(guest_stale.code, ErrorCode::NotFound);
-    assert_eq!(guest.file_request_count(), request_count + 3);
+    assert_eq!(guest.file_request_count(), request_count + 2);
 
     let host_stale = service
         .file(stale)
         .await
         .expect_err("stale host file target must fail before dispatch");
     assert_eq!(host_stale.code, ErrorCode::Conflict);
-    assert_eq!(metrics.file_dispatches(), driver_dispatches + 1);
-    assert_eq!(guest.file_request_count(), request_count + 3);
+    assert_eq!(metrics.file_dispatches(), driver_dispatches);
+    assert_eq!(guest.file_request_count(), request_count + 2);
     assert_eq!(guest.file_effect_count(), 1);
 }

@@ -479,44 +479,9 @@ async fn exercise(
     let response_delivered = stage == AgentTransportOperationStage::GuestAfterResponseWrite;
     let mut first_failure = None;
     match timeout(QUALIFICATION_TIMEOUT, first_service.delete(delete.clone())).await {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_interruption(report, error, stage) {
                 append_failure(&mut first_failure, reason);
-            }
-        }
-        Ok(Err(error)) => append_failure(
-            &mut first_failure,
-            format!(
-                "{} did not deliver its completed Delete response: {error}",
-                stage.as_str()
-            ),
-        ),
-        Ok(Ok(())) if response_delivered => {
-            report.first_operation_response_received = true;
-            report.disconnect_probe_attempted = true;
-            match timeout(
-                QUALIFICATION_TIMEOUT,
-                first_driver.state(delete.target.clone()),
-            )
-            .await
-            {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_interruption(report, error, stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!("{} disconnect probe unexpectedly succeeded", stage.as_str()),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
             }
         }
         Ok(Ok(())) => append_failure(

@@ -10,7 +10,10 @@ use tokio::time::timeout;
 
 use super::super::exec::support::{stale_target, wait_for_exact_marker};
 use super::super::{append_failure, owner_identities_are_distinct, QUALIFICATION_TIMEOUT};
-use super::support::{directory_response_matches, record_recovery_evidence};
+use super::support::{
+    directory_response_matches, filesystem_mutation_journal_status, record_recovery_evidence,
+    FilesystemMutationJournalStatus,
+};
 use super::{FirstOwnerEvidence, Qualification, QualificationHvfDriver};
 use crate::agent_session::UtilityVmSession;
 use crate::host_cleanup::MacosHostCleanupTracker;
@@ -267,6 +270,29 @@ pub(super) async fn run(
     };
     report.operation_replayed_without_driver_dispatch =
         driver.filesystem_calls() == calls_before_filesystem;
+    match filesystem_mutation_journal_status(
+        &qualification.state_root,
+        &qualification.filesystem,
+        &qualification.start.target,
+    )
+    .await
+    {
+        Ok(FilesystemMutationJournalStatus::Succeeded(journal)) => {
+            report.replacement_response_matches_durable_record =
+                replacement_response.as_ref() == Some(journal.as_ref());
+            if !report.replacement_response_matches_durable_record {
+                append_failure(
+                    &mut failure,
+                    "replacement Filesystem response did not match its durable Host journal",
+                );
+            }
+        }
+        Ok(FilesystemMutationJournalStatus::Prepared) => append_failure(
+            &mut failure,
+            "replacement Filesystem Host journal remained prepared",
+        ),
+        Err(reason) => append_failure(&mut failure, reason),
+    }
     let replay_calls_before = driver.filesystem_calls();
     match timeout(
         QUALIFICATION_TIMEOUT,
@@ -276,11 +302,11 @@ pub(super) async fn run(
     {
         Ok(Ok(response)) => {
             report.filesystem_response_replayed = replacement_response.as_ref() == Some(&response)
-                && driver.filesystem_calls() == replay_calls_before + 1;
+                && driver.filesystem_calls() == replay_calls_before;
             if !report.filesystem_response_replayed {
                 append_failure(
                     &mut failure,
-                    "replacement Guest did not replay the exact Filesystem response",
+                    "durable Host did not replay the exact Filesystem response without dispatch",
                 );
             }
         }
@@ -291,14 +317,17 @@ pub(super) async fn run(
         Err(_) => append_failure(&mut failure, "replacement Filesystem replay timed out"),
     }
     report.replacement_operation_dispatches = driver.filesystem_calls();
-    let expected_dispatches = if response_delivered { 3 } else { 2 };
-    if report.operation_replayed_without_driver_dispatch
-        || report.replacement_operation_dispatches != expected_dispatches
-    {
+    if report.operation_replayed_without_driver_dispatch != response_delivered {
+        append_failure(
+            &mut failure,
+            "replacement Filesystem dispatch did not match the durable Host journal outcome",
+        );
+    }
+    if report.replacement_operation_dispatches != 1 {
         append_failure(
             &mut failure,
             format!(
-                "replacement driver recorded {} Filesystem dispatches; expected {expected_dispatches}",
+                "replacement driver recorded {} Filesystem dispatches instead of one",
                 report.replacement_operation_dispatches
             ),
         );
@@ -358,38 +387,13 @@ pub(super) async fn run(
         Err(reason) => append_failure(&mut failure, reason),
     }
 
-    let mut changed_guest = qualification.filesystem.clone();
-    changed_guest.target = qualification.start.target.clone();
-    changed_guest.path = format!("{}-changed", qualification.filesystem.path);
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().filesystem(changed_guest.clone()),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed Filesystem error: {error}"),
-        ),
-        Ok(Ok(response)) => append_failure(
-            &mut failure,
-            format!("replacement Guest accepted changed Filesystem request: {response:?}"),
-        ),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed Filesystem check timed out",
-        ),
-    }
-    let mut changed_host = changed_guest;
-    changed_host.target = qualification.filesystem.target.clone();
+    let mut changed_host = qualification.filesystem.clone();
+    changed_host.path = format!("{}-changed", qualification.filesystem.path);
     let changed_host_calls = driver.filesystem_calls();
     match service.filesystem(changed_host).await {
         Err(error)
-            if error.code == ErrorCode::Conflict
-                && driver.filesystem_calls() == changed_host_calls + 1 =>
+            if error.code == ErrorCode::FailedPrecondition
+                && driver.filesystem_calls() == changed_host_calls =>
         {
             report.host_changed_request_rejected = true;
         }

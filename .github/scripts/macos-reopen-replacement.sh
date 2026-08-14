@@ -143,8 +143,8 @@ run_create_stage() {
               and (.guest_evidence_operation_id
                    == .qualification_operation_id)
               and (if $stage == "guest-after-response-write" then
-                     .first_create_response_received
-                     and .disconnect_probe_attempted
+                     (.first_create_response_received | not)
+                     and (.disconnect_probe_attempted | not)
                      and (.durable_creating_retained | not)
                      and .durable_created_retained
                      and (.first_created_pid > 0)
@@ -390,8 +390,8 @@ run_start_stage() {
               and (.guest_evidence_operation_id == null)
             end)
        and (if $stage == "guest-after-response-write" then
-              .first_operation_response_received
-              and .disconnect_probe_attempted
+              (.first_operation_response_received | not)
+              and (.disconnect_probe_attempted | not)
               and .first_response_matches_durable_record
               and (.durable_created_retained | not)
               and .durable_running_retained
@@ -522,8 +522,8 @@ run_kill_stage() {
               and (.guest_evidence_operation_id == null)
             end)
        and (if $stage == "guest-after-response-write" then
-              .first_operation_response_received
-              and .disconnect_probe_attempted
+              (.first_operation_response_received | not)
+              and (.disconnect_probe_attempted | not)
               and .first_response_matches_durable_record
               and (.durable_running_retained | not)
               and .durable_stopped_retained
@@ -667,8 +667,8 @@ run_delete_stage() {
        and (.durable_created_retained | not)
        and (.durable_running_retained | not)
        and (if $stage == "guest-after-response-write" then
-              .first_operation_response_received
-              and .disconnect_probe_attempted
+              (.first_operation_response_received | not)
+              and (.disconnect_probe_attempted | not)
               and (.durable_stopped_retained | not)
               and .first_durable_records_empty
               and (.delete_journal_prepared_before_reopen | not)

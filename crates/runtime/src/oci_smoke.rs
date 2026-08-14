@@ -890,9 +890,9 @@ pub async fn oci_vm_resize_reopen_replacement_at(
 
 /// Reissue one interrupted File upload through a replacement macOS HVF owner.
 ///
-/// The request remains session-scoped and is dispatched after every reopen.
-/// If the first owner delivered its response, recovery first rebuilds the
-/// upload and Guest journal in the fresh VM so the API retry is one-effect.
+/// The exact upload is retained in the durable Host journal. Prepared work is
+/// dispatched after reopen; a completed Host result is replayed without a
+/// second API-driven dispatch after recovery rebuilds the Guest effect.
 #[must_use]
 pub async fn oci_vm_file_reopen_replacement_at(
     shim: &Path,
@@ -930,9 +930,9 @@ pub async fn oci_vm_file_reopen_replacement_at(
 
 /// Reissue one interrupted Filesystem mkdir through a replacement macOS HVF owner.
 ///
-/// The request remains session-scoped and is dispatched after every reopen.
-/// If the first owner delivered its response, recovery first rebuilds the
-/// directory and Guest journal in the fresh VM so the API retry is one-effect.
+/// The exact mkdir is retained in the durable Host journal. Prepared work is
+/// dispatched after reopen; a completed Host result is replayed without a
+/// second API-driven dispatch after recovery rebuilds the Guest effect.
 #[must_use]
 pub async fn oci_vm_filesystem_reopen_replacement_at(
     shim: &Path,

@@ -114,6 +114,7 @@ impl DurableStateStore {
                 }
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
                 StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-kill",
@@ -155,6 +156,7 @@ impl DurableStateStore {
             container_id: request.target.id.clone(),
             generation: stored.record.generation,
             process_id: None,
+            request: None,
             request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
@@ -196,6 +198,7 @@ impl DurableStateStore {
             StoredOperationStatus::Succeeded { response } => return Ok(response.clone()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

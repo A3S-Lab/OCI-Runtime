@@ -84,16 +84,23 @@ async fn exercise_filesystem_reopen(index: usize, stage: AgentTransportOperation
         )))),
     };
 
-    let first_result = first_service.filesystem(make_dir.clone()).await;
-    if response_reached_host(stage) {
-        let response = first_result
-            .unwrap_or_else(|error| panic!("written filesystem response for {stage:?}: {error}"));
-        assert_directory(&response, &exact_target, stage);
-    } else {
-        let error = first_result.expect_err("filesystem fault must remain visible before delivery");
-        assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
-        assert!(error.retryable, "{stage:?}");
-    }
+    let error = first_service
+        .filesystem(make_dir.clone())
+        .await
+        .expect_err("filesystem transport or acknowledgement fault must remain visible");
+    assert_eq!(error.code, ErrorCode::Unavailable, "{stage:?}");
+    assert!(error.retryable, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(
+            &make_dir
+                .context
+                .as_ref()
+                .expect("Filesystem context")
+                .operation_id
+        ),
+        0,
+        "{stage:?}"
+    );
     assert_eq!(metrics.filesystem_dispatches(), 1, "{stage:?}");
     drop(first_service);
     drop(first_driver);
@@ -140,10 +147,31 @@ async fn exercise_filesystem_reopen(index: usize, stage: AgentTransportOperation
         .await
         .unwrap_or_else(|error| panic!("repeat filesystem mkdir after {stage:?}: {error}"));
     assert_directory(&response, &exact_target, stage);
-    assert_eq!(metrics.filesystem_dispatches(), 2, "{stage:?}");
+    assert_eq!(
+        guest.acknowledgement_count(
+            &make_dir
+                .context
+                .as_ref()
+                .expect("Filesystem context")
+                .operation_id
+        ),
+        1,
+        "{stage:?}"
+    );
+    let expected_driver_dispatches = if response_reached_host(stage) { 1 } else { 2 };
+    let expected_guest_requests = if response_reached_host(stage) {
+        1
+    } else {
+        first_guest_dispatches + 1
+    };
+    assert_eq!(
+        metrics.filesystem_dispatches(),
+        expected_driver_dispatches,
+        "{stage:?}"
+    );
     assert_eq!(
         guest.filesystem_request_count(),
-        first_guest_dispatches + 1,
+        expected_guest_requests,
         "{stage:?}"
     );
     assert_eq!(
@@ -165,10 +193,14 @@ async fn exercise_filesystem_reopen(index: usize, stage: AgentTransportOperation
         .await
         .unwrap_or_else(|error| panic!("replay filesystem mkdir after {stage:?}: {error}"));
     assert_directory(&replayed, &exact_target, stage);
-    assert_eq!(metrics.filesystem_dispatches(), 3, "{stage:?}");
+    assert_eq!(
+        metrics.filesystem_dispatches(),
+        expected_driver_dispatches,
+        "{stage:?}"
+    );
     assert_eq!(
         guest.filesystem_request_count(),
-        first_guest_dispatches + 2,
+        expected_guest_requests,
         "{stage:?}"
     );
     assert_eq!(guest.filesystem_effect_count(), 1, "{stage:?}");
@@ -236,10 +268,10 @@ async fn verify_changed_and_stale_filesystem_requests_fail_closed(
     let host_conflict = service
         .filesystem(changed)
         .await
-        .expect_err("changed host filesystem mutation must fail through the guest journal");
-    assert_eq!(host_conflict.code, ErrorCode::Conflict);
-    assert_eq!(metrics.filesystem_dispatches(), driver_dispatches + 1);
-    assert_eq!(guest.filesystem_request_count(), request_count + 2);
+        .expect_err("changed durable Filesystem mutation must fail before driver dispatch");
+    assert_eq!(host_conflict.code, ErrorCode::FailedPrecondition);
+    assert_eq!(metrics.filesystem_dispatches(), driver_dispatches);
+    assert_eq!(guest.filesystem_request_count(), request_count + 1);
     assert_eq!(guest.filesystem_effect_count(), 1);
 
     let stale_target = ContainerTarget::exact(
@@ -262,14 +294,14 @@ async fn verify_changed_and_stale_filesystem_requests_fail_closed(
         .await
         .expect_err("stale guest filesystem target must fail closed");
     assert_eq!(guest_stale.code, ErrorCode::NotFound);
-    assert_eq!(guest.filesystem_request_count(), request_count + 3);
+    assert_eq!(guest.filesystem_request_count(), request_count + 2);
 
     let host_stale = service
         .filesystem(stale)
         .await
         .expect_err("stale host filesystem target must fail before dispatch");
     assert_eq!(host_stale.code, ErrorCode::Conflict);
-    assert_eq!(metrics.filesystem_dispatches(), driver_dispatches + 1);
-    assert_eq!(guest.filesystem_request_count(), request_count + 3);
+    assert_eq!(metrics.filesystem_dispatches(), driver_dispatches);
+    assert_eq!(guest.filesystem_request_count(), request_count + 2);
     assert_eq!(guest.filesystem_effect_count(), 1);
 }

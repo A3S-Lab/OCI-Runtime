@@ -91,8 +91,8 @@ impl OciVmOperationReopenReplacementReport {
             && self.first_operation_error_code == Some(a3s_oci_sdk::ErrorCode::Unavailable)
             && expected_error_operation
             && self.first_operation_error_retryable
-            && self.first_operation_response_received == response_delivered
-            && self.disconnect_probe_attempted == response_delivered
+            && !self.first_operation_response_received
+            && !self.disconnect_probe_attempted
             && !self.first_response_matches_durable_record
             && !self.durable_created_retained
             && !self.durable_running_retained
@@ -223,8 +223,6 @@ mod tests {
                     stage_report.qualification_operation_id.clone();
             }
             if stage == AgentTransportOperationStage::GuestAfterResponseWrite {
-                stage_report.first_operation_response_received = true;
-                stage_report.disconnect_probe_attempted = true;
                 stage_report.durable_stopped_retained = false;
                 stage_report.first_durable_records_empty = true;
                 stage_report.delete_journal_prepared_before_reopen = false;

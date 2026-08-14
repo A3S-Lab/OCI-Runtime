@@ -423,36 +423,6 @@ pub(super) async fn run(
             format!("reopened Host accepted changed Exec and returned {process:?}"),
         ),
     }
-    let mut changed_guest_io = qualification.exec.io.clone();
-    changed_guest_io.terminal_size = Some(changed_size);
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().exec(AgentExecRequest {
-            context: qualification.exec.context.clone(),
-            target: exact_process.clone(),
-            process: qualification.exec.process.clone(),
-            io: changed_guest_io,
-        }),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed Exec error: {error}"),
-        ),
-        Ok(Ok(process)) => append_failure(
-            &mut failure,
-            format!("replacement Guest accepted changed Exec and returned {process:?}"),
-        ),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed Exec check timed out",
-        ),
-    }
-
     let stale_container = match stale_target(&qualification.start.target) {
         Ok(target) => target,
         Err(reason) => {

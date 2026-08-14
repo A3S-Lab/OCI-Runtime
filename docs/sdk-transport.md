@@ -257,9 +257,11 @@ bounded `acknowledge-operations` maintenance request; large stdin writes map
 the parent Host identity back to every derived Guest chunk identity. A lost
 acknowledgement is retryable, and replaying the completed Host operation sends
 it again without redispatching the workload mutation. Protocol-v1 through
-protocol-v9 Guests retain a compatibility no-op. File and filesystem Host
-mutations do not yet have a durable Host operation journal, so they are not
-included in this reclamation boundary.
+protocol-v9 Guests retain a compatibility no-op. File upload and Filesystem
+mkdir/move/remove use v3 Host journals that retain their exact request and
+typed response, so they share the same post-commit reclamation boundary.
+Reusing an acknowledged OperationId with changed content remains fenced by the
+Host record.
 
 File downloads and uploads are limited to 32 MiB decoded payloads. Directory
 listings are limited to depth 64, 4,096 entries, and a 12 MiB serialized

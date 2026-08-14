@@ -150,16 +150,16 @@ impl DurableStateStore {
                         .await
                 }
                 StoredOperationStatus::Failed { error } => Err(error),
-                StoredOperationStatus::Succeeded { .. } | StoredOperationStatus::SucceededEmpty => {
-                    Err(state_error(
-                        ErrorCode::FailedPrecondition,
-                        "prepare-exec",
-                        format!(
-                            "exec operation {} has an invalid outcome",
-                            request.context.operation_id
-                        ),
-                    ))
-                }
+                StoredOperationStatus::Succeeded { .. }
+                | StoredOperationStatus::SucceededFilesystem { .. }
+                | StoredOperationStatus::SucceededEmpty => Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    "prepare-exec",
+                    format!(
+                        "exec operation {} has an invalid outcome",
+                        request.context.operation_id
+                    ),
+                )),
             };
         }
 
@@ -209,6 +209,7 @@ impl DurableStateStore {
             container_id: container.id.clone(),
             generation: container.record.generation,
             process_id: Some(request.process_id.clone()),
+            request: None,
             request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
@@ -300,7 +301,9 @@ impl DurableStateStore {
             StoredOperationStatus::Prepared => {}
             StoredOperationStatus::SucceededProcess { response } => return Ok(response.clone()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
-            StoredOperationStatus::Succeeded { .. } | StoredOperationStatus::SucceededEmpty => {
+            StoredOperationStatus::Succeeded { .. }
+            | StoredOperationStatus::SucceededFilesystem { .. }
+            | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-exec",
@@ -438,7 +441,8 @@ impl DurableStateStore {
                 StoredOperationStatus::SucceededEmpty => Ok(SignalProcessPreparation::Replayed),
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
                 StoredOperationStatus::Succeeded { .. }
-                | StoredOperationStatus::SucceededProcess { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededFilesystem { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-signal-process",
                     format!(
@@ -469,6 +473,7 @@ impl DurableStateStore {
             container_id: container.id.clone(),
             generation: container.record.generation,
             process_id: Some(target.process_id.clone()),
+            request: None,
             request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
@@ -533,7 +538,8 @@ impl DurableStateStore {
             StoredOperationStatus::SucceededEmpty => return Ok(()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
-            | StoredOperationStatus::SucceededProcess { .. } => {
+            | StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededFilesystem { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-signal-process",

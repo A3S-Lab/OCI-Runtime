@@ -99,11 +99,13 @@ complete parent-to-child identity set until the Host outcome commits and then
 acknowledges the whole set as one batch. A failed acknowledgement restores that
 set for retry.
 
-This reclamation path is currently Native Linux-specific. The remote
-utility-VM transport does not yet carry an acknowledgement operation, and
-Host file/filesystem mutations do not yet have durable Host operation records
-that can establish the same commit boundary. Those records therefore remain
-outside this qualification claim.
+Native Linux releases replay records locally. Protocol-v10 utility-VM drivers
+carry the same boundary through the bounded `acknowledge-operations`
+maintenance request; protocol-v1 through protocol-v9 peers retain the
+compatibility no-op. Host File upload and Filesystem mkdir/move/remove now use
+v3 durable operation records and join this commit boundary. A lost
+acknowledgement is retried from the completed Host journal without redispatching
+the workload mutation.
 
 ## Identity mapping
 

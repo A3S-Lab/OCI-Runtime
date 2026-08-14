@@ -402,10 +402,10 @@ Completed:
   `exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
   `update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, and `resize`;
 - generation-scoped durable process records, global exec, per-process signal,
-  and write-stdin/close-stdin/resize journals, durable update journals,
-  terminal failure replay, active-operation claims, and stable init/exec
-  exit-status caching across host-service reopen;
-- typed, exhaustive recovery injection at all 657 registered durable commit
+  write-stdin/close-stdin/resize, update, File upload, and Filesystem
+  mkdir/move/remove journals, terminal failure replay, active-operation claims,
+  and stable init/exec exit-status caching across host-service reopen;
+- typed, exhaustive recovery injection at all 741 registered durable commit
   stages and all 44 before/after `RuntimeDriver` boundaries, including startup
   recovery;
 - runtime-owned Windows state paths with protected DACLs limited to the
@@ -674,19 +674,21 @@ enforce it. No property is silently ignored.
   - [x] Carry a journaled file upload through all nine portable `file` reopen
     stages. Resolve the current host target to the exact generation and retain
     the path, user, base64 payload, operation context, and acknowledgement.
-    Reissue the session-scoped request after every reopen, including after a
-    fully written first response, while the guest journal guarantees one upload
-    effect. Reject changed upload content through that journal and reject stale
-    generations at the guest boundary and before host driver dispatch.
+    Keep the v3 Host journal resumable before commit, then replay its typed
+    response without driver dispatch after commit. A lost post-commit Guest
+    acknowledgement stays retryable and is repeated by the next owner. Reject
+    changed upload content permanently at the Host and reject stale generations
+    at the Guest boundary and before Host driver dispatch.
   - [x] Carry a journaled directory creation through all nine portable
     `filesystem` reopen stages. Resolve the current host target to the exact
     generation and retain the path, user, operation context, and directory
-    metadata response. Reissue the session-scoped request after every reopen,
-    including after a fully written first response, while the guest journal
-    guarantees one mkdir effect. Reject changed paths through that journal and
-    reject stale generations at the guest boundary and before host driver
-    dispatch. This completes the portable 20-operation, 180-pair matrix without
-    claiming real utility-VM replacement evidence.
+    metadata response. Keep the v3 Host journal resumable before commit, then
+    replay its typed response without driver dispatch after commit. Repeat a
+    lost post-commit Guest acknowledgement through the replacement owner and
+    retain permanent Host changed-path fencing. Reject stale generations at the
+    Guest boundary and before Host driver dispatch. This completes the portable
+    20-operation, 180-pair matrix without claiming real utility-VM replacement
+    evidence.
   - [x] Cross the four host-side `create` request/response transitions inside
     fresh, authenticated utility VMs. The qualification-only client injector
     records the exact negotiated protocol-v9 point once, returns a retryable
@@ -965,28 +967,35 @@ enforce it. No property is silently ignored.
     2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs under
     `a3s.oci.oci-vm-operation-reopen-replacement.v17`.
   - [x] Carry all nine Host/Guest `file` stages through service reopen and
-    actual HVF owner replacement. Upload remains session-scoped, so every API
-    retry reaches the replacement driver. After a delivered first response,
-    driver recovery rebuilds the upload and Guest journal in the fresh `/tmp`
-    filesystem before Host open; the retry then receives the cached Guest
-    response without a second upload effect. Exact binary bytes, response
-    shape, request identity, changed-content rejection, stale generations,
-    explicit removal, force delete, and both owner cleanup inventories are
-    required. The August 11, 2026 Apple Silicon matrix passed all nine stages
-    in 18 fresh VMs under
+    actual HVF owner replacement. The v3 Host journal retains the exact upload
+    and typed response. Prepared paths dispatch once after reopen. At
+    `guest-after-response-write`, the first API call exposes the post-commit
+    acknowledgement disconnect; recovery rebuilds the upload in the fresh
+    `/tmp` filesystem, and Host replay returns without another driver dispatch.
+    Exact binary bytes, response shape, permanent changed-content rejection,
+    stale generations, explicit removal, force delete, and both owner cleanup
+    inventories are required. The August 15, 2026 Apple Silicon matrix passed
+    all nine stages in 18 fresh VMs under
     `a3s.oci.oci-vm-operation-reopen-replacement.v18`.
   - [x] Carry all nine Host/Guest `filesystem` stages through service reopen
-    and actual HVF owner replacement. MakeDir remains session-scoped, so every
-    API retry reaches the replacement driver. After a delivered first
-    response, driver recovery rebuilds the directory and Guest journal in the
-    fresh `/tmp` filesystem before Host open; the retry then receives the
-    cached Guest response without a second mkdir effect. Exact directory
-    metadata, request identity, changed-path rejection, stale generations,
-    replacement Stat, explicit Remove, force delete, and both owner cleanup
-    inventories are required. The August 11, 2026 Apple Silicon matrix passed
-    all nine stages in 18 fresh VMs under
+    and actual HVF owner replacement. The v3 Host journal retains the exact
+    MakeDir request and typed response. Prepared paths dispatch once after
+    reopen. At `guest-after-response-write`, the first API call exposes the
+    post-commit acknowledgement disconnect; recovery rebuilds the directory in
+    the fresh `/tmp` filesystem, and Host replay returns without another driver
+    dispatch. Exact directory metadata, request identity, permanent
+    changed-path rejection, stale generations, replacement Stat, explicit
+    Remove, force delete, and both owner cleanup inventories are required. The
+    August 15, 2026 Apple Silicon matrix passed all nine stages in 18 fresh VMs
+    under
     `a3s.oci.oci-vm-operation-reopen-replacement.v19`, completing all 180 real
-    operation-stage paths across all 20 protocol-v9 operations.
+    operation-stage paths across all 20 workload operations.
+  - [x] Requalify `guest-after-response-write` for all 14 journaled mutations
+    against real Apple Silicon HVF with protocol v10 acknowledgement. Every
+    first API call returns retryable `Unavailable` after its Host outcome is
+    durable, every replacement owner reconstructs any VM-local effect, Host
+    replay avoids a second API-driven dispatch, and Guest evidence is released
+    only after commit. The August 15, 2026 focused matrix passed 14/14 cases.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.
@@ -1202,6 +1211,13 @@ function-complete and remains `experimental`. Signed release-package
 qualification, upstream OCI conformance, adversarial security review, upgrade
 and rollback compatibility, and longer release soak remain promotion gates
 before `supported`.
+
+The August 15, 2026 focused follow-up closed durable Host journaling for File
+upload and Filesystem mkdir/move/remove, raised the durable operation schema to
+v3, and passed all 18 real-HVF File/Filesystem owner-replacement paths. It also
+passed the unified post-commit acknowledgement contract for all 14 journaled
+mutations. These are function-completeness fixes; they do not remove the
+release-promotion gates above.
 
 ### R2L — Linux KVM Utility VM
 

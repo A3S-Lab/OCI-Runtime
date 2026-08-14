@@ -472,7 +472,7 @@ pub(super) async fn run(
 
     let changed_data = b"changed-write-stdin\n".to_vec();
     let mut changed_host = qualification.write_stdin.clone();
-    changed_host.data = changed_data.clone();
+    changed_host.data = changed_data;
     let calls_before_changed_host = driver.write_stdin_calls();
     match service.write_stdin(changed_host).await {
         Err(error)
@@ -487,33 +487,6 @@ pub(super) async fn run(
         ),
         Ok(()) => append_failure(&mut failure, "reopened Host accepted changed WriteStdin"),
     }
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().write_stdin(AgentWriteStdinRequest {
-            context: Some(qualification.write_stdin.context.clone()),
-            process: exact_process.clone(),
-            data: changed_data,
-        }),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed WriteStdin error: {error}"),
-        ),
-        Ok(Ok(())) => append_failure(
-            &mut failure,
-            "replacement Guest accepted changed WriteStdin",
-        ),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed WriteStdin check timed out",
-        ),
-    }
-
     let stale_container = match stale_target(&qualification.start.target) {
         Ok(target) => target,
         Err(reason) => {

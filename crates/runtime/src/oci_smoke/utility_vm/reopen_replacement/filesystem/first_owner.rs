@@ -6,7 +6,7 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_core::{DriverKind, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{FilesystemRequest, ListRequest, OciRuntimeService, StateRequest};
+use a3s_oci_sdk::{FilesystemRequest, ListRequest, OciRuntimeService};
 use tokio::time::timeout;
 
 use super::super::super::transport_fault_cleanup::{
@@ -17,7 +17,10 @@ use super::super::exec::support::{
     identity_or_expected, reset_marker, shutdown_setup_failure, wait_for_exact_marker,
 };
 use super::super::{append_failure, QUALIFICATION_TIMEOUT};
-use super::support::{directory_response_matches, record_interruption};
+use super::support::{
+    directory_response_matches, filesystem_mutation_journal_status, record_interruption,
+    FilesystemMutationJournalStatus,
+};
 use super::{FirstOwnerEvidence, Qualification, QualificationHvfDriver};
 use crate::host_cleanup::MacosHostCleanupTracker;
 use crate::{OciVmOperationReopenReplacementReport, RuntimeDriver};
@@ -211,60 +214,9 @@ pub(super) async fn run(
     )
     .await
     {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_interruption(report, error, qualification.stage) {
                 append_failure(&mut first_failure, reason);
-            }
-        }
-        Ok(Err(error)) => append_failure(
-            &mut first_failure,
-            format!(
-                "{} did not deliver its completed Filesystem response: {error}",
-                qualification.stage.as_str()
-            ),
-        ),
-        Ok(Ok(response)) if response_delivered => {
-            report.first_operation_response_received = true;
-            report.first_filesystem_response_verified = directory_response_matches(
-                &response,
-                &qualification.start.target,
-                &qualification.filesystem.path,
-            );
-            if !report.first_filesystem_response_verified {
-                append_failure(
-                    &mut first_failure,
-                    format!("first Filesystem mkdir returned invalid metadata: {response:?}"),
-                );
-            }
-            report.disconnect_probe_attempted = true;
-            match timeout(
-                QUALIFICATION_TIMEOUT,
-                service.state(StateRequest {
-                    target: qualification.start.target.clone(),
-                }),
-            )
-            .await
-            {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_interruption(report, error, qualification.stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe unexpectedly succeeded",
-                        qualification.stage.as_str()
-                    ),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        qualification.stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
             }
         }
         Ok(Ok(response)) => append_failure(
@@ -280,6 +232,41 @@ pub(super) async fn run(
                 QUALIFICATION_TIMEOUT.as_secs()
             ),
         ),
+    }
+    match filesystem_mutation_journal_status(
+        &qualification.state_root,
+        &qualification.filesystem,
+        &qualification.start.target,
+    )
+    .await
+    {
+        Ok(FilesystemMutationJournalStatus::Prepared) if !response_delivered => {}
+        Ok(FilesystemMutationJournalStatus::Succeeded(response)) if response_delivered => {
+            report.first_response_matches_durable_record = directory_response_matches(
+                &response,
+                &qualification.start.target,
+                &qualification.filesystem.path,
+            );
+            if !report.first_response_matches_durable_record {
+                append_failure(
+                    &mut first_failure,
+                    format!(
+                        "first Filesystem journal retained invalid metadata: {response:?}"
+                    ),
+                );
+            }
+        }
+        Ok(FilesystemMutationJournalStatus::Prepared) => append_failure(
+            &mut first_failure,
+            "completed Filesystem response left its Host journal prepared",
+        ),
+        Ok(FilesystemMutationJournalStatus::Succeeded(response)) => append_failure(
+            &mut first_failure,
+            format!(
+                "Filesystem Host journal committed before the selected response boundary: {response:?}"
+            ),
+        ),
+        Err(reason) => append_failure(&mut first_failure, reason),
     }
     report.first_operation_dispatches = driver.filesystem_calls();
     if qualification.stage.is_host() {

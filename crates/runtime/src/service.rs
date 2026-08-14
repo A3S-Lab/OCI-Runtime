@@ -29,8 +29,9 @@ use crate::fault::{
     DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint, NoFaultInjector,
 };
 use crate::state::{
-    DeletePreparation, DurableStateStore, ProcessIoPreparation, ProcessOperationPreparation,
-    ProcessWaitPreparation, RecordOperationPreparation, SignalProcessPreparation,
+    DeletePreparation, DurableStateStore, FilesystemMutationPreparation, ProcessIoPreparation,
+    ProcessOperationPreparation, ProcessWaitPreparation, RecordOperationPreparation,
+    SignalProcessPreparation,
 };
 
 mod driver_registry;
@@ -1212,6 +1213,60 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("file")?;
         lifecycle.ensure_operation(RuntimeOperation::File, "file")?;
         request.validate()?;
+        if request.op == FileOp::Upload {
+            let operation_id = request
+                .context
+                .as_ref()
+                .expect("validated File upload has an operation context")
+                .operation_id
+                .clone();
+            let expected_upload_size = request
+                .data
+                .as_deref()
+                .map(|data| STANDARD.decode(data))
+                .transpose()
+                .map_err(|error| {
+                    Error::new(
+                        ErrorCode::InvalidArgument,
+                        format!("file upload data is not valid base64: {error}"),
+                    )
+                    .for_operation("file")
+                })?
+                .map(|data| data.len() as u64);
+            let target = match lifecycle.store.prepare_file_mutation(&request).await? {
+                FilesystemMutationPreparation::Replayed(response) => {
+                    return lifecycle
+                        .acknowledge_result(&operation_id, Ok(response))
+                        .await;
+                }
+                FilesystemMutationPreparation::Prepared(target)
+                | FilesystemMutationPreparation::Resume(target) => target,
+            };
+            let record = lifecycle.store.state(&target).await?;
+            let registered = lifecycle.driver(record.driver, "file")?;
+            registered.ensure_operation(RuntimeOperation::File, "file")?;
+            request.target = target.clone();
+            lifecycle.driver_boundary(DriverOperation::File, DriverBoundaryStage::BeforeCall)?;
+            let result = registered.driver().file(request).await;
+            lifecycle.driver_boundary(DriverOperation::File, DriverBoundaryStage::AfterCall)?;
+            let response = match result {
+                Ok(response) => response,
+                Err(error) => {
+                    return lifecycle.fail_driver_operation(&operation_id, error).await;
+                }
+            };
+            if let Err(error) =
+                validate_file_response(&response, &target, FileOp::Upload, expected_upload_size)
+            {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
+            let completed = lifecycle
+                .store
+                .complete_file_mutation(&operation_id, response)
+                .await;
+            return lifecycle.acknowledge_result(&operation_id, completed).await;
+        }
+
         let record = lifecycle.store.state(&request.target).await?;
         ensure_live_filesystem(&record, "file")?;
         let registered = lifecycle.driver(record.driver, "file")?;
@@ -1219,24 +1274,11 @@ impl OciRuntimeService for HostRuntimeService {
         request.target = ContainerTarget::exact(request.target.id, record.generation);
         let expected_target = request.target.clone();
         let operation = request.op;
-        let expected_upload_size = request
-            .data
-            .as_deref()
-            .map(|data| STANDARD.decode(data))
-            .transpose()
-            .map_err(|error| {
-                Error::new(
-                    ErrorCode::InvalidArgument,
-                    format!("file upload data is not valid base64: {error}"),
-                )
-                .for_operation("file")
-            })?
-            .map(|data| data.len() as u64);
         lifecycle.driver_boundary(DriverOperation::File, DriverBoundaryStage::BeforeCall)?;
         let result = registered.driver().file(request).await;
         lifecycle.driver_boundary(DriverOperation::File, DriverBoundaryStage::AfterCall)?;
         let response = result?;
-        validate_file_response(&response, &expected_target, operation, expected_upload_size)?;
+        validate_file_response(&response, &expected_target, operation, None)?;
         Ok(response)
     }
 
@@ -1244,6 +1286,52 @@ impl OciRuntimeService for HostRuntimeService {
         let lifecycle = self.lifecycle("filesystem")?;
         lifecycle.ensure_operation(RuntimeOperation::Filesystem, "filesystem")?;
         request.validate()?;
+        if request.op.is_mutating() {
+            let operation_id = request
+                .context
+                .as_ref()
+                .expect("validated Filesystem mutation has an operation context")
+                .operation_id
+                .clone();
+            let operation = request.op;
+            let target = match lifecycle
+                .store
+                .prepare_filesystem_mutation(&request)
+                .await?
+            {
+                FilesystemMutationPreparation::Replayed(response) => {
+                    return lifecycle
+                        .acknowledge_result(&operation_id, Ok(response))
+                        .await;
+                }
+                FilesystemMutationPreparation::Prepared(target)
+                | FilesystemMutationPreparation::Resume(target) => target,
+            };
+            let record = lifecycle.store.state(&target).await?;
+            let registered = lifecycle.driver(record.driver, "filesystem")?;
+            registered.ensure_operation(RuntimeOperation::Filesystem, "filesystem")?;
+            request.target = target.clone();
+            lifecycle
+                .driver_boundary(DriverOperation::Filesystem, DriverBoundaryStage::BeforeCall)?;
+            let result = registered.driver().filesystem(request).await;
+            lifecycle
+                .driver_boundary(DriverOperation::Filesystem, DriverBoundaryStage::AfterCall)?;
+            let response = match result {
+                Ok(response) => response,
+                Err(error) => {
+                    return lifecycle.fail_driver_operation(&operation_id, error).await;
+                }
+            };
+            if let Err(error) = validate_filesystem_response(&response, &target, operation) {
+                return lifecycle.fail_driver_operation(&operation_id, error).await;
+            }
+            let completed = lifecycle
+                .store
+                .complete_filesystem_mutation(&operation_id, response)
+                .await;
+            return lifecycle.acknowledge_result(&operation_id, completed).await;
+        }
+
         let record = lifecycle.store.state(&request.target).await?;
         ensure_live_filesystem(&record, "filesystem")?;
         let registered = lifecycle.driver(record.driver, "filesystem")?;

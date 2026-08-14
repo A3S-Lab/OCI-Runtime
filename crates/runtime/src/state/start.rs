@@ -125,6 +125,7 @@ impl DurableStateStore {
                 }
                 StoredOperationStatus::Failed { error } => Err(error),
                 StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-start",
@@ -166,6 +167,7 @@ impl DurableStateStore {
             container_id: request.target.id.clone(),
             generation: stored.record.generation,
             process_id: None,
+            request: None,
             request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
@@ -218,6 +220,8 @@ impl DurableStateStore {
                         | StoredOperationKind::Pause
                         | StoredOperationKind::Resume
                         | StoredOperationKind::Update
+                        | StoredOperationKind::File
+                        | StoredOperationKind::Filesystem
                 ) && active.container_id == stored.id
                     && active.generation == stored.record.generation
                     && matches!(active.outcome, StoredOperationStatus::Prepared)
@@ -255,8 +259,8 @@ impl DurableStateStore {
                 ErrorCode::Conflict,
                 "reconcile-succeeded-start",
                 format!(
-                    "completed start operation {} changed beyond its recovered process identity",
-                    operation.operation_id
+                    "completed start operation {} changed beyond its recovered process identity: durable {:?}, reconstructed {:?}",
+                    operation.operation_id, stored.record, expected
                 ),
             ));
         }
@@ -303,6 +307,7 @@ impl DurableStateStore {
             StoredOperationStatus::Succeeded { response } => return Ok(response.clone()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,

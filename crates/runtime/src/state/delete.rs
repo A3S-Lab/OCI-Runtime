@@ -122,7 +122,8 @@ impl DurableStateStore {
                 StoredOperationStatus::SucceededEmpty => Ok(DeletePreparation::Replayed),
                 StoredOperationStatus::Failed { error } => Err(error.clone()),
                 StoredOperationStatus::Succeeded { .. }
-                | StoredOperationStatus::SucceededProcess { .. } => Err(state_error(
+                | StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededFilesystem { .. } => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-delete",
                     format!(
@@ -172,6 +173,7 @@ impl DurableStateStore {
             container_id: request.target.id.clone(),
             generation: stored.record.generation,
             process_id: None,
+            request: None,
             request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
@@ -207,7 +209,8 @@ impl DurableStateStore {
             StoredOperationStatus::SucceededEmpty => return Ok(()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::Succeeded { .. }
-            | StoredOperationStatus::SucceededProcess { .. } => {
+            | StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededFilesystem { .. } => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "complete-delete",

@@ -190,6 +190,8 @@ impl DurableStateStore {
                                         | StoredOperationKind::Pause
                                         | StoredOperationKind::Resume
                                         | StoredOperationKind::Update
+                                        | StoredOperationKind::File
+                                        | StoredOperationKind::Filesystem
                                 )
                             ) | (
                                 RecreatedProcess::RunningPaused,
@@ -335,7 +337,9 @@ impl DurableStateStore {
                 | StoredOperationKind::WriteStdin
                 | StoredOperationKind::CloseStdin
                 | StoredOperationKind::Resize
-                | StoredOperationKind::Update => {}
+                | StoredOperationKind::Update
+                | StoredOperationKind::File
+                | StoredOperationKind::Filesystem => {}
             }
         }
         if status == ContainerState::Stopped && current != ContainerState::Stopped {
@@ -369,7 +373,9 @@ impl DurableStateStore {
                 | StoredOperationKind::WriteStdin
                 | StoredOperationKind::CloseStdin
                 | StoredOperationKind::Resize
-                | StoredOperationKind::Update => {
+                | StoredOperationKind::Update
+                | StoredOperationKind::File
+                | StoredOperationKind::Filesystem => {
                     return Err(state_error(
                         ErrorCode::Internal,
                         "observe-state",
@@ -427,7 +433,9 @@ fn observation_completes(kind: StoredOperationKind, status: ContainerState, paus
         | StoredOperationKind::WriteStdin
         | StoredOperationKind::CloseStdin
         | StoredOperationKind::Resize
-        | StoredOperationKind::Update => false,
+        | StoredOperationKind::Update
+        | StoredOperationKind::File
+        | StoredOperationKind::Filesystem => false,
     }
 }
 

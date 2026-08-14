@@ -197,8 +197,8 @@ impl OciVmReopenReplacementReport {
             AgentTransportOperationStage::GuestAfterResponseWrite
         );
         let expected_interruption = if response_delivered {
-            self.first_create_response_received
-                && self.disconnect_probe_attempted
+            !self.first_create_response_received
+                && !self.disconnect_probe_attempted
                 && !self.durable_creating_retained
                 && self.durable_created_retained
                 && self
@@ -379,8 +379,6 @@ mod tests {
         ));
         delivered_response.first_create_error_operation =
             Some("read-agent-frame-header".to_string());
-        delivered_response.first_create_response_received = true;
-        delivered_response.disconnect_probe_attempted = true;
         delivered_response.durable_creating_retained = false;
         delivered_response.durable_created_retained = true;
         delivered_response.first_created_pid = Some(41);

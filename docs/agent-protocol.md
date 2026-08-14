@@ -224,10 +224,12 @@ Guest Create request/dispatch/response points through durable service reopen
 and an actual utility-VM owner replacement. The Host points and first four
 Guest points leave the journal in `creating`; a fresh VM receives the unchanged
 OperationId and generation and completes that request. At
-`guest-after-response-write`, the first Create response is already durable, so
-a follow-up State request exposes the disconnect. The replacement recovery hook
-then rebuilds the pre-start process, reconciles its exact Guest PID, and repairs
-the cached Create response before replay. Guest points also require nonce-bound
+`guest-after-response-write`, the first Create response is already durable;
+the following Guest acknowledgement observes the closed connection, so the
+public Create call returns retryable `Unavailable`. The replacement recovery
+hook then rebuilds the pre-start process, reconciles its exact Guest PID,
+repairs the cached Create response before Host replay, and retries
+acknowledgement. Guest points also require nonce-bound
 console evidence emitted after executor cleanup. Every report retains both
 owner identities and requires force-delete cleanup. In-place Guest-agent
 restart remains open.
@@ -324,7 +326,15 @@ At `guest-after-response-write`, recovery replays the committed bytes into the
 fresh process before Host open completes, so the API retry returns from the
 durable journal without another driver dispatch. Complete request identity,
 exact effect bytes, changed-request conflicts, stale generations, and cleanup
-are retained. Replacement coverage for the other 4 operations remains open.
+are retained. Versions 16 and 17 add CloseStdin and Resize with the same
+Host-first commit boundary. Versions 18 and 19 add File upload and Filesystem
+MakeDir with exact v3 Host request retention and typed response replay. The
+August 15, 2026 Apple Silicon rerun passed all nine File and Filesystem stages,
+18/18 paths, and all 14 journaled `guest-after-response-write` cases. After the
+Host commit, the first public call exposes the acknowledgement disconnect;
+replacement recovery reconstructs any VM-local effect, Host replay avoids a
+second API-driven dispatch, and the Host record permanently fences changed
+reuse after Guest reclamation.
 
 ## Bundle Preservation
 

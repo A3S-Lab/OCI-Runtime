@@ -15,7 +15,10 @@ use super::model::{RuntimeRootMarker, ROOT_SCHEMA_VERSION};
 const ROOT_MARKER_FILE: &str = "root.json";
 const ROOT_MARKER_TRANSACTION_FILE: &str = ".root.json.next";
 const LOCK_FILE: &str = ".lock";
-const MAX_STATE_FILE_BYTES: u64 = 16 * 1024 * 1024;
+// A durable File upload record contains the caller's exact base64 request.
+// The public decoded payload limit is 32 MiB, whose canonical JSON encoding
+// remains below this fixed bound.
+const MAX_STATE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(super) struct RootLock {

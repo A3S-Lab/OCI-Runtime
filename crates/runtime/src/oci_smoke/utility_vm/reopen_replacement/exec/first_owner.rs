@@ -6,7 +6,7 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_core::{DriverKind, IsolationClass};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
-use a3s_oci_sdk::{ListRequest, OciRuntimeService, ProcessRecord, StateRequest};
+use a3s_oci_sdk::{ListRequest, OciRuntimeService};
 use tokio::time::timeout;
 
 use super::super::super::transport_fault_cleanup::{
@@ -206,7 +206,6 @@ pub(super) async fn run(
     let response_delivered = qualification.stage
         == a3s_oci_agent_protocol::AgentTransportOperationStage::GuestAfterResponseWrite;
     let expected_process_target = exact_process_target(&qualification.exec);
-    let mut first_response: Option<ProcessRecord> = None;
     let mut first_failure = None;
     match timeout(
         QUALIFICATION_TIMEOUT,
@@ -214,63 +213,9 @@ pub(super) async fn run(
     )
     .await
     {
-        Ok(Err(error)) if !response_delivered => {
+        Ok(Err(error)) => {
             if let Err(reason) = record_interruption(report, error, qualification.stage) {
                 append_failure(&mut first_failure, reason);
-            }
-        }
-        Ok(Err(error)) => append_failure(
-            &mut first_failure,
-            format!(
-                "{} did not deliver its completed Exec response: {error}",
-                qualification.stage.as_str()
-            ),
-        ),
-        Ok(Ok(process)) if response_delivered => {
-            report.first_operation_response_received = true;
-            report.first_exec_pid = process.pid;
-            if process.target != expected_process_target
-                || process.pid.is_none_or(|pid| pid == 0)
-                || !process.terminal
-            {
-                append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} returned an invalid Exec process {process:?}",
-                        qualification.stage.as_str()
-                    ),
-                );
-            }
-            first_response = Some(process);
-            report.disconnect_probe_attempted = true;
-            match timeout(
-                QUALIFICATION_TIMEOUT,
-                service.state(StateRequest {
-                    target: qualification.start.target.clone(),
-                }),
-            )
-            .await
-            {
-                Ok(Err(error)) => {
-                    if let Err(reason) = record_interruption(report, error, qualification.stage) {
-                        append_failure(&mut first_failure, reason);
-                    }
-                }
-                Ok(Ok(_)) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe unexpectedly succeeded",
-                        qualification.stage.as_str()
-                    ),
-                ),
-                Err(_) => append_failure(
-                    &mut first_failure,
-                    format!(
-                        "{} disconnect probe exceeded the {} second timeout",
-                        qualification.stage.as_str(),
-                        QUALIFICATION_TIMEOUT.as_secs()
-                    ),
-                ),
             }
         }
         Ok(Ok(process)) => append_failure(
@@ -348,12 +293,15 @@ pub(super) async fn run(
         }
         Ok(ExecJournalStatus::Succeeded(response)) => {
             report.exec_journal_succeeded_before_reopen = true;
-            report.first_response_matches_durable_record =
-                first_response.as_ref() == Some(&response);
+            report.first_exec_pid = response.pid;
+            report.first_response_matches_durable_record = response_delivered
+                && response.target == expected_process_target
+                && response.pid.is_some_and(|pid| pid != 0)
+                && response.terminal;
             if !response_delivered || !report.first_response_matches_durable_record {
                 append_failure(
                     &mut first_failure,
-                    "first Exec journal succeeded without the exact delivered response",
+                    "first Exec Host journal succeeded without the exact committed response",
                 );
             }
         }

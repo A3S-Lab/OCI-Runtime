@@ -3,6 +3,7 @@ mod delete;
 mod event;
 mod failure;
 mod filesystem;
+mod filesystem_mutation;
 mod freezer;
 mod kill;
 mod list;
@@ -23,9 +24,9 @@ use std::sync::Arc;
 use a3s_oci_core::{DriverKind, LifecycleEvent, LifecycleState};
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode, Generation, OciBundle,
-    OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget, Result, RuntimeEventKind,
-    ValidateRequest,
+    ContainerId, ContainerRecord, ContainerTarget, CreateRequest, ErrorCode, FileOp, Generation,
+    OciBundle, OciSchemaValidator, OperationId, ProcessRecord, ProcessTarget, Result,
+    RuntimeEventKind, ValidateRequest,
 };
 use tokio::sync::{Mutex, Notify};
 
@@ -39,9 +40,10 @@ use filesystem::{
     state_error, RootLock,
 };
 use model::{
-    StoredContainer, StoredGeneration, StoredOperation, StoredOperationKind, StoredOperationStatus,
-    CONTAINER_SCHEMA_VERSION, GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION,
-    OPERATION_SCHEMA_VERSION_V1,
+    StoredContainer, StoredFilesystemMutationResponse, StoredGeneration, StoredOperation,
+    StoredOperationKind, StoredOperationRequest, StoredOperationStatus, CONTAINER_SCHEMA_VERSION,
+    GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION_V1,
+    OPERATION_SCHEMA_VERSION_V2,
 };
 use oci_state::{build_state, container_state, is_paused, rebuild_state};
 use operation::validate_deadline;
@@ -113,6 +115,17 @@ pub(crate) enum ProcessIoPreparation {
     Resume(ProcessTarget),
     /// A matching operation already completed.
     Replayed,
+}
+
+/// Result of preparing a durable mutation of one container filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FilesystemMutationPreparation<Response> {
+    /// This call durably created a new operation intent.
+    Prepared(ContainerTarget),
+    /// A matching operation intent exists and requires driver reconciliation.
+    Resume(ContainerTarget),
+    /// A matching operation already completed; this is its exact response.
+    Replayed(Response),
 }
 
 /// Single-writer durable lifecycle store.
@@ -209,6 +222,7 @@ impl DurableStateStore {
                     Err(error)
                 }
                 StoredOperationStatus::SucceededProcess { .. }
+                | StoredOperationStatus::SucceededFilesystem { .. }
                 | StoredOperationStatus::SucceededEmpty => Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "prepare-create",
@@ -238,6 +252,7 @@ impl DurableStateStore {
             container_id: request.id.clone(),
             generation,
             process_id: None,
+            request: None,
             request_digest: request_digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
@@ -384,6 +399,8 @@ impl DurableStateStore {
                                 | StoredOperationKind::Pause
                                 | StoredOperationKind::Resume
                                 | StoredOperationKind::Update
+                                | StoredOperationKind::File
+                                | StoredOperationKind::Filesystem
                         )
                 ) && active.container_id == stored.id
                     && active.generation == stored.record.generation
@@ -415,8 +432,8 @@ impl DurableStateStore {
                 ErrorCode::Conflict,
                 "reconcile-succeeded-create",
                 format!(
-                    "completed create operation {} changed beyond its recovered process identity",
-                    operation.operation_id
+                    "completed create operation {} changed beyond its recovered process identity: durable {:?}, reconstructed {:?}",
+                    operation.operation_id, stored.record, expected_durable
                 ),
             ));
         }
@@ -467,6 +484,7 @@ impl DurableStateStore {
             StoredOperationStatus::Succeeded { response } => return Ok(response.clone()),
             StoredOperationStatus::Failed { error } => return Err(error.clone()),
             StoredOperationStatus::SucceededProcess { .. }
+            | StoredOperationStatus::SucceededFilesystem { .. }
             | StoredOperationStatus::SucceededEmpty => {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -648,7 +666,7 @@ impl DurableStateStore {
         let operation: StoredOperation = read_json(&path).await?;
         if !matches!(
             operation.schema_version.as_str(),
-            OPERATION_SCHEMA_VERSION_V1 | OPERATION_SCHEMA_VERSION
+            OPERATION_SCHEMA_VERSION_V1 | OPERATION_SCHEMA_VERSION_V2 | OPERATION_SCHEMA_VERSION
         ) || operation.operation_id != *operation_id
         {
             return Err(state_error(
@@ -657,6 +675,7 @@ impl DurableStateStore {
                 format!("invalid durable operation record for {operation_id}"),
             ));
         }
+        validate_stored_operation_shape(&operation)?;
         Ok(operation)
     }
 
@@ -830,6 +849,128 @@ impl DurableStateStore {
     ) -> Result<()> {
         filesystem::atomic_move_directory(self.faults.as_ref(), mutation, source, destination).await
     }
+}
+
+fn validate_stored_operation_shape(operation: &StoredOperation) -> Result<()> {
+    let invalid = |message: String| {
+        state_error(
+            ErrorCode::FailedPrecondition,
+            "load-operation",
+            format!(
+                "invalid durable operation record for {}: {message}",
+                operation.operation_id
+            ),
+        )
+    };
+    let request_target_matches = |target: &ContainerTarget| {
+        target.id == operation.container_id
+            && target
+                .generation
+                .is_none_or(|generation| generation == operation.generation)
+    };
+    let response_target_matches = |target: &ContainerTarget| {
+        target.id == operation.container_id && target.generation == Some(operation.generation)
+    };
+
+    match operation.kind {
+        StoredOperationKind::File => {
+            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+                return Err(invalid(
+                    "File mutations require the current request-retaining schema".to_string(),
+                ));
+            }
+            let Some(StoredOperationRequest::File(request)) = operation.request.as_ref() else {
+                return Err(invalid(
+                    "File mutation does not retain its exact request".to_string(),
+                ));
+            };
+            if request.op != FileOp::Upload
+                || !request_target_matches(&request.target)
+                || request
+                    .context
+                    .as_ref()
+                    .is_none_or(|context| context.operation_id != operation.operation_id)
+                || request.validate().is_err()
+            {
+                return Err(invalid(
+                    "File mutation request does not match its durable identity".to_string(),
+                ));
+            }
+            if let StoredOperationStatus::SucceededFilesystem { response } = &operation.outcome {
+                let StoredFilesystemMutationResponse::File(response) = response else {
+                    return Err(invalid(
+                        "File mutation contains a Filesystem response".to_string(),
+                    ));
+                };
+                if !response_target_matches(&response.target) {
+                    return Err(invalid(
+                        "File response targets a different container generation".to_string(),
+                    ));
+                }
+            }
+        }
+        StoredOperationKind::Filesystem => {
+            if operation.schema_version != OPERATION_SCHEMA_VERSION {
+                return Err(invalid(
+                    "Filesystem mutations require the current request-retaining schema".to_string(),
+                ));
+            }
+            let Some(StoredOperationRequest::Filesystem(request)) = operation.request.as_ref()
+            else {
+                return Err(invalid(
+                    "Filesystem mutation does not retain its exact request".to_string(),
+                ));
+            };
+            if !request.op.is_mutating()
+                || !request_target_matches(&request.target)
+                || request
+                    .context
+                    .as_ref()
+                    .is_none_or(|context| context.operation_id != operation.operation_id)
+                || request.validate().is_err()
+            {
+                return Err(invalid(
+                    "Filesystem mutation request does not match its durable identity".to_string(),
+                ));
+            }
+            if let StoredOperationStatus::SucceededFilesystem { response } = &operation.outcome {
+                let StoredFilesystemMutationResponse::Filesystem(response) = response else {
+                    return Err(invalid(
+                        "Filesystem mutation contains a File response".to_string(),
+                    ));
+                };
+                if !response_target_matches(&response.target) {
+                    return Err(invalid(
+                        "Filesystem response targets a different container generation".to_string(),
+                    ));
+                }
+            }
+        }
+        StoredOperationKind::Create
+        | StoredOperationKind::Start
+        | StoredOperationKind::Kill
+        | StoredOperationKind::Delete
+        | StoredOperationKind::Exec
+        | StoredOperationKind::SignalProcess
+        | StoredOperationKind::WriteStdin
+        | StoredOperationKind::CloseStdin
+        | StoredOperationKind::Resize
+        | StoredOperationKind::Pause
+        | StoredOperationKind::Resume
+        | StoredOperationKind::Update => {
+            if operation.request.is_some()
+                || matches!(
+                    operation.outcome,
+                    StoredOperationStatus::SucceededFilesystem { .. }
+                )
+            {
+                return Err(invalid(
+                    "non-filesystem operation contains filesystem mutation data".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn generation_conflict(

@@ -486,35 +486,6 @@ pub(super) async fn run(
         ),
         Ok(()) => append_failure(&mut failure, "reopened Host accepted changed CloseStdin"),
     }
-    match timeout(
-        QUALIFICATION_TIMEOUT,
-        session.client().close_stdin(AgentCloseStdinRequest {
-            context: Some(qualification.close_stdin.context.clone()),
-            process: ProcessTarget {
-                container: exact_process.container.clone(),
-                process_id: qualification.changed_process_id.clone(),
-            },
-        }),
-    )
-    .await
-    {
-        Ok(Err(error)) if error.code == ErrorCode::Conflict => {
-            report.guest_changed_request_rejected = true;
-        }
-        Ok(Err(error)) => append_failure(
-            &mut failure,
-            format!("replacement Guest returned the wrong changed CloseStdin error: {error}"),
-        ),
-        Ok(Ok(())) => append_failure(
-            &mut failure,
-            "replacement Guest accepted changed CloseStdin",
-        ),
-        Err(_) => append_failure(
-            &mut failure,
-            "replacement Guest changed CloseStdin check timed out",
-        ),
-    }
-
     let stale_container = match stale_target(&qualification.start.target) {
         Ok(target) => target,
         Err(reason) => {

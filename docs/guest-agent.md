@@ -166,6 +166,14 @@ executor removes the source directory immediately after the bind-mounted
 targets cross the Create-ready barrier. Strict type, major/minor, ownership,
 mode, allowlist, and cgroup-device checks are unchanged.
 
+Graceful executor shutdown now consumes every live container's device-target
+manifest before clearing its runtime state or removing the Guest runtime root.
+This removes bind-target placeholders such as `rootfs/dev/null` even when the
+VM owner is replaced without an API Delete, so recovery can prepare the same
+bundle in a fresh VM without an `EEXIST` collision. If any manifest cleanup
+fails, the runtime root is retained for diagnosis and shutdown returns the
+first error.
+
 Create snapshots the exact digest-bound configuration, starts an internal
 wrapper, and waits on a randomly named Linux abstract Unix socket. The parent
 accepts only the exact kernel-reported launcher PID. The wrapper revalidates
@@ -422,14 +430,17 @@ fault after a durably journaled host mutation response write commits the Host
 result, then exposes the retryable acknowledgement failure. After reopen, the
 completed Host journal answers the retry without a second driver dispatch and
 the replacement connection acknowledges the exact operation once; completed
-delete also leaves no live record to send through driver recovery. File and
-filesystem mutations are session-scoped and are dispatched again after every
-reopen, including after a fully written response; the guest journals return the
-same response without another mutation effect. Every case uses a newly
-authenticated connection and driver and preserves the same generation;
-mutations produce one effect and reject changed retries. This completes the
-portable in-memory matrix, not the required real utility-VM replacement and
-complete transition matrix.
+delete also leaves no live record to send through driver recovery. File upload
+and Filesystem mkdir/move/remove now have the same durable Host boundary. Their
+v3 Host records retain the exact request and typed response; after a completed
+Guest response, the public call returns the acknowledgement failure, the next
+owner rebuilds any VM-local effect, and Host replay returns without another
+API-driven dispatch. The Host request digest permanently rejects a changed
+reuse after the Guest journal has been acknowledged and reclaimed. Every case
+uses a newly authenticated connection and driver and preserves the same
+generation; mutations produce one effect. This completes the portable
+in-memory matrix, not the required real utility-VM replacement and complete
+transition matrix.
 
 A separate real-HVF diagnostic now crosses all nine Host/Guest `create` stages
 and both explicit Host shutdown stages inside fresh authenticated protocol-v9
@@ -609,6 +620,17 @@ the same operation ID, and the rebuilt Exec must write the exact line to its
 effect marker. Stale generations fail at both boundaries. All nine stages
 passed in 18 fresh VMs on August 11, 2026 under
 `a3s.oci.oci-vm-operation-reopen-replacement.v15`.
+
+CloseStdin and Resize retain the same Host-first commit boundary under schemas
+v16 and v17. File upload and Filesystem MakeDir use v18 and v19 with exact v3
+Host request retention. On `guest-after-response-write`, each operation
+commits its Host outcome, returns retryable `Unavailable` when Guest
+acknowledgement crosses the closed connection, reconstructs any VM-local effect
+under the replacement owner, and then replays without an API-driven dispatch.
+The August 15, 2026 Apple Silicon rerun passed this point for all 14 journaled
+mutations. File and Filesystem also passed every Host/Guest transport stage,
+18/18 paths, with permanent Host changed-request fencing and complete device
+placeholder cleanup between owners.
 
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
