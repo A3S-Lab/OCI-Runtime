@@ -730,6 +730,14 @@ mod tests {
         command.stdout(std::process::Stdio::piped());
         let mut child = command.spawn().expect("spawn delayed stdin reader");
         let mut stdout = child.stdout.take().expect("test stdout pipe");
+        let output_task = tokio::spawn(async move {
+            let mut output = Vec::new();
+            stdout
+                .read_to_end(&mut output)
+                .await
+                .expect("read delayed-reader stdout");
+            output
+        });
         let handle = ProcessIoHandle::attach(setup, &mut child, &io)
             .expect("attach piped process descriptors");
 
@@ -759,11 +767,10 @@ mod tests {
             .expect("close task")
             .expect("close stdin");
 
-        let mut output = Vec::new();
-        timeout(Duration::from_secs(5), stdout.read_to_end(&mut output))
+        let output = timeout(Duration::from_secs(5), output_task)
             .await
             .expect("stdout read timeout")
-            .expect("read stdout");
+            .expect("stdout read task");
         assert_eq!(output.len(), first_length + 4);
         assert!(output[..first_length].iter().all(|byte| *byte == b'a'));
         assert_eq!(&output[first_length..], b"tail");
@@ -787,6 +794,14 @@ mod tests {
         command.stdout(std::process::Stdio::piped());
         let mut child = command.spawn().expect("spawn delayed stdin reader");
         let mut stdout = child.stdout.take().expect("test stdout pipe");
+        let output_task = tokio::spawn(async move {
+            let mut output = Vec::new();
+            stdout
+                .read_to_end(&mut output)
+                .await
+                .expect("read cancelled-caller stdout");
+            output
+        });
         let handle = ProcessIoHandle::attach(setup, &mut child, &io)
             .expect("attach piped process descriptors");
 
@@ -824,11 +839,10 @@ mod tests {
             .expect("close task")
             .expect("close stdin");
 
-        let mut output = Vec::new();
-        timeout(Duration::from_secs(5), stdout.read_to_end(&mut output))
+        let output = timeout(Duration::from_secs(5), output_task)
             .await
             .expect("stdout read timeout")
-            .expect("read stdout");
+            .expect("stdout read task");
         assert_eq!(output.len(), first_length + 4);
         assert!(output[..first_length].iter().all(|byte| *byte == b'a'));
         assert_eq!(&output[first_length..], b"tail");
