@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 
 use crate::support::{qualification_error, QualificationConfig, TestResult};
 
-pub(super) async fn runtime_client(config: &QualificationConfig) -> TestResult<RuntimeClient> {
+pub(crate) async fn runtime_client(config: &QualificationConfig) -> TestResult<RuntimeClient> {
     let endpoint =
         LocalIpcEndpoint::unix_socket(config.runtime_endpoint.clone()).map_err(|error| {
             qualification_error(format!(
@@ -29,7 +29,7 @@ pub(super) fn containerd_operation_id(
     operation_id(namespace, task_id, incarnation, None, action)
 }
 
-pub(super) fn containerd_exec_operation_id(
+pub(crate) fn containerd_exec_operation_id(
     namespace: &str,
     task_id: &str,
     incarnation: &str,
@@ -39,7 +39,7 @@ pub(super) fn containerd_exec_operation_id(
     operation_id(namespace, task_id, incarnation, Some(exec_id), action)
 }
 
-pub(super) fn containerd_process_id(
+pub(crate) fn containerd_process_id(
     namespace: &str,
     task_id: &str,
     exec_id: &str,

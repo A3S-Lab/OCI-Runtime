@@ -19,6 +19,8 @@ mod controls;
 #[path = "faults/shared.rs"]
 mod shared;
 
+pub(crate) use shared::{containerd_exec_operation_id, containerd_process_id, runtime_client};
+
 const CREATE_INTENT_FILE_NAME: &str = "a3s-oci-shim-create-v1.json";
 
 #[derive(Deserialize)]
@@ -26,13 +28,13 @@ struct CreateIntentReference {
     container_id: String,
 }
 
-struct SuspendedProcess {
+pub(crate) struct SuspendedProcess {
     pid: u32,
     resumed: bool,
 }
 
 impl SuspendedProcess {
-    fn stop(pid: u32, target: &str) -> TestResult<Self> {
+    pub(crate) fn stop(pid: u32, target: &str) -> TestResult<Self> {
         send_signal(pid, libc::SIGSTOP, target)?;
         Ok(Self {
             pid,
@@ -40,13 +42,13 @@ impl SuspendedProcess {
         })
     }
 
-    fn resume(&mut self, target: &str) -> TestResult<()> {
+    pub(crate) fn resume(&mut self, target: &str) -> TestResult<()> {
         send_signal(self.pid, libc::SIGCONT, target)?;
         self.resumed = true;
         Ok(())
     }
 
-    fn kill(mut self, target: &str) -> TestResult<()> {
+    pub(crate) fn kill(mut self, target: &str) -> TestResult<()> {
         send_signal(self.pid, libc::SIGKILL, target)?;
         self.resumed = true;
         Ok(())
@@ -481,7 +483,7 @@ async fn wait_for_create_intent(config: &QualificationConfig, id: &str) -> TestR
     }
 }
 
-async fn find_runtime_host_pid(config: &QualificationConfig) -> TestResult<u32> {
+pub(crate) async fn find_runtime_host_pid(config: &QualificationConfig) -> TestResult<u32> {
     let table = tokio::fs::read_to_string("/proc/net/unix")
         .await
         .map_err(|error| qualification_error(format!("read Unix socket table: {error}")))?;

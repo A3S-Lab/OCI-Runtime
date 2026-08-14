@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use a3s_oci_sdk::{
+    ContainerTarget, Generation, OperationContext, ProcessTarget, WriteStdinRequest,
+};
 use prost_types::Any;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
@@ -35,8 +38,15 @@ struct RehydratedTerminalExec {
 struct StdinJournalEvidence {
     schema_version: u64,
     completed_sequence: u64,
-    pending: Option<serde_json::Value>,
+    pending: Option<PendingStdinEvidence>,
     output_cursor: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingStdinEvidence {
+    sequence: u64,
+    data: Vec<u8>,
 }
 
 pub(crate) async fn qualify_manual_shim_rehydration(
@@ -83,20 +93,67 @@ pub(crate) async fn qualify_manual_shim_rehydration(
     let bootstrap = load_bootstrap(&bundle).await?;
     let binary = load_shim_binary(&bundle).await?;
     let old_shim_pid = faults::find_exact_shim_pid(config, &id).await?;
+    let pending_data = b"committed-before-rehydrate\n";
+    let host_pid = faults::find_runtime_host_pid(config).await?;
+    let mut suspended_host = faults::SuspendedProcess::stop(host_pid, "A3S OCI host service")?;
+    terminal_exec
+        .stdin
+        .as_mut()
+        .ok_or_else(|| {
+            qualification_error("terminal stdin disappeared before pending rehydration write")
+        })?
+        .write_all(pending_data)
+        .await
+        .map_err(|error| {
+            qualification_error(format!(
+                "write pending terminal stdin before shim rehydration: {error}"
+            ))
+        })?;
+    terminal_exec
+        .stdin
+        .as_mut()
+        .ok_or_else(|| {
+            qualification_error("terminal stdin disappeared before pending rehydration flush")
+        })?
+        .flush()
+        .await
+        .map_err(|error| {
+            qualification_error(format!(
+                "flush pending terminal stdin before shim rehydration: {error}"
+            ))
+        })?;
+    wait_for_exec_pending_stdin(&bundle, "rehydrated-terminal-exec", 2, 3, pending_data).await?;
+    let suspended_shim =
+        faults::SuspendedProcess::stop(old_shim_pid, "pending-stdin original shim")?;
+    suspended_host.resume("A3S OCI host service")?;
+    commit_runtime_exec_stdin(
+        config,
+        &id,
+        "rehydrated-terminal-exec",
+        &identity,
+        3,
+        pending_data,
+    )
+    .await?;
+
     let containerd_pid = containerd_main_pid(config).await?;
     faults::send_signal(containerd_pid, libc::SIGSTOP, "containerd")?;
 
     let mut replacement = None;
-    let relaunch = relaunch_while_containerd_suspended(
-        config,
-        &id,
-        &bundle,
-        &binary,
-        &bootstrap,
-        old_shim_pid,
-        containerd_pid,
-        &mut replacement,
-    )
+    let relaunch = async {
+        suspended_shim.kill("pending-stdin original shim")?;
+        wait_for_pid_exit(old_shim_pid, "pending-stdin original shim").await?;
+        launch_replacement_while_containerd_suspended(
+            config,
+            &id,
+            &bundle,
+            &binary,
+            &bootstrap,
+            containerd_pid,
+            &mut replacement,
+        )
+        .await
+    }
     .await;
     let _ = faults::send_signal(containerd_pid, libc::SIGCONT, "containerd");
     if let Err(error) = relaunch {
@@ -344,15 +401,21 @@ async fn finish_rehydrated_terminal_exec(
     })?;
     let restored_journal = read_exec_stdin_journal(bundle, exec_id).await?;
     if restored_journal.schema_version != 4
-        || restored_journal.completed_sequence != 2
+        || restored_journal.completed_sequence != 3
         || restored_journal.pending.is_some()
         || restored_journal.output_cursor == 0
     {
         return Err(qualification_error(format!(
-            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 4, completed sequence 2, no pending write, and a nonzero output cursor"
+            "terminal stdin journal after manual shim rehydration was {restored_journal:?}; expected schema 4, completed sequence 3, no pending write, and a nonzero output cursor"
         ))
         .into());
     }
+    terminal::expect_line(
+        &mut exec.output,
+        "stdin:committed-before-rehydrate",
+        "committed terminal stdin replay after manual shim rehydration",
+    )
+    .await?;
     let stdin = exec.stdin.as_mut().ok_or_else(|| {
         qualification_error("terminal stdin writer disappeared during manual shim rehydration")
     })?;
@@ -395,7 +458,7 @@ async fn finish_rehydrated_terminal_exec(
         "terminal output after manual shim rehydration",
     )
     .await?;
-    wait_for_exec_stdin_sequence(bundle, exec_id, 4).await?;
+    wait_for_exec_stdin_sequence(bundle, exec_id, 5).await?;
     TasksClient::new(channel.clone())
         .kill(namespaced(
             KillRequest {
@@ -483,6 +546,35 @@ async fn wait_for_exec_stdin_sequence(
     }
 }
 
+async fn wait_for_exec_pending_stdin(
+    bundle: &Path,
+    exec_id: &str,
+    completed_sequence: u64,
+    pending_sequence: u64,
+    data: &[u8],
+) -> TestResult<()> {
+    let expected = PendingStdinEvidence {
+        sequence: pending_sequence,
+        data: data.to_vec(),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let evidence = read_exec_stdin_journal(bundle, exec_id).await?;
+        if evidence.completed_sequence == completed_sequence
+            && evidence.pending.as_ref() == Some(&expected)
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(qualification_error(format!(
+                "terminal stdin journal did not retain pending sequence {pending_sequence}: {evidence:?}"
+            ))
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn read_exec_stdin_journal(bundle: &Path, exec_id: &str) -> TestResult<StdinJournalEvidence> {
     let path = bundle.join("a3s-oci-shim-v1.json");
     let document: serde_json::Value = serde_json::from_slice(
@@ -504,25 +596,73 @@ async fn read_exec_stdin_journal(bundle: &Path, exec_id: &str) -> TestResult<Std
             .as_u64()
             .ok_or_else(|| qualification_error("shim metadata omitted schema_version"))?,
         completed_sequence: exec["stdin_sequence"].as_u64().unwrap_or(0),
-        pending: exec.get("pending_stdin_write").cloned(),
+        pending: serde_json::from_value(
+            exec.get("pending_stdin_write")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|error| {
+            qualification_error(format!(
+                "decode shim metadata pending stdin for exec {exec_id}: {error}"
+            ))
+        })?,
         output_cursor: exec["output_cursor"].as_u64().unwrap_or(0),
     })
 }
 
+async fn commit_runtime_exec_stdin(
+    config: &QualificationConfig,
+    task_id: &str,
+    exec_id: &str,
+    identity: &RuntimeIdentity,
+    sequence: u64,
+    data: &[u8],
+) -> TestResult<()> {
+    let client = faults::runtime_client(config).await?;
+    let request = WriteStdinRequest {
+        context: OperationContext::new(faults::containerd_exec_operation_id(
+            &config.namespace,
+            task_id,
+            &identity.incarnation,
+            exec_id,
+            &format!("write-stdin-{sequence}"),
+        )?),
+        process: ProcessTarget {
+            container: ContainerTarget::exact(
+                identity.container_id.clone(),
+                Generation(identity.generation),
+            ),
+            process_id: faults::containerd_process_id(&config.namespace, task_id, exec_id)?,
+        },
+        data: data.to_vec(),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match client.write_stdin(request.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(error) if error.retryable && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => {
+                return Err(qualification_error(format!(
+                    "commit exact runtime WriteStdin before shim replacement: {error}"
+                ))
+                .into());
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-async fn relaunch_while_containerd_suspended(
+async fn launch_replacement_while_containerd_suspended(
     config: &QualificationConfig,
     id: &str,
     bundle: &Path,
     binary: &Path,
     bootstrap: &Bootstrap,
-    old_shim_pid: u32,
     containerd_pid: u32,
     replacement: &mut Option<Child>,
 ) -> TestResult<()> {
-    faults::send_signal(old_shim_pid, libc::SIGKILL, "original shim")?;
-    wait_for_pid_exit(old_shim_pid, "original shim").await?;
-
     let containerd_address = config.socket.to_str().ok_or_else(|| {
         qualification_error("containerd gRPC socket path is not valid UTF-8 for shim arguments")
     })?;

@@ -1528,7 +1528,9 @@ Created/Running/Stopped daemon-restart boundaries, terminal exec resize before
 and after daemon restart, schema-v4 durable init/exec stdin sequences, exact
 pending input payloads, output cursors, and per-task control sequencing, live
 terminal-exec input and output continuation without replay after manual shim
-replacement, stale task incarnation and runtime-generation replacement, a
+replacement, including a pending WriteStdin operation committed remotely
+before the replacement can observe its response and replayed with exactly one
+input effect, stale task incarnation and runtime-generation replacement, a
 four-task parallel Create/Start/running-restart/137-cleanup matrix, and exact
 cleanup after shim
 `SIGKILL` with init Created or Running and exec Added or Running. A durable
@@ -1569,7 +1571,7 @@ metadata reopen. Canonical JSON request fingerprints keep unordered resource
 maps stable across shim, host, and guest reconstruction. Runtime operation
 schema v2 records that encoding explicitly while retaining schema-v1 retry
 validation with the legacy serializer. The August 14, 2026
-Ubuntu arm64/containerd 2.2.2 release build passed the complete 40.95-second
+Ubuntu arm64/containerd 2.2.2 release build passed the complete 40.52-second
 matrix with installed shim SHA-256
 `2d03eca60f1cbf098f038811fda61c6c353c7a0f85c6cc64ac422feaf5f0fb18`.
 The qualification recreates the killed task ID with a new

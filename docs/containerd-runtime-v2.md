@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -23,12 +23,13 @@ release-built shim SHA-256
 The host CLI, agent, and qualification executable SHA-256 values were
 `9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
 `0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
-and `9fefd1c6cf73b699eb06135bc753bfc56fa54b17821fee4d5fed5f47d4139316`.
-The 40.95-second matrix passed two distinct resource updates, two complete
+and `cbdbf266c6a889b0bfcec4f9cb04b04f4c4891f4224d94bd623835b784de2ce3`.
+The 40.52-second matrix passed two distinct resource updates, two complete
 pause/resume cycles, durable terminal stdin before and after live shim
-replacement, every retained restart and shim-crash boundary, and its post-run
-audit with no task, container, shim, bundle, active runtime container, workload
-process, or workload cgroup member left behind.
+replacement, replay of a remotely committed write whose exact payload was
+still locally pending, every retained restart and shim-crash boundary, and its
+post-run audit with no task, container, shim, bundle, active runtime container,
+workload process, or workload cgroup member left behind.
 
 ## Runtime type and package layout
 
@@ -158,7 +159,12 @@ then continues at the next sequence. Reusing a sequence with different bytes,
 skipping a sequence, attaching journal state to a process without stdin, or
 loading an oversized pending payload fails closed. The retained arm64 gate
 proves that a live terminal exec receives input before and after manual shim
-replacement without duplicating the first remote effect.
+replacement without duplicating the first remote effect. It also freezes the
+original shim after the next exact payload is durable but before dispatch can
+finish, commits that same operation through the Runtime, and replaces the shim
+while its journal still records the payload as pending. The replacement must
+join the completed operation, emit the input effect exactly once, clear the
+pending entry, and continue from the following sequence.
 
 ## Restart and cleanup contract
 
