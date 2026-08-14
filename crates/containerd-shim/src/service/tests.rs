@@ -6,6 +6,7 @@ use a3s_oci_sdk::{
     ProcessesRequest, StateRequest, WaitProcessRequest, WaitRequest,
 };
 
+mod control;
 mod delete_shim_paused;
 
 #[derive(Clone)]
@@ -268,6 +269,10 @@ fn task_state(bundle: &Path) -> TaskState {
         stderr: "stderr".to_string(),
         terminal: false,
         output_cursor: 0,
+        control_gate: Arc::new(Mutex::new(())),
+        control_sequence: 0,
+        pending_control: None,
+        last_update_digest: None,
         rootfs_mounted: true,
         record: ContainerRecord {
             state,

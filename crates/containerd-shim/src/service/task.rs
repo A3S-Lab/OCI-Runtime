@@ -171,6 +171,10 @@ impl Task for Service {
             stderr: req.stderr().to_string(),
             terminal: req.terminal(),
             output_cursor: 0,
+            control_gate: Arc::new(Mutex::new(())),
+            control_sequence: 0,
+            pending_control: None,
+            last_update_digest: None,
             rootfs_mounted,
             record: record.clone(),
             exit: None,
@@ -543,19 +547,39 @@ impl Task for Service {
     }
 
     async fn pause(&self, _ctx: &TtrpcContext, req: api::PauseRequest) -> TtrpcResult<api::Empty> {
-        let task = self.task_snapshot(req.id()).await?;
-        let adapter = self.adapter().await.map_err(runtime_error)?;
-        let record = adapter
-            .pause(&task.identity, task.record.generation)
+        let control_gate = self.task_snapshot(req.id()).await?.control_gate;
+        let _control_guard = control_gate.lock().await;
+        let Some(prepared) = self
+            .prepare_control(req.id(), &control_gate, ControlOperationKind::Pause, None)
+            .await?
+        else {
+            return Ok(api::Empty::new());
+        };
+        let adapter = match self.adapter().await {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                self.finish_control_error(req.id(), &prepared.operation, &error)
+                    .await?;
+                return Err(runtime_error(error));
+            }
+        };
+        let record = match adapter
+            .pause(
+                &prepared.task.identity,
+                prepared.task.record.generation,
+                prepared.operation.sequence(),
+            )
             .await
-            .map_err(runtime_error)?;
-        self.state
-            .lock()
-            .await
-            .tasks
-            .get_mut(req.id())
-            .ok_or_else(|| ttrpc_error(format!("task {} disappeared", req.id())))?
-            .record = record;
+        {
+            Ok(record) => record,
+            Err(error) => {
+                self.finish_control_error(req.id(), &prepared.operation, &error)
+                    .await?;
+                return Err(runtime_error(error));
+            }
+        };
+        self.complete_control(req.id(), &prepared.operation, record)
+            .await?;
         self.publish_paused(req.id()).await;
         Ok(api::Empty::new())
     }
@@ -565,19 +589,39 @@ impl Task for Service {
         _ctx: &TtrpcContext,
         req: api::ResumeRequest,
     ) -> TtrpcResult<api::Empty> {
-        let task = self.task_snapshot(req.id()).await?;
-        let adapter = self.adapter().await.map_err(runtime_error)?;
-        let record = adapter
-            .resume(&task.identity, task.record.generation)
+        let control_gate = self.task_snapshot(req.id()).await?.control_gate;
+        let _control_guard = control_gate.lock().await;
+        let Some(prepared) = self
+            .prepare_control(req.id(), &control_gate, ControlOperationKind::Resume, None)
+            .await?
+        else {
+            return Ok(api::Empty::new());
+        };
+        let adapter = match self.adapter().await {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                self.finish_control_error(req.id(), &prepared.operation, &error)
+                    .await?;
+                return Err(runtime_error(error));
+            }
+        };
+        let record = match adapter
+            .resume(
+                &prepared.task.identity,
+                prepared.task.record.generation,
+                prepared.operation.sequence(),
+            )
             .await
-            .map_err(runtime_error)?;
-        self.state
-            .lock()
-            .await
-            .tasks
-            .get_mut(req.id())
-            .ok_or_else(|| ttrpc_error(format!("task {} disappeared", req.id())))?
-            .record = record;
+        {
+            Ok(record) => record,
+            Err(error) => {
+                self.finish_control_error(req.id(), &prepared.operation, &error)
+                    .await?;
+                return Err(runtime_error(error));
+            }
+        };
+        self.complete_control(req.id(), &prepared.operation, record)
+            .await?;
         self.publish_resumed(req.id()).await;
         Ok(api::Empty::new())
     }
@@ -606,7 +650,6 @@ impl Task for Service {
                     .to_string(),
             ));
         }
-        let task = self.task_snapshot(req.id()).await?;
         let resources_any = req.resources.as_ref().ok_or_else(|| {
             ttrpc_invalid_argument("containerd update omitted LinuxResources".to_string())
         })?;
@@ -620,18 +663,46 @@ impl Task for Service {
             serde_json::from_slice(&resources_any.value).map_err(|error| {
                 ttrpc_invalid_argument(format!("invalid OCI LinuxResources JSON: {error}"))
             })?;
-        let adapter = self.adapter().await.map_err(runtime_error)?;
-        let record = adapter
-            .update(&task.identity, task.record.generation, resources)
+        let digest = control::update_request_digest(&resources).map_err(runtime_error)?;
+        let control_gate = self.task_snapshot(req.id()).await?.control_gate;
+        let _control_guard = control_gate.lock().await;
+        let Some(prepared) = self
+            .prepare_control(
+                req.id(),
+                &control_gate,
+                ControlOperationKind::Update,
+                Some(digest),
+            )
+            .await?
+        else {
+            return Ok(api::Empty::new());
+        };
+        let adapter = match self.adapter().await {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                self.finish_control_error(req.id(), &prepared.operation, &error)
+                    .await?;
+                return Err(runtime_error(error));
+            }
+        };
+        let record = match adapter
+            .update(
+                &prepared.task.identity,
+                prepared.task.record.generation,
+                prepared.operation.sequence(),
+                resources,
+            )
             .await
-            .map_err(runtime_error)?;
-        self.state
-            .lock()
-            .await
-            .tasks
-            .get_mut(req.id())
-            .ok_or_else(|| ttrpc_error(format!("task {} disappeared", req.id())))?
-            .record = record;
+        {
+            Ok(record) => record,
+            Err(error) => {
+                self.finish_control_error(req.id(), &prepared.operation, &error)
+                    .await?;
+                return Err(runtime_error(error));
+            }
+        };
+        self.complete_control(req.id(), &prepared.operation, record)
+            .await?;
         Ok(api::Empty::new())
     }
 

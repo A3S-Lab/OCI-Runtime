@@ -117,6 +117,13 @@ complete OCI `LinuxResources` patch and returns the exact observed container
 record on replay. Delete atomically moves the owned container directory into
 quarantine rather than recursively deleting an unresolved path.
 
+New journals use `a3s.oci.operation.v2` and SHA-256 over canonical JSON with
+every object key sorted, so unordered OCI resource maps retain the same
+identity after process reconstruction. Existing `a3s.oci.operation.v1`
+journals remain loadable and validate retries with their original JSON
+encoding; the schema version therefore selects the fingerprint algorithm
+instead of silently changing the meaning of a persisted digest.
+
 Drivers must be idempotent by `OperationId`. A retryable driver error leaves
 the intent active for an exact retry. A terminal error is stored and replayed
 exactly; it releases a start, kill, pause, resume, update, delete, exec, or

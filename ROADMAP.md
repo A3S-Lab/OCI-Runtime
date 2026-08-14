@@ -1525,7 +1525,8 @@ Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
 separate stdout/stderr plus stdin from empty input through 4 MiB,
 Created/Running/Stopped daemon-restart boundaries, terminal exec resize before
-and after daemon restart, schema-v2 durable init/exec output cursors, live
+and after daemon restart, schema-v3 durable init/exec output cursors and
+per-task control sequencing, live
 terminal-exec continuation without replay after manual shim replacement, stale
 task incarnation and runtime-generation replacement, a four-task parallel
 Create/Start/running-restart/137-cleanup matrix, and exact cleanup after shim
@@ -1550,8 +1551,19 @@ verify the real paused state or applied `pids.max`, then kill the shim and prove
 the same bounded cleanup converges without leaked cgroups or processes. Paused
 cleanup uses the exact force Delete operation so the runtime thaws and stops
 the generation as one cleanup operation instead of waiting on a frozen
-terminal signal. The
-qualification recreates the killed task ID with a new
+terminal signal. Repeated controls now use a monotonically increasing durable
+sequence instead of one fixed operation identity: two different Updates and
+two complete Pause/Resume cycles dispatch distinct mutations, identical
+completed retries do not dispatch twice, concurrent same-task controls are
+serialized, and an in-flight retry retains the same sequence across shim
+metadata reopen. Canonical JSON request fingerprints keep unordered resource
+maps stable across shim, host, and guest reconstruction. Runtime operation
+schema v2 records that encoding explicitly while retaining schema-v1 retry
+validation with the legacy serializer. The August 14, 2026
+Ubuntu arm64/containerd 2.2.2 release build passed the complete 43.12-second
+matrix with installed shim SHA-256
+`3358a0f693bbab7551496125cd5092e66bbea0dc35a1f7deeea55e2807ccb4f1`.
+The qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
 workload process, or bundle. The R7 items remain open until the version and
 package contract, remaining failure boundaries, every advertised driver

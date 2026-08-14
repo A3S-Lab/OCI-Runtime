@@ -256,7 +256,7 @@ pub(in crate::oci_smoke::utility_vm::reopen_replacement) async fn exec_journal_s
     let identity_matches = value
         .get("schemaVersion")
         .and_then(serde_json::Value::as_str)
-        == Some("a3s.oci.operation.v1")
+        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
         && value.get("operationId").and_then(serde_json::Value::as_str)
             == Some(operation_id.as_str())
         && value.get("kind").and_then(serde_json::Value::as_str) == Some("exec")

@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Start/Kill/Delete/Pause/Resume/Update, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact output continuation, in-flight Create, committed Start/Kill/Delete/Pause/Resume/Update, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -16,6 +16,18 @@ The implementation may interoperate with an unlisted release because the
 runtime-v2 contract is stable. That is not a support claim. Add a release to
 the table only after the same ignored real-host qualification passes against
 the packaged shim, SDK, host service, agent, and selected driver.
+
+The August 14, 2026 arm64 requalification used containerd 2.2.2 and the
+release-built shim SHA-256
+`3358a0f693bbab7551496125cd5092e66bbea0dc35a1f7deeea55e2807ccb4f1`.
+The host CLI, agent, and qualification executable SHA-256 values were
+`9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
+`0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
+and `e3e0927d410c1b9bf5e5b8fd88d82d3566d0ebe12e28b1f7c3418ea9c27ed0c5`.
+The 43.12-second matrix passed two distinct resource updates, two complete
+pause/resume cycles, every retained restart and shim-crash boundary, and its
+post-run audit with no task, container, shim, bundle, active runtime container,
+workload process, or workload cgroup member left behind.
 
 ## Runtime type and package layout
 
@@ -75,10 +87,13 @@ mutation. Every live request carries the exact runtime generation.
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v2 also records the last init and exec output cursor
-only after the corresponding FIFO write succeeds. A schema-v1 record remains
-readable, defaults both cursor classes to zero, and is rewritten as schema v2
-on the next metadata commit.
+any drift. Metadata schema v3 records the last init and exec output cursor only
+after the corresponding FIFO write succeeds. It also records the last
+completed per-task control sequence, an optional in-flight Pause, Resume, or
+Update, and the last completed Update request digest. Schema-v1 records remain
+readable with zero output cursors and empty control state. Schema-v2 records
+preserve their output cursors and default only the new control state. Either
+legacy schema is rewritten as schema v3 on the next metadata commit.
 
 Before dispatching Create, the shim separately commits a schema-v1 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
@@ -117,6 +132,20 @@ Create without A3S options selects `shared-host-kernel`. The versioned
 `shared-host-kernel` or `dedicated-vm`. `shared-guest-kernel`, unknown fields,
 unknown versions, and foreign option types fail closed. The dedicated-VM route
 is not containerd-qualified yet.
+
+Pause, Resume, and Update share one monotonically increasing per-task control
+sequence. Their SDK operation identities include that sequence, so a later
+pause cycle or resource update cannot replay an earlier result. A task-scoped
+async gate serializes concurrent control requests without blocking controls
+for another task. Before dispatch, the shim durably records the sequence and
+operation kind; Update also records a canonical JSON SHA-256 fingerprint whose
+object ordering is stable after a shim or host-process restart. Retryable
+errors retain that pending identity, terminal errors close it, and a completed
+request commits the returned runtime record and sequence atomically. An
+identical completed retry is answered without a second SDK dispatch.
+The host Runtime writes canonical fingerprints as durable operation schema v2
+while continuing to load and validate schema-v1 journals with their original
+encoding.
 
 ## Restart and cleanup contract
 

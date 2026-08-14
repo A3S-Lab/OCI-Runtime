@@ -3,7 +3,7 @@ use a3s_oci_sdk::{ContainerId, CreateAttachments, CreateRequest, OciBundle, Resu
 use serde::Serialize;
 
 use super::model::{StoredOperation, StoredOperationKind};
-use super::operation::{request_digest, validate_retry};
+use super::operation::{request_digest, validate_retry, RequestDigests};
 
 #[derive(Serialize)]
 struct CreateRequestFingerprint<'a> {
@@ -18,7 +18,7 @@ struct CreateRequestFingerprint<'a> {
 pub(super) fn create_request_digest(
     request: &CreateRequest,
     inherited_descriptors: Option<&AgentInheritedDescriptorSchema>,
-) -> Result<String> {
+) -> Result<RequestDigests> {
     request_digest(
         &CreateRequestFingerprint {
             id: &request.id,
@@ -34,7 +34,7 @@ pub(super) fn create_request_digest(
 pub(super) fn validate_create_retry(
     operation: &StoredOperation,
     request: &CreateRequest,
-    request_digest: &str,
+    request_digest: &RequestDigests,
 ) -> Result<()> {
     validate_retry(
         operation,

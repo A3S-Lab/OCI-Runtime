@@ -209,7 +209,7 @@ async fn pause_runtime_generation(
             &config.namespace,
             &task.id,
             &task.identity.incarnation,
-            "pause",
+            "pause-1",
         )?),
         target: ContainerTarget::exact(
             task.identity.container_id.clone(),
@@ -243,7 +243,7 @@ async fn resume_runtime_generation(
             &config.namespace,
             &task.id,
             &task.identity.incarnation,
-            "resume",
+            "resume-2",
         )?),
         target: ContainerTarget::exact(
             task.identity.container_id.clone(),
@@ -278,7 +278,7 @@ async fn update_runtime_generation(
             &config.namespace,
             &task.id,
             &task.identity.incarnation,
-            "update",
+            "update-1",
         )?),
         target: ContainerTarget::exact(
             task.identity.container_id.clone(),

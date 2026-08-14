@@ -18,7 +18,7 @@ pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 2;
+const METADATA_SCHEMA_VERSION: u32 = 3;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_INCARNATION_BYTES: u64 = 64;
@@ -42,6 +42,12 @@ pub(crate) struct ShimMetadata {
     terminal: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     output_cursor: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    control_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_control: Option<PendingControlOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_update_digest: Option<String>,
     rootfs_mounted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     exit: Option<ExitStatus>,
@@ -77,6 +83,75 @@ pub(crate) enum ExecStage {
     Starting,
     Started,
     Exited,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ControlOperationKind {
+    Pause,
+    Resume,
+    Update,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingControlOperation {
+    sequence: u64,
+    kind: ControlOperationKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_digest: Option<String>,
+}
+
+impl PendingControlOperation {
+    pub(crate) fn new(
+        sequence: u64,
+        kind: ControlOperationKind,
+        request_digest: Option<String>,
+    ) -> Result<Self> {
+        let operation = Self {
+            sequence,
+            kind,
+            request_digest,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub(crate) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub(crate) fn kind(&self) -> ControlOperationKind {
+        self.kind
+    }
+
+    pub(crate) fn request_digest(&self) -> Option<&str> {
+        self.request_digest.as_deref()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.sequence == 0 {
+            return Err(metadata_error(
+                "pending containerd control operation records sequence zero",
+            ));
+        }
+        match self.kind {
+            ControlOperationKind::Pause | ControlOperationKind::Resume
+                if self.request_digest.is_some() =>
+            {
+                Err(metadata_error(
+                    "Pause and Resume control operations must not record a request digest",
+                ))
+            }
+            ControlOperationKind::Update => validate_sha256_digest(
+                self.request_digest.as_deref().ok_or_else(|| {
+                    metadata_error("pending Update control operation omitted its request digest")
+                })?,
+                "pending Update request",
+            ),
+            ControlOperationKind::Pause | ControlOperationKind::Resume => Ok(()),
+        }
+    }
 }
 
 impl ExecMetadata {
@@ -141,6 +216,9 @@ impl ShimMetadata {
             stderr: value.stderr,
             terminal: value.terminal,
             output_cursor: value.output_cursor,
+            control_sequence: 0,
+            pending_control: None,
+            last_update_digest: None,
             rootfs_mounted: value.rootfs_mounted,
             exit: None,
             exited_at_unix_nanos: None,
@@ -329,6 +407,18 @@ impl ShimMetadata {
         self.output_cursor
     }
 
+    pub(crate) fn control_sequence(&self) -> u64 {
+        self.control_sequence
+    }
+
+    pub(crate) fn pending_control(&self) -> Option<&PendingControlOperation> {
+        self.pending_control.as_ref()
+    }
+
+    pub(crate) fn last_update_digest(&self) -> Option<&str> {
+        self.last_update_digest.as_deref()
+    }
+
     pub(crate) fn rootfs_mounted(&self) -> bool {
         self.rootfs_mounted
     }
@@ -354,6 +444,17 @@ impl ShimMetadata {
         self.execs = execs;
     }
 
+    pub(crate) fn set_control_state(
+        &mut self,
+        sequence: u64,
+        pending: Option<PendingControlOperation>,
+        last_update_digest: Option<String>,
+    ) {
+        self.control_sequence = sequence;
+        self.pending_control = pending;
+        self.last_update_digest = last_update_digest;
+    }
+
     fn validate(&self, path: &Path) -> Result<()> {
         if !(MIN_METADATA_SCHEMA_VERSION..=METADATA_SCHEMA_VERSION).contains(&self.schema_version) {
             return Err(metadata_error(format!(
@@ -367,6 +468,33 @@ impl ShimMetadata {
                 "shim metadata {} records generation zero",
                 path.display()
             )));
+        }
+        if self.schema_version < 3
+            && (self.control_sequence != 0
+                || self.pending_control.is_some()
+                || self.last_update_digest.is_some())
+        {
+            return Err(metadata_error(format!(
+                "shim metadata schema {} cannot contain schema-v3 control state",
+                self.schema_version
+            )));
+        }
+        if let Some(pending) = &self.pending_control {
+            pending.validate()?;
+            if self.control_sequence.checked_add(1) != Some(pending.sequence) {
+                return Err(metadata_error(format!(
+                    "pending containerd control sequence {} does not follow completed sequence {}",
+                    pending.sequence, self.control_sequence
+                )));
+            }
+        }
+        if let Some(digest) = &self.last_update_digest {
+            if self.control_sequence == 0 {
+                return Err(metadata_error(
+                    "last completed Update request requires a nonzero control sequence",
+                ));
+            }
+            validate_sha256_digest(digest, "last completed Update request")?;
         }
         if !self.bundle.is_absolute() {
             return Err(metadata_error(format!(
@@ -404,6 +532,24 @@ impl ShimMetadata {
 
 const fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+fn validate_sha256_digest(digest: &str, context: &str) -> Result<()> {
+    let Some(hex) = digest.strip_prefix("sha256:") else {
+        return Err(metadata_error(format!(
+            "{context} digest must use the sha256 prefix"
+        )));
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(metadata_error(format!(
+            "{context} digest must contain 64 lowercase hexadecimal digits"
+        )));
+    }
+    Ok(())
 }
 
 fn read_incarnation(mut file: File, path: &Path) -> Result<IncarnationId> {
@@ -621,7 +767,7 @@ mod tests {
             String::new(),
             true,
         )]);
-        expected.store().expect("store schema-v2 metadata");
+        expected.store().expect("store current metadata");
 
         let path = ShimMetadata::path(directory.path());
         let mut document: serde_json::Value =
@@ -632,6 +778,12 @@ mod tests {
             .as_object_mut()
             .expect("metadata object")
             .remove("output_cursor");
+        for field in ["control_sequence", "pending_control", "last_update_digest"] {
+            document
+                .as_object_mut()
+                .expect("metadata object")
+                .remove(field);
+        }
         document["execs"][0]
             .as_object_mut()
             .expect("exec metadata object")
@@ -648,6 +800,9 @@ mod tests {
         assert_eq!(loaded.schema_version, 1);
         assert_eq!(loaded.output_cursor(), 0);
         assert_eq!(loaded.execs()[0].output_cursor, 0);
+        assert_eq!(loaded.control_sequence(), 0);
+        assert_eq!(loaded.pending_control(), None);
+        assert_eq!(loaded.last_update_digest(), None);
     }
 
     #[test]
@@ -673,14 +828,117 @@ mod tests {
         exec.output_cursor = 73;
         expected.set_execs(vec![exec]);
 
-        expected.store().expect("store schema-v2 metadata");
-        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+        expected.store().expect("store current metadata");
+        let path = ShimMetadata::path(directory.path());
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read metadata"))
+                .expect("decode metadata document");
+        document["schema_version"] = serde_json::json!(2);
+        for field in ["control_sequence", "pending_control", "last_update_digest"] {
+            document
+                .as_object_mut()
+                .expect("metadata object")
+                .remove(field);
+        }
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&document).expect("encode schema-v2 metadata"),
+        )
+        .expect("replace metadata with schema-v2 document");
+
+        let loaded = ShimMetadata::load(&path)
             .expect("load schema-v2 metadata")
             .expect("metadata exists");
 
-        assert_eq!(loaded.schema_version, METADATA_SCHEMA_VERSION);
+        assert_eq!(loaded.schema_version, 2);
         assert_eq!(loaded.output_cursor(), 41);
         assert_eq!(loaded.execs()[0].output_cursor, 73);
+        assert_eq!(loaded.control_sequence(), 0);
+        assert_eq!(loaded.pending_control(), None);
+        assert_eq!(loaded.last_update_digest(), None);
+    }
+
+    #[test]
+    fn schema_v3_metadata_round_trip_preserves_pending_control_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        let last_update = format!("sha256:{}", "1".repeat(64));
+        let pending_update = format!("sha256:{}", "2".repeat(64));
+        expected.set_control_state(
+            4,
+            Some(
+                PendingControlOperation::new(
+                    5,
+                    ControlOperationKind::Update,
+                    Some(pending_update.clone()),
+                )
+                .expect("pending Update"),
+            ),
+            Some(last_update.clone()),
+        );
+
+        expected.store().expect("store schema-v3 metadata");
+        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load schema-v3 metadata")
+            .expect("metadata exists");
+
+        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.control_sequence(), 4);
+        assert_eq!(loaded.pending_control(), expected.pending_control());
+        assert_eq!(
+            loaded
+                .pending_control()
+                .and_then(PendingControlOperation::request_digest),
+            Some(pending_update.as_str())
+        );
+        assert_eq!(loaded.last_update_digest(), Some(last_update.as_str()));
+    }
+
+    #[test]
+    fn schema_v3_metadata_rejects_invalid_control_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+
+        let mut wrong_sequence = metadata(directory.path());
+        wrong_sequence.set_control_state(
+            4,
+            Some(
+                PendingControlOperation::new(6, ControlOperationKind::Pause, None)
+                    .expect("pending Pause"),
+            ),
+            None,
+        );
+        assert_eq!(
+            wrong_sequence
+                .store()
+                .expect_err("nonconsecutive pending sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut digest_without_sequence = metadata(directory.path());
+        digest_without_sequence.set_control_state(
+            0,
+            None,
+            Some(format!("sha256:{}", "3".repeat(64))),
+        );
+        assert_eq!(
+            digest_without_sequence
+                .store()
+                .expect_err("completed Update digest without sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut legacy_with_control = metadata(directory.path());
+        legacy_with_control.schema_version = 2;
+        legacy_with_control.set_control_state(1, None, None);
+        assert_eq!(
+            legacy_with_control
+                .store()
+                .expect_err("schema-v2 control state must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
     }
 
     #[test]

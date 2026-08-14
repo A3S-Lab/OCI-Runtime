@@ -86,6 +86,50 @@ async fn create_container(store: &DurableStateStore, request: &CreateRequest) {
 }
 
 #[tokio::test]
+async fn replays_legacy_v1_operation_journal_with_its_original_fingerprint() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let root = state_root(&temporary);
+    let request = create_request(
+        &bundle_directory,
+        "legacy-operation-container",
+        "legacy-operation-create",
+    );
+    let store = DurableStateStore::open(&root)
+        .await
+        .expect("initialize state root");
+
+    store
+        .prepare_create(&request, DriverKind::LibkrunWhpx)
+        .await
+        .expect("prepare current operation journal");
+    let mut operation = store
+        .load_operation(&request.context.operation_id)
+        .await
+        .expect("load current operation journal");
+    operation.schema_version = super::model::OPERATION_SCHEMA_VERSION_V1.to_string();
+    operation.request_digest = super::create::create_request_digest(&request, None)
+        .expect("legacy request fingerprints")
+        .legacy()
+        .to_string();
+    tokio::fs::write(
+        store.operation_path(&request.context.operation_id),
+        serde_json::to_vec_pretty(&operation).expect("encode legacy operation journal"),
+    )
+    .await
+    .expect("write legacy operation journal");
+
+    assert!(matches!(
+        store
+            .prepare_create(&request, DriverKind::LibkrunWhpx)
+            .await
+            .expect("resume legacy operation journal"),
+        RecordOperationPreparation::Resume(_)
+    ));
+}
+
+#[tokio::test]
 async fn initializes_and_exclusively_locks_an_absolute_root() {
     let relative_error = DurableStateStore::open(Path::new("relative-state"))
         .await

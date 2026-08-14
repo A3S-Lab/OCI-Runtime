@@ -6,8 +6,8 @@ use a3s_oci_agent_protocol::{
 };
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources};
 use a3s_oci_sdk::{
-    ContainerStats, ErrorCode, ExitStatus, FileResponse, FilesystemResponse, OperationId,
-    ProcessId, ProcessRecord, ProcessTarget, Result,
+    canonical_json_bytes, ContainerStats, ErrorCode, ExitStatus, FileResponse, FilesystemResponse,
+    OperationId, ProcessId, ProcessRecord, ProcessTarget, Result,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -404,7 +404,7 @@ pub(super) struct RecordedRequest {
 
 impl RecordedRequest {
     pub(super) fn new(kind: MutationKind, request: &impl Serialize) -> Result<Self> {
-        let encoded = serde_json::to_vec(request).map_err(|error| {
+        let encoded = canonical_json_bytes(request).map_err(|error| {
             executor_error(
                 ErrorCode::Internal,
                 format!("failed to fingerprint guest operation request: {error}"),
@@ -528,6 +528,7 @@ fn process_record(
 #[cfg(test)]
 mod tests {
     use a3s_oci_agent_protocol::AgentInheritedDescriptorSchema;
+    use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
     use a3s_oci_sdk::{ErrorCode, OperationId};
     use serde_json::json;
 
@@ -579,6 +580,22 @@ mod tests {
             .expect("operation exists")
             .expect_err("cross-kind reuse must fail");
         assert_eq!(error.code, ErrorCode::Conflict);
+    }
+
+    #[test]
+    fn guest_operation_fingerprint_is_stable_across_resource_map_reconstruction() {
+        let first: LinuxResources =
+            serde_json::from_str(r#"{"unified":{"memory.low":"0","memory.high":"1"}}"#)
+                .expect("first Linux resources");
+        let reopened: LinuxResources =
+            serde_json::from_str(r#"{"unified":{"memory.high":"1","memory.low":"0"}}"#)
+                .expect("reopened Linux resources");
+
+        assert_eq!(
+            RecordedRequest::new(MutationKind::Update, &first).expect("first Update fingerprint"),
+            RecordedRequest::new(MutationKind::Update, &reopened)
+                .expect("reopened Update fingerprint")
+        );
     }
 
     #[tokio::test]

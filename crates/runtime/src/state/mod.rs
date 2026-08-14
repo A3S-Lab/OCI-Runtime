@@ -41,12 +41,15 @@ use filesystem::{
 use model::{
     StoredContainer, StoredGeneration, StoredOperation, StoredOperationKind, StoredOperationStatus,
     CONTAINER_SCHEMA_VERSION, GENERATION_SCHEMA_VERSION, OPERATION_SCHEMA_VERSION,
+    OPERATION_SCHEMA_VERSION_V1,
 };
 use oci_state::{build_state, container_state, is_paused, rebuild_state};
 use operation::validate_deadline;
 
 const CONTAINER_RECORD_FILE: &str = "record.json";
 const CONFIG_SNAPSHOT_FILE: &str = "config.json";
+#[cfg(target_os = "macos")]
+pub(crate) const DURABLE_OPERATION_SCHEMA_VERSION: &str = OPERATION_SCHEMA_VERSION;
 
 /// Result of preparing an idempotent operation that returns container state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,7 +238,7 @@ impl DurableStateStore {
             container_id: request.id.clone(),
             generation,
             process_id: None,
-            request_digest,
+            request_digest: request_digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
         self.write_json(
@@ -643,8 +646,10 @@ impl DurableStateStore {
             ));
         }
         let operation: StoredOperation = read_json(&path).await?;
-        if operation.schema_version != OPERATION_SCHEMA_VERSION
-            || operation.operation_id != *operation_id
+        if !matches!(
+            operation.schema_version.as_str(),
+            OPERATION_SCHEMA_VERSION_V1 | OPERATION_SCHEMA_VERSION
+        ) || operation.operation_id != *operation_id
         {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,

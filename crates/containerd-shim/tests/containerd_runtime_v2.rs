@@ -355,6 +355,52 @@ async fn qualify_controls(
         "resumed init",
     )?;
 
+    TasksClient::new(channel.clone())
+        .update(namespaced(
+            UpdateTaskRequest {
+                container_id: id.to_string(),
+                resources: Some(Any {
+                    type_url: LINUX_RESOURCES_TYPE.to_string(),
+                    value: br#"{"pids":{"limit":63}}"#.to_vec(),
+                }),
+                ..Default::default()
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("update task resources a second time", error))?;
+
+    TasksClient::new(channel.clone())
+        .pause(namespaced(
+            PauseTaskRequest {
+                container_id: id.to_string(),
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("pause task a second time", error))?;
+    expect_process(
+        &task_process(config, channel, id, "").await?,
+        STATUS_PAUSED,
+        None,
+        "paused init a second time",
+    )?;
+    TasksClient::new(channel.clone())
+        .resume(namespaced(
+            ResumeTaskRequest {
+                container_id: id.to_string(),
+            },
+            &config.namespace,
+        )?)
+        .await
+        .map_err(|error| rpc_error("resume task a second time", error))?;
+    expect_process(
+        &task_process(config, channel, id, "").await?,
+        STATUS_RUNNING,
+        None,
+        "resumed init a second time",
+    )?;
+
     let pids = TasksClient::new(channel.clone())
         .list_pids(namespaced(
             ListPidsRequest {

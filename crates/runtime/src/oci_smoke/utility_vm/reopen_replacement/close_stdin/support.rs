@@ -143,7 +143,7 @@ pub(super) async fn close_stdin_journal_status(
     let identity_matches = value
         .get("schemaVersion")
         .and_then(serde_json::Value::as_str)
-        == Some("a3s.oci.operation.v1")
+        == Some(crate::state::DURABLE_OPERATION_SCHEMA_VERSION)
         && value.get("operationId").and_then(serde_json::Value::as_str)
             == Some(operation_id.as_str())
         && value.get("kind").and_then(serde_json::Value::as_str) == Some("close-stdin")

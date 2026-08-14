@@ -8,6 +8,7 @@ mod bundle;
 mod client;
 mod conformance;
 mod error;
+mod fingerprint;
 mod handoff;
 mod id;
 mod model;
@@ -38,6 +39,7 @@ pub use conformance::{
     OciNormativeInventory, OciNormativeKeyword, OciNormativeRequirement, OciSpecificationScope,
 };
 pub use error::{Error, ErrorCode, Result};
+pub use fingerprint::canonical_json_bytes;
 pub use handoff::{
     runtime_bundle_handoff_directory, runtime_bundle_handoff_root,
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_ROOT_DIRECTORY,

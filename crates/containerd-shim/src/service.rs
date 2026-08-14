@@ -18,9 +18,11 @@ use tokio::sync::{Mutex, Notify};
 use crate::adapter::{self, RuntimeAdapter, TaskIdentity};
 use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
 use crate::metadata::{
-    ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata, ShimCreateIntent, ShimMetadata,
+    ControlOperationKind, ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata,
+    PendingControlOperation, ShimCreateIntent, ShimMetadata,
 };
 
+mod control;
 mod task;
 
 #[cfg(test)]
@@ -41,6 +43,10 @@ struct TaskState {
     stderr: String,
     terminal: bool,
     output_cursor: u64,
+    control_gate: Arc<Mutex<()>>,
+    control_sequence: u64,
+    pending_control: Option<PendingControlOperation>,
+    last_update_digest: Option<String>,
     rootfs_mounted: bool,
     record: ContainerRecord,
     exit: Option<ExitStatus>,
@@ -292,6 +298,10 @@ impl Service {
             stderr: metadata.stderr().to_string(),
             terminal: metadata.terminal(),
             output_cursor: metadata.output_cursor(),
+            control_gate: Arc::new(Mutex::new(())),
+            control_sequence: metadata.control_sequence(),
+            pending_control: metadata.pending_control().cloned(),
+            last_update_digest: metadata.last_update_digest().map(str::to_string),
             rootfs_mounted: metadata.rootfs_mounted(),
             record,
             exit: metadata.exit().cloned(),
@@ -1275,6 +1285,11 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
         output_cursor: task.output_cursor,
         rootfs_mounted: task.rootfs_mounted,
     });
+    metadata.set_control_state(
+        task.control_sequence,
+        task.pending_control.clone(),
+        task.last_update_digest.clone(),
+    );
     metadata.set_exit(
         task.exit.clone(),
         task.exited_at.and_then(system_time_to_unix_nanos),

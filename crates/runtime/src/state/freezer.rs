@@ -245,7 +245,7 @@ impl DurableStateStore {
             container_id: request.target.id.clone(),
             generation: stored.record.generation,
             process_id: None,
-            request_digest: digest,
+            request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
         self.write_json(

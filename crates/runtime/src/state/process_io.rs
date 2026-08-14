@@ -11,7 +11,7 @@ use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
-use super::operation::{request_digest, validate_deadline};
+use super::operation::{request_digest, validate_deadline, RequestDigests};
 use super::process::{
     exact_process_target, required_operation_process_id, validate_process_retry,
     validate_requested_generation,
@@ -139,7 +139,7 @@ impl DurableStateStore {
         &self,
         context: &OperationContext,
         requested: &ProcessTarget,
-        digest: String,
+        digest: RequestDigests,
         profile: ProcessIoOperation,
     ) -> Result<ProcessIoPreparation> {
         let operation_name = profile.name;
@@ -197,7 +197,7 @@ impl DurableStateStore {
             container_id: container.id.clone(),
             generation: container.record.generation,
             process_id: Some(target.process_id.clone()),
-            request_digest: digest,
+            request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
         self.write_json(

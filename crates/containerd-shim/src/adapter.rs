@@ -356,10 +356,11 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
+        sequence: u64,
     ) -> Result<ContainerRecord> {
         self.client
             .pause(ContainerOperationRequest {
-                context: task.operation(None, "pause")?,
+                context: task.operation(None, &format!("pause-{sequence}"))?,
                 target: ContainerTarget::exact(task.container_id.clone(), generation),
             })
             .await
@@ -369,10 +370,11 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
+        sequence: u64,
     ) -> Result<ContainerRecord> {
         self.client
             .resume(ContainerOperationRequest {
-                context: task.operation(None, "resume")?,
+                context: task.operation(None, &format!("resume-{sequence}"))?,
                 target: ContainerTarget::exact(task.container_id.clone(), generation),
             })
             .await
@@ -382,11 +384,12 @@ impl RuntimeAdapter {
         &self,
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
+        sequence: u64,
         resources: LinuxResources,
     ) -> Result<ContainerRecord> {
         self.client
             .update(UpdateRequest {
-                context: task.operation(None, "update")?,
+                context: task.operation(None, &format!("update-{sequence}"))?,
                 target: ContainerTarget::exact(task.container_id.clone(), generation),
                 resources,
             })
@@ -726,14 +729,28 @@ mod tests {
             .await
             .expect("replayed start");
         assert_eq!(first, replay);
-        adapter.pause(&task, generation).await.expect("pause");
-        adapter.resume(&task, generation).await.expect("resume");
+        adapter
+            .pause(&task, generation, 1)
+            .await
+            .expect("first pause");
+        adapter
+            .pause(&task, generation, 1)
+            .await
+            .expect("replayed first pause");
+        adapter.resume(&task, generation, 2).await.expect("resume");
+        adapter
+            .pause(&task, generation, 3)
+            .await
+            .expect("second pause");
 
         let calls = calls.lock().expect("recorded calls");
-        assert_eq!(calls.len(), 4);
+        assert_eq!(calls.len(), 6);
         assert_eq!(calls[0].1.operation_id, calls[1].1.operation_id);
         assert_ne!(calls[0].1.operation_id, calls[2].1.operation_id);
-        assert_ne!(calls[2].1.operation_id, calls[3].1.operation_id);
+        assert_eq!(calls[2].1.operation_id, calls[3].1.operation_id);
+        assert_ne!(calls[2].1.operation_id, calls[4].1.operation_id);
+        assert_ne!(calls[2].1.operation_id, calls[5].1.operation_id);
+        assert_ne!(calls[4].1.operation_id, calls[5].1.operation_id);
         assert!(calls
             .iter()
             .all(|(_, _, target)| target.generation == Some(generation)));

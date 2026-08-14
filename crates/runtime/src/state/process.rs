@@ -18,7 +18,7 @@ use super::model::{
     OPERATION_SCHEMA_VERSION, PROCESS_SCHEMA_VERSION,
 };
 use super::oci_state::rebuild_state;
-use super::operation::{request_digest, validate_deadline, validate_retry};
+use super::operation::{request_digest, validate_deadline, validate_retry, RequestDigests};
 use super::{
     claim_active_operation, generation_conflict, DurableStateStore, ProcessOperationPreparation,
     ProcessWaitPreparation, SignalProcessPreparation, CONTAINER_RECORD_FILE,
@@ -209,7 +209,7 @@ impl DurableStateStore {
             container_id: container.id.clone(),
             generation: container.record.generation,
             process_id: Some(request.process_id.clone()),
-            request_digest: digest,
+            request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
         self.write_json(
@@ -469,7 +469,7 @@ impl DurableStateStore {
             container_id: container.id.clone(),
             generation: container.record.generation,
             process_id: Some(target.process_id.clone()),
-            request_digest: digest,
+            request_digest: digest.current().to_string(),
             outcome: StoredOperationStatus::Prepared,
         };
         self.write_json(
@@ -1083,7 +1083,7 @@ pub(super) fn validate_process_retry(
     kind: StoredOperationKind,
     container_id: &ContainerId,
     process_id: &ProcessId,
-    digest: &str,
+    digest: &RequestDigests,
     operation: &'static str,
 ) -> Result<()> {
     validate_retry(stored, operation_id, kind, container_id, digest, operation)?;
