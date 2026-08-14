@@ -1118,6 +1118,27 @@ shim/worker identities, and left no runtime transient behind. These hashes are
 audit anchors; each merge candidate still requires its own report with the
 exact candidate revision in `artifacts.source_revision`.
 
+The August 14, 2026 revision-bound rerun covered the Guest-local devtmpfs
+device-source correction at source revision
+`a5a6b535fb69e16c10708fbc94927cf515e6b4d7`. It used Agent SHA-256
+`5b936ebaf6964a266f24d6c57d2c7c61a33c956eb9d9556d36dc663bda79a100`,
+immutable image SHA-256
+`b1bcaeb235cef6ddd68f47a2a1ae84efb2d70e1e5c08134dffdcdfbde1d82c24`,
+manifest SHA-256
+`228c61bdbf08baf69c212fba1d8c54460d9c36ff0997a6e67534d1eca4ef5a0d`,
+signed Host Service SHA-256
+`9bc9722b7c0f85f7f1ae7faea91bbfd7b05f54cfe5c9bb0fc369c196ee30b2c0`,
+and signed shim SHA-256
+`955e33e2c9449562f3314afddf84a33673cd037807c8453dc090a0d03d41fa39`.
+All 23 operations passed, owner death recovered through a distinct service,
+and 25/25 fresh VMs restored the 14-descriptor baseline without transient
+residue. The full, lifecycle, owner-death, and soak report SHA-256 values are
+respectively
+`51611842e214a769f69994451bd494cab7491bfef7c761b60ba1ec2ef9ca56c9`,
+`06988d538670fa3ae71de77485be921379b4c8a7f938d1998c244597b3967c50`,
+`67a5f2d4e968b639fb271250599259a9c19a052c390c1960ded9883b52d60bd5`,
+and `5b9ebc175e78b4a28584fd8328800fa5ac42971b7c121e6733b0d8361803e2e7`.
+
 After building and signing both executables as described above, reproduce the
 complete gate with:
 

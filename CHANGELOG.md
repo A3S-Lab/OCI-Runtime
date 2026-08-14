@@ -310,6 +310,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
   as soon as Create is ready with a root-level shutdown sweep as a fallback.
   This preserves strict character/block device identity checks across macOS
   and Linux rather than accepting Darwin device metadata as a Linux source.
+  Apple Silicon source revision
+  `a5a6b535fb69e16c10708fbc94927cf515e6b4d7` passed the revision-bound public
+  Host Service gate: all 23 operations, owner death and replacement, and 25/25
+  fresh-VM soak iterations restored the 14-descriptor baseline and left no
+  endpoint, bundle handoff, runtime share, recovery report, shim, or worker.
+  The full report SHA-256 is
+  `51611842e214a769f69994451bd494cab7491bfef7c761b60ba1ec2ef9ca56c9`.
 - Reject unrepresentable Unix SDK socket paths during endpoint configuration
   instead of after writable service state has been opened. The macOS HVF public
   Host Service qualification now uses compact private service directories, and

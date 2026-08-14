@@ -1175,6 +1175,12 @@ then may WHPX become `experimental`.
   identities, replayed create/kill/wait/delete exactly once, rejected stale
   generations, restored the 13-descriptor baseline, and left no endpoint,
   bundle handoff, runtime share, recovery report, socket, or process behind.
+  The August 14 revision-bound rerun at
+  `a5a6b535fb69e16c10708fbc94927cf515e6b4d7` included the Guest-local device
+  source fix, exercised all 23 public Host Service operations, recovered the
+  killed owner through a distinct replacement, and completed 25/25 fresh VMs.
+  Lifecycle, replacement, and soak each restored the 14-descriptor baseline
+  with no transient residue.
 
 Exit gate: a fresh Apple Silicon host test boots the utility VM, completes the
 fixed OCI lifecycle through the authenticated guest agent, validates negative
@@ -1189,6 +1195,8 @@ That evidence qualifies the historical R2M harness. Separate August 13, 2026
 closing runs through the public Host Service passed the three real-host gates
 above against signed Apple Silicon artifacts, including a complete post-fix
 rerun after Unix socket path capacity became a configuration-time invariant.
+An August 14, 2026 revision-bound rerun then covered the Guest-local devtmpfs
+device-source correction with the same three gates and zero residue.
 The currently advertised macOS/HVF public product path is therefore 100%
 function-complete and remains `experimental`. Signed release-package
 qualification, upstream OCI conformance, adversarial security review, upgrade
