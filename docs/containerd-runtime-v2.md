@@ -7,7 +7,7 @@ The shim is a development adapter. It does not make any runtime driver
 
 | containerd | Host | Runtime profile | Status | Retained gate |
 | --- | --- | --- | --- | --- |
-| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
+| 2.2.2 | Ubuntu arm64 | Native Linux, `shared-host-kernel` | Development-qualified | Real lifecycle, exec, FIFO/PTY I/O, repeated controls, daemon restart, live shim replacement with exact input and output continuation, in-flight Create, committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty, four-state shim `SIGKILL`, identity replacement, and four-task parallel cleanup |
 | 2.0, 2.1, other 2.2 releases | Linux | Any | Not yet qualified | Compatibility record pending |
 | 1.7 and earlier | Linux | Any | Not qualified | No compatibility claim |
 | Any | Utility-VM profile | `dedicated-vm` | Not yet qualified through containerd | Driver-specific gate pending |
@@ -19,17 +19,21 @@ the packaged shim, SDK, host service, agent, and selected driver.
 
 The August 14, 2026 arm64 requalification used containerd 2.2.2 and the
 release-built shim SHA-256
-`856913e536c231449dd5423b0810306c7402dbeaae78f1aede6bb34e28a0575d`.
+`f13165079acc22d73e14bab6118ca77da78dc88be47a254b3b7cb2d0ca845f29`.
 The host CLI, agent, and qualification executable SHA-256 values were
 `9dfccc7e6a25593755a0c300bb3a8b4d5678919fcc2656bb8827e01652e34103`,
 `0d368fe1727d34da0ed25bf4e0f845a4462825240066a7d6aff12ba4a480dbb4`,
-and `d79a57091f4fd0c422fc9f2e4c18fc793cf3ab864fd7e48d7c3b12a12afaf0bc`.
-The 42.31-second matrix passed two distinct resource updates, two complete
+and `99a7fce24beaefc70199485d711564a979ad0d794bac923b2bef40508337d85d`.
+The 44.23-second matrix passed two distinct resource updates, two complete
 pause/resume cycles, durable terminal stdin before and after live shim
 replacement, replay of a remotely committed write whose exact payload was
 still locally pending, replay of a remotely committed CloseStdin while the
-shim still recorded Closing, every retained restart and shim-crash boundary,
-and its post-run audit with no task, container, shim, bundle, active runtime
+shim still recorded Closing, and replay of a remotely committed ResizePty
+while schema-v6 metadata still held its sequence and size as pending. The
+replacement suppressed an identical resize retry and proved a real
+`A→B→A` PTY transition with distinct operation identities. It then passed
+every retained restart and shim-crash boundary, and its post-run audit found
+no task, container, shim, bundle, active runtime
 container, workload process, or workload cgroup member left behind.
 
 ## Runtime type and package layout
@@ -90,17 +94,21 @@ mutation. Every live request carries the exact runtime generation.
 The shim stores its incarnation and generation-bound metadata in the
 containerd-owned task bundle. Rehydration verifies namespace, task ID,
 generation, driver, and isolation against the host service and fails closed on
-any drift. Metadata schema v5 records the last completed init and exec stdin
+any drift. Metadata schema v6 records the last completed init and exec stdin
 sequence, an optional in-flight sequence plus its exact bounded payload, the
 Open, Closing, or Closed state of each stdin stream, and the last output cursor
-only after the corresponding FIFO write succeeds. It
-also records the last completed per-task control sequence, an optional
+only after the corresponding FIFO write succeeds. For each terminal process it
+also records a separate completed resize sequence, one pending size, and the
+last committed size. It also records the last completed per-task control
+sequence, an optional
 in-flight Pause, Resume, or Update, and the last completed Update request
 digest. Schema-v1 records default input sequences, output cursors, and control
 state to empty. Schema-v2 records preserve output cursors, schema-v3 adds the
-control journal, and schema-v4 adds sequenced writes. Schemas v1 through v4
-default stdin close state to Open and are rewritten as schema v5 on the next
-metadata commit.
+control journal, schema-v4 adds sequenced writes, schema-v5 adds durable stdin
+close state, and schema-v6 adds durable terminal resize state. Schemas v1
+through v4 default stdin close state to Open. Schemas v1 through v5 default
+resize state to empty, and every legacy schema is rewritten as schema v6 on the
+next metadata commit.
 
 Before dispatching Create, the shim separately commits a schema-v1 create
 intent containing the exact incarnation, isolation request, bundle, I/O shape,
@@ -169,6 +177,21 @@ while its journal still records the payload as pending. The replacement must
 join the completed operation, emit the input effect exactly once, clear the
 pending entry, and continue from the following sequence.
 
+Init and exec terminal resize use separate durable sequences and process-local
+serialization gates. The shim stores the next sequence and exact dimensions
+before dispatch. Its SDK operation identity is derived from that sequence; the
+Runtime request fingerprint independently binds the process and dimensions.
+This distinction is required for `A→B→A`: the second A must not reuse the first
+A's cached Runtime result while the real terminal remains at B. A successful
+response atomically commits the sequence and size. Retryable failures retain
+the pending operation for exact replay; a confirmed process exit settles it
+without leaving recovery blocked. A completed same-size request is a no-op.
+The retained arm64 gate freezes the Host Runtime with sequence 3 pending,
+freezes the original shim, commits the exact resize directly, kills that shim,
+and requires its replacement to join the completed Runtime operation and clear
+the pending record. It then proves same-size suppression and real terminal
+dimensions across sequences 4 and 5 for the full `A→B→A` transition.
+
 CloseStdin uses a separate durable state machine. The shim commits Closing only
 after every FIFO byte and pending write has completed, then dispatches the
 stable process-scoped `close-stdin` operation. A successful response commits
@@ -193,6 +216,11 @@ runtime generation, replacement shim PID, completed stdin sequence, and output
 cursor. Output delivered before the replacement must not replay; new stdin
 must use the next durable operation identity and reach the original PTY; and a
 resize issued after replacement must produce only its new terminal dimensions.
+The committed-resize boundary repeats the replacement while ResizePty is
+durably pending but already complete in the Runtime. The replacement must use
+the same operation identity, avoid a second PTY effect, preserve the live PID,
+and commit the exact size before serving a same-size retry or the later
+`A→B→A` sequence.
 
 containerd 2.2 treats an already-stopped shim as leaked during some daemon
 recovery paths. In that case it invokes DeleteShim. The shim replays durable

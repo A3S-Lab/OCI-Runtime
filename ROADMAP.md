@@ -1525,9 +1525,10 @@ Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
 separate stdout/stderr plus stdin from empty input through 4 MiB,
 Created/Running/Stopped daemon-restart boundaries, terminal exec resize before
-and after daemon restart, schema-v5 durable init/exec stdin sequences, exact
-pending input payloads, Open/Closing/Closed stdin state, output cursors, and
-per-task control sequencing, live
+and after daemon restart, schema-v6 durable init/exec stdin and resize
+sequences, exact pending input payloads and terminal sizes,
+Open/Closing/Closed stdin state, output cursors, and per-task control
+sequencing, live
 terminal-exec input and output continuation without replay after manual shim
 replacement, including a pending WriteStdin operation committed remotely
 before the replacement can observe its response and replayed with exactly one
@@ -1575,14 +1576,21 @@ metadata reopen. Canonical JSON request fingerprints keep unordered resource
 maps stable across shim, host, and guest reconstruction. Runtime operation
 schema v2 records that encoding explicitly while retaining schema-v1 retry
 validation with the legacy serializer. The August 14, 2026
-Ubuntu arm64/containerd 2.2.2 release build passed the complete 42.31-second
-matrix with installed shim SHA-256
-`856913e536c231449dd5423b0810306c7402dbeaae78f1aede6bb34e28a0575d`.
+Ubuntu arm64/containerd 2.2.2 release build also freezes the Runtime before a
+terminal ResizePty, persists the next per-exec sequence and size, freezes the
+original shim, commits that exact Resize directly, and replaces the shim before
+its local journal can observe the response. The replacement replays the same
+sequence without a second terminal effect, commits the observed size,
+suppresses an identical retry, and proves that `A→B→A` allocates fresh
+identities and restores the real PTY to A instead of replaying the first A.
+The complete 44.23-second matrix passed with installed shim SHA-256
+`f13165079acc22d73e14bab6118ca77da78dc88be47a254b3b7cb2d0ca845f29`.
 The qualification recreates the killed task ID with a new
 incarnation and generation and leaves no matching task, container, shim,
-workload process, or bundle. The R7 items remain open until the version and
-package contract, remaining failure boundaries, every advertised driver
-profile, and release-artifact record pass.
+workload process, bundle, live runtime record, session, marker, workload
+cgroup, or zombie. The R7 items remain open until the version and package
+contract, remaining failure boundaries, every advertised driver profile, and
+release-artifact record pass.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,

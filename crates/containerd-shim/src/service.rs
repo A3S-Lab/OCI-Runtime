@@ -19,10 +19,12 @@ use crate::adapter::{self, RuntimeAdapter, TaskIdentity};
 use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
 use crate::metadata::{
     ControlOperationKind, ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata,
-    PendingControlOperation, PendingStdinWrite, ShimCreateIntent, ShimMetadata, StdinCloseState,
+    PendingControlOperation, PendingResize, PendingStdinWrite, ShimCreateIntent, ShimMetadata,
+    StdinCloseState,
 };
 
 mod control;
+mod resize;
 mod task;
 
 #[cfg(test)]
@@ -45,6 +47,10 @@ struct TaskState {
     stdin_sequence: u64,
     pending_stdin_write: Option<PendingStdinWrite>,
     stdin_close_state: StdinCloseState,
+    resize_gate: Arc<Mutex<()>>,
+    resize_sequence: u64,
+    pending_resize: Option<PendingResize>,
+    terminal_size: Option<TerminalSize>,
     output_cursor: u64,
     control_gate: Arc<Mutex<()>>,
     control_sequence: u64,
@@ -67,6 +73,10 @@ struct ExecState {
     stdin_sequence: u64,
     pending_stdin_write: Option<PendingStdinWrite>,
     stdin_close_state: StdinCloseState,
+    resize_gate: Arc<Mutex<()>>,
+    resize_sequence: u64,
+    pending_resize: Option<PendingResize>,
+    terminal_size: Option<TerminalSize>,
     output_cursor: u64,
     stage: ExecStage,
     record: Option<ProcessRecord>,
@@ -628,6 +638,10 @@ impl Service {
             stdin_sequence: metadata.stdin_sequence(),
             pending_stdin_write: metadata.pending_stdin_write().cloned(),
             stdin_close_state: metadata.stdin_close_state(),
+            resize_gate: Arc::new(Mutex::new(())),
+            resize_sequence: metadata.resize_sequence(),
+            pending_resize: metadata.pending_resize().cloned(),
+            terminal_size: metadata.terminal_size(),
             output_cursor: metadata.output_cursor(),
             control_gate: Arc::new(Mutex::new(())),
             control_sequence: metadata.control_sequence(),
@@ -653,6 +667,10 @@ impl Service {
                     stdin_sequence: exec.stdin_sequence,
                     pending_stdin_write: exec.pending_stdin_write.clone(),
                     stdin_close_state: exec.stdin_close_state,
+                    resize_gate: Arc::new(Mutex::new(())),
+                    resize_sequence: exec.resize_sequence,
+                    pending_resize: exec.pending_resize.clone(),
+                    terminal_size: exec.terminal_size,
                     output_cursor: exec.output_cursor,
                     stage: exec.stage,
                     record: exec.record.clone(),
@@ -663,6 +681,7 @@ impl Service {
                 },
             );
         }
+        resize::replay_pending(&adapter, &mut task).await?;
         let mut pumps = Vec::new();
         if task.exit.is_none() {
             pumps.push((
@@ -1644,6 +1663,11 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
         task.pending_stdin_write.clone(),
         task.stdin_close_state,
     );
+    metadata.set_resize_state(
+        task.resize_sequence,
+        task.pending_resize.clone(),
+        task.terminal_size,
+    );
     metadata.set_exit(
         task.exit.clone(),
         task.exited_at.and_then(system_time_to_unix_nanos),
@@ -1665,6 +1689,9 @@ fn metadata_from_task(task: &TaskState) -> ShimMetadata {
                 metadata.stdin_sequence = exec.stdin_sequence;
                 metadata.pending_stdin_write = exec.pending_stdin_write.clone();
                 metadata.stdin_close_state = exec.stdin_close_state;
+                metadata.resize_sequence = exec.resize_sequence;
+                metadata.pending_resize = exec.pending_resize.clone();
+                metadata.terminal_size = exec.terminal_size;
                 metadata.output_cursor = exec.output_cursor;
                 metadata.exit = exec.exit.clone();
                 metadata.exited_at_unix_nanos = exec.exited_at.and_then(system_time_to_unix_nanos);

@@ -178,6 +178,10 @@ impl Task for Service {
             stdin_sequence: 0,
             pending_stdin_write: None,
             stdin_close_state: StdinCloseState::Open,
+            resize_gate: Arc::new(Mutex::new(())),
+            resize_sequence: 0,
+            pending_resize: None,
+            terminal_size: None,
             output_cursor: 0,
             control_gate: Arc::new(Mutex::new(())),
             control_sequence: 0,
@@ -473,6 +477,10 @@ impl Task for Service {
             stdin_sequence: 0,
             pending_stdin_write: None,
             stdin_close_state: StdinCloseState::Open,
+            resize_gate: Arc::new(Mutex::new(())),
+            resize_sequence: 0,
+            pending_resize: None,
+            terminal_size: None,
             output_cursor: 0,
             stage: ExecStage::Added,
             record: None,
@@ -840,52 +848,69 @@ impl Task for Service {
         req: api::ResizePtyRequest,
     ) -> TtrpcResult<api::Empty> {
         let task = self.task_snapshot(req.id()).await?;
-        let terminal = if req.exec_id().is_empty() {
-            task.terminal
-        } else {
+        let exec_id = (!req.exec_id().is_empty()).then_some(req.exec_id());
+        let resize_gate = if let Some(exec_id) = exec_id {
             task.execs
-                .get(req.exec_id())
-                .ok_or_else(|| ttrpc_not_found(format!("unknown exec {}", req.exec_id())))?
-                .terminal
+                .get(exec_id)
+                .ok_or_else(|| ttrpc_not_found(format!("unknown exec {exec_id}")))?
+                .resize_gate
+                .clone()
+        } else {
+            task.resize_gate.clone()
         };
-        if !terminal {
-            return Err(ttrpc::Error::RpcStatus(ttrpc::get_status(
-                ttrpc::Code::FAILED_PRECONDITION,
-                "cannot resize a non-terminal process".to_string(),
-            )));
-        }
         let Some(size) = containerd_terminal_size(req.width(), req.height())? else {
             return Ok(api::Empty::new());
         };
-        let adapter = self.adapter().await.map_err(runtime_error)?;
-        let exec_id = (!req.exec_id().is_empty()).then_some(req.exec_id());
-        let target = adapter
-            .process_target(&task.identity, task.record.generation, exec_id)
-            .map_err(runtime_error)?;
-        let result = adapter
-            .resize(&task.identity, task.record.generation, exec_id, size)
-            .await;
-        if let Err(error) = result {
-            let exited = match adapter
-                .processes(&task.identity, task.record.generation)
-                .await
-            {
-                Ok(processes) => {
-                    crate::io::late_process_io_can_be_ignored(&error, &processes, &target)
-                }
-                Err(inventory_error) if inventory_error.code == ErrorCode::NotFound => true,
-                Err(inventory_error) => {
-                    log::warn!(
-                        "could not confirm process exit after late containerd resize: {inventory_error}"
-                    );
-                    false
+        let _resize_guard = resize_gate.lock().await;
+        loop {
+            let Some(prepared) = self
+                .prepare_resize(req.id(), exec_id, &resize_gate, size)
+                .await?
+            else {
+                return Ok(api::Empty::new());
+            };
+            let requested_operation = prepared.operation.size() == size;
+            let adapter = match self.adapter().await {
+                Ok(adapter) => adapter,
+                Err(error) => {
+                    self.finish_resize_error(
+                        req.id(),
+                        exec_id,
+                        &resize_gate,
+                        &prepared.operation,
+                        &error,
+                    )
+                    .await?;
+                    return Err(runtime_error(error));
                 }
             };
-            if !exited {
-                return Err(runtime_error(error));
+            match resize::dispatch(&adapter, &prepared.task, exec_id, &prepared.operation).await {
+                Ok(()) => {
+                    self.complete_resize(
+                        req.id(),
+                        exec_id,
+                        &resize_gate,
+                        &prepared.operation,
+                        true,
+                    )
+                    .await?;
+                }
+                Err(error) => {
+                    self.finish_resize_error(
+                        req.id(),
+                        exec_id,
+                        &resize_gate,
+                        &prepared.operation,
+                        &error,
+                    )
+                    .await?;
+                    return Err(runtime_error(error));
+                }
+            }
+            if requested_operation {
+                return Ok(api::Empty::new());
             }
         }
-        Ok(api::Empty::new())
     }
 
     async fn close_io(

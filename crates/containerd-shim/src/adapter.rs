@@ -415,12 +415,12 @@ impl RuntimeAdapter {
         task: &TaskIdentity,
         generation: a3s_oci_sdk::Generation,
         exec_id: Option<&str>,
+        sequence: u64,
         size: TerminalSize,
     ) -> Result<()> {
         self.client
             .resize(ResizeRequest {
-                context: task
-                    .operation(exec_id, &format!("resize-{}x{}", size.width, size.height))?,
+                context: task.operation(exec_id, &format!("resize-{sequence}"))?,
                 process: self.process_target(task, generation, exec_id)?,
                 size,
             })

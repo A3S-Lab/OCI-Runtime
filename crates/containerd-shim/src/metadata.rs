@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
     ContainerId, DriverKind, Error, ErrorCode, ExitStatus, Generation, IsolationClass,
-    ProcessRecord, Result,
+    ProcessRecord, Result, TerminalSize,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ pub(crate) use create_intent::{NewShimCreateIntent, ShimCreateIntent};
 
 const METADATA_FILE_NAME: &str = "a3s-oci-shim-v1.json";
 const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
-const METADATA_SCHEMA_VERSION: u32 = 5;
+const METADATA_SCHEMA_VERSION: u32 = 6;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_INCARNATION_BYTES: u64 = 64;
@@ -47,6 +47,12 @@ pub(crate) struct ShimMetadata {
     pending_stdin_write: Option<PendingStdinWrite>,
     #[serde(default, skip_serializing_if = "StdinCloseState::is_open")]
     stdin_close_state: StdinCloseState,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    resize_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_resize: Option<PendingResize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_size: Option<TerminalSize>,
     #[serde(default, skip_serializing_if = "is_zero")]
     output_cursor: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -79,6 +85,12 @@ pub(crate) struct ExecMetadata {
     pub(crate) pending_stdin_write: Option<PendingStdinWrite>,
     #[serde(default, skip_serializing_if = "StdinCloseState::is_open")]
     pub(crate) stdin_close_state: StdinCloseState,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) resize_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_resize: Option<PendingResize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal_size: Option<TerminalSize>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) output_cursor: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,6 +132,38 @@ pub(crate) enum StdinCloseState {
     Open,
     Closing,
     Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingResize {
+    sequence: u64,
+    size: TerminalSize,
+}
+
+impl PendingResize {
+    pub(crate) fn new(sequence: u64, size: TerminalSize) -> Result<Self> {
+        let resize = Self { sequence, size };
+        resize.validate()?;
+        Ok(resize)
+    }
+
+    pub(crate) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub(crate) fn size(&self) -> TerminalSize {
+        self.size
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.sequence == 0 {
+            return Err(metadata_error(
+                "pending containerd terminal resize records sequence zero",
+            ));
+        }
+        validate_terminal_size(self.size, "pending containerd terminal resize")
+    }
 }
 
 impl StdinCloseState {
@@ -245,6 +289,9 @@ impl ExecMetadata {
             stdin_sequence: 0,
             pending_stdin_write: None,
             stdin_close_state: StdinCloseState::Open,
+            resize_sequence: 0,
+            pending_resize: None,
+            terminal_size: None,
             output_cursor: 0,
             record: None,
             exit: None,
@@ -292,6 +339,9 @@ impl ShimMetadata {
             stdin_sequence: 0,
             pending_stdin_write: None,
             stdin_close_state: StdinCloseState::Open,
+            resize_sequence: 0,
+            pending_resize: None,
+            terminal_size: None,
             output_cursor: value.output_cursor,
             control_sequence: 0,
             pending_control: None,
@@ -496,6 +546,18 @@ impl ShimMetadata {
         self.stdin_close_state
     }
 
+    pub(crate) fn resize_sequence(&self) -> u64 {
+        self.resize_sequence
+    }
+
+    pub(crate) fn pending_resize(&self) -> Option<&PendingResize> {
+        self.pending_resize.as_ref()
+    }
+
+    pub(crate) fn terminal_size(&self) -> Option<TerminalSize> {
+        self.terminal_size
+    }
+
     pub(crate) fn control_sequence(&self) -> u64 {
         self.control_sequence
     }
@@ -555,6 +617,17 @@ impl ShimMetadata {
         self.stdin_close_state = close_state;
     }
 
+    pub(crate) fn set_resize_state(
+        &mut self,
+        sequence: u64,
+        pending: Option<PendingResize>,
+        terminal_size: Option<TerminalSize>,
+    ) {
+        self.resize_sequence = sequence;
+        self.pending_resize = pending;
+        self.terminal_size = terminal_size;
+    }
+
     fn validate(&self, path: &Path) -> Result<()> {
         if !(MIN_METADATA_SCHEMA_VERSION..=METADATA_SCHEMA_VERSION).contains(&self.schema_version) {
             return Err(metadata_error(format!(
@@ -604,10 +677,32 @@ impl ShimMetadata {
                 self.schema_version
             )));
         }
+        if self.schema_version < 6
+            && (self.resize_sequence != 0
+                || self.pending_resize.is_some()
+                || self.terminal_size.is_some()
+                || self.execs.iter().any(|exec| {
+                    exec.resize_sequence != 0
+                        || exec.pending_resize.is_some()
+                        || exec.terminal_size.is_some()
+                }))
+        {
+            return Err(metadata_error(format!(
+                "shim metadata schema {} cannot contain schema-v6 terminal resize state",
+                self.schema_version
+            )));
+        }
         validate_stdin_state(
             self.stdin_sequence,
             self.pending_stdin_write.as_ref(),
             self.stdin_close_state,
+            "task",
+        )?;
+        validate_resize_state(
+            self.resize_sequence,
+            self.pending_resize.as_ref(),
+            self.terminal_size,
+            self.terminal,
             "task",
         )?;
         if self.stdin.is_empty()
@@ -670,6 +765,13 @@ impl ShimMetadata {
                 exec.stdin_close_state,
                 &format!("exec {}", exec.exec_id),
             )?;
+            validate_resize_state(
+                exec.resize_sequence,
+                exec.pending_resize.as_ref(),
+                exec.terminal_size,
+                exec.terminal,
+                &format!("exec {}", exec.exec_id),
+            )?;
             if exec.stdin.is_empty()
                 && (exec.stdin_sequence != 0
                     || exec.pending_stdin_write.is_some()
@@ -705,6 +807,52 @@ fn validate_stdin_state(
         return Err(metadata_error(format!(
             "pending containerd {context} stdin sequence {} does not follow completed sequence {completed_sequence}",
             pending.sequence
+        )));
+    }
+    Ok(())
+}
+
+fn validate_resize_state(
+    completed_sequence: u64,
+    pending: Option<&PendingResize>,
+    terminal_size: Option<TerminalSize>,
+    terminal: bool,
+    context: &str,
+) -> Result<()> {
+    if !terminal && (completed_sequence != 0 || pending.is_some() || terminal_size.is_some()) {
+        return Err(metadata_error(format!(
+            "non-terminal containerd {context} cannot retain terminal resize state"
+        )));
+    }
+    if let Some(size) = terminal_size {
+        validate_terminal_size(size, &format!("containerd {context} terminal size"))?;
+        if completed_sequence == 0 {
+            return Err(metadata_error(format!(
+                "containerd {context} terminal size requires a completed resize sequence"
+            )));
+        }
+    }
+    if let Some(pending) = pending {
+        pending.validate()?;
+        if completed_sequence.checked_add(1) != Some(pending.sequence) {
+            return Err(metadata_error(format!(
+                "pending containerd {context} resize sequence {} does not follow completed sequence {completed_sequence}",
+                pending.sequence
+            )));
+        }
+        if terminal_size == Some(pending.size) {
+            return Err(metadata_error(format!(
+                "pending containerd {context} resize repeats the completed terminal size"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_terminal_size(size: TerminalSize, context: &str) -> Result<()> {
+    if size.width == 0 || size.height == 0 {
+        return Err(metadata_error(format!(
+            "{context} records zero terminal width or height"
         )));
     }
     Ok(())
@@ -1128,6 +1276,7 @@ mod tests {
     fn schema_v5_metadata_round_trip_preserves_task_and_exec_stdin_close_state() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut expected = metadata(directory.path());
+        expected.schema_version = 5;
         expected.set_stdin_state(4, None, StdinCloseState::Closing);
         let process: Process = serde_json::from_value(serde_json::json!({
             "terminal": true,
@@ -1158,6 +1307,85 @@ mod tests {
         assert_eq!(loaded.stdin_close_state(), StdinCloseState::Closing);
         assert_eq!(loaded.execs()[0].stdin_sequence, 8);
         assert_eq!(loaded.execs()[0].stdin_close_state, StdinCloseState::Closed);
+        assert_eq!(loaded.resize_sequence(), 0);
+        assert_eq!(loaded.pending_resize(), None);
+        assert_eq!(loaded.terminal_size(), None);
+        assert_eq!(loaded.execs()[0].resize_sequence, 0);
+        assert_eq!(loaded.execs()[0].pending_resize, None);
+        assert_eq!(loaded.execs()[0].terminal_size, None);
+    }
+
+    #[test]
+    fn schema_v6_metadata_round_trip_preserves_task_and_exec_resize_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut expected = metadata(directory.path());
+        expected.terminal = true;
+        let task_size = TerminalSize {
+            width: 120,
+            height: 40,
+        };
+        let pending_task_size = TerminalSize {
+            width: 132,
+            height: 43,
+        };
+        expected.set_resize_state(
+            3,
+            Some(PendingResize::new(4, pending_task_size).expect("pending task resize")),
+            Some(task_size),
+        );
+        let process: Process = serde_json::from_value(serde_json::json!({
+            "terminal": true,
+            "user": {"uid": 0, "gid": 0},
+            "args": ["/bin/sh"],
+            "cwd": "/"
+        }))
+        .expect("OCI process");
+        let mut exec = ExecMetadata::new(
+            "exec-resize".to_string(),
+            process,
+            "exec-in".to_string(),
+            "exec-out".to_string(),
+            String::new(),
+            true,
+        );
+        exec.resize_sequence = 8;
+        exec.terminal_size = Some(TerminalSize {
+            width: 91,
+            height: 31,
+        });
+        exec.pending_resize = Some(
+            PendingResize::new(
+                9,
+                TerminalSize {
+                    width: 97,
+                    height: 37,
+                },
+            )
+            .expect("pending exec resize"),
+        );
+        expected.set_execs(vec![exec]);
+
+        expected.store().expect("store schema-v6 metadata");
+        let loaded = ShimMetadata::load(&ShimMetadata::path(directory.path()))
+            .expect("load schema-v6 metadata")
+            .expect("metadata exists");
+
+        assert_eq!(loaded.schema_version, 6);
+        assert_eq!(loaded.resize_sequence(), 3);
+        assert_eq!(loaded.terminal_size(), Some(task_size));
+        assert_eq!(loaded.pending_resize(), expected.pending_resize());
+        assert_eq!(loaded.execs()[0].resize_sequence, 8);
+        assert_eq!(
+            loaded.execs()[0].terminal_size,
+            Some(TerminalSize {
+                width: 91,
+                height: 31
+            })
+        );
+        assert_eq!(
+            loaded.execs()[0].pending_resize,
+            expected.execs()[0].pending_resize
+        );
     }
 
     #[test]
@@ -1232,6 +1460,25 @@ mod tests {
             ErrorCode::FailedPrecondition
         );
 
+        let mut legacy_with_resize = metadata(directory.path());
+        legacy_with_resize.terminal = true;
+        legacy_with_resize.schema_version = 5;
+        legacy_with_resize.set_resize_state(
+            1,
+            None,
+            Some(TerminalSize {
+                width: 80,
+                height: 24,
+            }),
+        );
+        assert_eq!(
+            legacy_with_resize
+                .store()
+                .expect_err("schema-v5 resize state must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
         let mut closing_with_pending = metadata(directory.path());
         closing_with_pending.set_stdin_state(
             0,
@@ -1264,6 +1511,85 @@ mod tests {
             PendingStdinWrite::new(1, vec![0; MAX_PENDING_STDIN_BYTES + 1])
                 .expect_err("oversized pending stdin must fail")
                 .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut nonterminal_resize = metadata(directory.path());
+        nonterminal_resize.set_resize_state(
+            0,
+            Some(
+                PendingResize::new(
+                    1,
+                    TerminalSize {
+                        width: 80,
+                        height: 24,
+                    },
+                )
+                .expect("pending resize"),
+            ),
+            None,
+        );
+        assert_eq!(
+            nonterminal_resize
+                .store()
+                .expect_err("non-terminal resize state must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut repeated_resize = metadata(directory.path());
+        repeated_resize.terminal = true;
+        let repeated_size = TerminalSize {
+            width: 120,
+            height: 40,
+        };
+        repeated_resize.set_resize_state(
+            4,
+            Some(PendingResize::new(5, repeated_size).expect("pending resize")),
+            Some(repeated_size),
+        );
+        assert_eq!(
+            repeated_resize
+                .store()
+                .expect_err("pending resize must differ from completed size")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        let mut skipped_resize = metadata(directory.path());
+        skipped_resize.terminal = true;
+        skipped_resize.set_resize_state(
+            4,
+            Some(
+                PendingResize::new(
+                    6,
+                    TerminalSize {
+                        width: 132,
+                        height: 43,
+                    },
+                )
+                .expect("pending resize"),
+            ),
+            None,
+        );
+        assert_eq!(
+            skipped_resize
+                .store()
+                .expect_err("nonconsecutive resize sequence must fail")
+                .code,
+            ErrorCode::FailedPrecondition
+        );
+
+        assert_eq!(
+            PendingResize::new(
+                1,
+                TerminalSize {
+                    width: 0,
+                    height: 24,
+                },
+            )
+            .expect_err("zero-width pending resize must fail")
+            .code,
             ErrorCode::FailedPrecondition
         );
     }

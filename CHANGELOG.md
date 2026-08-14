@@ -6,6 +6,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Durable containerd terminal resize recovery across live shim replacement.
+  Metadata schema v6 gives init and each exec an independent monotonic resize
+  sequence, one pending size, and the last committed terminal size. Resize
+  operation identities use the sequence instead of the dimensions, so an
+  `A→B→A` transition dispatches three distinct mutations while an identical
+  completed retry is answered without another Runtime call. Per-process gates
+  serialize concurrent requests. A replacement shim automatically replays a
+  pending resize with the same sequence and payload before serving containerd.
+  The Ubuntu arm64/containerd 2.2.2 release gate freezes the Host Runtime,
+  persists a pending exec resize, freezes the original shim, commits the exact
+  Runtime resize, and kills the shim before it can observe the response. The
+  replacement joins that completed operation, clears the pending record,
+  preserves the process and generation, suppresses a same-size retry, and
+  proves the real PTY returns from A through B to A. The 44.23-second matrix and
+  its independent residue audit passed with release shim SHA-256
+  `f13165079acc22d73e14bab6118ca77da78dc88be47a254b3b7cb2d0ca845f29`.
 - Durable containerd stdin continuation across live shim replacement. Metadata
   schema v5 gives init and each exec an independent completed sequence, one
   bounded pending payload, and an explicit Open, Closing, or Closed state. The

@@ -29,6 +29,7 @@ pub(super) async fn qualify(
     identity: &crate::support::RuntimeIdentity,
     exec: &mut RehydratedTerminalExec,
     mut old_replacement: Child,
+    stdin_sequence: u64,
 ) -> TestResult<(Channel, Child)> {
     let old_shim_pid = old_replacement
         .id()
@@ -42,7 +43,7 @@ pub(super) async fn qualify(
     let mut close_call =
         tokio::spawn(async move { shim_close_io(&close_address, &close_id).await });
 
-    wait_for_close_request(bundle, &mut close_call).await?;
+    wait_for_close_request(bundle, stdin_sequence, &mut close_call).await?;
     let suspended_shim =
         faults::SuspendedProcess::stop(old_shim_pid, "committed-close original shim")?;
     suspended_host.resume("committed-close A3S OCI host service")?;
@@ -131,7 +132,7 @@ pub(super) async fn qualify(
         ))
         .into());
     }
-    wait_for_close_state(bundle, "closed").await?;
+    wait_for_close_state(bundle, stdin_sequence, "closed").await?;
     crate::terminal::expect_line(
         &mut exec.output,
         "stdin-closed",
@@ -155,12 +156,16 @@ pub(super) async fn qualify(
     Ok((channel, replacement))
 }
 
-async fn wait_for_close_state(bundle: &Path, expected: &str) -> TestResult<()> {
+async fn wait_for_close_state(
+    bundle: &Path,
+    stdin_sequence: u64,
+    expected: &str,
+) -> TestResult<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_stdin_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 5
-            && evidence.completed_sequence == 5
+        if evidence.schema_version == 6
+            && evidence.completed_sequence == stdin_sequence
             && evidence.pending.is_none()
             && evidence.close_state == expected
         {
@@ -178,13 +183,14 @@ async fn wait_for_close_state(bundle: &Path, expected: &str) -> TestResult<()> {
 
 async fn wait_for_close_request(
     bundle: &Path,
+    stdin_sequence: u64,
     close_call: &mut tokio::task::JoinHandle<TestResult<()>>,
 ) -> TestResult<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let evidence = read_exec_stdin_journal(bundle, EXEC_ID).await?;
-        if evidence.schema_version == 5
-            && evidence.completed_sequence == 5
+        if evidence.schema_version == 6
+            && evidence.completed_sequence == stdin_sequence
             && evidence.pending.is_none()
             && evidence.close_state == "closing"
         {
