@@ -415,10 +415,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`ociVersion`** (string, REQUIRED) is version of the Open Container Initiative Runtime Specification with which the state complies.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.required-fields"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:becb248d6deef4a0be4bc0071c3ef95e260d4277c39215e07f00f9694e729794",
@@ -429,10 +434,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`id`** (string, REQUIRED) is the container's ID.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.required-fields"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:94b6f50466c875e3864032f8a62e10363fdf7fd03604ff33c77152d7690566ea",
@@ -443,10 +453,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This MUST be unique across all containers on this host.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.id.unique"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:ffbe27a54964c5b83ba8fb46c4b0a635a55dcd882e668418b05fabfccbba06f4",
@@ -457,10 +471,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`status`** (string, REQUIRED) is the runtime state of the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.required-fields"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:74daebf28fff4e6be1b6a672a029574639fa8a23603daa9064dbe2022dbf707b",
@@ -513,10 +532,16 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`pid`** (int, REQUIRED when `status` is `created` or `running` on Linux, OPTIONAL on other platforms) is the ID of the container process.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.pid.lifecycle"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::expired_deadline_and_invalid_pid_do_not_commit_state",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:844545d31b06713299d0b172edabdccf757c2563cceee9d441e1a273ddf32684",
@@ -541,10 +566,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`bundle`** (string, REQUIRED) is the absolute path to the container's bundle directory.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.required-fields"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:5f9e7d778251b67654b1bcddbb16af2ca9c16653126ad1a656f7725599b4b66d",
@@ -555,10 +585,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`annotations`** (map, OPTIONAL) contains the list of annotations associated with the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.annotations"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::oci_state::tests::resume_preserves_non_freezer_annotations"
+      ]
     },
     {
       "id": "sha256:c2128311c1108da2cc4006c23fcac06a3fc5eb0f3fbdf6bf84a9fc306720079f",
@@ -569,10 +604,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "If no annotations were provided then this property MAY either be absent or an empty map.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.annotations"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::oci_state::tests::resume_preserves_non_freezer_annotations"
+      ]
     },
     {
       "id": "sha256:f4e370ca1405131366c93a2aa04443f125e5d1bacbc3728dc0dc2c3acdb580b1",
@@ -597,10 +637,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "When serialized in JSON, the format MUST adhere to the JSON Schema [`schema/state-schema.json`](schema/state-schema.json).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.schema"
+      ],
+      "testIds": [
+        "schema::tests::invalid_state_returns_stable_sdk_error",
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract"
+      ]
     },
     {
       "id": "sha256:9d4a290e3827254d85261e201cb469d4cf16bae6ab9b0f274a9d6da55568fbcf",

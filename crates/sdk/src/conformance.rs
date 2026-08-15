@@ -35,6 +35,11 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.runtime.delete.stopped-only", "runtime-lifecycle"),
     OciNonSemanticRule::new("oci.runtime.kill.created-or-running", "runtime-lifecycle"),
     OciNonSemanticRule::new("oci.runtime.start.created-only", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.state.annotations", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.state.id.unique", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.state.pid.lifecycle", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.state.required-fields", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.state.schema", "runtime-lifecycle"),
 ];
 
 const SPECIFICATION_DOCUMENTS: &[EmbeddedSpecificationDocument] = &[

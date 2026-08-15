@@ -496,6 +496,22 @@ async fn core_lifecycle_is_idempotent_and_generation_safe() {
     create_container(&store, &create).await;
     let target = ContainerTarget::exact(create.id.clone(), Generation(1));
 
+    let duplicate_create = create_request(
+        &bundle_directory,
+        "container-1",
+        "create-duplicate-container-id",
+    );
+    let duplicate_error = store
+        .prepare_create(&duplicate_create, DriverKind::LibkrunWhpx)
+        .await
+        .expect_err("a live container ID must remain unique on the host");
+    assert_eq!(duplicate_error.code, ErrorCode::AlreadyExists);
+    assert!(!store
+        .root()
+        .join("operations")
+        .join("create-duplicate-container-id.json")
+        .exists());
+
     let start = StartRequest {
         context: OperationContext::new(operation_id("start-1")),
         target: target.clone(),
@@ -504,6 +520,20 @@ async fn core_lifecycle_is_idempotent_and_generation_safe() {
         store.prepare_start(&start).await.expect("prepare start"),
         RecordOperationPreparation::Prepared(_)
     ));
+    let missing_running_pid = store
+        .complete_start(&start.context.operation_id, ContainerState::Running, None)
+        .await
+        .expect_err("a running Linux container must retain its PID");
+    assert_eq!(missing_running_pid.code, ErrorCode::InvalidArgument);
+    assert_eq!(
+        *store
+            .state(&target)
+            .await
+            .expect("invalid start completion leaves created state")
+            .state
+            .status(),
+        ContainerState::Created
+    );
     let running = store
         .complete_start(
             &start.context.operation_id,
