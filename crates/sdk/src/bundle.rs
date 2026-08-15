@@ -563,7 +563,7 @@ mod tests {
         assert!(error.message.contains("not a plain file"));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn rejects_symlinked_config_json() {
         let temporary = tempfile::tempdir().expect("create temporary directory");
@@ -575,14 +575,25 @@ mod tests {
             serde_json::to_vec(&complete_v1_3_fixture()).expect("encode fixture"),
         )
         .expect("write external configuration");
-        std::os::unix::fs::symlink(&external, bundle.join("config.json"))
-            .expect("link external configuration into bundle");
+        create_file_symlink(&external, &bundle.join("config.json"));
 
         let error = OciBundle::load(&bundle)
             .await
             .expect_err("bundle config.json must be a plain file in the bundle root");
         assert_eq!(error.code, ErrorCode::InvalidArgument);
         assert!(error.message.contains("not a plain file"));
+    }
+
+    #[cfg(unix)]
+    fn create_file_symlink(source: &Path, destination: &Path) {
+        std::os::unix::fs::symlink(source, destination)
+            .expect("link external configuration into bundle");
+    }
+
+    #[cfg(windows)]
+    fn create_file_symlink(source: &Path, destination: &Path) {
+        std::os::windows::fs::symlink_file(source, destination)
+            .expect("link external configuration into bundle");
     }
 
     #[tokio::test]
