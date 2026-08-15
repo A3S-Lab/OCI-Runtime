@@ -1176,10 +1176,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST generate an error if `process` was not set.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.common.process.required-for-start"
+      ],
+      "testIds": [
+        "run_composition::missing_start_process_fails_before_create_mutation",
+        "semantic::tests::start_requires_a_process_but_configuration_loading_does_not",
+        "state::tests::start_revalidates_durable_process_before_journaling"
+      ]
     },
     {
       "id": "sha256:dce164d1810648b5f7dec66c7bc8da37e0a649d1e5690394ccda374c1af91ab3",
