@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Owner-bound OCI State enforcement for required version, ID, status, and
+  bundle fields; host-unique live container IDs; positive created/running
+  Linux PIDs; stopped-state PID removal; exact optional annotations; and the
+  pinned State schema. Focused tests now reject a duplicate live container ID
+  before journaling, reject missing or invalid lifecycle PIDs without changing
+  durable state, validate emitted State values against the pinned schema, and
+  preserve both present and absent annotation forms. Nine OCI 1.3.0 entries
+  move from pending to enforced, reducing the ledger from 604 to 595 entries.
 - Owner-bound runtime state gates for start, kill, and stopped-only delete.
   Tests now prove each invalid-state request returns an error without changing
   container state or writing an operation journal, reducing the pending OCI
