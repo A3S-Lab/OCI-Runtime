@@ -30,6 +30,14 @@ pub(crate) async fn exercise_process_io(
            /proc/self/sched; \
          /bin/busybox awk '$1 == \"prio\" && $3 == 127 { ok = 1 } END { exit !ok }' \
            /proc/self/sched; \
+         /bin/busybox awk '$1 == \"CapInh:\" && $2 == \"0000000000000400\" { inh = 1 } \
+           $1 == \"CapPrm:\" && $2 == \"0000000000000400\" { prm = 1 } \
+           $1 == \"CapEff:\" && $2 == \"0000000000000400\" { eff = 1 } \
+           $1 == \"CapBnd:\" && $2 == \"0000000000000400\" { bnd = 1 } \
+           $1 == \"CapAmb:\" && $2 == \"0000000000000400\" { amb = 1 } \
+           END { exit !(inh && prm && eff && bnd && amb) }' /proc/self/status; \
+         /bin/busybox awk '$1 == \"NoNewPrivs:\" && $2 == 1 { ok = 1 } \
+           END { exit !ok }' /proc/self/status; \
          IFS= read -r first; IFS= read -r second; \
          printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
          printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
@@ -560,6 +568,13 @@ fn exec_request(
         "env": ["PATH=/bin:/usr/bin"],
         "cwd": "/",
         "rlimits": [{"type": "RLIMIT_NOFILE", "hard": 48, "soft": 48}],
+        "capabilities": {
+            "bounding": ["CAP_NET_BIND_SERVICE"],
+            "effective": ["CAP_NET_BIND_SERVICE"],
+            "inheritable": ["CAP_NET_BIND_SERVICE"],
+            "permitted": ["CAP_NET_BIND_SERVICE"],
+            "ambient": ["CAP_NET_BIND_SERVICE"]
+        },
         "noNewPrivileges": true
     }))
     .map_err(|error| format!("failed to construct native exec process: {error}"))?;

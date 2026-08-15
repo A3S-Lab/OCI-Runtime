@@ -779,12 +779,7 @@ fn exec_configured_process(plan: &InitPlan, host_proc: &File) -> Result<()> {
         }
     }
     plan.capabilities.apply_after_credentials(plan.uid)?;
-    // SAFETY: `PR_SET_NO_NEW_PRIVS` consumes a boolean integer and zero
-    // padding arguments.
-    if plan.no_new_privileges && unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
-    {
-        return Err(last_os_error("enable no_new_privileges"));
-    }
+    super::no_new_privileges::apply(plan.no_new_privileges)?;
     plan.seccomp.install()?;
     // SAFETY: every pointer below references a live, NUL-terminated buffer.
     unsafe {

@@ -13,7 +13,7 @@
     "args": [
       "/bin/sh",
       "-c",
-      "set -eu; test \"$(ulimit -n)\" = 64; test \"$(/bin/busybox cat /proc/self/oom_score_adj)\" = 100; test \"$(/bin/busybox ionice -p $$)\" = \"best-effort: prio 4\"; /bin/busybox awk '$1 == \"policy\" && $3 == 3 { ok = 1 } END { exit !ok }' /proc/self/sched; /bin/busybox awk '$1 == \"prio\" && $3 == 126 { ok = 1 } END { exit !ok }' /proc/self/sched; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 100000 && $3 == 65536 { ok = 1 } END { exit !ok }' /proc/self/uid_map; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 200000 && $3 == 65536 { ok = 1 } END { exit !ok }' /proc/self/gid_map; /bin/busybox awk '$1 == \"monotonic\" && $2 == 3600 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; /bin/busybox awk '$1 == \"boottime\" && $2 == 7200 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; if [ \"${A3S_OCI_NATIVE_CONTROL_SMOKE:-}\" = 1 ]; then test -S /proc/self/fd/3; test -S /proc/self/fd/4; test -f /proc/self/fd/5; printf 'a3s-box-native-control-v1\\n' >&5; fi; printf 'a3s-oci-native-box-mapping-v1\\n' > /.a3s-oci-native-smoke; exec /bin/busybox sleep 300"
+      "set -eu; test \"$(ulimit -n)\" = 64; test \"$(/bin/busybox cat /proc/self/oom_score_adj)\" = 100; test \"$(/bin/busybox ionice -p $$)\" = \"best-effort: prio 4\"; /bin/busybox awk '$1 == \"policy\" && $3 == 3 { ok = 1 } END { exit !ok }' /proc/self/sched; /bin/busybox awk '$1 == \"prio\" && $3 == 126 { ok = 1 } END { exit !ok }' /proc/self/sched; /bin/busybox awk '$1 == \"CapInh:\" && $2 == \"0000000000000400\" { inh = 1 } $1 == \"CapPrm:\" && $2 == \"0000000000000401\" { prm = 1 } $1 == \"CapEff:\" && $2 == \"0000000000000401\" { eff = 1 } $1 == \"CapBnd:\" && $2 == \"0000000000000401\" { bnd = 1 } $1 == \"CapAmb:\" && $2 == \"0000000000000400\" { amb = 1 } END { exit !(inh && prm && eff && bnd && amb) }' /proc/self/status; /bin/busybox awk '$1 == \"NoNewPrivs:\" && $2 == 1 { ok = 1 } END { exit !ok }' /proc/self/status; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 100000 && $3 == 65536 { ok = 1 } END { exit !ok }' /proc/self/uid_map; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 200000 && $3 == 65536 { ok = 1 } END { exit !ok }' /proc/self/gid_map; /bin/busybox awk '$1 == \"monotonic\" && $2 == 3600 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; /bin/busybox awk '$1 == \"boottime\" && $2 == 7200 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; if [ \"${A3S_OCI_NATIVE_CONTROL_SMOKE:-}\" = 1 ]; then test -S /proc/self/fd/3; test -S /proc/self/fd/4; test -f /proc/self/fd/5; printf 'a3s-box-native-control-v1\\n' >&5; fi; printf 'a3s-oci-native-box-mapping-v1\\n' > /.a3s-oci-native-smoke; exec /bin/busybox sleep 300"
     ],
     "env": [
       "PATH=/bin"
@@ -35,6 +35,26 @@
         "soft": 64
       }
     ],
+    "capabilities": {
+      "bounding": [
+        "CAP_CHOWN",
+        "CAP_NET_BIND_SERVICE"
+      ],
+      "effective": [
+        "CAP_CHOWN",
+        "CAP_NET_BIND_SERVICE"
+      ],
+      "inheritable": [
+        "CAP_NET_BIND_SERVICE"
+      ],
+      "permitted": [
+        "CAP_CHOWN",
+        "CAP_NET_BIND_SERVICE"
+      ],
+      "ambient": [
+        "CAP_NET_BIND_SERVICE"
+      ]
+    },
     "noNewPrivileges": true
   },
   "hostname": "a3s-native",

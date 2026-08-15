@@ -120,7 +120,7 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v16` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v17` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
@@ -149,6 +149,10 @@ following:
    `RLIMIT_NOFILE` soft/hard value of 64, retained separately as
    `init_rlimits_verified`, exact configured `oom_score_adj`
    value of 100, best-effort I/O priority 4, and `SCHED_BATCH` with nice 6,
+   reads capability masks `CapInh=0x400`, `CapPrm=0x401`, `CapEff=0x401`,
+   `CapBnd=0x401`, and `CapAmb=0x400` as
+   `init_capabilities_verified`, and reads `NoNewPrivs=1` as
+   `init_no_new_privileges_verified`,
    verifies FD 3 and FD 4 are sockets, and writes the exact
    `a3s-box-native-control-v1\n` bytes through FD 5 before the marker is
    observed; the host connects to both inherited listeners and reads back the
@@ -156,7 +160,9 @@ following:
 8. exact-target exec reads back its own `RLIMIT_NOFILE` soft/hard value of 48,
    retained separately as `exec_rlimits_verified`, plus exact configured
    `oom_score_adj` value of 200, best-effort I/O priority
-   5, and `SCHED_BATCH` with nice 7; exec and its retry return the same positive
+   5, and `SCHED_BATCH` with nice 7; reads `0x400` for all five capability
+   masks as `exec_capabilities_verified` and `NoNewPrivs=1` as
+   `exec_no_new_privileges_verified`; exec and its retry return the same positive
    authenticated PID, a duplicate process ID is rejected, and a
    50-millisecond process wait returns `DeadlineExceeded`;
 9. per-process `SIGKILL` and its exact retry succeed through the retained
@@ -255,7 +261,7 @@ configured with one container ID and duplicates the inherited Box FD 3/4/5
 roles before it opens any workload.
 
 The `native-linux-service-smoke` command reuses the complete
-`a3s.oci.native-linux-smoke.v16` lifecycle assertions over a real `0600` Unix
+`a3s.oci.native-linux-smoke.v17` lifecycle assertions over a real `0600` Unix
 socket. In addition to the 26 lifecycle requirements above, success requires:
 
 1. the service root, state root, and executor parent are real, owner-owned

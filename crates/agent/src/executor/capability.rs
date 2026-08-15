@@ -1,11 +1,11 @@
 use std::io;
 
 use a3s_oci_sdk::oci_spec::runtime::{Capabilities, Capability, LinuxCapabilities};
-use a3s_oci_sdk::{Error, ErrorCode, Result};
+use a3s_oci_sdk::{oci_linux_capability_number, Error, ErrorCode, Result};
 use serde::{Deserialize, Serialize};
 
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
-const LAST_KNOWN_CAPABILITY: u32 = 40;
+const LAST_KNOWN_CAPABILITY: u32 = oci_linux_capability_number(Capability::CheckpointRestore);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -68,7 +68,7 @@ impl CapabilityPlan {
     }
 
     pub(super) fn prepare_for_credentials(self, target_uid: u32) -> Result<()> {
-        let last_capability = read_last_capability()?;
+        let last_capability = probe_kernel_capabilities()?.last_capability;
         for capability in 0..=last_capability {
             if self.bounding & (1_u64 << capability) == 0 {
                 // SAFETY: `PR_CAPBSET_DROP` consumes the integer capability
@@ -139,7 +139,7 @@ impl CapabilityPlan {
         {
             return Err(last_os_error("clear inherited ambient capabilities"));
         }
-        for capability in 0..=read_last_capability()? {
+        for capability in 0..=probe_kernel_capabilities()?.last_capability {
             if self.ambient & (1_u64 << capability) != 0
                 // SAFETY: the capability number was validated against the
                 // running kernel's cap_last_cap value.
@@ -188,59 +188,20 @@ fn capability_mask(capabilities: Option<&Capabilities>) -> u64 {
         .into_iter()
         .flatten()
         .fold(0_u64, |mask, capability| {
-            mask | (1_u64 << capability_number(*capability))
+            mask | (1_u64 << oci_linux_capability_number(*capability))
         })
 }
 
-const fn capability_number(capability: Capability) -> u32 {
-    match capability {
-        Capability::Chown => 0,
-        Capability::DacOverride => 1,
-        Capability::DacReadSearch => 2,
-        Capability::Fowner => 3,
-        Capability::Fsetid => 4,
-        Capability::Kill => 5,
-        Capability::Setgid => 6,
-        Capability::Setuid => 7,
-        Capability::Setpcap => 8,
-        Capability::LinuxImmutable => 9,
-        Capability::NetBindService => 10,
-        Capability::NetBroadcast => 11,
-        Capability::NetAdmin => 12,
-        Capability::NetRaw => 13,
-        Capability::IpcLock => 14,
-        Capability::IpcOwner => 15,
-        Capability::SysModule => 16,
-        Capability::SysRawio => 17,
-        Capability::SysChroot => 18,
-        Capability::SysPtrace => 19,
-        Capability::SysPacct => 20,
-        Capability::SysAdmin => 21,
-        Capability::SysBoot => 22,
-        Capability::SysNice => 23,
-        Capability::SysResource => 24,
-        Capability::SysTime => 25,
-        Capability::SysTtyConfig => 26,
-        Capability::Mknod => 27,
-        Capability::Lease => 28,
-        Capability::AuditWrite => 29,
-        Capability::AuditControl => 30,
-        Capability::Setfcap => 31,
-        Capability::MacOverride => 32,
-        Capability::MacAdmin => 33,
-        Capability::Syslog => 34,
-        Capability::WakeAlarm => 35,
-        Capability::BlockSuspend => 36,
-        Capability::AuditRead => 37,
-        Capability::Perfmon => 38,
-        Capability::Bpf => 39,
-        Capability::CheckpointRestore => 40,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KernelCapabilityState {
+    last_capability: u32,
+    bounding: u64,
 }
 
-fn read_last_capability() -> Result<u32> {
+fn probe_kernel_capabilities() -> Result<KernelCapabilityState> {
     let mut last_capability = None;
-    for capability in 0..=63 {
+    let mut bounding = 0_u64;
+    for capability in 0..=64 {
         // SAFETY: `PR_CAPBSET_READ` consumes the integer capability number
         // and zero padding arguments without mutating process state.
         let result = unsafe {
@@ -253,6 +214,23 @@ fn read_last_capability() -> Result<u32> {
             )
         };
         if result >= 0 {
+            if capability == 64 {
+                return Err(security_error(
+                    ErrorCode::Unsupported,
+                    "kernel capability ceiling exceeds the 64-bit OCI capability model",
+                ));
+            }
+            if result == 1 {
+                bounding |= 1_u64 << capability;
+            } else if result != 0 {
+                return Err(security_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "kernel returned invalid bounding-set value {result} for capability \
+                         {capability}"
+                    ),
+                ));
+            }
             last_capability = Some(capability);
             continue;
         }
@@ -280,7 +258,10 @@ fn read_last_capability() -> Result<u32> {
             ),
         ));
     }
-    Ok(value)
+    Ok(KernelCapabilityState {
+        last_capability: value,
+        bounding,
+    })
 }
 
 fn verify_sets(expected: CapabilityPlan) -> Result<()> {
@@ -301,30 +282,34 @@ fn verify_sets(expected: CapabilityPlan) -> Result<()> {
     {
         return Err(last_os_error("verify final process capability sets"));
     }
+    let kernel = probe_kernel_capabilities()?;
     let actual = CapabilityPlan {
-        bounding: expected.bounding,
+        bounding: kernel.bounding,
         effective: u64::from(data[0].effective) | (u64::from(data[1].effective) << 32),
         permitted: u64::from(data[0].permitted) | (u64::from(data[1].permitted) << 32),
         inheritable: u64::from(data[0].inheritable) | (u64::from(data[1].inheritable) << 32),
-        ambient: ambient_mask()?,
+        ambient: ambient_mask(kernel.last_capability)?,
     };
-    if actual.effective == expected.effective
-        && actual.permitted == expected.permitted
-        && actual.inheritable == expected.inheritable
-        && actual.ambient == expected.ambient
-    {
+    ensure_exact_sets(expected, actual)
+}
+
+fn ensure_exact_sets(expected: CapabilityPlan, actual: CapabilityPlan) -> Result<()> {
+    if actual == expected {
         Ok(())
     } else {
         Err(security_error(
             ErrorCode::FailedPrecondition,
-            "process capability sets differ after enforcement",
+            format!(
+                "process capability sets differ after enforcement: expected {expected:?}, actual \
+                 {actual:?}"
+            ),
         ))
     }
 }
 
-fn ambient_mask() -> Result<u64> {
+fn ambient_mask(last_capability: u32) -> Result<u64> {
     let mut mask = 0_u64;
-    for capability in 0..=read_last_capability()? {
+    for capability in 0..=last_capability {
         // SAFETY: `PR_CAP_AMBIENT_IS_SET` reads the validated capability bit.
         let value = unsafe {
             libc::prctl(
@@ -370,11 +355,31 @@ fn security_error(code: ErrorCode, message: impl Into<String>) -> Error {
 mod tests {
     use a3s_oci_sdk::oci_spec::runtime::LinuxCapabilities;
 
-    use super::{read_last_capability, CapabilityPlan, LAST_KNOWN_CAPABILITY};
+    use super::{
+        ensure_exact_sets, probe_kernel_capabilities, CapabilityPlan, LAST_KNOWN_CAPABILITY,
+    };
 
     #[test]
     fn probes_the_kernel_capability_ceiling_without_procfs() {
-        assert!(read_last_capability().expect("probe capability ceiling") >= LAST_KNOWN_CAPABILITY);
+        assert!(
+            probe_kernel_capabilities()
+                .expect("probe capability state")
+                .last_capability
+                >= LAST_KNOWN_CAPABILITY
+        );
+    }
+
+    #[test]
+    fn bounding_set_mismatch_fails_closed() {
+        let expected = CapabilityPlan {
+            bounding: 1,
+            ..CapabilityPlan::default()
+        };
+        let error = ensure_exact_sets(expected, CapabilityPlan::default())
+            .expect_err("bounding mismatch must fail closed");
+
+        assert!(error.message.contains("differ after enforcement"));
+        assert!(error.message.contains("bounding: 1"));
     }
 
     #[test]

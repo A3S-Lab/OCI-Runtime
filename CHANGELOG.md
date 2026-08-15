@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Exact OCI capability and `noNewPrivileges` enforcement evidence. The SDK now
+  owns the 41 recognized Linux capability names and kernel numbers used by
+  both execution and feature reporting. Init and exec read back bounding,
+  effective, permitted, inheritable, and ambient sets from the kernel, and a
+  shared `PR_SET_NO_NEW_PRIVS` path requires `PR_GET_NO_NEW_PRIVS` to return
+  one. Native Linux smoke report v17 retains different init and exec profiles
+  and verifies both profiles through `/proc/self/status`. Three owner-bound
+  rules promote nine requirements to enforced, moving the ledger to 138
+  enforced, 25 validated, and 492 pending. The two capability warning-policy
+  requirements remain pending because the executor still fails closed when a
+  requested capability cannot be granted.
 - Exact OCI process rlimit enforcement and evidence. The Linux executor maps
   all 16 OCI resource types, reads every successful `setrlimit` back through
   `getrlimit`, and fails closed unless both soft and hard values match. Native

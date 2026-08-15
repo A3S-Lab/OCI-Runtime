@@ -11,6 +11,7 @@ mod error;
 mod fingerprint;
 mod handoff;
 mod id;
+mod linux_capability;
 mod model;
 pub mod process_serde;
 mod rootfs_metadata;
@@ -46,6 +47,7 @@ pub use handoff::{
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_ROOT_DIRECTORY,
 };
 pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
+pub use linux_capability::{oci_linux_capability_number, OCI_LINUX_CAPABILITY_NAMES};
 pub use model::*;
 pub use oci_spec;
 pub use oci_spec::runtime::{

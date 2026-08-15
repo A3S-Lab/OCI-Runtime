@@ -294,8 +294,10 @@ Completed:
   The x86_64 and aarch64 production owner routes and fresh-Box-process
   stopped-only restart gates now pass; real-driver live-session reattachment
   plus WHPX, default-routing, and broader cutover gates remain open;
-- Linux executor enforcement for exact capability sets and exec bounding
-  ceilings, private controller-enabled cgroup-v2 management,
+- Linux executor enforcement for exact capability sets with real bounding,
+  effective, permitted, inheritable, and ambient kernel read-back, exec
+  bounding ceilings, exact `no_new_privileges` read-back, private
+  controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
   normalized cgroup stats, exact static device nodes within a bounded
   default-deny profile, and pure-Rust x86_64/AArch64 seccomp BPF retained
@@ -460,7 +462,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 501-entry pending normative evidence backlog.
+- [ ] Close the 492-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1344,8 +1346,16 @@ leak. Only then may KVM become `experimental`.
   prove filesystem ownership through native Linux and the macOS utility VM
   plus unchanged bind sources and exact recursion through native Linux.
 - [x] Apply and verify OCI capability bounding, effective, permitted,
-  inheritable, and ambient sets, and prevent exec from exceeding the
-  configured init bounding ceiling.
+  inheritable, and ambient sets; read all five sets back from the kernel,
+  prevent exec from exceeding the configured init bounding ceiling, and
+  retain distinct init and exec profiles in Native Linux smoke v17.
+- [x] Apply OCI `process.noNewPrivileges` through one shared init/exec path,
+  require exact `PR_GET_NO_NEW_PRIVS` read-back, and retain workload-level
+  `/proc/self/status` evidence for init and exec.
+- [ ] Implement and retain the OCI warning-only policy for requested
+  capabilities that the kernel cannot map or grant. The exact-set executor is
+  intentionally fail-closed today, so the two warning-policy requirements
+  remain pending.
 - [x] Validate, retain, and apply every OCI `process.rlimits` type before
   credential reduction for both init and exec; reject duplicates, inverted
   soft/hard values, and unbounded plans; read every successful `setrlimit`

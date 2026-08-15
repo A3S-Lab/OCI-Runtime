@@ -945,6 +945,58 @@
         ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
         "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:fd38796efd0bc4465e7fec0a3308836194c148585beeda1e5cb7e1f7e1cb7977",
+        "sha256:61b98cb3bc63d38352792a9e7bda11bb764d987f20027fe72670aa82a6c674ff",
+        "sha256:10c6a6aa3ee048a862af43cdc158d54ab39db6bc38d62f6f196ba8c124e5aba7",
+        "sha256:edaf6da9ba25e25b705c1f9d9b0036fe355835a258f681da075a457338f31e1f",
+        "sha256:6f2b307b8d64ff79e0781c520d6c81519d18d961083a0fb68468d14e9e6f33fe",
+        "sha256:5980c3b18bad4e37f1eadc12a578d0b30bd372c95c4634a2aa81534a753db261"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.exact-sets"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-capability-readback",
+        "executor::capability::tests::bounding_set_mismatch_fails_closed",
+        "executor::capability::tests::exec_capabilities_cannot_exceed_the_configured_bounding_set",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::plan_tests::exec_process_planning_enforces_capabilities_and_rejects_unsupported_io"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:50808ff63fa7076a8d4415076e89b328cf67b01298ef15997f0af19c77a8fe53"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.no-new-privileges"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-no-new-privileges-readback",
+        "executor::no_new_privileges::tests::applies_and_reads_back_in_isolated_process",
+        "executor::no_new_privileges::tests::disabled_request_does_not_change_the_current_process"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:0a9e00992c10f315d11815ce40df8ae0f497372c77fb6cdc4814169c7af9fa34",
+        "sha256:5fe7ee0272fc2a9bbb596d6117f235d5708b2b9c739907e75295a6e446151ea2"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.capabilities.recognized"
+      ],
+      "testIds": [
+        "linux_capability::tests::registry_covers_every_recognized_kernel_capability_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     }
   ]
 }
