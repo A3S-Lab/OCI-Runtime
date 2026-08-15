@@ -401,10 +401,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The entity using a runtime to create a container MUST be able to use the operations defined in this specification against that same container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.container.same-entity-operations"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::service_operations",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:73091e1abe2258453ae44c4c0a664e79dd841b42e60c3e8f7c23bc5b651e7fb4",
@@ -698,10 +703,15 @@
       "keyword": "must-not",
       "occurrence": 2,
       "source": "While the resources requested in the [`config.json`](config.md) MUST be created, the user-specified program (from [`process`](config.md#process)) MUST NOT be run at this time.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.create.process.deferred-until-start"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::marker_absent_after_create",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:54cc9754381cfe1353bfa0b6cfa81e7e54d04ccd86beea111662f3bbcbba5b8d",
@@ -843,10 +853,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "8. The runtime MUST run the user-specified program, as specified by [`process`](config.md#process).",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.start.process.executed"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.direct_argv_verified",
+        ".github/scripts/native-linux-smoke.sh::marker_verified",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:00f59cd965210a494e77697bc3baa44195fc31f303a75cebfc5cdff34eb608eb",
@@ -885,10 +901,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This MAY happen due to erroring out, exiting, crashing or the runtime's [`kill`](runtime.md#kill) operation being invoked.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.kill.signal.exact-exit"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::wait_exit_status-signal-9",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:5700536290b4aed2b497dee63d584234cbf412c190654052b81c9d45bc9fecbc",
@@ -969,10 +990,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Unless otherwise stated, runtimes MUST support the following operations.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.operations.required-set"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::service_operations",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:ecb286de5aff2aab4188c4d0fed13d4166a05317d3fea2022f0991c3315bfa0d",
@@ -1126,10 +1152,15 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "[`process.args`](config.md#process) MUST NOT be applied until triggered by the [`start`](#start) operation.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.create.process.deferred-until-start"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::marker_absent_after_create",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:de89ac9eec2c519dbf839ede5a2623dfcf869b141070c949c54d605e9865ac6a",
@@ -1196,10 +1227,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST [generate an error](#errors) if it is not provided the container ID.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.start.id.required"
+      ],
+      "testIds": [
+        "transport::tests::lifecycle_wire_requests_require_container_id"
+      ]
     },
     {
       "id": "sha256:2a9eff47a379f3bdba8a0cc8c704535d77704132db18d9351a1423c991d55ab7",
@@ -1246,10 +1281,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST run the user-specified program as specified by [`process`](config.md#process).",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.start.process.executed"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.direct_argv_verified",
+        ".github/scripts/native-linux-smoke.sh::marker_verified",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:b0bb060732a422aa1bf5c6b9c1e3625408052f06b9f1fb8d083c852d76eabfed",
@@ -1280,10 +1321,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST [generate an error](#errors) if it is not provided the container ID.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.kill.id.required"
+      ],
+      "testIds": [
+        "transport::tests::lifecycle_wire_requests_require_container_id"
+      ]
     },
     {
       "id": "sha256:f7bcb267f8708483e632e47fa0af6f8bbb14dda13de0fdbedcf7230165fc34a5",
@@ -1330,10 +1375,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST send the specified signal to the container process.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.kill.signal.exact-exit"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::wait_exit_status-signal-9",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:c5764360446dfa280c75328e04f5914d0fc81410474b6ce42c180545b02db95b",
@@ -1344,10 +1394,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST [generate an error](#errors) if it is not provided the container ID.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.delete.id.required"
+      ],
+      "testIds": [
+        "transport::tests::lifecycle_wire_requests_require_container_id"
+      ]
     },
     {
       "id": "sha256:018091023b6bddf39465281cc3e88aee283807ed185cce860c801e2b75ac469d",
@@ -1394,10 +1448,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Deleting a container MUST delete the resources that were created during the `create` step.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.delete.owned-resources"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::state_missing_after_delete-and-runtime-clean",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:0a3bf2ea1c240abde08df16a9208a893f096bc6b2484c8291764f78291c9724c",
@@ -1408,10 +1467,14 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "Note that resources associated with the container, but not created by this container, MUST NOT be deleted.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.delete.external-resources-preserved"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::storage_volumes.bind_data_persisted_after_recreate"
+      ]
     },
     {
       "id": "sha256:2762b1e2fd3035d9a47a425bb0dd9a8a641ae11b732e8da0c05e5760bb0597a2",
@@ -1422,10 +1485,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Once a container is deleted its ID MAY be used by a subsequent container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.delete.id.reusable"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:87abc4c465d91b88dd1ab6011d8cae7d3ac50c40362c3da9076d6dfcbcdfc1f0",

@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Exact create-to-delete lifecycle operation evidence. Raw wire tests reject
+  Start, Kill, and Delete requests without a container ID, while the Host
+  boundary test retains the configured start argv, exact signal and all flag,
+  and stopped-only delete mode. The real Native Linux gate proves the workload
+  marker remains absent after create, direct argv executes only after start,
+  signal 9 produces the exact terminal result, delete removes runtime-owned
+  state and resources without deleting caller-owned bind storage, and a
+  deleted ID can be reused with a new generation. Fourteen OCI 1.3.0 entries
+  move from pending to enforced, reducing the ledger from 588 to 574 entries.
 - Exact Create and Query State operation contracts at the public SDK boundary.
   Raw wire tests reject State without a container ID and Create without either
   the container ID or bundle before dispatch. Runtime evidence also rejects

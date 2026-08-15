@@ -50,6 +50,20 @@
     },
     {
       "requirementIds": [
+        "sha256:259c418034dd3d597e824dc6a2cc17ddc1c28ecf6ee9c987f42bdd7ab8f2c1ce"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.container.same-entity-operations"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::service_operations",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:73091e1abe2258453ae44c4c0a664e79dd841b42e60c3e8f7c23bc5b651e7fb4",
         "sha256:becb248d6deef4a0be4bc0071c3ef95e260d4277c39215e07f00f9694e729794",
         "sha256:ffbe27a54964c5b83ba8fb46c4b0a635a55dcd882e668418b05fabfccbba06f4",
@@ -215,6 +229,145 @@
       "testIds": [
         "service::tests::source_config_updates_after_create_do_not_affect_start",
         "state::tests::create_is_durable_idempotent_and_generation_fenced"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:3611f977ed6a97376d86b1408d08c707ec00b070ff779eb049bc4bcbec06fb3a",
+        "sha256:7b567573604a2146308360f6fae6bb4818dc5a1fae3824e1d18c88c3e27926ab"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.create.process.deferred-until-start"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::marker_absent_after_create",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:a0715ec0c7f5cbe12a41ded9eb34e5cc7bc0d99cdb03d63cc2aa31ac7d65e4fa"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.operations.required-set"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::service_operations",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:d983dfad355a3b4255f5294f9ef36abe5563b4ac88cc03258efa912411720877"
+      ],
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.start.id.required"
+      ],
+      "testIds": [
+        "transport::tests::lifecycle_wire_requests_require_container_id"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:2e1690650c4f78eb64ea55af0eebeb4eec9bcaadc16fb1c61115a7f8d5a3a692",
+        "sha256:71b0e3a3947247d7d2c5a6645e019cd5f99125a0e7e333be845f0fc165476a84"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.start.process.executed"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.direct_argv_verified",
+        ".github/scripts/native-linux-smoke.sh::marker_verified",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:dce164d1810648b5f7dec66c7bc8da37e0a649d1e5690394ccda374c1af91ab3"
+      ],
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.kill.id.required"
+      ],
+      "testIds": [
+        "transport::tests::lifecycle_wire_requests_require_container_id"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:c24570f24d069f04b899efc739450a2019ad00325709077fcc2665373013be90",
+        "sha256:d4cb8a17454fc931ca64d8112b0a5c774a002a625c8ec383626055284a9cda76"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.kill.signal.exact-exit"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::wait_exit_status-signal-9",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:c5764360446dfa280c75328e04f5914d0fc81410474b6ce42c180545b02db95b"
+      ],
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.delete.id.required"
+      ],
+      "testIds": [
+        "transport::tests::lifecycle_wire_requests_require_container_id"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:1fc847889a3172f36fa379c59245ecca0138e9970c4d9d19d8d8df24015cddda"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.delete.owned-resources"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::state_missing_after_delete-and-runtime-clean",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:0a3bf2ea1c240abde08df16a9208a893f096bc6b2484c8291764f78291c9724c"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.delete.external-resources-preserved"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::storage_volumes.bind_data_persisted_after_recreate"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:2762b1e2fd3035d9a47a425bb0dd9a8a641ae11b732e8da0c05e5760bb0597a2"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.delete.id.reusable"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
       ]
     },
     {
