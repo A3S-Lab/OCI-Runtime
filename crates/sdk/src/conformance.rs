@@ -28,6 +28,11 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.bundle.config.root-file", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.required", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.semver", "runtime-bundle"),
+    OciNonSemanticRule::new(
+        "oci.common.process.capabilities.exact-sets",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new("oci.common.process.no-new-privileges", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.exact-values", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.command", "linux-executor"),
@@ -36,6 +41,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.hooks.lifecycle-order", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.runtime-namespace", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.state-stdin", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.features.capabilities.recognized",
+        "runtime-feature-report",
+    ),
     OciNonSemanticRule::new("oci.linux.runtime.dev-symlinks.required", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.runtime.config.immutable-after-create",

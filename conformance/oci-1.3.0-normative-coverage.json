@@ -3769,10 +3769,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`capabilities`** (object, OPTIONAL) is an object containing arrays that specifies the sets of capabilities for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.exact-sets"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-capability-readback",
+        "executor::capability::tests::bounding_set_mismatch_fails_closed",
+        "executor::capability::tests::exec_capabilities_cannot_exceed_the_configured_bounding_set",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::plan_tests::exec_process_planning_enforces_capabilities_and_rejects_unsupported_io"
+      ]
     },
     {
       "id": "sha256:d304906b5b6aef9f80ef97c3e2c8f074f23fa8c62965d29d2fb36eb4cb575ba6",
@@ -3811,10 +3819,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`effective`** (array of strings, OPTIONAL) the `effective` field is an array of effective capabilities that are kept for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.exact-sets"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-capability-readback",
+        "executor::capability::tests::bounding_set_mismatch_fails_closed",
+        "executor::capability::tests::exec_capabilities_cannot_exceed_the_configured_bounding_set",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::plan_tests::exec_process_planning_enforces_capabilities_and_rejects_unsupported_io"
+      ]
     },
     {
       "id": "sha256:10c6a6aa3ee048a862af43cdc158d54ab39db6bc38d62f6f196ba8c124e5aba7",
@@ -3825,10 +3841,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`bounding`** (array of strings, OPTIONAL) the `bounding` field is an array of bounding capabilities that are kept for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.exact-sets"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-capability-readback",
+        "executor::capability::tests::bounding_set_mismatch_fails_closed",
+        "executor::capability::tests::exec_capabilities_cannot_exceed_the_configured_bounding_set",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::plan_tests::exec_process_planning_enforces_capabilities_and_rejects_unsupported_io"
+      ]
     },
     {
       "id": "sha256:edaf6da9ba25e25b705c1f9d9b0036fe355835a258f681da075a457338f31e1f",
@@ -3839,10 +3863,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`inheritable`** (array of strings, OPTIONAL) the `inheritable` field is an array of inheritable capabilities that are kept for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.exact-sets"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-capability-readback",
+        "executor::capability::tests::bounding_set_mismatch_fails_closed",
+        "executor::capability::tests::exec_capabilities_cannot_exceed_the_configured_bounding_set",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::plan_tests::exec_process_planning_enforces_capabilities_and_rejects_unsupported_io"
+      ]
     },
     {
       "id": "sha256:6f2b307b8d64ff79e0781c520d6c81519d18d961083a0fb68468d14e9e6f33fe",
@@ -3853,10 +3885,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`permitted`** (array of strings, OPTIONAL) the `permitted` field is an array of permitted capabilities that are kept for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.exact-sets"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-capability-readback",
+        "executor::capability::tests::bounding_set_mismatch_fails_closed",
+        "executor::capability::tests::exec_capabilities_cannot_exceed_the_configured_bounding_set",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::plan_tests::exec_process_planning_enforces_capabilities_and_rejects_unsupported_io"
+      ]
     },
     {
       "id": "sha256:5980c3b18bad4e37f1eadc12a578d0b30bd372c95c4634a2aa81534a753db261",
@@ -3867,10 +3907,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`ambient`** (array of strings, OPTIONAL) the `ambient` field is an array of ambient capabilities that are kept for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.exact-sets"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-capability-readback",
+        "executor::capability::tests::bounding_set_mismatch_fails_closed",
+        "executor::capability::tests::exec_capabilities_cannot_exceed_the_configured_bounding_set",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::plan_tests::exec_process_planning_enforces_capabilities_and_rejects_unsupported_io"
+      ]
     },
     {
       "id": "sha256:50808ff63fa7076a8d4415076e89b328cf67b01298ef15997f0af19c77a8fe53",
@@ -3881,10 +3929,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`noNewPrivileges`** (bool, OPTIONAL) setting `noNewPrivileges` to true prevents the process from gaining additional privileges.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.no-new-privileges"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-no-new-privileges-readback",
+        "executor::no_new_privileges::tests::applies_and_reads_back_in_isolated_process",
+        "executor::no_new_privileges::tests::disabled_request_does_not_change_the_current_process"
+      ]
     },
     {
       "id": "sha256:2aa0add6139457892f538b277481877da7dea6cb39b4986bbb8f379286ef0578",
@@ -11575,10 +11629,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`capabilities`** (array of strings, OPTIONAL) The recognized names of the capabilities, including capabilities that might not be supported by the host operating system.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.capabilities.recognized"
+      ],
+      "testIds": [
+        "linux_capability::tests::registry_covers_every_recognized_kernel_capability_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:5fe7ee0272fc2a9bbb596d6117f235d5708b2b9c739907e75295a6e446151ea2",
@@ -11589,10 +11648,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array in the [`process.capabilities` object of `config.json`](config.md#linux-process).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.capabilities.recognized"
+      ],
+      "testIds": [
+        "linux_capability::tests::registry_covers_every_recognized_kernel_capability_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:948a4163a92c95496fb31c53a3c7d3e1f582c9f1cc426a71dd24b108a0938a7d",

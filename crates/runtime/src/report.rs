@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v16";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v17";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-rootless-smoke.v4";
@@ -386,6 +386,10 @@ pub struct NativeLinuxSmokeReport {
     pub init_io_priority_verified: bool,
     /// Whether init read back its exact OCI process.scheduler values.
     pub init_scheduler_verified: bool,
+    /// Whether init read back all five exact OCI capability sets.
+    pub init_capabilities_verified: bool,
+    /// Whether init read back `NoNewPrivs: 1` after enforcement.
+    pub init_no_new_privileges_verified: bool,
     /// Whether process inventory contained the exact live init and exec processes.
     pub processes_verified: bool,
     /// Whether captured stdout/stderr and piped stdin passed end-to-end.
@@ -398,6 +402,10 @@ pub struct NativeLinuxSmokeReport {
     pub exec_io_priority_verified: bool,
     /// Whether an exec process read back its exact OCI process.scheduler values.
     pub exec_scheduler_verified: bool,
+    /// Whether an exec process read back all five exact OCI capability sets.
+    pub exec_capabilities_verified: bool,
+    /// Whether an exec process read back `NoNewPrivs: 1` after enforcement.
+    pub exec_no_new_privileges_verified: bool,
     /// Whether PTY allocation, resize, interactive I/O, and EOF passed end-to-end.
     pub terminal_io_verified: bool,
     /// Whether binary upload/download and mutation replay passed end-to-end.
@@ -478,12 +486,16 @@ impl NativeLinuxSmokeReport {
             init_oom_score_adj_verified: false,
             init_io_priority_verified: false,
             init_scheduler_verified: false,
+            init_capabilities_verified: false,
+            init_no_new_privileges_verified: false,
             processes_verified: false,
             process_io_verified: false,
             exec_rlimits_verified: false,
             exec_oom_score_adj_verified: false,
             exec_io_priority_verified: false,
             exec_scheduler_verified: false,
+            exec_capabilities_verified: false,
+            exec_no_new_privileges_verified: false,
             terminal_io_verified: false,
             file_transfer_verified: false,
             filesystem_operations_verified: false,
@@ -579,12 +591,16 @@ impl NativeLinuxSmokeReport {
             && self.init_oom_score_adj_verified
             && self.init_io_priority_verified
             && self.init_scheduler_verified
+            && self.init_capabilities_verified
+            && self.init_no_new_privileges_verified
             && self.processes_verified
             && self.process_io_verified
             && self.exec_rlimits_verified
             && self.exec_oom_score_adj_verified
             && self.exec_io_priority_verified
             && self.exec_scheduler_verified
+            && self.exec_capabilities_verified
+            && self.exec_no_new_privileges_verified
             && self.terminal_io_verified
             && self.file_transfer_verified
             && self.filesystem_operations_verified

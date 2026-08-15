@@ -27,11 +27,11 @@ use a3s_oci_sdk::{
     ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
     Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
     TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    ATTACHMENT_SCHEMA_V1,
+    ATTACHMENT_SCHEMA_V1, OCI_LINUX_CAPABILITY_NAMES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
+use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS};
 #[cfg(target_os = "linux")]
 use crate::DriverCreateAttachments;
 use crate::{
@@ -1481,7 +1481,7 @@ async fn reports_only_operations_that_are_currently_implemented() {
     assert_eq!(
         linux.capabilities().as_deref(),
         Some(
-            SUPPORTED_LINUX_CAPABILITIES
+            OCI_LINUX_CAPABILITY_NAMES
                 .iter()
                 .map(|capability| (*capability).to_string())
                 .collect::<Vec<_>>()

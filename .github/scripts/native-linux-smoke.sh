@@ -477,7 +477,7 @@ verify_single_container_report() {
   local output="$2"
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-smoke.v16"
+    '.schema_version == "a3s.oci.native-linux-smoke.v17"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundle_loaded
@@ -505,12 +505,16 @@ verify_single_container_report() {
      and .init_oom_score_adj_verified
      and .init_io_priority_verified
      and .init_scheduler_verified
+     and .init_capabilities_verified
+     and .init_no_new_privileges_verified
      and .processes_verified
      and .process_io_verified
      and .exec_rlimits_verified
      and .exec_oom_score_adj_verified
      and .exec_io_priority_verified
      and .exec_scheduler_verified
+     and .exec_capabilities_verified
+     and .exec_no_new_privileges_verified
      and .terminal_io_verified
      and .file_transfer_verified
      and .filesystem_operations_verified

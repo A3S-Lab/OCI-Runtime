@@ -40,7 +40,7 @@ mod feature_report;
 use driver_registry::{DriverRegistration, DriverRegistry, RegisteredDriver};
 
 #[cfg(test)]
-use feature_report::{RECOGNIZED_LINUX_MOUNT_OPTIONS, SUPPORTED_LINUX_CAPABILITIES};
+use feature_report::RECOGNIZED_LINUX_MOUNT_OPTIONS;
 
 /// In-process host implementation used by the CLI and A3S Box adapter.
 #[derive(Clone, Default)]

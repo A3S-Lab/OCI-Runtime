@@ -352,12 +352,7 @@ fn apply_exec_credentials(plan: &ProcessPlan) -> Result<()> {
         }
     }
     plan.capabilities.apply_after_credentials(plan.uid)?;
-    // SAFETY: `PR_SET_NO_NEW_PRIVS` consumes a boolean integer and zero
-    // padding arguments.
-    if plan.no_new_privileges && unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
-    {
-        return Err(last_exec_os_error("enable exec no_new_privileges"));
-    }
+    crate::executor::no_new_privileges::apply(plan.no_new_privileges)?;
     plan.seccomp.install()?;
     Ok(())
 }
