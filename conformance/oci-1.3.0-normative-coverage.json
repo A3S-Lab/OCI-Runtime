@@ -1367,10 +1367,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`ociVersion`** (string, REQUIRED) MUST be in [SemVer v2.0.0][semver-v2.0.0] format and specifies the version of the Open Container Initiative Runtime Specification with which the bundle complies.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.bundle.config.version.required"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_missing_specification_version"
+      ]
     },
     {
       "id": "sha256:5172c914fcb30e39b89b2925b0116d947377c29d9715f26fa69a8d7c6c7eb6ad",
@@ -1381,10 +1386,15 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "* **`ociVersion`** (string, REQUIRED) MUST be in [SemVer v2.0.0][semver-v2.0.0] format and specifies the version of the Open Container Initiative Runtime Specification with which the bundle complies.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.bundle.config.version.semver"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_non_semver_specification_version"
+      ]
     },
     {
       "id": "sha256:abb94e86ce4dc1eabe4b3a112f71f3cfb126730107ed3be8516b45e13067cc81",

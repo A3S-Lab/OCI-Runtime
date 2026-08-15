@@ -6,12 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Exact normative evidence for the required `ociVersion` field and its SemVer
+  syntax. Dedicated positive and negative SDK tests now bind both obligations
+  to owner-checked bundle-validation rules, reducing the pending OCI 1.3.0
+  ledger from 614 to 612 entries.
 - Owner-bound normative evidence for non-semantic runtime enforcement. Bundle
   loading now pins the canonical directory, opens only the root `config.json`
   entry without following symlinks or Windows reparse points, and rejects a
   missing, renamed, nested, non-file, or redirected configuration before
   decoding it. The evidence verifier combines the existing semantic-rule
-  registry with an explicit owner-bound execution-rule registry, rejecting
+  registry with an explicit owner-bound non-semantic rule registry, rejecting
   unknown, duplicate, orphaned, or owner-drifted rules. The three RFC 2119
   occurrences defining the root `config.json` contract move from pending to
   enforced, reducing the pending OCI 1.3.0 ledger from 617 to 614 entries.

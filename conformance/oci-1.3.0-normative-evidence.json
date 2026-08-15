@@ -22,6 +22,34 @@
     },
     {
       "requirementIds": [
+        "sha256:c8b42bebc58cbf1bb28bc412d4abdacfd6bf5d34f683315ce29a0aa332592ad2"
+      ],
+      "disposition": "validated",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.bundle.config.version.required"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_missing_specification_version"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:5172c914fcb30e39b89b2925b0116d947377c29d9715f26fa69a8d7c6c7eb6ad"
+      ],
+      "disposition": "validated",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.bundle.config.version.semver"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_non_semver_specification_version"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:e3edff401547ac1dea717dc4be796cde5ac7aff43208ac9719e2de67c2145e6c"
       ],
       "disposition": "validated",

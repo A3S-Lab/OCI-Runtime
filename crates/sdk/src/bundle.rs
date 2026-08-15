@@ -634,6 +634,43 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_specification_version() {
+        let mut fixture = complete_v1_3_fixture();
+        fixture
+            .as_object_mut()
+            .expect("configuration object")
+            .remove("ociVersion");
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("bundle");
+
+        let error = OciBundle::from_json(
+            absolute,
+            serde_json::to_string(&fixture).expect("encode fixture"),
+        )
+        .expect_err("ociVersion must be required");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("ociVersion"));
+    }
+
+    #[test]
+    fn rejects_non_semver_specification_version() {
+        let mut fixture = complete_v1_3_fixture();
+        fixture["ociVersion"] = json!("1.3");
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("bundle");
+
+        let error = OciBundle::from_json(
+            absolute,
+            serde_json::to_string(&fixture).expect("encode fixture"),
+        )
+        .expect_err("ociVersion must use SemVer 2.0.0 syntax");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("invalid OCI specification version"));
+    }
+
+    #[test]
     fn rejects_future_specification_version() {
         let mut fixture = complete_v1_3_fixture();
         fixture["ociVersion"] = json!("1.4.0");
