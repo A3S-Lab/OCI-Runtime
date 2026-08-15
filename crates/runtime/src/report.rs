@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v15";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v16";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-rootless-smoke.v4";
@@ -378,6 +378,8 @@ pub struct NativeLinuxSmokeReport {
     pub start_released: bool,
     /// Whether the configured process was observed running.
     pub running_observed: bool,
+    /// Whether init read back its exact OCI process.rlimits values.
+    pub init_rlimits_verified: bool,
     /// Whether init read back its exact OCI process.oomScoreAdj value.
     pub init_oom_score_adj_verified: bool,
     /// Whether init read back its exact OCI process.ioPriority value.
@@ -388,6 +390,8 @@ pub struct NativeLinuxSmokeReport {
     pub processes_verified: bool,
     /// Whether captured stdout/stderr and piped stdin passed end-to-end.
     pub process_io_verified: bool,
+    /// Whether an exec process read back its exact OCI process.rlimits values.
+    pub exec_rlimits_verified: bool,
     /// Whether an exec process read back its exact OCI process.oomScoreAdj value.
     pub exec_oom_score_adj_verified: bool,
     /// Whether an exec process read back its exact OCI process.ioPriority value.
@@ -470,11 +474,13 @@ impl NativeLinuxSmokeReport {
             marker_absent_after_create: false,
             start_released: false,
             running_observed: false,
+            init_rlimits_verified: false,
             init_oom_score_adj_verified: false,
             init_io_priority_verified: false,
             init_scheduler_verified: false,
             processes_verified: false,
             process_io_verified: false,
+            exec_rlimits_verified: false,
             exec_oom_score_adj_verified: false,
             exec_io_priority_verified: false,
             exec_scheduler_verified: false,
@@ -569,11 +575,13 @@ impl NativeLinuxSmokeReport {
             && self.marker_absent_after_create
             && self.start_released
             && self.running_observed
+            && self.init_rlimits_verified
             && self.init_oom_score_adj_verified
             && self.init_io_priority_verified
             && self.init_scheduler_verified
             && self.processes_verified
             && self.process_io_verified
+            && self.exec_rlimits_verified
             && self.exec_oom_score_adj_verified
             && self.exec_io_priority_verified
             && self.exec_scheduler_verified
