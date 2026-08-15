@@ -50,6 +50,20 @@
     },
     {
       "requirementIds": [
+        "sha256:54cc9754381cfe1353bfa0b6cfa81e7e54d04ccd86beea111662f3bbcbba5b8d"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.config.immutable-after-create"
+      ],
+      "testIds": [
+        "service::tests::source_config_updates_after_create_do_not_affect_start",
+        "state::tests::create_is_durable_idempotent_and_generation_fenced"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:e3edff401547ac1dea717dc4be796cde5ac7aff43208ac9719e2de67c2145e6c"
       ],
       "disposition": "validated",
