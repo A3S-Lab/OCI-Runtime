@@ -460,7 +460,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 574-entry pending normative evidence backlog.
+- [ ] Close the 573-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1296,6 +1296,10 @@ leak. Only then may KVM become `experimental`.
 - [x] Apply OCI mount entries in listed order, including safe missing
   directory/file target creation, bind/rbind, common VFS flags, propagation
   modes, and filesystem-specific data.
+- [x] After all mounts are in place, create the conditional OCI Linux
+  `/dev/fd`, `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` links without
+  replacing conflicting container content. Verify their exact targets through
+  native Linux v17 and Apple Silicon utility-VM v11 retained evidence.
 - [x] Create new IPC, network, and cgroup namespaces atomically before the
   created barrier.
 - [x] Create a new PID namespace, retain a dedicated namespace PID 1
@@ -1421,8 +1425,8 @@ leak. Only then may KVM become `experimental`.
     descriptor, observe bounded non-overlapping UID/GID maps from inside the
     namespace, recheck its device/inode identity immediately before `setns`,
     and use the observed namespace-root mapping with the existing detached
-    device-source and exact-cleanup path. Native Linux multi-container v16 and
-    real Apple Silicon utility-VM multi-container v10 verify all six nodes from
+    device-source and exact-cleanup path. Native Linux multi-container v17 and
+    real Apple Silicon utility-VM multi-container v11 verify all six nodes from
     inside the joined-user workload.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
     for every newly advertised controller on x86_64 and aarch64.

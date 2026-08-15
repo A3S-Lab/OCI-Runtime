@@ -1,3 +1,5 @@
+mod command;
+
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
@@ -17,6 +19,10 @@ use a3s_oci_sdk::OciBundle;
 use serde_json::{json, Map, Value};
 use tokio::io::AsyncReadExt;
 
+use command::{
+    enforcement_command, process_command_mut, EnforcementCommandPaths, NativeIdmapBindPaths,
+};
+
 use crate::{PidSupervisionEvidence, RootfsMountEvidence};
 
 const EVIDENCE_FILE: &str = "evidence";
@@ -31,6 +37,7 @@ const IDMAP_VISIBLE_ID_RANGE: u32 = 65_536;
 const EXPECTED_COMMON_EVIDENCE: &[u8] = b"pid1-supervision-enforced\n\
 orphan-adopted-by-pid1\n\
 orphan-reaping-enforced\n\
+dev-symlinks-verified\n\
 mount-target-created\n\
 mount-file-target-created\n\
 rootfs-propagation-shared\n\
@@ -45,6 +52,7 @@ readonly-rootfs-enforced\n";
 const EXPECTED_NATIVE_EVIDENCE: &[u8] = b"pid1-supervision-enforced\n\
 orphan-adopted-by-pid1\n\
 orphan-reaping-enforced\n\
+dev-symlinks-verified\n\
 mount-target-created\n\
 mount-file-target-created\n\
 rootfs-propagation-shared\n\
@@ -243,6 +251,7 @@ impl RootfsEnforcementFixture {
         let lines = evidence_text.lines().collect::<Vec<_>>();
         pid_report.pid1_supervision_enforced = lines.contains(&"pid1-supervision-enforced");
         pid_report.orphan_reaping_enforced = lines.contains(&"orphan-reaping-enforced");
+        rootfs_report.dev_symlinks_verified = lines.contains(&"dev-symlinks-verified");
         rootfs_report.rootfs_propagation_shared = lines.contains(&"rootfs-propagation-shared");
         rootfs_report.readonly_path_enforced = lines.contains(&"readonly-path-enforced");
         rootfs_report.masked_path_enforced = lines.contains(&"masked-path-enforced");
@@ -540,6 +549,12 @@ fn build_bundle(
             "options": ["nosuid", "noexec", "nodev"]
         },
         {
+            "destination": "/dev",
+            "type": "tmpfs",
+            "source": "tmpfs",
+            "options": ["nosuid", "strictatime", "mode=0755", "size=64k"]
+        },
+        {
             "destination": output_target,
             "type": "none",
             "source": output_name,
@@ -689,233 +704,6 @@ fn build_bundle(
         .map_err(|error| format!("failed to encode rootfs enforcement config: {error}"))?;
     OciBundle::from_json(base.directory().to_path_buf(), config)
         .map_err(|error| format!("failed to validate rootfs enforcement bundle: {error}"))
-}
-
-#[derive(Debug, Clone, Copy)]
-struct NativeIdmapBindPaths<'a> {
-    source: &'a str,
-    foreign_readonly: &'a str,
-    idmap: &'a str,
-    ridmap: &'a str,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct EnforcementCommandPaths<'a> {
-    evidence: &'a str,
-    tmpfs_target: &'a str,
-    file_target: &'a str,
-    recursive_source: &'a str,
-    recursive_target: &'a str,
-    idmap_target: &'a str,
-    ridmap_target: &'a str,
-    write_probe: &'a str,
-}
-
-fn enforcement_command(
-    paths: EnforcementCommandPaths<'_>,
-    native_idmap_bind: Option<NativeIdmapBindPaths<'_>>,
-) -> String {
-    let EnforcementCommandPaths {
-        evidence,
-        tmpfs_target,
-        file_target,
-        recursive_source,
-        recursive_target,
-        idmap_target,
-        ridmap_target,
-        write_probe,
-    } = paths;
-    let recursive_source_child = format!("{recursive_source}/child");
-    let recursive_target_child = format!("{recursive_target}/child");
-    let native_idmap_bind_checks = native_idmap_bind.map_or_else(String::new, |paths| {
-        let source_child = format!("{}/child", paths.source);
-        let idmap_child = format!("{}/child", paths.idmap);
-        let ridmap_child = format!("{}/child", paths.ridmap);
-        format!(
-            "test \"$(/bin/busybox stat -c '%u:%g' '{source}')\" = '0:0'; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{source_child}')\" = '0:0'; \
-             /bin/busybox awk '$5 == \"{source_child}\" {{ ok = 1 }} \
-               END {{ exit !ok }}' /proc/self/mountinfo; \
-             printf 'idmap-source-ownership-unchanged\\n' >> \"$evidence\"; \
-             test \"$(/bin/busybox cat '{foreign_readonly}')\" = \
-               'a3s-oci-foreign-readonly-bind-v1'; \
-             test \"$(/bin/busybox stat -c '%a' '{foreign_readonly}')\" = '400'; \
-             /bin/busybox awk '$5 == \"{foreign_readonly}\" && \
-               $6 ~ /(^|,)ro(,|$)/ && $6 ~ /(^|,)nosuid(,|$)/ && \
-               $6 ~ /(^|,)nodev(,|$)/ && $6 ~ /(^|,)noexec(,|$)/ \
-               {{ ok = 1 }} END {{ exit !ok }}' /proc/self/mountinfo; \
-             if printf 'forbidden\\n' > '{foreign_readonly}' 2>/dev/null; then \
-               exit 46; fi; \
-             printf 'foreign-readonly-bind-enforced\\n' >> \"$evidence\"; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{idmap}')\" = '1000:1000'; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{idmap_child}')\" = '0:0'; \
-             /bin/busybox awk '$5 == \"{idmap_child}\" {{ ok = 1 }} \
-               END {{ exit !ok }}' /proc/self/mountinfo; \
-             printf 'idmap-nonrecursive-enforced\\n' >> \"$evidence\"; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{ridmap}')\" = '2000:2000'; \
-             test \"$(/bin/busybox stat -c '%u:%g' '{ridmap_child}')\" = '2000:2000'; \
-             /bin/busybox awk '$5 == \"{ridmap_child}\" {{ ok = 1 }} \
-               END {{ exit !ok }}' /proc/self/mountinfo; \
-             printf 'ridmap-recursive-enforced\\n' >> \"$evidence\"; ",
-            source = paths.source,
-            foreign_readonly = paths.foreign_readonly,
-            idmap = paths.idmap,
-            ridmap = paths.ridmap,
-        )
-    });
-    format!(
-        "set -eu; \
-         evidence='{evidence}'; \
-         : > \"$evidence\"; \
-         failure_step=pid-self; \
-         failure_detail=none; \
-         trap 'status=$?; if test \"$status\" -ne 0; then \
-           printf \"failure-step=%s status=%s detail=%s\\n\" \
-             \"$failure_step\" \"$status\" \"$failure_detail\" >> \"$evidence\"; \
-           fi; exit \"$status\"' EXIT; \
-         self_pid=$$; \
-         test \"$self_pid\" -gt 1; \
-         failure_step=pid-parent; \
-         test \"$(/bin/busybox awk '/^PPid:/ {{ print $2 }}' \
-           \"/proc/$self_pid/status\")\" = '1'; \
-         failure_step=pid-init-nspid; \
-         test \"$(/bin/busybox awk '/^NSpid:/ {{ print $NF }}' /proc/1/status)\" = '1'; \
-         failure_step=pid-init-parent; \
-         test \"$(/bin/busybox awk '/^PPid:/ {{ print $2 }}' /proc/1/status)\" = '0'; \
-         failure_step=pid-self-nspid; \
-         test \"$(/bin/busybox awk '/^NSpid:/ {{ print $NF }}' \
-           \"/proc/$self_pid/status\")\" = \
-           \"$self_pid\"; \
-         printf 'pid1-supervision-enforced\\n' >> \"$evidence\"; \
-         failure_step=orphan-supervision; \
-         failure_detail=none; \
-         orphan_pid_file=\"${{evidence}}.orphan-pid\"; \
-         /bin/busybox rm -f \"$orphan_pid_file\"; \
-         /bin/busybox setsid /bin/busybox setsid /bin/busybox sh -c \
-           'set -eu; printf \"%s\\n\" \"$$\" > \"$1\"; \
-              exec /bin/busybox sleep 30' \
-           a3s-orphan-child \"$orphan_pid_file\"; \
-         attempt=0; \
-         while test ! -s \"$orphan_pid_file\" && test \"$attempt\" -lt 100; do \
-           /bin/busybox sleep 0.01; attempt=$((attempt + 1)); \
-         done; \
-         test -s \"$orphan_pid_file\"; \
-         orphan_pid=\"$(/bin/busybox cat \"$orphan_pid_file\")\"; \
-         if ! test \"$orphan_pid\" -gt 1; then \
-           printf 'invalid-orphan-pid=%s\\n' \"$orphan_pid\" >> \"$evidence\"; exit 45; \
-         fi; \
-         orphan_parent=''; attempt=0; \
-         while test \"$attempt\" -lt 100; do \
-           if test -e \"/proc/$orphan_pid/status\"; then \
-             orphan_parent=\"$(/bin/busybox awk '/^PPid:/ {{ print $2 }}' \
-               \"/proc/$orphan_pid/status\")\"; \
-             if test \"$orphan_parent\" = '1'; then break; fi; \
-           fi; \
-           /bin/busybox sleep 0.01; \
-           attempt=$((attempt + 1)); \
-         done; \
-         if test \"$orphan_parent\" != '1'; then \
-           printf 'unexpected-orphan-parent=%s pid=%s self=%s\\n' \
-             \"$orphan_parent\" \"$orphan_pid\" \"$self_pid\" >> \"$evidence\"; \
-           /bin/busybox ps -o pid,ppid,comm >> \"$evidence\"; \
-           exit 45; \
-         fi; \
-         printf 'orphan-adopted-by-pid1\\n' >> \"$evidence\"; \
-         /bin/busybox kill -TERM \"$orphan_pid\"; \
-         orphan_reaped=0; attempt=0; \
-         while test \"$attempt\" -lt 400; do \
-           if test ! -e \"/proc/$orphan_pid/status\"; then \
-             orphan_reaped=1; break; \
-           fi; \
-           /bin/busybox sleep 0.01; \
-           attempt=$((attempt + 1)); \
-         done; \
-         /bin/busybox rm -f \"$orphan_pid_file\"; \
-         if test \"$orphan_reaped\" != '1'; then \
-           /bin/busybox awk '/^(State|PPid|NSpid):/' \"/proc/$orphan_pid/status\" \
-             >> \"$evidence\"; \
-           exit 45; \
-         fi; \
-         printf 'orphan-reaping-enforced\\n' >> \"$evidence\"; \
-         test -d '{tmpfs_target}'; \
-         /bin/busybox awk '$5 == \"{tmpfs_target}\" {{ ok = 1 }} END {{ exit !ok }}' \
-           /proc/self/mountinfo; \
-         printf 'mount-target-created\\n' >> \"$evidence\"; \
-         test -f '{file_target}'; \
-         test \"$(/bin/busybox cat '{file_target}')\" = 'a3s-oci-bind-source-v1'; \
-         /bin/busybox awk '$5 == \"{file_target}\" {{ ok = 1 }} END {{ exit !ok }}' \
-           /proc/self/mountinfo; \
-         printf 'mount-file-target-created\\n' >> \"$evidence\"; \
-         /bin/busybox awk '$5 == \"/\" {{ for (i = 7; i <= NF && $i != \"-\"; i++) \
-           if ($i ~ /^shared:/) ok = 1 }} END {{ exit !ok }}' /proc/self/mountinfo; \
-         printf 'rootfs-propagation-shared\\n' >> \"$evidence\"; \
-         /bin/busybox awk '$5 == \"/proc/sys\" && $6 ~ /(^|,)ro(,|$)/ {{ ok = 1 }} \
-           END {{ exit !ok }}' /proc/self/mountinfo; \
-         printf 'readonly-path-enforced\\n' >> \"$evidence\"; \
-         /bin/busybox awk '$5 == \"/proc/meminfo\" && $6 ~ /(^|,)ro(,|$)/ {{ ok = 1 }} \
-           END {{ exit !ok }}' /proc/self/mountinfo; \
-         test -f /proc/meminfo; test ! -s /proc/meminfo; \
-         test -z \"$(/bin/busybox cat /proc/meminfo)\"; \
-         printf 'masked-file-empty-readonly\\n' >> \"$evidence\"; \
-         /bin/busybox awk '$5 == \"/proc/irq\" && $6 ~ /(^|,)ro(,|$)/ {{ ok = 1 }} \
-           END {{ exit !ok }}' /proc/self/mountinfo; \
-         test -d /proc/irq; test -z \"$(/bin/busybox ls -A /proc/irq)\"; \
-         printf 'masked-directory-empty-readonly\\n' >> \"$evidence\"; \
-         printf 'masked-path-enforced\\n' >> \"$evidence\"; \
-         for path in '{recursive_target}' '{recursive_target_child}'; do \
-           /bin/busybox awk -v path=\"$path\" '$5 == path && \
-             $6 ~ /(^|,)ro(,|$)/ && $6 ~ /(^|,)nosuid(,|$)/ && \
-             $6 ~ /(^|,)nodev(,|$)/ && $6 ~ /(^|,)noexec(,|$)/ && \
-             $6 ~ /(^|,)noatime(,|$)/ && $6 ~ /(^|,)nodiratime(,|$)/ && \
-             $6 ~ /(^|,)nosymfollow(,|$)/ {{ ok = 1 }} END {{ exit !ok }}' \
-             /proc/self/mountinfo; \
-         done; \
-         for path in '{recursive_source}' '{recursive_source_child}'; do \
-           /bin/busybox touch \"$path/write-probe\"; \
-           /bin/busybox rm \"$path/write-probe\"; \
-           printf '#!/bin/sh\\nexit 0\\n' > \"$path/exec-probe\"; \
-           /bin/busybox chmod 0700 \"$path/exec-probe\"; \
-           \"$path/exec-probe\"; \
-           printf 'symlink-source\\n' > \"$path/symlink-source\"; \
-           /bin/busybox ln -s symlink-source \"$path/symlink-probe\"; \
-         done; \
-         for path in '{recursive_target}' '{recursive_target_child}'; do \
-           if /bin/busybox touch \"$path/write-probe\" 2>/dev/null; then exit 42; fi; \
-           if \"$path/exec-probe\" 2>/dev/null; then exit 43; fi; \
-           if /bin/busybox cat \"$path/symlink-probe\" >/dev/null 2>&1; then exit 44; fi; \
-         done; \
-         printf 'recursive-mount-attributes-enforced\\n' >> \"$evidence\"; \
-         test \"$(/bin/busybox stat -c '%u:%g' '{idmap_target}')\" = '1000:1000'; \
-         test \"$(/bin/busybox stat -c '%u:%g' '{ridmap_target}')\" = '2000:2000'; \
-         printf 'idmapped-mounts-enforced\\n' >> \"$evidence\"; \
-         {native_idmap_bind_checks}\
-         /bin/busybox awk '$5 == \"/\" && $6 ~ /(^|,)ro(,|$)/ {{ ok = 1 }} \
-           END {{ exit !ok }}' /proc/self/mountinfo; \
-         if /bin/busybox touch '{write_probe}' 2>/dev/null; then \
-           /bin/busybox rm -f '{write_probe}'; exit 41; \
-         fi; \
-         printf 'readonly-rootfs-enforced\\n' >> \"$evidence\"; \
-         trap - EXIT"
-    )
-}
-
-fn process_command_mut(root: &mut Map<String, Value>) -> Result<&mut String, String> {
-    let command = root
-        .get_mut("process")
-        .and_then(Value::as_object_mut)
-        .and_then(|process| process.get_mut("args"))
-        .and_then(Value::as_array_mut)
-        .and_then(|args| args.get_mut(2))
-        .ok_or_else(|| {
-            "rootfs enforcement fixture requires process.args[2] to be a shell command".to_string()
-        })?;
-    command.as_str().ok_or_else(|| {
-        "rootfs enforcement fixture requires process.args[2] to be a string".to_string()
-    })?;
-    match command {
-        Value::String(command) => Ok(command),
-        _ => Err("rootfs enforcement process command is not a string".into()),
-    }
 }
 
 fn object_mut<'a>(value: &'a mut Value, field: &str) -> Result<&'a mut Map<String, Value>, String> {
@@ -1198,323 +986,5 @@ async fn remove_tree(path: &Path, description: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use a3s_oci_sdk::OciBundle;
-    use serde_json::Value;
-    use tempfile::tempdir;
-
-    use super::{build_bundle, EnforcementIdMappings, FixtureIdMapping, RootfsEnforcementFixture};
-
-    const CONFIG: &str = include_str!("../../../fixtures/utility-vm/config.json");
-    const NATIVE_CONFIG: &str = include_str!("../../../fixtures/native-linux/config.json");
-
-    #[tokio::test]
-    async fn derives_and_cleans_a_complete_rootfs_enforcement_fixture() {
-        let temporary = tempdir().expect("temporary rootfs fixture");
-        let bundle_directory = temporary.path().join("bundle");
-        std::fs::create_dir_all(bundle_directory.join("rootfs")).expect("fixture rootfs");
-        let base = OciBundle::from_json(bundle_directory, CONFIG).expect("qualified base bundle");
-
-        let fixture = RootfsEnforcementFixture::prepare(&base, "fixture-123")
-            .await
-            .expect("rootfs enforcement fixture");
-        let config: Value =
-            serde_json::from_str(fixture.bundle.config_json()).expect("enforcement JSON");
-
-        assert_eq!(config["root"]["readonly"], Value::Bool(true));
-        assert_eq!(
-            config["linux"]["rootfsPropagation"],
-            Value::String("shared".into())
-        );
-        assert_eq!(
-            config["linux"]["maskedPaths"],
-            serde_json::json!(["/proc/meminfo", "/proc/irq"])
-        );
-        assert_eq!(
-            config["linux"]["readonlyPaths"],
-            serde_json::json!(["/proc/sys"])
-        );
-        assert_eq!(
-            config["linux"]["uidMappings"],
-            serde_json::json!([{"containerID": 0, "hostID": 0, "size": 65_536}])
-        );
-        assert_eq!(
-            config["linux"]["gidMappings"],
-            serde_json::json!([{"containerID": 0, "hostID": 0, "size": 65_536}])
-        );
-        assert_eq!(
-            config["process"]["capabilities"],
-            serde_json::json!({
-                "bounding": ["CAP_SYS_PTRACE"],
-                "effective": ["CAP_SYS_PTRACE"],
-                "inheritable": [],
-                "permitted": ["CAP_SYS_PTRACE"],
-                "ambient": []
-            })
-        );
-        assert_eq!(
-            config["mounts"][1]["source"],
-            Value::String(".a3s-oci-rootfs-output-fixture-123".into())
-        );
-        assert_eq!(
-            config["mounts"][3]["source"],
-            Value::String(".a3s-oci-rootfs-output-fixture-123/bind-source".into())
-        );
-        let recursive_mount = config["mounts"]
-            .as_array()
-            .expect("mount array")
-            .iter()
-            .find(|mount| {
-                mount["destination"]
-                    .as_str()
-                    .is_some_and(|path| path.ends_with("/recursive/readonly"))
-            })
-            .expect("recursive-attribute mount");
-        assert_eq!(
-            recursive_mount["options"],
-            serde_json::json!([
-                "rbind",
-                "rro",
-                "rnosuid",
-                "rnodev",
-                "rnoexec",
-                "rnoatime",
-                "rnodiratime",
-                "rnosymfollow"
-            ])
-        );
-        let idmapped_mounts = config["mounts"]
-            .as_array()
-            .expect("mount array")
-            .iter()
-            .filter(|mount| {
-                mount["options"].as_array().is_some_and(|options| {
-                    options
-                        .iter()
-                        .any(|option| matches!(option.as_str(), Some("idmap" | "ridmap")))
-                })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(idmapped_mounts.len(), 2);
-        assert_eq!(
-            idmapped_mounts[0]["uidMappings"],
-            serde_json::json!([{"containerID": 0, "hostID": 1000, "size": 1}])
-        );
-        assert_eq!(
-            idmapped_mounts[1]["uidMappings"],
-            serde_json::json!([{"containerID": 0, "hostID": 2000, "size": 1}])
-        );
-        let command = config["process"]["args"][2]
-            .as_str()
-            .expect("enforcement command");
-        for assertion in [
-            "/bin/busybox setsid /bin/busybox setsid",
-            "pid1-supervision-enforced",
-            "orphan-adopted-by-pid1",
-            "orphan-reaping-enforced",
-            "mount-target-created",
-            "mount-file-target-created",
-            "rootfs-propagation-shared",
-            "readonly-path-enforced",
-            "masked-directory-empty-readonly",
-            "masked-path-enforced",
-            "recursive-mount-attributes-enforced",
-            "idmapped-mounts-enforced",
-            "readonly-rootfs-enforced",
-        ] {
-            assert!(command.contains(assertion), "missing {assertion}");
-        }
-        assert!(fixture.evidence_absent().await.expect("evidence state"));
-        assert!(fixture.cleanup().await.expect("fixture cleanup"));
-        assert!(!PathBuf::from(base.directory())
-            .join(".a3s-oci-rootfs-output-fixture-123")
-            .exists());
-    }
-
-    #[test]
-    fn utility_vm_fixture_preserves_caller_owned_root_and_extends_id_range() {
-        let temporary = tempdir().expect("temporary utility-VM fixture");
-        let bundle_directory = temporary.path().join("bundle");
-        std::fs::create_dir_all(bundle_directory.join("rootfs")).expect("fixture rootfs");
-        let mut config: Value = serde_json::from_str(CONFIG).expect("utility-VM config");
-        config["linux"]["uidMappings"] =
-            serde_json::json!([{"containerID": 0, "hostID": 501, "size": 1}]);
-        config["linux"]["gidMappings"] =
-            serde_json::json!([{"containerID": 0, "hostID": 0, "size": 1}]);
-        let base = OciBundle::from_json(
-            bundle_directory,
-            serde_json::to_string(&config).expect("caller-owned config JSON"),
-        )
-        .expect("caller-owned utility-VM base bundle");
-
-        let mappings =
-            EnforcementIdMappings::from_base(&base, false).expect("extended fixture mappings");
-        assert_eq!(
-            mappings.uids,
-            vec![
-                FixtureIdMapping {
-                    container_id: 0,
-                    host_id: 501,
-                    size: 1,
-                },
-                FixtureIdMapping {
-                    container_id: 1,
-                    host_id: 0,
-                    size: 501,
-                },
-                FixtureIdMapping {
-                    container_id: 502,
-                    host_id: 502,
-                    size: 65_034,
-                },
-            ]
-        );
-        assert_eq!(
-            mappings.gids,
-            vec![FixtureIdMapping {
-                container_id: 0,
-                host_id: 0,
-                size: 65_536,
-            }]
-        );
-        assert_mapping_ranges_do_not_overlap(&mappings.uids);
-        assert_mapping_ranges_do_not_overlap(&mappings.gids);
-        for (container_id, expected_uid, expected_gid) in [
-            (0, 501, 0),
-            (1, 0, 1),
-            (501, 500, 501),
-            (1_000, 1_000, 1_000),
-            (2_000, 2_000, 2_000),
-            (65_535, 65_535, 65_535),
-        ] {
-            assert_eq!(
-                super::translate_fixture_id(&mappings.uids, container_id, "UID")
-                    .expect("visible UID"),
-                expected_uid
-            );
-            assert_eq!(
-                super::translate_fixture_id(&mappings.gids, container_id, "GID")
-                    .expect("visible GID"),
-                expected_gid
-            );
-        }
-        assert_eq!(
-            mappings.filesystem_1000.uid,
-            super::single_mapping(0, 1_000)
-        );
-        assert_eq!(
-            mappings.filesystem_1000.gid,
-            super::single_mapping(0, 1_000)
-        );
-        assert_eq!(
-            mappings.filesystem_2000.uid,
-            super::single_mapping(0, 2_000)
-        );
-        assert_eq!(
-            mappings.filesystem_2000.gid,
-            super::single_mapping(0, 2_000)
-        );
-    }
-
-    fn assert_mapping_ranges_do_not_overlap(mappings: &[FixtureIdMapping]) {
-        for (index, mapping) in mappings.iter().enumerate() {
-            let container_end = u64::from(mapping.container_id) + u64::from(mapping.size);
-            let host_end = u64::from(mapping.host_id) + u64::from(mapping.size);
-            for prior in &mappings[..index] {
-                let prior_container_end = u64::from(prior.container_id) + u64::from(prior.size);
-                let prior_host_end = u64::from(prior.host_id) + u64::from(prior.size);
-                assert!(
-                    container_end <= u64::from(prior.container_id)
-                        || prior_container_end <= u64::from(mapping.container_id),
-                    "container ranges overlap: {prior:?} and {mapping:?}"
-                );
-                assert!(
-                    host_end <= u64::from(prior.host_id)
-                        || prior_host_end <= u64::from(mapping.host_id),
-                    "host ranges overlap: {prior:?} and {mapping:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn native_fixture_declares_distinct_idmap_and_ridmap_bind_evidence() {
-        let temporary = tempdir().expect("temporary native fixture");
-        let bundle_directory = temporary.path().join("bundle");
-        std::fs::create_dir_all(bundle_directory.join("rootfs")).expect("fixture rootfs");
-        let base = OciBundle::from_json(bundle_directory, NATIVE_CONFIG)
-            .expect("qualified native base bundle");
-        let bundle = build_bundle(
-            &base,
-            ".a3s-oci-rootfs-output-native",
-            ".a3s-oci-rootfs-target-native",
-            "native",
-            true,
-        )
-        .expect("native rootfs enforcement bundle");
-        let config: Value =
-            serde_json::from_str(bundle.config_json()).expect("native enforcement JSON");
-        let mounts = config["mounts"].as_array().expect("mount array");
-
-        assert_eq!(
-            config["linux"]["uidMappings"],
-            serde_json::json!([{"containerID": 0, "hostID": 100_000, "size": 65_536}])
-        );
-        assert_eq!(
-            config["linux"]["gidMappings"],
-            serde_json::json!([{"containerID": 0, "hostID": 200_000, "size": 65_536}])
-        );
-
-        for (destination, mapped_uid, mapped_gid) in [
-            ("/idmap/filesystem/nonrecursive", 101_000, 201_000),
-            ("/idmap/filesystem/recursive", 102_000, 202_000),
-        ] {
-            let mount = mounts
-                .iter()
-                .find(|mount| {
-                    mount["destination"]
-                        .as_str()
-                        .is_some_and(|path| path.ends_with(destination))
-                })
-                .expect("native ID-mapped filesystem mount");
-            assert_eq!(mount["uidMappings"][0]["containerID"], 0);
-            assert_eq!(mount["uidMappings"][0]["hostID"], mapped_uid);
-            assert_eq!(mount["gidMappings"][0]["containerID"], 0);
-            assert_eq!(mount["gidMappings"][0]["hostID"], mapped_gid);
-        }
-
-        for (destination, mode, mapped_uid, mapped_gid) in [
-            ("/idmap/bind/nonrecursive", "idmap", 101_000, 201_000),
-            ("/idmap/bind/recursive", "ridmap", 102_000, 202_000),
-        ] {
-            let mount = mounts
-                .iter()
-                .find(|mount| {
-                    mount["destination"]
-                        .as_str()
-                        .is_some_and(|path| path.ends_with(destination))
-                })
-                .expect("native ID-mapped bind mount");
-            assert!(mount["options"]
-                .as_array()
-                .is_some_and(|options| options.iter().any(|option| option == mode)));
-            assert_eq!(mount["uidMappings"][0]["containerID"], 100_000);
-            assert_eq!(mount["uidMappings"][0]["hostID"], mapped_uid);
-            assert_eq!(mount["gidMappings"][0]["containerID"], 200_000);
-            assert_eq!(mount["gidMappings"][0]["hostID"], mapped_gid);
-        }
-
-        let command = config["process"]["args"][2]
-            .as_str()
-            .expect("native enforcement command");
-        for assertion in [
-            "idmap-source-ownership-unchanged",
-            "idmap-nonrecursive-enforced",
-            "ridmap-recursive-enforced",
-        ] {
-            assert!(command.contains(assertion), "missing {assertion}");
-        }
-    }
-}
+#[path = "rootfs_enforcement/tests.rs"]
+mod tests;

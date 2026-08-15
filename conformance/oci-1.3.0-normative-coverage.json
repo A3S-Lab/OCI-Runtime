@@ -1531,10 +1531,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "While creating the container (step 2 in the [lifecycle](runtime.md#lifecycle)), runtimes MUST create the following symlinks if the source file exists after processing [`mounts`](config.md#mounts):",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.runtime.dev-symlinks.required"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.dev_symlinks_verified",
+        ".github/workflows/ci.yml::oci-vm-multi-container.rootfs_mount.dev_symlinks_verified",
+        "executor::rootfs::dev_symlink::tests::creates_only_links_whose_sources_exist_and_is_idempotent",
+        "executor::rootfs::dev_symlink::tests::rejects_a_conflicting_destination_without_replacing_it",
+        "executor::rootfs::dev_symlink::tests::source_lookup_cannot_escape_through_a_rootfs_symlink",
+        "rootfs_enforcement::tests::derives_and_cleans_a_complete_rootfs_enforcement_fixture"
+      ]
     },
     {
       "id": "sha256:c8b42bebc58cbf1bb28bc412d4abdacfd6bf5d34f683315ce29a0aa332592ad2",

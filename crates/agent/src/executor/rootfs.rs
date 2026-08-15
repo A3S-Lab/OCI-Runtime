@@ -1,3 +1,4 @@
+mod dev_symlink;
 mod mask;
 
 use std::ffi::CString;
@@ -109,6 +110,8 @@ pub(super) fn finalize(
     }
     Ok(())
 }
+
+pub(super) use dev_symlink::create_required_dev_symlinks;
 
 pub(super) fn pivot_root(rootfs: &Path) -> Result<()> {
     let rootfs = path_cstring(rootfs)?;

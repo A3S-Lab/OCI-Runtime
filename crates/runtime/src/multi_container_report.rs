@@ -6,9 +6,9 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v16";
+    "a3s.oci.native-linux-multi-container-smoke.v17";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
-pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v10";
+pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v11";
 /// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.
 pub const WINDOWS_OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str =
     "a3s.oci.windows-oci-vm-multi-container-smoke.v1";
@@ -24,6 +24,9 @@ pub struct RootfsMountEvidence {
     pub evidence_absent_before_start: bool,
     /// Whether start released the prepared enforcement workload.
     pub start_released: bool,
+    /// Whether all four conditional OCI Linux `/dev` links resolved to their
+    /// exact `/proc/self/fd` targets after mounts were applied.
+    pub dev_symlinks_verified: bool,
     /// Whether the workload observed the root mount in a new shared peer group.
     pub rootfs_propagation_shared: bool,
     /// Whether the configured path had a distinct read-only mount.
@@ -73,6 +76,7 @@ impl RootfsMountEvidence {
             && self.mount_targets_created_before_start
             && self.evidence_absent_before_start
             && self.start_released
+            && self.dev_symlinks_verified
             && self.rootfs_propagation_shared
             && self.readonly_path_enforced
             && self.masked_path_enforced
@@ -832,6 +836,7 @@ mod tests {
             mount_targets_created_before_start: true,
             evidence_absent_before_start: true,
             start_released: true,
+            dev_symlinks_verified: true,
             rootfs_propagation_shared: true,
             readonly_path_enforced: true,
             masked_path_enforced: true,
@@ -851,6 +856,9 @@ mod tests {
         assert!(complete.native_bind_is_success());
 
         let mut incomplete = complete;
+        incomplete.dev_symlinks_verified = false;
+        assert!(!incomplete.is_success());
+        incomplete.dev_symlinks_verified = true;
         incomplete.idmap_nonrecursive_enforced = Some(false);
         assert!(!incomplete.native_bind_is_success());
         incomplete.idmapped_mounts_enforced = false;
