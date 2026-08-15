@@ -1041,7 +1041,7 @@ real-driver coverage remains open for the other utility-VM backends.
   checksum-verified Windows bundle for the isolated shim, with firmware
   provenance from `A3S-Lab/Box@93fc281` and segmented stream, writable
   virtio-fs flush, and same-process native-resource reclamation fixes from
-  `A3S-Lab/libkrun@75ec190`.
+  clean source revision `A3S-Lab/libkrun@35cc832`.
 - [x] Create, configure, and release a real context using the Windows WHPX
   libkrun build.
 - [x] Configure a plain-vsock device and the fixed guest control port through

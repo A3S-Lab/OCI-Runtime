@@ -17,7 +17,7 @@ The runtime:
    stages a runtime-owned, checksum-verified native bundle with firmware
    provenance from `A3S-Lab/Box@93fc281` and segmented stream, writable
    virtio-fs flush, and same-process native-resource reclamation fixes from
-   `A3S-Lab/libkrun@75ec190`;
+   clean source revision `A3S-Lab/libkrun@35cc832`;
 6. creates, configures for one vCPU and 128 MiB, replaces implicit TSI with a
    zero-feature plain-vsock device, maps guest port 4093 to a validated bare
    Windows pipe name, and releases one real libkrun context without entering a
@@ -362,7 +362,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 Run the same-process native-handle gate separately. This command must use a
 `krun.dll` built from the handle-reclamation libkrun revision recorded by the
-system-image manifest; an older DLL is expected to fail the final count:
+system-image manifest. The fixed archive currently binds `35cc832`, produced
+by libkrun Windows CI run `31878747322`; an older DLL is expected to fail the
+final count:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `

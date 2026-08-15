@@ -336,8 +336,10 @@ and system-image SHA-256
 The latest WHPX owner-death gate emitted
 `a3s.oci.whpx-recovery-smoke-run.v1` from clean runtime commit `2d91cd0`.
 That closes the service-restart evidence item. The immutable-image code and
-qualification artifact are now present, but they have not yet produced the
-fresh-host matrix required to promote the public candidate.
+qualification artifact are now present. Its fixed Windows runtime bundle uses
+the clean libkrun source revision `35cc832` from passing Windows CI run
+`31878747322`, but the bundle has not yet produced the fresh-host matrix
+required to promote the public candidate.
 
 ## Architecture
 

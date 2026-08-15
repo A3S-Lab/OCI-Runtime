@@ -7,30 +7,40 @@ The Windows x86_64 shim carries one deterministic native runtime archive:
 `runtime/windows-x86_64/krun-windows-x64.tar.xz`
 
 Its SHA-256 is
-`734f69936e5c6caee5f67ff5daf68a52d90d7f6f0be3dae41907f009db39c847`.
+`f6bc8d37681788454acded5872d54d6cf1047ee786876cedf6e81e0115232e9b`.
 The build script verifies the archive and every extracted file before linking
 or staging them:
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `krun.dll` | 7,433,728 | `ac7724209635505c4ae7b3ba36edeb7fc5597353e6ffcc7351fbf97af1e0d5e5` |
+| `krun.dll` | 7,422,976 | `0d28ac43fca4e9e592b98779f9d6e8e948be566ca2f433a6974d2460375d45cd` |
 | `krun.lib` | 11,870 | `3ac760758158bd4d2d6570db58037d47cd370a8e6ea04ccf54a8b24fd1fdec3d` |
 | `libkrunfw.dll` | 21,473,280 | `44f25540f58155c01258fe123617636fdc6cff27873e38e71dbc75f139602077` |
 
-The archive is created with bsdtar 3.8.2 using the file order above and fixed
-ustar metadata:
+The archive is created with bsdtar 3.5.3, libarchive 3.7.4, and liblzma 5.4.3
+using the file order above and fixed ustar metadata:
 
-```powershell
-tar.exe -cJf krun-windows-x64.tar.xz --format ustar `
-  --mtime '1970-01-01 00:00:00 UTC' -C stage `
+```bash
+chmod 0666 stage/krun.dll stage/krun.lib stage/libkrunfw.dll
+TZ=UTC touch -t 197001010000.00 \
+  stage/krun.dll stage/krun.lib stage/libkrunfw.dll
+COPYFILE_DISABLE=1 /usr/bin/tar -cJf krun-windows-x64.tar.xz --format ustar \
+  --uid 0 --gid 0 --uname '' --gname '' -C stage \
   krun.dll krun.lib libkrunfw.dll
 ```
 
-Repacking the prior archive with this command reproduced its SHA-256 exactly;
-two independent staging directories produced the new hash above.
+Two independent staging directories produced byte-identical archives with the
+hash above.
 
 `krun.dll` and `krun.lib` were built from
-[`A3S-Lab/libkrun@75ec190`](https://github.com/A3S-Lab/libkrun/commit/75ec19097a337a60076a2ebff7cdad6acf8ca69c).
+[`A3S-Lab/libkrun@35cc832`](https://github.com/A3S-Lab/libkrun/commit/35cc832b3de33e2bcbb6f1d4687ab18685d92396).
+The files came from `krun-windows-x64`, artifact `9245492618`, produced by
+[Windows CI run `31878747322`](https://github.com/A3S-Lab/libkrun/actions/runs/31878747322)
+for that exact source revision. The pull-request checkout commit
+`300b9367ac0ed7f52fdd71a7c5b5c62dd65c117d` and source revision shared Git
+tree `c64917f9c56dc5d7943f07b51c5a839d5fa80a11`. GitHub recorded SHA-256
+`77cb80ad83ae49598c81703b614ebea11df90e1c7189b7582e5ad5ef8efba175`
+for the uploaded artifact archive.
 That revision retains segmented Windows host-to-guest stream reads and
 writable virtio-fs flush support. It also cancels and joins vCPU, monitor,
 timer, virtiofs, vsock, and stdin-reader workers, releases the WHPX partition

@@ -16,10 +16,12 @@ All notable changes to A3S OCI Runtime are documented in this file.
   baseline within two handles. The PowerShell wrapper additionally binds the
   evidence to a clean source revision and exact input, shim, `krun.dll`, and
   firmware digests. A passing fresh-host run with the fixed handle-safe DLL is
-  still required before WHPX becomes `experimental`. A manual CI dispatch now
-  builds the revision-bound bundle and runs this gate, the formal driver,
-  owner-death recovery, and complete soak on the self-hosted Hyper-V runner,
-  retaining all four evidence directories even on failure.
+  still required before WHPX becomes `experimental`. The pinned bundle now
+  uses clean source revision `A3S-Lab/libkrun@35cc832`, built and tested by
+  Windows CI run `31878747322`. A manual CI dispatch builds the revision-bound
+  bundle and runs this gate, the formal driver, owner-death recovery, and
+  complete soak on the self-hosted Hyper-V runner, retaining all four evidence
+  directories even on failure.
 - Transactional OCI Linux sysctl enforcement for known namespaced controls.
   One SDK parser preserves OCI dot/slash notation without losing literal dots,
   rejects host-global controls, traversal, aliases, and `kernel.hostname`, and
