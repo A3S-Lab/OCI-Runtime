@@ -356,9 +356,12 @@ pub(super) fn complete_create_and_wait_for_start(
     {
         return reject_before_ready(&mut control, error);
     }
-    if let Err(error) =
-        finish_create_environment(create.plan, create.rootfs, create.prepared_devices)
-    {
+    if let Err(error) = finish_create_environment(
+        create.plan,
+        create.rootfs,
+        create.rootfs_file,
+        create.prepared_devices,
+    ) {
         return reject_before_ready(&mut control, error);
     }
     write_ready(&mut control, runtime_pid, namespace_init_pid)?;
@@ -594,6 +597,7 @@ fn prepare_create_environment_before_pivot(
 fn finish_create_environment(
     plan: &InitPlan,
     rootfs: &Path,
+    rootfs_file: &File,
     prepared_devices: &PreparedDeviceSources,
 ) -> Result<()> {
     if plan.namespaces.new_mount() {
@@ -609,7 +613,10 @@ fn finish_create_environment(
             plan.root_readonly,
         )?;
     } else {
-        rootfs::create_required_dev_symlinks(rootfs)?;
+        // Joining another mount namespace can hide the original bundle path.
+        // Keep all rootfs mutation anchored to the pre-setns descriptor that
+        // will also be used by the eventual chroot.
+        rootfs::create_required_dev_symlinks_from_root(rootfs_file)?;
     }
     Ok(())
 }

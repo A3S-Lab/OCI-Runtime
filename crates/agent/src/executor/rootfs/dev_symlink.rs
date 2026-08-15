@@ -46,6 +46,13 @@ const MAX_LINK_TARGET_BYTES: usize = 256;
 /// fails closed instead of replacing container or bind-mounted content.
 pub(in crate::executor) fn create_required_dev_symlinks(rootfs: &Path) -> Result<()> {
     let root = open_root(rootfs)?;
+    create_required_dev_symlinks_from_root(&root)
+}
+
+/// Create the conditional links through a root descriptor retained before
+/// namespace entry. This is required when `setns` makes the original bundle
+/// path unreachable while the descriptor remains the authenticated rootfs.
+pub(in crate::executor) fn create_required_dev_symlinks_from_root(root: &File) -> Result<()> {
     let mut required = [false; REQUIRED_LINKS.len()];
     for (index, link) in REQUIRED_LINKS.iter().enumerate() {
         required[index] = source_exists(root.as_raw_fd(), link.source)?;
@@ -262,7 +269,7 @@ mod tests {
 
     use a3s_oci_sdk::ErrorCode;
 
-    use super::create_required_dev_symlinks;
+    use super::{create_required_dev_symlinks, create_required_dev_symlinks_from_root};
 
     fn rootfs_with_fd_directory() -> tempfile::TempDir {
         let rootfs = tempfile::tempdir().expect("temporary rootfs");
@@ -292,6 +299,31 @@ mod tests {
         assert_eq!(
             fs::read_link(rootfs.path().join("dev/stderr")).expect("stderr link"),
             Path::new("/proc/self/fd/2")
+        );
+    }
+
+    #[test]
+    fn retained_root_descriptor_survives_an_unreachable_original_path() {
+        let parent = tempfile::tempdir().expect("temporary parent");
+        let original = parent.path().join("rootfs");
+        let detached = parent.path().join("detached-rootfs");
+        fs::create_dir_all(original.join("proc/self/fd")).expect("proc fd directory");
+        fs::create_dir(original.join("dev")).expect("dev directory");
+        fs::write(original.join("proc/self/fd/0"), b"stdin").expect("stdin source");
+        let root = fs::File::open(&original).expect("retain root descriptor");
+
+        fs::rename(&original, &detached).expect("make original root path unreachable");
+        assert!(!original.exists());
+
+        create_required_dev_symlinks_from_root(&root)
+            .expect("create required links through retained descriptor");
+        assert_eq!(
+            fs::read_link(detached.join("dev/fd")).expect("fd link"),
+            Path::new("/proc/self/fd")
+        );
+        assert_eq!(
+            fs::read_link(detached.join("dev/stdin")).expect("stdin link"),
+            Path::new("/proc/self/fd/0")
         );
     }
 
