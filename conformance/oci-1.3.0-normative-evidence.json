@@ -5,6 +5,23 @@
   "bindings": [
     {
       "requirementIds": [
+        "sha256:93a1b9c2528f6f1d04ce0301d68e93d2262e83e15b0708a34fc3c1bd719e5fb8",
+        "sha256:96c5bcacf765426a9e9cedb8bc2d5e0d6fba22d898470564f25db18b9531be82",
+        "sha256:f818cdc28aa3a44fdf50ebf61d60bb050081f7b5b00d7879f85b60b6ea18be34"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.bundle.config.root-file"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_symlinked_config_json",
+        "bundle::tests::requires_config_json_at_bundle_root"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:e3edff401547ac1dea717dc4be796cde5ac7aff43208ac9719e2de67c2145e6c"
       ],
       "disposition": "validated",
