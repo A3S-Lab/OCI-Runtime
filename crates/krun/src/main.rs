@@ -61,8 +61,11 @@ enum Command {
         /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
         #[arg(long, value_name = "DIR")]
         rootfs: PathBuf,
-        /// Exact immutable system-image manifest required by macOS HVF.
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        /// Exact immutable system-image manifest required by the utility VM.
+        #[cfg(any(
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        ))]
         #[arg(long, value_name = "FILE")]
         system_image_manifest: PathBuf,
         /// Host file that receives the guest console stream.
@@ -89,10 +92,10 @@ enum Command {
         ))]
         #[arg(long, value_name = "FILE")]
         recovery_report: Option<PathBuf>,
-        /// Optional exact-generation host directory exported to the Windows guest.
+        /// Exact-generation host directory exported to the Windows guest.
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         #[arg(long, value_name = "DIR")]
-        runtime_share: Option<PathBuf>,
+        runtime_share: PathBuf,
         /// Writable host directory exported to the macOS guest.
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         #[arg(long, value_name = "DIR")]
@@ -175,7 +178,10 @@ fn main() -> ExitCode {
         }
         Command::AgentVmSmoke {
             rootfs,
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            #[cfg(any(
+                all(target_os = "windows", target_arch = "x86_64"),
+                all(target_os = "macos", target_arch = "aarch64")
+            ))]
             system_image_manifest,
             console,
             pipe_name,
@@ -223,15 +229,9 @@ fn main() -> ExitCode {
             let socket_path = None;
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             let report = {
-                let handoff_root = runtime_share.as_deref().unwrap_or(&rootfs);
-                let guest_handoff_root = if runtime_share.is_some() {
-                    a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT
-                } else {
-                    "/"
-                };
                 let bootstrap = match bootstrap_token::BootstrapTokenFile::create(
-                    handoff_root,
-                    guest_handoff_root,
+                    &runtime_share,
+                    a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT,
                     &endpoint,
                     &token,
                 ) {
@@ -245,8 +245,8 @@ fn main() -> ExitCode {
                 };
                 let recovery = match recovery_report {
                     Some(destination) => match recovery_report::RecoveryReportHandoff::create(
-                        handoff_root,
-                        guest_handoff_root,
+                        &runtime_share,
+                        a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT,
                         &endpoint,
                         &destination,
                     ) {
@@ -273,13 +273,13 @@ fn main() -> ExitCode {
                 };
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
-                    None,
+                    Some(&system_image_manifest),
                     &console,
                     &endpoint,
                     socket_path,
                     &token,
                     a3s_oci_krun::AgentVmHandoff::new(
-                        runtime_share.as_deref(),
+                        Some(&runtime_share),
                         Some(bootstrap.guest_path()),
                         recovery.as_ref().map(|recovery| recovery.guest_path()),
                     )

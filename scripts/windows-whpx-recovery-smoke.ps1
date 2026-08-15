@@ -2,6 +2,8 @@
 param(
     [Parameter(Mandatory)]
     [string]$RootfsArchive,
+    [Parameter(Mandatory)]
+    [string]$SystemImageManifest,
     [string]$OutputDirectory = '',
     [switch]$SkipBuild
 )
@@ -16,12 +18,14 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 $expectedRootfsSha256 = '4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282'
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $rootfsArchive = (Resolve-Path -LiteralPath $RootfsArchive -ErrorAction Stop).Path
+$systemImageManifest = (
+    Resolve-Path -LiteralPath $SystemImageManifest -ErrorAction Stop
+).Path
 $fixtureConfig = Join-Path $repositoryRoot 'fixtures\utility-vm\config.windows.json'
 $cli = Join-Path $repositoryRoot 'target\debug\a3s-oci.exe'
 $shim = Join-Path $repositoryRoot 'target\debug\a3s-oci-krun-shim.exe'
 $krunDll = Join-Path $repositoryRoot 'target\debug\krun.dll'
-$agent = Join-Path $repositoryRoot `
-    'target\x86_64-unknown-linux-musl\release\a3s-oci-agent'
+$firmwareDll = Join-Path $repositoryRoot 'target\debug\libkrunfw.dll'
 $tar = (Get-Command tar.exe -ErrorAction Stop).Source
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
@@ -41,6 +45,33 @@ if ($rootfsSha256 -ne $expectedRootfsSha256) {
 if (-not (Test-Path -LiteralPath $fixtureConfig -PathType Leaf)) {
     throw "Windows OCI fixture is missing: $fixtureConfig"
 }
+$manifestItem = Get-Item -LiteralPath $systemImageManifest -Force
+if ($manifestItem.PSIsContainer -or $manifestItem.Length -le 0) {
+    throw "System-image manifest must be a non-empty regular file: $systemImageManifest"
+}
+if ($manifestItem.PSObject.Properties.Name -contains 'LinkType' -and $manifestItem.LinkType) {
+    throw "System-image manifest must not be a link: $systemImageManifest"
+}
+$systemImage = Get-Content -LiteralPath $systemImageManifest -Raw | ConvertFrom-Json
+if ($systemImage.schema_version -ne 'a3s.oci.windows-system-image.v1' -or
+    $systemImage.architecture -ne 'x86_64' -or
+    $systemImage.image.name -ne 'a3s-oci-system.ext4') {
+    throw "Unexpected Windows system-image manifest: $systemImageManifest"
+}
+$systemImagePath = Join-Path $manifestItem.DirectoryName $systemImage.image.name
+if (-not (Test-Path -LiteralPath $systemImagePath -PathType Leaf)) {
+    throw "Windows system image is missing: $systemImagePath"
+}
+$systemImageSha256 = (
+    Get-FileHash -LiteralPath $systemImagePath -Algorithm SHA256
+).Hash.ToLowerInvariant()
+if ($systemImageSha256 -ne $systemImage.image.sha256 -or
+    (Get-Item -LiteralPath $systemImagePath).Length -ne [uint64]$systemImage.image.size) {
+    throw "Windows system image does not match its manifest: $systemImagePath"
+}
+$systemImageManifestSha256 = (
+    Get-FileHash -LiteralPath $systemImageManifest -Algorithm SHA256
+).Hash.ToLowerInvariant()
 
 $runId = '{0}-{1}' -f (
     Get-Date
@@ -57,7 +88,7 @@ if (Test-Path -LiteralPath $outputRoot) {
 $containerId = "whpx-recovery-smoke-$PID"
 $expectedGeneration = 1
 $runtimeRoot = Join-Path $outputRoot 'runtime'
-$systemRoot = Join-Path $runtimeRoot 'system'
+$bootstrapRoot = Join-Path $runtimeRoot 'bootstrap'
 $stateRoot = Join-Path $runtimeRoot 'state'
 $runtimeShare = Join-Path $runtimeRoot `
     "shares\$containerId\$expectedGeneration"
@@ -132,44 +163,25 @@ if ($preexisting.Count -gt 0) {
 }
 
 New-Item -ItemType Directory -Path `
-    $systemRoot, $stateRoot, $containerRootfs | Out-Null
+    $bootstrapRoot, $stateRoot, $containerRootfs | Out-Null
 
 if (-not $SkipBuild) {
-    & cargo.exe zigbuild --manifest-path (Join-Path $repositoryRoot 'Cargo.toml') `
-        -p a3s-oci-agent --release `
-        --jobs 1 `
-        --target x86_64-unknown-linux-musl
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to build the static Linux guest agent.'
-    }
     & cargo.exe build --manifest-path (Join-Path $repositoryRoot 'Cargo.toml') `
         -p a3s-oci-cli -p a3s-oci-krun --jobs 1
     if ($LASTEXITCODE -ne 0) {
         throw 'Failed to build the Windows recovery qualification binaries.'
     }
 }
-foreach ($path in @($cli, $shim, $krunDll, $agent)) {
+foreach ($path in @($cli, $shim, $krunDll, $firmwareDll)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required WHPX recovery smoke binary is missing: $path"
     }
 }
 
-& $tar -xf $rootfsArchive -C $systemRoot
-if ($LASTEXITCODE -ne 0) {
-    throw 'Failed to extract the WHPX guest system root.'
-}
 & $tar -xf $rootfsArchive -C $containerRootfs
 if ($LASTEXITCODE -ne 0) {
     throw 'Failed to extract the WHPX container rootfs.'
 }
-New-Item -ItemType Directory -Path (
-    Join-Path $systemRoot 'run\a3s-oci-runtime'
-) -Force | Out-Null
-New-Item -ItemType Directory -Path (
-    Join-Path $systemRoot 'usr\bin'
-) -Force | Out-Null
-Copy-Item -LiteralPath $agent `
-    -Destination (Join-Path $systemRoot 'usr\bin\a3s-oci-agent') -Force
 Copy-Item -LiteralPath $fixtureConfig `
     -Destination (Join-Path $bundle 'config.json') -Force
 
@@ -177,7 +189,8 @@ $ownerArguments = @(
     'whpx-recovery-owner',
     '--shim', $shim,
     '--runtime-root', $runtimeRoot,
-    '--vm-rootfs', $systemRoot,
+    '--vm-rootfs', $bootstrapRoot,
+    '--system-image-manifest', $systemImageManifest,
     '--state-root', $stateRoot,
     '--bundle', $bundle,
     '--container-id', $containerId,
@@ -250,7 +263,8 @@ try {
         'whpx-recovery-resume',
         '--shim', $shim,
         '--runtime-root', $runtimeRoot,
-        '--vm-rootfs', $systemRoot,
+        '--vm-rootfs', $bootstrapRoot,
+        '--system-image-manifest', $systemImageManifest,
         '--state-root', $stateRoot,
         '--bundle', $bundle,
         '--container-id', $containerId,
@@ -322,9 +336,10 @@ $summary = [ordered]@{
     worktree_status = @(& git -C $repositoryRoot status --porcelain)
     rootfs_archive = $rootfsArchive
     rootfs_sha256 = $rootfsSha256
-    agent_sha256 = (
-        Get-FileHash -LiteralPath $agent -Algorithm SHA256
-    ).Hash.ToLowerInvariant()
+    system_image_manifest = $systemImageManifest
+    system_image_manifest_sha256 = $systemImageManifestSha256
+    system_image = $systemImagePath
+    system_image_sha256 = $systemImageSha256
     cli_sha256 = (
         Get-FileHash -LiteralPath $cli -Algorithm SHA256
     ).Hash.ToLowerInvariant()
@@ -333,6 +348,9 @@ $summary = [ordered]@{
     ).Hash.ToLowerInvariant()
     krun_dll_sha256 = (
         Get-FileHash -LiteralPath $krunDll -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    firmware_dll_sha256 = (
+        Get-FileHash -LiteralPath $firmwareDll -Algorithm SHA256
     ).Hash.ToLowerInvariant()
     owner_process_id = $owner.Id
     owner_exit_code = $ownerExitCode

@@ -3,19 +3,19 @@ use serde_json::{json, Value};
 
 #[cfg(unix)]
 use super::canonical_file;
-use super::{parse_shim_report, BoundedOutput};
+use super::{parse_shim_report, paths_overlap, require_expected_manifest_digest, BoundedOutput};
 
 fn valid_output(platform: &str) -> BoundedOutput {
     BoundedOutput {
         bytes: serde_json::to_vec(&json!({
-            "schema_version": "a3s.oci.krun-agent-vm-smoke.v3",
+            "schema_version": "a3s.oci.krun-agent-vm-smoke.v4",
             "platform": platform,
             "status": "available",
             "runtime_bundle_loaded": true,
             "context_created": true,
             "vm_configured": true,
             "rootfs_configured": true,
-            "runtime_share_configured": false,
+            "runtime_share_configured": true,
             "macos_boot_assets": {
                 "manifest_sha256": "1".repeat(64),
                 "system_image_sha256": "2".repeat(64),
@@ -27,6 +27,26 @@ fn valid_output(platform: &str) -> BoundedOutput {
                 "kernel_bundle_size": 22740992,
                 "kernel_guest_load_address": "0x0000000080000000",
                 "kernel_entry_address": "0x0000000080000000",
+                "root_disk_read_only": true,
+                "runtime_share_separate": true
+            },
+            "windows_boot_assets": {
+                "manifest_sha256": "7".repeat(64),
+                "system_image_sha256": "8".repeat(64),
+                "system_image_size": 67108864,
+                "runtime_archive_sha256": "9".repeat(64),
+                "krun_dll_sha256": "a".repeat(64),
+                "firmware_sha256": "b".repeat(64),
+                "box_revision": "c".repeat(40),
+                "libkrun_revision": "d".repeat(40),
+                "firmware_wrapper_revision": "e".repeat(40),
+                "libkrunfw_revision": "f".repeat(40),
+                "kernel_version": "6.12.91",
+                "kernel_source_sha256": "1".repeat(64),
+                "kernel_bundle_sha256": "2".repeat(64),
+                "kernel_bundle_size": 21364736,
+                "kernel_guest_load_address": "0x0000000001000000",
+                "kernel_entry_address": "0x0000000001000123",
                 "root_disk_read_only": true,
                 "runtime_share_separate": true
             },
@@ -47,8 +67,13 @@ fn valid_output(platform: &str) -> BoundedOutput {
 
 #[test]
 fn accepts_complete_shim_evidence() {
-    let report = parse_shim_report(&valid_output("windows"), HostPlatform::Windows, false, None)
-        .expect("valid Windows shim evidence");
+    let report = parse_shim_report(
+        &valid_output("windows"),
+        HostPlatform::Windows,
+        true,
+        Some(&"7".repeat(64)),
+    )
+    .expect("valid Windows shim evidence");
     assert_eq!(report["guest_exit_code"], 0);
 
     let report = parse_shim_report(
@@ -67,11 +92,23 @@ fn rejects_incomplete_or_truncated_shim_evidence() {
     let mut value: Value = serde_json::from_slice(&incomplete.bytes).expect("decode test evidence");
     value["agent_vsock_configured"] = json!(false);
     incomplete.bytes = serde_json::to_vec(&value).expect("serialize test evidence");
-    assert!(parse_shim_report(&incomplete, HostPlatform::Windows, false, None).is_err());
+    assert!(parse_shim_report(
+        &incomplete,
+        HostPlatform::Windows,
+        true,
+        Some(&"7".repeat(64)),
+    )
+    .is_err());
 
     let mut truncated = valid_output("windows");
     truncated.truncated = true;
-    assert!(parse_shim_report(&truncated, HostPlatform::Windows, false, None).is_err());
+    assert!(parse_shim_report(
+        &truncated,
+        HostPlatform::Windows,
+        true,
+        Some(&"7".repeat(64)),
+    )
+    .is_err());
 }
 
 #[test]
@@ -100,13 +137,58 @@ fn rejects_a_shim_report_with_a_different_system_image_manifest() {
 #[test]
 fn requires_explicit_runtime_share_evidence_for_the_driver_path() {
     let mut output = valid_output("windows");
-    assert!(parse_shim_report(&output, HostPlatform::Windows, true, None).is_err());
-
     let mut value: Value = serde_json::from_slice(&output.bytes).expect("decode test evidence");
+    value["runtime_share_configured"] = json!(false);
+    output.bytes = serde_json::to_vec(&value).expect("serialize test evidence");
+    assert!(
+        parse_shim_report(&output, HostPlatform::Windows, true, Some(&"7".repeat(64)),).is_err()
+    );
+
     value["runtime_share_configured"] = json!(true);
     output.bytes = serde_json::to_vec(&value).expect("serialize test evidence");
-    parse_shim_report(&output, HostPlatform::Windows, true, None)
+    parse_shim_report(&output, HostPlatform::Windows, true, Some(&"7".repeat(64)))
         .expect("runtime-share driver evidence");
+}
+
+#[test]
+fn rejects_a_windows_shim_report_with_a_different_system_image_manifest() {
+    let error = parse_shim_report(
+        &valid_output("windows"),
+        HostPlatform::Windows,
+        true,
+        Some(&"0".repeat(64)),
+    )
+    .expect_err("host and Windows shim manifest digests must agree");
+    assert!(error.contains("manifest digest does not match"));
+}
+
+#[test]
+fn detects_asset_bootstrap_and_runtime_share_path_overlap() {
+    let assets = std::path::Path::new("/qualification/system-image");
+    assert!(paths_overlap(
+        assets,
+        std::path::Path::new("/qualification/system-image/runtime")
+    ));
+    assert!(paths_overlap(
+        assets,
+        std::path::Path::new("/qualification")
+    ));
+    assert!(!paths_overlap(
+        assets,
+        std::path::Path::new("/qualification/runtime")
+    ));
+}
+
+#[test]
+fn driver_bound_manifest_digest_rejects_prelaunch_drift() {
+    let expected = "1".repeat(64);
+    require_expected_manifest_digest(&expected, Some(&expected))
+        .expect("the exact driver-bound digest must remain valid");
+
+    let error = require_expected_manifest_digest(&"2".repeat(64), Some(&expected))
+        .expect_err("manifest drift after driver open must fail closed");
+    assert!(error.contains("changed after the runtime driver was opened"));
+    assert!(require_expected_manifest_digest(&expected, Some("not-a-digest")).is_err());
 }
 
 #[cfg(unix)]

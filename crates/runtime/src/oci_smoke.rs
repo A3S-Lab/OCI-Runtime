@@ -27,6 +27,7 @@ pub async fn oci_vm_smoke(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle: &Path,
     console: &Path,
 ) -> OciVmSmokeReport {
@@ -35,7 +36,15 @@ pub async fn oci_vm_smoke(
         all(target_os = "macos", target_arch = "aarch64")
     ))]
     {
-        utility_vm::run(shim, vm_rootfs, system_image_manifest, bundle, console).await
+        utility_vm::run(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle,
+            console,
+        )
+        .await
     }
 
     #[cfg(not(any(
@@ -43,7 +52,14 @@ pub async fn oci_vm_smoke(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, vm_rootfs, system_image_manifest, bundle, console);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle,
+            console,
+        );
         OciVmSmokeReport::unsupported(HostPlatform::current())
     }
 }
@@ -56,6 +72,7 @@ pub async fn oci_vm_multi_container_smoke(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
@@ -69,6 +86,7 @@ pub async fn oci_vm_multi_container_smoke(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle_a,
             bundle_b,
             console,
@@ -85,6 +103,7 @@ pub async fn oci_vm_multi_container_smoke(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle_a,
             bundle_b,
             console,
@@ -146,18 +165,37 @@ pub async fn macos_hvf_soak(
 pub async fn windows_oci_vm_multi_container_smoke(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
 ) -> WindowsOciVmMultiContainerSmokeReport {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        utility_vm::run_windows_multi_container(shim, vm_rootfs, bundle_a, bundle_b, console).await
+        utility_vm::run_windows_multi_container(
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle_a,
+            bundle_b,
+            console,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
-        let _ = (shim, vm_rootfs, bundle_a, bundle_b, console);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle_a,
+            bundle_b,
+            console,
+        );
         WindowsOciVmMultiContainerSmokeReport::unsupported(HostPlatform::current())
     }
 }
@@ -172,6 +210,7 @@ pub async fn oci_vm_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle: &Path,
     console: &Path,
     fault: LifecycleFaultPoint,
@@ -185,6 +224,7 @@ pub async fn oci_vm_fault_cleanup(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle,
             console,
             fault,
@@ -197,7 +237,14 @@ pub async fn oci_vm_fault_cleanup(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, vm_rootfs, system_image_manifest, bundle, console);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle,
+            console,
+        );
         OciVmFaultCleanupReport::unsupported(HostPlatform::current(), fault)
     }
 }
@@ -212,6 +259,7 @@ pub async fn oci_vm_transport_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle: &Path,
     console: &Path,
     stage: impl Into<AgentTransportFaultStage>,
@@ -226,6 +274,7 @@ pub async fn oci_vm_transport_fault_cleanup(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle,
             console,
             stage,
@@ -238,7 +287,14 @@ pub async fn oci_vm_transport_fault_cleanup(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, vm_rootfs, system_image_manifest, bundle, console);
+        let _ = (
+            shim,
+            vm_rootfs,
+            system_image_manifest,
+            runtime_share,
+            bundle,
+            console,
+        );
         OciVmTransportFaultCleanupReport::unsupported(HostPlatform::current(), stage)
     }
 }

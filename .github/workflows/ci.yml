@@ -29,6 +29,12 @@ jobs:
         with:
           name: macos-system-image
           path: ${{ runner.temp }}/a3s-oci-macos-system-image
+      - if: runner.os == 'Windows'
+        name: Download immutable Windows system image
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-system-image
+          path: ${{ runner.temp }}/a3s-oci-windows-system-image
       - if: runner.os == 'macOS'
         name: Pin immutable macOS system-image path
         shell: bash
@@ -44,6 +50,30 @@ jobs:
           test "$(jq --raw-output '.image.archive_sha256' "$manifest")" = "$(shasum -a 256 "$archive" | awk '{print $1}')"
           chmod 0444 "$manifest" "$image" "$archive"
           printf 'A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST=%s\n' "$manifest" >> "$GITHUB_ENV"
+      - if: runner.os == 'Windows'
+        name: Pin immutable Windows system-image path
+        shell: pwsh
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP 'a3s-oci-windows-system-image'
+          $manifest = Join-Path $directory 'system-image.json'
+          $image = Join-Path $directory 'a3s-oci-system.ext4'
+          $archive = Join-Path $directory 'a3s-oci-system.ext4.xz'
+          foreach ($path in @($manifest, $image, $archive)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing Windows system-image artifact: $path"
+            }
+          }
+          $decoded = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+          $imageSha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash.ToLowerInvariant()
+          $archiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($decoded.schema_version -ne 'a3s.oci.windows-system-image.v1' -or
+              $decoded.architecture -ne 'x86_64' -or
+              $decoded.image.sha256 -ne $imageSha256 -or
+              $decoded.image.archive_sha256 -ne $archiveSha256) {
+            throw 'Downloaded Windows system image failed manifest verification.'
+          }
+          "A3S_OCI_WINDOWS_SYSTEM_IMAGE_MANIFEST=$manifest" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Exhaustive durable-state and host-driver fault matrix
@@ -860,7 +890,9 @@ jobs:
           if (Test-Path -LiteralPath $stage) {
             throw "Refusing to reuse qualification artifact directory: $stage"
           }
-          New-Item -ItemType Directory -Path $stage | Out-Null
+          $bin = Join-Path $stage 'bin'
+          $systemImage = Join-Path $stage 'system-image'
+          New-Item -ItemType Directory -Path $bin, $systemImage | Out-Null
 
           $sources = @(
             'target\debug\a3s-oci.exe',
@@ -872,22 +904,45 @@ jobs:
             if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
               throw "Missing Windows qualification binary: $source"
             }
-            Copy-Item -LiteralPath $source -Destination $stage
+            Copy-Item -LiteralPath $source -Destination $bin
+          }
+
+          $systemImageManifest = $env:A3S_OCI_WINDOWS_SYSTEM_IMAGE_MANIFEST
+          $systemImageSource = Split-Path -Parent $systemImageManifest
+          foreach ($name in @(
+            'system-image.json',
+            'a3s-oci-system.ext4',
+            'a3s-oci-system.ext4.xz'
+          )) {
+            Copy-Item -LiteralPath (Join-Path $systemImageSource $name) `
+              -Destination $systemImage
+          }
+          $decoded = Get-Content -LiteralPath `
+            (Join-Path $systemImage 'system-image.json') -Raw | ConvertFrom-Json
+          $krunSha256 = (
+            Get-FileHash -LiteralPath (Join-Path $bin 'krun.dll') -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+          $firmwareSha256 = (
+            Get-FileHash -LiteralPath (Join-Path $bin 'libkrunfw.dll') -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+          if ($decoded.runtime.krun_dll.sha256 -ne $krunSha256 -or
+              $decoded.runtime.firmware.sha256 -ne $firmwareSha256) {
+            throw 'Windows runtime DLLs do not match the immutable system-image manifest.'
           }
 
           $files = @(
-            Get-ChildItem -LiteralPath $stage -File |
-              Sort-Object Name |
+            Get-ChildItem -LiteralPath $stage -File -Recurse |
+              Sort-Object FullName |
               ForEach-Object {
                 [ordered]@{
-                  name = $_.Name
+                  name = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
                   size = $_.Length
                   sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
               }
           )
           $manifest = [ordered]@{
-            schema_version = 'a3s.oci.windows-whpx-qualification-artifact.v1'
+            schema_version = 'a3s.oci.windows-whpx-qualification-artifact.v2'
             source_commit = $env:A3S_QUALIFICATION_SOURCE_COMMIT
             workflow_commit = $env:GITHUB_SHA
             run_id = $env:GITHUB_RUN_ID
@@ -997,6 +1052,29 @@ jobs:
         with:
           name: macos-system-image
           path: ${{ runner.temp }}/a3s-oci-macos-system-image
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build reproducible immutable Windows system image
+        shell: bash
+        run: |
+          alpine="$RUNNER_TEMP/alpine-minirootfs-3.22.5-x86_64.tar.gz"
+          output="$RUNNER_TEMP/a3s-oci-windows-system-image"
+          curl --fail --location --retry 3 \
+            --output "$alpine" \
+            https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-minirootfs-3.22.5-x86_64.tar.gz
+          bash scripts/build-windows-system-image.sh \
+            --alpine-archive "$alpine" \
+            --agent target/x86_64-unknown-linux-musl/release/a3s-oci-agent \
+            --output-dir "$output" \
+            --reproducibility-delay 1
+          test "$(jq --raw-output '.image.sha256' "$output/system-image.json")" = "$(sha256sum "$output/a3s-oci-system.ext4" | cut -d ' ' -f 1)"
+          test "$(jq --raw-output '.image.archive_sha256' "$output/system-image.json")" = "$(sha256sum "$output/a3s-oci-system.ext4.xz" | cut -d ' ' -f 1)"
+          test "$(jq --raw-output '.runtime.sources.kernel_version' "$output/system-image.json")" = '6.12.91'
+      - name: Upload immutable Windows system image
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-system-image
+          path: ${{ runner.temp }}/a3s-oci-windows-system-image
           if-no-files-found: error
           retention-days: 14
       - name: Stage static guest qualification artifacts

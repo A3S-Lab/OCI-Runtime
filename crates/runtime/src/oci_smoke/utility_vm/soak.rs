@@ -35,6 +35,7 @@ pub(super) async fn run(
             shim,
             vm_rootfs,
             Some(system_image_manifest),
+            None,
             bundle_a,
             bundle_b,
             &console,

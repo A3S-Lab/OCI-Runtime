@@ -23,6 +23,27 @@ pub struct WhpxRecoveryOwnerReady {
     pub qualification_override_scoped: bool,
 }
 
+/// Inputs held by the process that owns the live WHPX qualification VM.
+#[derive(Debug)]
+pub struct WhpxRecoveryOwnerConfig<'a> {
+    /// Isolated libkrun shim executable.
+    pub shim: &'a Path,
+    /// Protected mutable root for driver state and per-generation shares.
+    pub runtime_root: &'a Path,
+    /// Empty virtio-fs bootstrap root used only by libkrun initialization.
+    pub vm_rootfs: &'a Path,
+    /// Manifest for the pinned read-only x86_64 system image.
+    pub system_image_manifest: &'a Path,
+    /// Durable host-service state root.
+    pub state_root: &'a Path,
+    /// OCI bundle staged inside the exact per-generation runtime share.
+    pub bundle: &'a Path,
+    /// Path-safe identity assigned to the qualification container.
+    pub container_id: ContainerId,
+    /// New file used to publish the owner process readiness evidence.
+    pub ready_file: &'a Path,
+}
+
 /// Real-host evidence for WHPX owner-death and host-service restart recovery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WhpxRecoverySmokeReport {
@@ -136,40 +157,15 @@ impl WhpxRecoverySmokeReport {
 
 /// Start a durable WHPX host service, run one workload, publish readiness, and
 /// remain alive until the qualification parent forcibly terminates this process.
-pub async fn whpx_recovery_owner(
-    shim: &Path,
-    runtime_root: &Path,
-    vm_rootfs: &Path,
-    state_root: &Path,
-    bundle: &Path,
-    container_id: ContainerId,
-    ready_file: &Path,
-) -> Result<()> {
+pub async fn whpx_recovery_owner(config: WhpxRecoveryOwnerConfig<'_>) -> Result<()> {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        windows::owner(
-            shim,
-            runtime_root,
-            vm_rootfs,
-            state_root,
-            bundle,
-            container_id,
-            ready_file,
-        )
-        .await
+        windows::owner(config).await
     }
 
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
-        let _ = (
-            shim,
-            runtime_root,
-            vm_rootfs,
-            state_root,
-            bundle,
-            container_id,
-            ready_file,
-        );
+        let _ = config;
         Err(a3s_oci_sdk::Error::unsupported("whpx-recovery-owner"))
     }
 }
@@ -181,18 +177,35 @@ pub async fn whpx_recovery_resume(
     shim: &Path,
     runtime_root: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     state_root: &Path,
     bundle: &Path,
     target: ContainerTarget,
 ) -> WhpxRecoverySmokeReport {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        windows::resume(shim, runtime_root, vm_rootfs, state_root, bundle, target).await
+        windows::resume(
+            shim,
+            runtime_root,
+            vm_rootfs,
+            system_image_manifest,
+            state_root,
+            bundle,
+            target,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
-        let _ = (shim, runtime_root, vm_rootfs, state_root, bundle);
+        let _ = (
+            shim,
+            runtime_root,
+            vm_rootfs,
+            system_image_manifest,
+            state_root,
+            bundle,
+        );
         WhpxRecoverySmokeReport::unsupported(HostPlatform::current(), target)
     }
 }
@@ -213,14 +226,14 @@ mod windows {
     use a3s_oci_core::{CapabilityStatus, DriverReadiness, HostPlatform};
     use a3s_oci_sdk::oci_spec::runtime::ContainerState;
     use a3s_oci_sdk::{
-        ContainerId, ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest,
-        Error, ErrorCode, ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
+        ContainerTarget, CreateAttachments, CreateRequest, DeleteMode, DeleteRequest, Error,
+        ErrorCode, ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
         ProcessIo, Result, Signal, StartRequest, StateRequest, WaitRequest,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::time::{sleep, Instant};
 
-    use super::{WhpxRecoveryOwnerReady, WhpxRecoverySmokeReport};
+    use super::{WhpxRecoveryOwnerConfig, WhpxRecoveryOwnerReady, WhpxRecoverySmokeReport};
     use crate::fault::{DriverBoundaryStage, DriverOperation, FaultInjector, FaultPoint};
     use crate::{
         DriverKillRequest, HostRuntimeService, RuntimeDriver, WhpxRuntimeDriver,
@@ -235,15 +248,17 @@ mod windows {
     const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
     const MAX_MARKER_BYTES: u64 = 1_024;
 
-    pub(super) async fn owner(
-        shim: &Path,
-        runtime_root: &Path,
-        vm_rootfs: &Path,
-        state_root: &Path,
-        bundle_directory: &Path,
-        container_id: ContainerId,
-        ready_file: &Path,
-    ) -> Result<()> {
+    pub(super) async fn owner(config: WhpxRecoveryOwnerConfig<'_>) -> Result<()> {
+        let WhpxRecoveryOwnerConfig {
+            shim,
+            runtime_root,
+            vm_rootfs,
+            system_image_manifest,
+            state_root,
+            bundle: bundle_directory,
+            container_id,
+            ready_file,
+        } = config;
         let bundle = OciBundle::load(bundle_directory).await?;
         let marker = fixed_marker(&bundle).await.map_err(owner_error)?;
         if path_exists(&marker).await.map_err(owner_error)? {
@@ -253,7 +268,8 @@ mod windows {
             )));
         }
 
-        let config = WhpxRuntimeDriverConfig::new(shim, runtime_root, vm_rootfs);
+        let config =
+            WhpxRuntimeDriverConfig::new(shim, runtime_root, vm_rootfs, system_image_manifest);
         let driver = Arc::new(WhpxRuntimeDriver::open_service_qualification(config).await?);
         let capability = driver.capability();
         let qualification_override_scoped = capability.readiness == DriverReadiness::Experimental
@@ -344,6 +360,7 @@ mod windows {
         shim: &Path,
         runtime_root: &Path,
         vm_rootfs: &Path,
+        system_image_manifest: &Path,
         state_root: &Path,
         bundle_directory: &Path,
         target: ContainerTarget,
@@ -365,7 +382,8 @@ mod windows {
         if target.generation.is_none() {
             return failed(report, "WHPX recovery smoke requires an exact generation");
         }
-        let config = WhpxRuntimeDriverConfig::new(shim, runtime_root, vm_rootfs);
+        let config =
+            WhpxRuntimeDriverConfig::new(shim, runtime_root, vm_rootfs, system_image_manifest);
 
         let default_candidate = match WhpxRuntimeDriver::open_candidate(config.clone()).await {
             Ok(driver) => driver,

@@ -270,6 +270,9 @@ enum Command {
         /// Immutable system-image manifest required by macOS HVF.
         #[arg(long, value_name = "FILE")]
         system_image_manifest: Option<PathBuf>,
+        /// Writable directory exported separately from the immutable system root.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: Option<PathBuf>,
         /// New host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
@@ -279,13 +282,16 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
-        /// Immutable system-image manifest required by macOS HVF.
+        /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
         #[arg(long, value_name = "FILE")]
         system_image_manifest: Option<PathBuf>,
-        /// OCI bundle contained by the VM root filesystem.
+        /// Writable directory exported separately from the immutable system root.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: Option<PathBuf>,
+        /// OCI bundle contained by the writable runtime tree.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
         /// New host file that receives the guest console stream.
@@ -297,12 +303,15 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Protected runtime root containing system, shares, console, and recovery.
+        /// Protected runtime root containing bootstrap, shares, console, and recovery.
         #[arg(long, value_name = "DIR")]
         runtime_root: PathBuf,
-        /// Extracted Linux system root containing /usr/bin/a3s-oci-agent.
+        /// Empty protected virtio-fs bootstrap root used only for init.krun.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        /// Manifest for the pinned read-only x86_64 ext4 system image.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         /// OCI bundle below `shares/<container>/<generation>`.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
@@ -318,12 +327,15 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Protected runtime root containing system, shares, console, and handoffs.
+        /// Protected runtime root containing bootstrap, shares, console, and handoffs.
         #[arg(long, value_name = "DIR")]
         runtime_root: PathBuf,
-        /// Extracted immutable Linux system root containing /usr/bin/a3s-oci-agent.
+        /// Empty protected virtio-fs bootstrap root used only for init.krun.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        /// Manifest for the pinned read-only x86_64 ext4 system image.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         /// Durable runtime service state root.
         #[arg(long, value_name = "DIR")]
         state_root: PathBuf,
@@ -343,6 +355,8 @@ enum Command {
         runtime_root: PathBuf,
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
         state_root: PathBuf,
         #[arg(long, value_name = "DIR")]
@@ -361,6 +375,8 @@ enum Command {
         runtime_root: PathBuf,
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
         state_root: PathBuf,
         #[arg(long, value_name = "DIR")]
@@ -375,16 +391,19 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
-        /// Immutable system-image manifest required by macOS HVF.
+        /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
         #[arg(long, value_name = "FILE")]
         system_image_manifest: Option<PathBuf>,
-        /// First OCI bundle contained by the VM root filesystem.
+        /// Writable directory containing both OCI bundles.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: Option<PathBuf>,
+        /// First OCI bundle contained by the writable runtime tree.
         #[arg(long, value_name = "DIR")]
         bundle_a: PathBuf,
-        /// Second distinct OCI bundle contained by the VM root filesystem.
+        /// Second distinct OCI bundle contained by the writable runtime tree.
         #[arg(long, value_name = "DIR")]
         bundle_b: PathBuf,
         /// New host file that receives the guest console stream.
@@ -396,16 +415,16 @@ enum Command {
         /// Isolated, entitlement-signed libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        /// Writable runtime tree shared with each immutable-image VM wave.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
         /// Immutable system-image manifest bound to every soak wave.
         #[arg(long, value_name = "FILE")]
         system_image_manifest: PathBuf,
-        /// First OCI bundle contained by the VM root filesystem.
+        /// First OCI bundle contained by the writable runtime tree.
         #[arg(long, value_name = "DIR")]
         bundle_a: PathBuf,
-        /// Second distinct OCI bundle contained by the VM root filesystem.
+        /// Second distinct OCI bundle contained by the writable runtime tree.
         #[arg(long, value_name = "DIR")]
         bundle_b: PathBuf,
         /// Existing empty directory that receives one console per VM wave.
@@ -420,13 +439,19 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        /// Empty protected virtio-fs bootstrap root used only for init.krun.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
-        /// First Windows-profile OCI bundle contained by the VM rootfs.
+        /// Manifest for the pinned read-only x86_64 ext4 system image.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// Writable directory exported through the fixed runtime-share tag.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: PathBuf,
+        /// First Windows-profile OCI bundle contained by the runtime share.
         #[arg(long, value_name = "DIR")]
         bundle_a: PathBuf,
-        /// Second distinct Windows-profile OCI bundle contained by the VM rootfs.
+        /// Second distinct Windows-profile OCI bundle contained by the runtime share.
         #[arg(long, value_name = "DIR")]
         bundle_b: PathBuf,
         /// New host file that receives the guest console stream.
@@ -438,13 +463,16 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
-        /// Immutable system-image manifest required by macOS HVF.
+        /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
         #[arg(long, value_name = "FILE")]
         system_image_manifest: Option<PathBuf>,
-        /// OCI bundle contained by the VM root filesystem.
+        /// Writable directory containing the OCI bundle.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: Option<PathBuf>,
+        /// OCI bundle contained by the writable runtime tree.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
         /// New host file that receives the guest console stream.
@@ -459,13 +487,16 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        /// Empty virtio-fs bootstrap root when a separate runtime share is supplied.
         #[arg(long, value_name = "DIR")]
         vm_rootfs: PathBuf,
-        /// Immutable system-image manifest required by macOS HVF.
+        /// Immutable system-image manifest required by macOS HVF and Windows WHPX.
         #[arg(long, value_name = "FILE")]
         system_image_manifest: Option<PathBuf>,
-        /// OCI bundle contained by the VM root filesystem.
+        /// Writable directory containing the OCI bundle.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: Option<PathBuf>,
+        /// OCI bundle contained by the writable runtime tree.
         #[arg(long, value_name = "DIR")]
         bundle: PathBuf,
         /// New host file that receives the guest console stream.
@@ -1006,12 +1037,14 @@ async fn dispatch(
             shim,
             rootfs,
             system_image_manifest,
+            runtime_share,
             console,
         } => {
             let report = a3s_oci_runtime::agent_vm_smoke(
                 &shim,
                 &rootfs,
                 system_image_manifest.as_deref(),
+                runtime_share.as_deref(),
                 &console,
             )
             .await;
@@ -1027,6 +1060,7 @@ async fn dispatch(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle,
             console,
         } => {
@@ -1034,6 +1068,7 @@ async fn dispatch(
                 &shim,
                 &vm_rootfs,
                 system_image_manifest.as_deref(),
+                runtime_share.as_deref(),
                 &bundle,
                 &console,
             )
@@ -1050,6 +1085,7 @@ async fn dispatch(
             shim,
             runtime_root,
             vm_rootfs,
+            system_image_manifest,
             bundle,
             container_id,
             generation,
@@ -1062,6 +1098,7 @@ async fn dispatch(
                 &shim,
                 &runtime_root,
                 &vm_rootfs,
+                &system_image_manifest,
                 &bundle,
                 target,
             )
@@ -1078,6 +1115,7 @@ async fn dispatch(
             shim,
             runtime_root,
             vm_rootfs,
+            system_image_manifest,
             state_root,
             pipe,
             ready_file,
@@ -1086,6 +1124,7 @@ async fn dispatch(
                 shim,
                 runtime_root,
                 vm_rootfs,
+                system_image_manifest,
                 state_root,
                 pipe,
             );
@@ -1102,20 +1141,22 @@ async fn dispatch(
             shim,
             runtime_root,
             vm_rootfs,
+            system_image_manifest,
             state_root,
             bundle,
             container_id,
             ready_file,
         } => {
-            a3s_oci_runtime::whpx_recovery_owner(
-                &shim,
-                &runtime_root,
-                &vm_rootfs,
-                &state_root,
-                &bundle,
+            a3s_oci_runtime::whpx_recovery_owner(a3s_oci_runtime::WhpxRecoveryOwnerConfig {
+                shim: &shim,
+                runtime_root: &runtime_root,
+                vm_rootfs: &vm_rootfs,
+                system_image_manifest: &system_image_manifest,
+                state_root: &state_root,
+                bundle: &bundle,
                 container_id,
-                &ready_file,
-            )
+                ready_file: &ready_file,
+            })
             .await?;
             Ok(ExitCode::SUCCESS)
         }
@@ -1123,6 +1164,7 @@ async fn dispatch(
             shim,
             runtime_root,
             vm_rootfs,
+            system_image_manifest,
             state_root,
             bundle,
             container_id,
@@ -1136,6 +1178,7 @@ async fn dispatch(
                 &shim,
                 &runtime_root,
                 &vm_rootfs,
+                &system_image_manifest,
                 &state_root,
                 &bundle,
                 target,
@@ -1153,6 +1196,7 @@ async fn dispatch(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle_a,
             bundle_b,
             console,
@@ -1161,6 +1205,7 @@ async fn dispatch(
                 &shim,
                 &vm_rootfs,
                 system_image_manifest.as_deref(),
+                runtime_share.as_deref(),
                 &bundle_a,
                 &bundle_b,
                 &console,
@@ -1204,12 +1249,20 @@ async fn dispatch(
         Command::WindowsOciVmMultiContainerSmoke {
             shim,
             vm_rootfs,
+            system_image_manifest,
+            runtime_share,
             bundle_a,
             bundle_b,
             console,
         } => {
             let report = a3s_oci_runtime::windows_oci_vm_multi_container_smoke(
-                &shim, &vm_rootfs, &bundle_a, &bundle_b, &console,
+                &shim,
+                &vm_rootfs,
+                &system_image_manifest,
+                &runtime_share,
+                &bundle_a,
+                &bundle_b,
+                &console,
             )
             .await;
             let succeeded = report.is_success();
@@ -1224,6 +1277,7 @@ async fn dispatch(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle,
             console,
             fault_after,
@@ -1232,6 +1286,7 @@ async fn dispatch(
                 &shim,
                 &vm_rootfs,
                 system_image_manifest.as_deref(),
+                runtime_share.as_deref(),
                 &bundle,
                 &console,
                 fault_after.into(),
@@ -1249,6 +1304,7 @@ async fn dispatch(
             shim,
             vm_rootfs,
             system_image_manifest,
+            runtime_share,
             bundle,
             console,
             fault_at,
@@ -1257,6 +1313,7 @@ async fn dispatch(
                 &shim,
                 &vm_rootfs,
                 system_image_manifest.as_deref(),
+                runtime_share.as_deref(),
                 &bundle,
                 &console,
                 a3s_oci_runtime::AgentTransportFaultStage::from(fault_at),

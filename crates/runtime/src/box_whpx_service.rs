@@ -5,7 +5,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 /// Readiness evidence emitted only after the protected Box qualification
 /// endpoint has been bound around a durable runtime service.
-pub const BOX_WHPX_SERVICE_READY_SCHEMA_VERSION: &str = "a3s.oci.box-whpx-service-ready.v1";
+pub const BOX_WHPX_SERVICE_READY_SCHEMA_VERSION: &str = "a3s.oci.box-whpx-service-ready.v2";
 
 /// Explicit inputs for the qualification-only A3S Box/WHPX SDK owner.
 #[derive(Debug, Clone)]
@@ -13,6 +13,7 @@ pub struct BoxWhpxServiceConfig {
     pub shim: PathBuf,
     pub runtime_root: PathBuf,
     pub vm_rootfs: PathBuf,
+    pub system_image_manifest: PathBuf,
     pub state_root: PathBuf,
     pub pipe_name: String,
     pub ready_file: Option<PathBuf>,
@@ -24,6 +25,7 @@ impl BoxWhpxServiceConfig {
         shim: impl Into<PathBuf>,
         runtime_root: impl Into<PathBuf>,
         vm_rootfs: impl Into<PathBuf>,
+        system_image_manifest: impl Into<PathBuf>,
         state_root: impl Into<PathBuf>,
         pipe_name: impl Into<String>,
     ) -> Self {
@@ -31,6 +33,7 @@ impl BoxWhpxServiceConfig {
             shim: shim.into(),
             runtime_root: runtime_root.into(),
             vm_rootfs: vm_rootfs.into(),
+            system_image_manifest: system_image_manifest.into(),
             state_root: state_root.into(),
             pipe_name: pipe_name.into(),
             ready_file: None,
@@ -79,6 +82,7 @@ where
             &config.shim,
             &config.runtime_root,
             &config.vm_rootfs,
+            &config.system_image_manifest,
         ))
         .await?,
     );
@@ -145,6 +149,7 @@ fn write_ready_file(path: &std::path::Path, config: &BoxWhpxServiceConfig) -> Re
         owner_pid: u32,
         endpoint: &'a str,
         runtime_root: &'a std::path::Path,
+        system_image_manifest: &'a std::path::Path,
         state_root: &'a std::path::Path,
     }
 
@@ -179,6 +184,7 @@ fn write_ready_file(path: &std::path::Path, config: &BoxWhpxServiceConfig) -> Re
         owner_pid: std::process::id(),
         endpoint: &config.pipe_name,
         runtime_root: &config.runtime_root,
+        system_image_manifest: &config.system_image_manifest,
         state_root: &config.state_root,
     })
     .map_err(|error| {
@@ -245,6 +251,7 @@ mod tests {
             "shim",
             "runtime",
             "system",
+            "system-image.json",
             "state",
             r"\\.\pipe\a3s-oci-box-test",
         )
@@ -252,13 +259,28 @@ mod tests {
 
         assert_eq!(config.pipe_name, r"\\.\pipe\a3s-oci-box-test");
         assert_eq!(config.ready_file, Some(PathBuf::from("ready.json")));
+        assert_eq!(
+            config.system_image_manifest,
+            PathBuf::from("system-image.json")
+        );
+        assert_eq!(
+            BOX_WHPX_SERVICE_READY_SCHEMA_VERSION,
+            "a3s.oci.box-whpx-service-ready.v2"
+        );
     }
 
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     #[tokio::test]
     async fn unsupported_hosts_fail_before_waiting_for_shutdown() {
         let error = serve_box_whpx_qualification(
-            BoxWhpxServiceConfig::new("shim", "runtime", "system", "state", "pipe"),
+            BoxWhpxServiceConfig::new(
+                "shim",
+                "runtime",
+                "system",
+                "system-image.json",
+                "state",
+                "pipe",
+            ),
             std::future::pending(),
         )
         .await

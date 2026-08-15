@@ -18,6 +18,7 @@ pub async fn agent_vm_smoke(
     shim: &Path,
     rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     console: &Path,
 ) -> AgentVmSmokeReport {
     #[cfg(any(
@@ -27,14 +28,28 @@ pub async fn agent_vm_smoke(
     {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-        let report = match crate::agent_session::UtilityVmSession::connect(
-            shim,
-            rootfs,
-            system_image_manifest,
-            console,
-        )
-        .await
-        {
+        let session = match runtime_share {
+            Some(runtime_share) => {
+                crate::agent_session::UtilityVmSession::connect_with_separate_runtime_share(
+                    shim,
+                    rootfs,
+                    system_image_manifest,
+                    runtime_share,
+                    console,
+                )
+                .await
+            }
+            None => {
+                crate::agent_session::UtilityVmSession::connect(
+                    shim,
+                    rootfs,
+                    system_image_manifest,
+                    console,
+                )
+                .await
+            }
+        };
+        let report = match session {
             Ok(session) => session.shutdown().await,
             Err(report) => report,
         };
@@ -55,7 +70,7 @@ pub async fn agent_vm_smoke(
         all(target_os = "macos", target_arch = "aarch64")
     )))]
     {
-        let _ = (shim, rootfs, system_image_manifest, console);
+        let _ = (shim, rootfs, system_image_manifest, runtime_share, console);
         AgentVmSmokeReport::unsupported(HostPlatform::current())
     }
 }

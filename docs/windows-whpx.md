@@ -64,7 +64,12 @@ The runtime:
     reopens durable state, replays the authenticated signal-9 exit result, and
     proves stopped-only delete plus complete host/share cleanup. Its launch
     override is crate-private and scoped only to this gate, so normal discovery
-    remains `probe-only`.
+    remains `probe-only`;
+18. builds a byte-reproducible Alpine 3.22.5 x86_64 ext4 image containing the
+    protocol-v10 agent, binds Linux 6.12.91 and every Box/libkrun/firmware
+    revision and digest in `a3s.oci.windows-system-image.v1`, pins all boot
+    inputs with read-only Windows handles, and switches from the empty
+    bootstrap share to that read-only block root before starting the agent.
 
 Product bundle preparation no longer needs to guess the runtime generation.
 An explicitly annotated, digest-bound `dev.a3s.bundle-handoff` attachment lets
@@ -125,11 +130,17 @@ A successful libkrun VM smoke additionally proves that:
 
 A successful end-to-end agent VM smoke additionally proves that:
 
-- the static musl guest agent starts from the supplied rootfs;
+- the manifest-bound ext4 image supplies the static musl guest agent and fixed
+  Linux userspace;
+- the image is attached read-only and remains separate from the writable
+  runtime share;
+- the manifest, raw image, `krun.dll`, and `libkrunfw.dll` retain their exact
+  sizes, SHA-256 digests, file identities, and loaded-module paths through VM
+  entry;
 - guest AF_VSOCK reaches the protected Windows named pipe through libkrun;
 - only the exact spawned shim PID is accepted before the token is sent;
 - the real guest authenticates the one-time token and negotiates protocol
-  version 9;
+  version 10;
 - the agent version and `x86_64` guest architecture are reported;
 - the guest advertises exactly create, state, start, kill, delete, wait, exec,
   signal-process, wait-process, pause, resume, processes, update, stats,
@@ -140,7 +151,8 @@ A successful end-to-end agent VM smoke additionally proves that:
 
 A successful fixed OCI VM smoke additionally proves that:
 
-- the accepted bundle is a strict descendant of the supplied VM rootfs;
+- the accepted bundle is a strict descendant of the supplied writable runtime
+  share and is addressed below `/run/a3s-oci-runtime` in the guest;
 - create establishes a new UTS namespace, applies the configured hostname and
   domainname, and reports ready only afterward;
 - when configured, create establishes a new mount namespace, makes `/`
@@ -230,7 +242,8 @@ gate retains its different `host-service-owner-death-only` scope.
 a3s-oci box-whpx-qualification-service `
   --shim C:\a3s\bin\a3s-oci-krun-shim.exe `
   --runtime-root C:\a3s\oci-runtime `
-  --vm-rootfs C:\a3s\oci-runtime\system `
+  --vm-rootfs C:\a3s\oci-runtime\bootstrap `
+  --system-image-manifest C:\a3s\system-image\system-image.json `
   --state-root C:\a3s\oci-runtime\state `
   --pipe '\\.\pipe\a3s-oci-box-qualification' `
   --ready-file C:\a3s\oci-runtime\box-service-ready.json
@@ -238,10 +251,10 @@ a3s-oci box-whpx-qualification-service `
 
 The optional readiness file is created atomically only after the driver,
 durable state, protected pipe ACL, and first pipe instance are ready. It uses
-schema `a3s.oci.box-whpx-service-ready.v1`, records the owner PID and exact
-endpoint/roots, and is removed on graceful shutdown. A stale file after owner
-death is never connection evidence; clients must still complete the SDK
-handshake and feature preflight.
+schema `a3s.oci.box-whpx-service-ready.v2`, records the owner PID, exact
+endpoint and roots, and selected system-image manifest, and is removed on
+graceful shutdown. A stale file after owner death is never connection
+evidence; clients must still complete the SDK handshake and feature preflight.
 
 This owner accepts the operation-scoped portable-bundle handoff contract used
 by Box. The source must be exactly
@@ -265,35 +278,35 @@ sync. All entries are validated before the first metadata mutation.
 
 Run the complete gate from an x86-64 Windows host with WHPX enabled:
 
-Every successful CI run retains two qualification inputs for 14 days:
-`windows-whpx-qualification` contains the exact Windows CLI, shim, and pinned
-native runtime DLLs, while `guest-agents-musl` contains the static x86_64 and
-aarch64 guest agents. Each artifact includes a versioned JSON manifest that
-binds every file size and SHA-256 digest to the exact source commit, the
-workflow commit that was built, and the Actions run. Download both artifacts
-from the same successful run; never combine artifacts whose manifests name
-different source or workflow commits.
+Every successful CI run retains `windows-whpx-qualification` for 14 days. Its
+v2 manifest binds the exact source and workflow commits, and lists every file
+size and SHA-256 digest. `bin/` contains the CLI, shim, `krun.dll`, and
+`libkrunfw.dll`; the disjoint `system-image/` directory contains the raw ext4
+image, compressed release copy, and `a3s.oci.windows-system-image.v1`
+manifest. CI also publishes the same image separately as
+`windows-system-image`. `guest-agents-musl` remains available for development,
+but these qualification scripts boot the agent embedded in the immutable
+image and do not copy a loose agent into a guest root.
 
 ```powershell
 gh run download <run-id> --repo A3S-Lab/OCI-Runtime `
   --name windows-whpx-qualification --dir C:\a3s\oci-artifacts\windows
-gh run download <run-id> --repo A3S-Lab/OCI-Runtime `
-  --name guest-agents-musl --dir C:\a3s\oci-artifacts\agents
 ```
 
-For a build-free qualification, copy the four verified Windows files into
-`target\debug`, copy `a3s-oci-agent-x86_64` to
-`target\x86_64-unknown-linux-musl\release\a3s-oci-agent`, and pass
-`-SkipBuild` to the focused scripts below. The scripts still bind their report
-to the checked-out commit, so that checkout must match `source_commit` in both
-artifact manifests. A pull-request artifact can also name GitHub's temporary
-merge commit as `workflow_commit`; a `main` push artifact has identical source
-and workflow commits.
+For a build-free qualification, copy the four files from `bin/` into
+`target\debug`, keep `system-image/` separate, and pass its
+`system-image.json` path with `-SystemImageManifest`. Then pass `-SkipBuild` to
+the focused scripts. The scripts still bind their report to the checked-out
+commit, so that checkout must match `source_commit` in the artifact manifest.
+A pull-request artifact can name GitHub's temporary merge commit as
+`workflow_commit`; a `main` push artifact has identical source and workflow
+commits.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\windows-whpx-soak.ps1 `
-  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar `
+  -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json
 ```
 
 Run the nominal formal-driver gate separately:
@@ -301,7 +314,8 @@ Run the nominal formal-driver gate separately:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\windows-whpx-driver-smoke.ps1 `
-  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar `
+  -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json
 ```
 
 Run the owner-death and host-service recovery gate separately:
@@ -309,7 +323,8 @@ Run the owner-death and host-service recovery gate separately:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\windows-whpx-recovery-smoke.ps1 `
-  -RootfsArchive C:\path\to\alpine-minirootfs.tar
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar `
+  -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json
 ```
 
 The default profile requires:
@@ -452,17 +467,19 @@ For that reason, driver readiness remains `probe-only` even after all smokes
 succeed. Driver resolution must reject `probe-only` readiness rather than
 silently treating host capability as runtime support.
 
-The runtime now contains a qualification-only `WhpxRuntimeDriver` candidate.
+The runtime contains a qualification-only `WhpxRuntimeDriver` candidate.
 It uses the same twenty-operation adapter as native Linux, owns one VM per
 exact dedicated-VM generation, retains the VM across retryable create calls,
 and reaps terminal create failures, deletes, and driver shutdown exactly once.
-Opening it requires a guest system root below the runtime root, the fixed
-`/run/a3s-oci-runtime` mount-point directory, and a disjoint runtime-created
-`shares` parent, all guarded by the protected Windows DACL. Create accepts a
-bundle only below the exact `<container>/<generation>` share, exports only that
-directory, and rejects cross-generation or external paths before launching a
-VM. The shim stages token and recovery files in the share and emits v2 evidence
-that the virtio-fs device was configured; the host requires that evidence. Its
+Opening it requires an empty bootstrap directory below the protected runtime
+root, a manifest and image outside that mutable tree, and a disjoint
+runtime-created `shares` parent. Create accepts a bundle only below the exact
+`<container>/<generation>` share, exports only that directory, and rejects
+cross-generation or external paths before launching a VM. The shim stages
+token and recovery files in the share and emits v4 evidence for the read-only
+block root, fixed native boot assets, and separate virtio-fs device; the host
+requires the same manifest digest it retained before launch and includes that
+digest in the durable driver binding used after host-service reopen. Its
 reported readiness deliberately stays `probe-only`, so the durable host
 service cannot register it yet.
 
@@ -502,14 +519,13 @@ terminal replay, stopped-only delete, and complete transient cleanup.
 
 ## Next Windows gate
 
-With the protected share and restart recovery qualified, the remaining R2
-promotion gate must:
+The version-pinned image, read-only root attachment, source/digest manifest,
+pre-entry drift checks, and separate runtime-share path are implemented. They
+do not count as real WHPX evidence until the following two gates pass:
 
-1. boot a version-pinned A3S Linux kernel and immutable system root, bind their
-   source revisions, reproducible build inputs, checksums, and compatibility
-   level, keep that root separate from the protected writable generation
-   share, and rerun the complete WHPX SDK and recovery matrices against those
-   exact assets;
+1. rerun the complete WHPX SDK, soak, owner-death, and service-recovery
+   matrices against the exact v1 manifest on a fresh WHPX-enabled Windows
+   host, retaining the v4 boot evidence in every session;
 2. prove that every in-process native WHPX/libkrun handle is reclaimed without
    relying on Windows process teardown.
 

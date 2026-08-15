@@ -20,6 +20,7 @@ pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
@@ -28,6 +29,14 @@ pub(super) async fn run(
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
+    };
+    let separate_runtime_share = runtime_share.is_some();
+    let runtime_share = match runtime_share {
+        Some(path) => match canonical_directory(path, "VM runtime share").await {
+            Ok(path) => path,
+            Err(reason) => return failed(report, reason),
+        },
+        None => vm_rootfs.clone(),
     };
     let bundle_a_directory = match canonical_directory(bundle_a, "first OCI bundle").await {
         Ok(path) => path,
@@ -41,12 +50,12 @@ pub(super) async fn run(
         ("first", &bundle_a_directory),
         ("second", &bundle_b_directory),
     ] {
-        if bundle == &vm_rootfs || !bundle.starts_with(&vm_rootfs) {
+        if bundle == &runtime_share || !bundle.starts_with(&runtime_share) {
             return failed(
                 report,
                 format!(
-                    "{label} OCI bundle must be a strict descendant of VM rootfs {}: {}",
-                    vm_rootfs.display(),
+                    "{label} OCI bundle must be a strict descendant of VM runtime share {}: {}",
+                    runtime_share.display(),
                     bundle.display()
                 ),
             );
@@ -107,13 +116,13 @@ pub(super) async fn run(
     }
 
     let guest_bundles = match (
-        guest_path(&vm_rootfs, &bundle_a_directory),
-        guest_path(&vm_rootfs, &bundle_b_directory),
+        guest_path(&runtime_share, &bundle_a_directory),
+        guest_path(&runtime_share, &bundle_b_directory),
     ) {
         (Ok(a), Ok(b)) => [a, b],
         (Err(reason), _) | (_, Err(reason)) => return failed(report, reason),
     };
-    let baseline_runtime_entries = match runtime_entries(&vm_rootfs).await {
+    let baseline_runtime_entries = match runtime_entries(&runtime_share).await {
         Ok(entries) => entries,
         Err(reason) => return failed(report, reason),
     };
@@ -124,21 +133,32 @@ pub(super) async fn run(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let session =
-        match UtilityVmSession::connect(shim, &vm_rootfs, system_image_manifest, console).await {
-            Ok(session) => session,
-            Err(bridge) => {
-                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-                let bridge = {
-                    let mut bridge = bridge;
-                    cleanup.apply(&mut bridge).await;
-                    bridge
-                };
-                report.reason = bridge.reason.clone();
-                report.bridge = bridge;
-                return report;
-            }
-        };
+    let session_result = if separate_runtime_share {
+        UtilityVmSession::connect_with_separate_runtime_share(
+            shim,
+            &vm_rootfs,
+            system_image_manifest,
+            &runtime_share,
+            console,
+        )
+        .await
+    } else {
+        UtilityVmSession::connect(shim, &vm_rootfs, system_image_manifest, console).await
+    };
+    let session = match session_result {
+        Ok(session) => session,
+        Err(bridge) => {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            let bridge = {
+                let mut bridge = bridge;
+                cleanup.apply(&mut bridge).await;
+                bridge
+            };
+            report.reason = bridge.reason.clone();
+            report.bridge = bridge;
+            return report;
+        }
+    };
     let client = session.client();
     let rootfs_fixture =
         crate::rootfs_enforcement::RootfsEnforcementFixture::prepare(&bundle_b, &nonce).await;
@@ -202,7 +222,7 @@ pub(super) async fn run(
         }
     }
     report.markers_removed = markers_removed;
-    match runtime_entries(&vm_rootfs).await {
+    match runtime_entries(&runtime_share).await {
         Ok(entries) => {
             report.guest_runtime_clean = entries == baseline_runtime_entries;
             if !report.guest_runtime_clean {
@@ -239,6 +259,8 @@ pub(super) async fn run(
 pub(super) async fn run_windows(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
@@ -247,6 +269,10 @@ pub(super) async fn run_windows(
 
     let mut report = WindowsOciVmMultiContainerSmokeReport::initial(HostPlatform::Windows);
     let vm_rootfs = match canonical_directory(vm_rootfs, "VM rootfs").await {
+        Ok(path) => path,
+        Err(reason) => return failed_windows(report, reason),
+    };
+    let runtime_share = match canonical_directory(runtime_share, "VM runtime share").await {
         Ok(path) => path,
         Err(reason) => return failed_windows(report, reason),
     };
@@ -262,12 +288,12 @@ pub(super) async fn run_windows(
         ("first", &bundle_a_directory),
         ("second", &bundle_b_directory),
     ] {
-        if bundle == &vm_rootfs || !bundle.starts_with(&vm_rootfs) {
+        if bundle == &runtime_share || !bundle.starts_with(&runtime_share) {
             return failed_windows(
                 report,
                 format!(
-                    "{label} OCI bundle must be a strict descendant of VM rootfs {}: {}",
-                    vm_rootfs.display(),
+                    "{label} OCI bundle must be a strict descendant of VM runtime share {}: {}",
+                    runtime_share.display(),
                     bundle.display()
                 ),
             );
@@ -328,13 +354,13 @@ pub(super) async fn run_windows(
     }
 
     let guest_bundles = match (
-        guest_path(&vm_rootfs, &bundle_a_directory),
-        guest_path(&vm_rootfs, &bundle_b_directory),
+        guest_path(&runtime_share, &bundle_a_directory),
+        guest_path(&runtime_share, &bundle_b_directory),
     ) {
         (Ok(a), Ok(b)) => [a, b],
         (Err(reason), _) | (_, Err(reason)) => return failed_windows(report, reason),
     };
-    let baseline_runtime_entries = match runtime_entries(&vm_rootfs).await {
+    let baseline_runtime_entries = match runtime_entries(&runtime_share).await {
         Ok(entries) => entries,
         Err(reason) => return failed_windows(report, reason),
     };
@@ -342,7 +368,15 @@ pub(super) async fn run_windows(
         Ok(nonce) => nonce,
         Err(reason) => return failed_windows(report, reason),
     };
-    let session = match UtilityVmSession::connect(shim, &vm_rootfs, None, console).await {
+    let session = match UtilityVmSession::connect_with_separate_runtime_share(
+        shim,
+        &vm_rootfs,
+        Some(system_image_manifest),
+        &runtime_share,
+        console,
+    )
+    .await
+    {
         Ok(session) => session,
         Err(bridge) => {
             report.reason = bridge.reason.clone();
@@ -380,7 +414,7 @@ pub(super) async fn run_windows(
         }
     }
     report.markers_removed = markers_removed;
-    match runtime_entries(&vm_rootfs).await {
+    match runtime_entries(&runtime_share).await {
         Ok(entries) => {
             report.guest_runtime_clean = entries == baseline_runtime_entries;
             if !report.guest_runtime_clean {

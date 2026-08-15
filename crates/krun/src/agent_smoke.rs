@@ -73,8 +73,21 @@ pub fn agent_vm_smoke(
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        let _ = (system_image_manifest, socket_path, token);
-        agent_vm_smoke_windows(rootfs, console, endpoint, handoff, config)
+        let _ = (socket_path, token);
+        let Some(system_image_manifest) = system_image_manifest else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Windows, config);
+            report.reason =
+                Some("the Windows guest-agent bridge requires a system-image manifest".into());
+            return report;
+        };
+        agent_vm_smoke_windows(
+            rootfs,
+            system_image_manifest,
+            console,
+            endpoint,
+            handoff,
+            config,
+        )
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -140,6 +153,7 @@ pub fn agent_vm_smoke(
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 fn agent_vm_smoke_windows(
     rootfs: &Path,
+    system_image_manifest: &Path,
     console: &Path,
     endpoint: &AgentVsockEndpoint,
     handoff: AgentVmHandoff<'_>,
@@ -148,6 +162,7 @@ fn agent_vm_smoke_windows(
     use std::fs;
 
     use crate::context::KrunContext;
+    use crate::windows_system_image::WindowsSystemImage;
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Windows, config);
     let Some(guest_token_file) = handoff.guest_token_file else {
         report.reason = Some("the Windows guest-agent bridge requires a token file".into());
@@ -167,35 +182,36 @@ fn agent_vm_smoke_windows(
             return report;
         }
     };
-    let agent = rootfs.join("usr").join("bin").join("a3s-oci-agent");
-    if !agent.is_file() {
-        report.reason = Some(format!(
-            "fixed guest agent is not a regular file: {}",
-            agent.display()
-        ));
-        return report;
-    }
+    let system_image = match WindowsSystemImage::load(system_image_manifest) {
+        Ok(image) => image,
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
     report.agent_binary_present = true;
 
-    let runtime_share = match handoff.runtime_share {
-        Some(path) => match path.canonicalize() {
-            Ok(path) if path.is_dir() => Some(path),
-            Ok(path) => {
-                report.reason = Some(format!(
-                    "runtime share is not a directory: {}",
-                    path.display()
-                ));
-                return report;
-            }
-            Err(error) => {
-                report.reason = Some(format!(
-                    "failed to resolve runtime share {}: {error}",
-                    path.display()
-                ));
-                return report;
-            }
-        },
-        None => None,
+    let Some(runtime_share) = handoff.runtime_share else {
+        report.reason =
+            Some("the Windows guest-agent bridge requires a writable runtime share".into());
+        return report;
+    };
+    let runtime_share = match runtime_share.canonicalize() {
+        Ok(path) if path.is_dir() => path,
+        Ok(path) => {
+            report.reason = Some(format!(
+                "runtime share is not a directory: {}",
+                path.display()
+            ));
+            return report;
+        }
+        Err(error) => {
+            report.reason = Some(format!(
+                "failed to resolve runtime share {}: {error}",
+                runtime_share.display()
+            ));
+            return report;
+        }
     };
 
     let Some(console_parent) = console.parent() else {
@@ -232,14 +248,16 @@ fn agent_vm_smoke_windows(
         report.reason = Some(error.to_string());
         return report;
     }
-    report.rootfs_configured = true;
-    if let Some(runtime_share) = &runtime_share {
-        if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, runtime_share) {
-            report.reason = Some(error.to_string());
-            return report;
-        }
-        report.runtime_share_configured = true;
+    if let Err(error) = context.set_root_disk(system_image.image_path()) {
+        report.reason = Some(error.to_string());
+        return report;
     }
+    report.rootfs_configured = true;
+    if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, &runtime_share) {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.runtime_share_configured = true;
     if let Err(error) = context.set_agent_vsock(endpoint) {
         report.reason = Some(error.to_string());
         return report;
@@ -254,12 +272,10 @@ fn agent_vm_smoke_windows(
         AGENT_SESSION_TOKEN_FILE_ENV.to_string(),
         guest_token_file.to_string(),
     )];
-    if runtime_share.is_some() {
-        environment.push((
-            AGENT_RUNTIME_SHARE_ENV.to_string(),
-            AGENT_RUNTIME_SHARE_TAG.to_string(),
-        ));
-    }
+    environment.push((
+        AGENT_RUNTIME_SHARE_ENV.to_string(),
+        AGENT_RUNTIME_SHARE_TAG.to_string(),
+    ));
     if let Some(path) = handoff.guest_recovery_report {
         environment.push((AGENT_RECOVERY_REPORT_ENV.to_string(), path.to_string()));
     }
@@ -286,6 +302,12 @@ fn agent_vm_smoke_windows(
         return report;
     }
     report.console_configured = true;
+
+    if let Err(error) = system_image.reverify() {
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.windows_boot_assets = Some(system_image.evidence());
 
     std::env::set_var("LIBKRUN_WINDOWS_RETURN_ON_EXIT", "1");
     match context.start_enter() {

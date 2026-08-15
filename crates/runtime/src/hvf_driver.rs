@@ -160,6 +160,7 @@ impl HvfRuntimeDriver {
         let factory = Arc::new(LiveHvfVmFactory {
             shim: prepared.shim,
             system_image_manifest: prepared.system_image_manifest.clone(),
+            system_image_manifest_sha256: prepared.system_image_manifest_sha256.clone(),
             console_directory: prepared.console_directory,
             recovery: recovery.clone(),
         });
@@ -786,6 +787,7 @@ trait HvfVmOwner: Send + Sync {
 struct LiveHvfVmFactory {
     shim: PathBuf,
     system_image_manifest: PathBuf,
+    system_image_manifest_sha256: String,
     console_directory: PathBuf,
     recovery: RecoveryStore,
 }
@@ -806,6 +808,7 @@ impl HvfVmFactory for LiveHvfVmFactory {
             UtilityVmSession::connect_with_runtime_share(
                 &self.shim,
                 &self.system_image_manifest,
+                &self.system_image_manifest_sha256,
                 runtime_share,
                 &console,
                 Some(&recovery_report),

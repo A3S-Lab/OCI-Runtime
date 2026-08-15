@@ -384,6 +384,8 @@ fn oci_vm_smoke_fails_closed_with_versioned_output() {
             "missing-a3s-oci-krun-shim",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--console",
@@ -410,6 +412,8 @@ fn whpx_driver_smoke_fails_closed_with_versioned_output() {
             "missing-a3s-oci-runtime-root",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--bundle",
             "missing-a3s-oci-bundle",
             "--container-id",
@@ -440,6 +444,8 @@ fn box_whpx_qualification_service_fails_before_publishing_readiness() {
         .arg(temporary.join("missing-runtime"))
         .arg("--vm-rootfs")
         .arg(temporary.join("missing-system"))
+        .arg("--system-image-manifest")
+        .arg(temporary.join("missing-system-image-manifest"))
         .arg("--state-root")
         .arg(temporary.join("missing-state"))
         .arg("--pipe")
@@ -468,6 +474,8 @@ fn whpx_recovery_resume_fails_closed_with_versioned_output() {
             "missing-a3s-oci-runtime-root",
             "--vm-rootfs",
             "missing-a3s-oci-vm-rootfs",
+            "--system-image-manifest",
+            "missing-a3s-oci-system-image-manifest",
             "--state-root",
             "missing-a3s-oci-state-root",
             "--bundle",

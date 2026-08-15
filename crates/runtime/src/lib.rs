@@ -214,8 +214,9 @@ pub use whpx_driver_smoke::{
     whpx_driver_smoke, WhpxDriverSmokeReport, WHPX_DRIVER_SMOKE_SCHEMA_VERSION,
 };
 pub use whpx_recovery_smoke::{
-    whpx_recovery_owner, whpx_recovery_resume, WhpxRecoveryOwnerReady, WhpxRecoverySmokeReport,
-    WHPX_RECOVERY_OWNER_READY_SCHEMA_VERSION, WHPX_RECOVERY_SMOKE_SCHEMA_VERSION,
+    whpx_recovery_owner, whpx_recovery_resume, WhpxRecoveryOwnerConfig, WhpxRecoveryOwnerReady,
+    WhpxRecoverySmokeReport, WHPX_RECOVERY_OWNER_READY_SCHEMA_VERSION,
+    WHPX_RECOVERY_SMOKE_SCHEMA_VERSION,
 };
 #[cfg(windows)]
 pub use windows_service::WindowsHostService;

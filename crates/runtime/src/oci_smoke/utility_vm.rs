@@ -29,6 +29,7 @@ pub(super) async fn run_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
     fault: crate::LifecycleFaultPoint,
@@ -37,6 +38,7 @@ pub(super) async fn run_fault_cleanup(
         shim,
         vm_rootfs,
         system_image_manifest,
+        runtime_share,
         bundle_directory,
         console,
         fault,
@@ -48,6 +50,7 @@ pub(super) async fn run_transport_fault_cleanup(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
     stage: a3s_oci_agent_protocol::AgentTransportFaultStage,
@@ -56,6 +59,7 @@ pub(super) async fn run_transport_fault_cleanup(
         shim,
         vm_rootfs,
         system_image_manifest,
+        runtime_share,
         bundle_directory,
         console,
         stage,
@@ -467,6 +471,7 @@ pub(super) async fn run_multi_container(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
@@ -475,6 +480,7 @@ pub(super) async fn run_multi_container(
         shim,
         vm_rootfs,
         system_image_manifest,
+        runtime_share,
         bundle_a,
         bundle_b,
         console,
@@ -508,17 +514,29 @@ pub(super) async fn run_macos_hvf_soak(
 pub(super) async fn run_windows_multi_container(
     shim: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
     bundle_a: &Path,
     bundle_b: &Path,
     console: &Path,
 ) -> crate::WindowsOciVmMultiContainerSmokeReport {
-    multi_container::run_windows(shim, vm_rootfs, bundle_a, bundle_b, console).await
+    multi_container::run_windows(
+        shim,
+        vm_rootfs,
+        system_image_manifest,
+        runtime_share,
+        bundle_a,
+        bundle_b,
+        console,
+    )
+    .await
 }
 
 pub(super) async fn run(
     shim: &Path,
     vm_rootfs: &Path,
     system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
     bundle_directory: &Path,
     console: &Path,
 ) -> OciVmSmokeReport {
@@ -527,16 +545,24 @@ pub(super) async fn run(
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
     };
+    let separate_runtime_share = runtime_share.is_some();
+    let runtime_share = match runtime_share {
+        Some(path) => match canonical_directory(path, "VM runtime share").await {
+            Ok(path) => path,
+            Err(reason) => return failed(report, reason),
+        },
+        None => vm_rootfs.clone(),
+    };
     let bundle_directory = match canonical_directory(bundle_directory, "OCI bundle").await {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
     };
-    if bundle_directory == vm_rootfs || !bundle_directory.starts_with(&vm_rootfs) {
+    if bundle_directory == runtime_share || !bundle_directory.starts_with(&runtime_share) {
         return failed(
             report,
             format!(
-                "OCI bundle must be a strict descendant of VM rootfs {}: {}",
-                vm_rootfs.display(),
+                "OCI bundle must be a strict descendant of VM runtime share {}: {}",
+                runtime_share.display(),
                 bundle_directory.display()
             ),
         );
@@ -576,11 +602,11 @@ pub(super) async fn run(
         }
     }
 
-    let guest_bundle = match guest_path(&vm_rootfs, &bundle_directory) {
+    let guest_bundle = match guest_path(&runtime_share, &bundle_directory) {
         Ok(path) => path,
         Err(reason) => return failed(report, reason),
     };
-    let baseline_runtime_entries = match runtime_entries(&vm_rootfs).await {
+    let baseline_runtime_entries = match runtime_entries(&runtime_share).await {
         Ok(entries) => entries,
         Err(reason) => return failed(report, reason),
     };
@@ -595,21 +621,32 @@ pub(super) async fn run(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let cleanup = crate::host_cleanup::MacosHostCleanupTracker::capture();
-    let session =
-        match UtilityVmSession::connect(shim, &vm_rootfs, system_image_manifest, console).await {
-            Ok(session) => session,
-            Err(bridge) => {
-                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-                let bridge = {
-                    let mut bridge = bridge;
-                    cleanup.apply(&mut bridge).await;
-                    bridge
-                };
-                report.reason = bridge.reason.clone();
-                report.bridge = bridge;
-                return report;
-            }
-        };
+    let session_result = if separate_runtime_share {
+        UtilityVmSession::connect_with_separate_runtime_share(
+            shim,
+            &vm_rootfs,
+            system_image_manifest,
+            &runtime_share,
+            console,
+        )
+        .await
+    } else {
+        UtilityVmSession::connect(shim, &vm_rootfs, system_image_manifest, console).await
+    };
+    let session = match session_result {
+        Ok(session) => session,
+        Err(bridge) => {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            let bridge = {
+                let mut bridge = bridge;
+                cleanup.apply(&mut bridge).await;
+                bridge
+            };
+            report.reason = bridge.reason.clone();
+            report.bridge = bridge;
+            return report;
+        }
+    };
 
     let client = session.client();
     let exercise = exercise(
@@ -636,7 +673,7 @@ pub(super) async fn run(
         Ok(()) => report.marker_removed = true,
         Err(reason) => append_reason(&mut report, reason),
     }
-    match runtime_entries(&vm_rootfs).await {
+    match runtime_entries(&runtime_share).await {
         Ok(entries) => {
             report.guest_runtime_clean = entries == baseline_runtime_entries;
             if !report.guest_runtime_clean {
@@ -742,13 +779,19 @@ fn guest_path(vm_rootfs: &Path, bundle: &Path) -> Result<GuestPath, String> {
     if components.is_empty() {
         return Err("OCI bundle cannot be the VM rootfs itself".into());
     }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     let path = format!(
         "{}/{}",
         a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_GUEST_ROOT,
         components.join("/")
     );
-    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
     let path = format!("/{}", components.join("/"));
     GuestPath::new(path).map_err(|error| format!("failed to construct guest bundle path: {error}"))
 }

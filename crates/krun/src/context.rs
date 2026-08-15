@@ -3,7 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use a3s_libkrun_sys::{
-    krun_add_virtiofs, krun_add_vsock, krun_add_vsock_port_windows, krun_create_ctx,
+    krun_add_disk, krun_add_virtiofs, krun_add_vsock, krun_add_vsock_port_windows, krun_create_ctx,
     krun_disable_implicit_vsock, krun_free_ctx, krun_set_console_output, krun_set_exec,
     krun_set_root, krun_set_vm_config, krun_set_workdir, krun_start_enter,
 };
@@ -16,8 +16,15 @@ use crate::{AgentVsockEndpoint, VmConfig};
 /// Single-threaded owner of one valid libkrun configuration context.
 pub(crate) struct KrunContext {
     id: Option<u32>,
+    root_disk_configured: bool,
     not_thread_safe: PhantomData<Rc<()>>,
 }
+
+const BLOCK_ROOT_ENVIRONMENT: &[(&str, &str)] = &[
+    ("KRUN_BLOCK_ROOT_DEVICE", "/dev/vda"),
+    ("KRUN_BLOCK_ROOT_FSTYPE", "ext4"),
+    ("KRUN_BLOCK_ROOT_OPTIONS", "ro"),
+];
 
 impl KrunContext {
     pub(crate) fn create() -> Result<Self> {
@@ -34,6 +41,7 @@ impl KrunContext {
 
         Ok(Self {
             id: Some(id),
+            root_disk_configured: false,
             not_thread_safe: PhantomData,
         })
     }
@@ -81,6 +89,30 @@ impl KrunContext {
             status,
             "failed to configure the protected runtime share",
         )
+    }
+
+    /// Attach the manifest-verified system image as the first, read-only disk.
+    pub(crate) fn set_root_disk(&mut self, image: &Path) -> Result<()> {
+        let id = self.active_id("krun_add_disk")?;
+        if self.root_disk_configured {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "the immutable libkrun root disk is already configured",
+            )
+            .for_operation("krun_add_disk"));
+        }
+        let block_id = value_to_cstring("krun_add_disk", "block device ID", "root")?;
+        let image = path_to_cstring("krun_add_disk", image)?;
+        // SAFETY: the context is exclusively owned, both C strings remain
+        // live for the call, and true selects the Windows read-only backend.
+        let status = unsafe { krun_add_disk(id, block_id.as_ptr(), image.as_ptr(), true) };
+        check_status(
+            "krun_add_disk",
+            status,
+            "failed to configure the immutable libkrun root disk",
+        )?;
+        self.root_disk_configured = true;
+        Ok(())
     }
 
     pub(crate) fn set_agent_vsock(&mut self, endpoint: &AgentVsockEndpoint) -> Result<()> {
@@ -141,12 +173,7 @@ impl KrunContext {
         let id = self.active_id("krun_set_exec")?;
         let executable = value_to_cstring("krun_set_exec", "executable", executable)?;
         let arguments = FfiStringArray::new("krun_set_exec", "arguments", arguments)?;
-        let environment_entries = Zeroizing::new(
-            environment
-                .iter()
-                .map(|(key, value)| format!("{key}={value}"))
-                .collect::<Vec<_>>(),
-        );
+        let environment_entries = Zeroizing::new(self.guest_environment(environment)?);
         let environment =
             FfiStringArray::new("krun_set_exec", "environment", &environment_entries)?;
 
@@ -165,6 +192,33 @@ impl KrunContext {
             status,
             "failed to configure the libkrun guest workload",
         )
+    }
+
+    fn guest_environment(&self, environment: &[(String, String)]) -> Result<Vec<String>> {
+        for (key, _) in environment {
+            if BLOCK_ROOT_ENVIRONMENT
+                .iter()
+                .any(|(reserved, _)| key == reserved)
+            {
+                return Err(Error::new(
+                    ErrorCode::InvalidArgument,
+                    format!("guest environment cannot override internal libkrun key {key}"),
+                )
+                .for_operation("krun_set_exec"));
+            }
+        }
+        let mut entries = environment
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>();
+        if self.root_disk_configured {
+            entries.extend(
+                BLOCK_ROOT_ENVIRONMENT
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}")),
+            );
+        }
+        Ok(entries)
     }
 
     pub(crate) fn set_console_output(&mut self, output: &Path) -> Result<()> {
@@ -256,4 +310,42 @@ fn ffi_error(operation: &'static str, status: i32, message: &'static str) -> Err
         format!("{message}: {operation} returned status {status}"),
     )
     .for_operation(operation)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::marker::PhantomData;
+
+    use super::KrunContext;
+
+    fn context_with_root_disk(configured: bool) -> KrunContext {
+        KrunContext {
+            id: None,
+            root_disk_configured: configured,
+            not_thread_safe: PhantomData,
+        }
+    }
+
+    #[test]
+    fn injects_the_fixed_read_only_block_root_environment() {
+        let context = context_with_root_disk(true);
+        let environment = context
+            .guest_environment(&[("A3S_TOKEN".to_string(), "value".to_string())])
+            .expect("ordinary guest environment must remain valid");
+
+        assert_eq!(environment[0], "A3S_TOKEN=value");
+        assert!(environment.contains(&"KRUN_BLOCK_ROOT_DEVICE=/dev/vda".to_string()));
+        assert!(environment.contains(&"KRUN_BLOCK_ROOT_FSTYPE=ext4".to_string()));
+        assert!(environment.contains(&"KRUN_BLOCK_ROOT_OPTIONS=ro".to_string()));
+    }
+
+    #[test]
+    fn rejects_callers_that_override_internal_block_root_environment() {
+        let context = context_with_root_disk(true);
+        let error = context
+            .guest_environment(&[("KRUN_BLOCK_ROOT_OPTIONS".to_string(), "rw".to_string())])
+            .expect_err("callers must not make the immutable root writable");
+
+        assert!(error.to_string().contains("cannot override"));
+    }
 }

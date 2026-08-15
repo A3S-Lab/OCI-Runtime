@@ -27,6 +27,8 @@ mod macos_system_image;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_vm_smoke;
 mod report;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod windows_system_image;
 
 pub use a3s_oci_agent_protocol::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
 use a3s_oci_core::CapabilityStatus;
@@ -35,8 +37,8 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 pub use agent_smoke::{agent_vm_smoke, AgentVmHandoff};
 pub use report::{
     KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunVmSmokeReport, MacosBootAssetsEvidence,
-    KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,
-    KRUN_VM_SMOKE_SCHEMA_VERSION,
+    WindowsBootAssetsEvidence, KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION,
+    KRUN_CONTEXT_SMOKE_SCHEMA_VERSION, KRUN_VM_SMOKE_SCHEMA_VERSION,
 };
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

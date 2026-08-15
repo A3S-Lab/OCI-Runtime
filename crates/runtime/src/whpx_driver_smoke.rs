@@ -60,7 +60,7 @@ pub struct WhpxDriverSmokeReport {
     pub marker_verified: bool,
     /// Whether stopped-only delete completed guest and VM cleanup.
     pub delete_succeeded: bool,
-    /// Whether successful VM shutdown verified shim v2 runtime-share evidence.
+    /// Whether successful VM shutdown verified shim v4 runtime-share evidence.
     pub runtime_share_configured: bool,
     /// Whether the driver removed the exact in-memory attachment after delete.
     pub driver_attachment_removed: bool,
@@ -179,17 +179,26 @@ pub async fn whpx_driver_smoke(
     shim: &Path,
     runtime_root: &Path,
     vm_rootfs: &Path,
+    system_image_manifest: &Path,
     bundle: &Path,
     target: ContainerTarget,
 ) -> WhpxDriverSmokeReport {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        windows::run(shim, runtime_root, vm_rootfs, bundle, target).await
+        windows::run(
+            shim,
+            runtime_root,
+            vm_rootfs,
+            system_image_manifest,
+            bundle,
+            target,
+        )
+        .await
     }
 
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
     {
-        let _ = (shim, runtime_root, vm_rootfs, bundle);
+        let _ = (shim, runtime_root, vm_rootfs, system_image_manifest, bundle);
         WhpxDriverSmokeReport::unsupported(HostPlatform::current(), target)
     }
 }
@@ -234,6 +243,7 @@ mod windows {
         shim: &Path,
         runtime_root: &Path,
         vm_rootfs: &Path,
+        system_image_manifest: &Path,
         bundle_directory: &Path,
         target: ContainerTarget,
     ) -> WhpxDriverSmokeReport {
@@ -320,6 +330,7 @@ mod windows {
             shim,
             &runtime_root,
             vm_rootfs,
+            system_image_manifest,
         ))
         .await
         {
@@ -576,7 +587,7 @@ mod windows {
             .map_err(|error| format!("WHPX driver delete failed: {error}"))?;
         report.delete_succeeded = true;
         // A successful live delete includes UtilityVmSession shutdown, whose
-        // driver-owned contract rejects missing shim v2 runtime-share evidence.
+        // The driver-owned contract rejects missing shim v4 runtime-share evidence.
         report.runtime_share_configured = true;
         report.driver_attachment_removed = matches!(
             driver.state(target.clone()).await,

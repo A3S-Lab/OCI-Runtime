@@ -51,21 +51,25 @@ pub struct WhpxRuntimeDriverConfig {
     shim: PathBuf,
     runtime_root: PathBuf,
     vm_rootfs: PathBuf,
+    system_image_manifest: PathBuf,
     runtime_share_root: PathBuf,
 }
 
 impl WhpxRuntimeDriverConfig {
-    /// Describe the isolated shim, protected runtime root, and guest system root.
+    /// Describe the isolated shim, protected runtime root, empty bootstrap, and
+    /// immutable system-image manifest.
     ///
-    /// The system root must be a strict descendant of `runtime_root` and contain
-    /// the fixed agent plus runtime-share mount point. Opening the candidate
-    /// verifies those plain paths, creates the sibling share parent, and applies
-    /// the private Windows DACL before any VM can launch.
+    /// The bootstrap must be a strict, empty descendant of `runtime_root`; the
+    /// manifest and its assets must remain outside that mutable tree. Opening
+    /// the candidate verifies those paths, binds the manifest digest into the
+    /// driver capability, creates the share parent, and applies the private
+    /// Windows DACL before any VM can launch.
     #[must_use]
     pub fn new(
         shim: impl Into<PathBuf>,
         runtime_root: impl Into<PathBuf>,
         vm_rootfs: impl Into<PathBuf>,
+        system_image_manifest: impl Into<PathBuf>,
     ) -> Self {
         let runtime_root = runtime_root.into();
         Self {
@@ -73,6 +77,7 @@ impl WhpxRuntimeDriverConfig {
             runtime_share_root: runtime_root.join(RUNTIME_SHARE_DIRECTORY),
             runtime_root,
             vm_rootfs: vm_rootfs.into(),
+            system_image_manifest: system_image_manifest.into(),
         }
     }
 
@@ -88,10 +93,16 @@ impl WhpxRuntimeDriverConfig {
         &self.runtime_root
     }
 
-    /// Guest system root exported to each dedicated utility VM.
+    /// Empty bootstrap root used while each dedicated utility VM starts.
     #[must_use]
     pub fn vm_rootfs(&self) -> &Path {
         &self.vm_rootfs
+    }
+
+    /// Manifest for the pinned, read-only x86_64 system disk.
+    #[must_use]
+    pub fn system_image_manifest(&self) -> &Path {
+        &self.system_image_manifest
     }
 
     /// Protected parent of every exact-generation writable guest share.
@@ -107,11 +118,13 @@ impl WhpxRuntimeDriverConfig {
 /// qualification tests may invoke it directly. Its capability deliberately
 /// remains `probe-only`, so
 /// [`crate::HostRuntimeService`] rejects production registration until the
-/// immutable-system-root and fresh-host recovery gates are complete.
+/// fresh-host recovery and native-handle reclamation gates are complete.
 pub struct WhpxRuntimeDriver {
     capability: DriverCapability,
     runtime_root: PathBuf,
     vm_rootfs: PathBuf,
+    system_image_manifest: PathBuf,
+    system_image_manifest_sha256: String,
     runtime_share_root: PathBuf,
     recovery_directory: PathBuf,
     factory: Arc<dyn UtilityVmFactory>,
@@ -126,6 +139,11 @@ impl fmt::Debug for WhpxRuntimeDriver {
             .field("capability", &self.capability)
             .field("runtime_root", &self.runtime_root)
             .field("vm_rootfs", &self.vm_rootfs)
+            .field("system_image_manifest", &self.system_image_manifest)
+            .field(
+                "system_image_manifest_sha256",
+                &self.system_image_manifest_sha256,
+            )
             .field("runtime_share_root", &self.runtime_share_root)
             .finish_non_exhaustive()
     }
@@ -160,6 +178,14 @@ impl WhpxRuntimeDriver {
             "protected-per-generation-virtiofs".to_string(),
         );
         capability.evidence.insert(
+            "immutable_system_root".to_string(),
+            "manifest-bound-read-only-virtio-blk".to_string(),
+        );
+        capability.evidence.insert(
+            "system_image_manifest_sha256".to_string(),
+            prepared.system_image_manifest_sha256.clone(),
+        );
+        capability.evidence.insert(
             "owner_death_recovery".to_string(),
             "stopped-with-authenticated-exit".to_string(),
         );
@@ -174,6 +200,8 @@ impl WhpxRuntimeDriver {
         let factory = Arc::new(LiveUtilityVmFactory {
             shim: prepared.shim,
             vm_rootfs: prepared.vm_rootfs.clone(),
+            system_image_manifest: prepared.system_image_manifest.clone(),
+            system_image_manifest_sha256: prepared.system_image_manifest_sha256.clone(),
             console_directory: prepared.console_directory,
             recovery_directory: prepared.recovery_directory.clone(),
         });
@@ -181,6 +209,8 @@ impl WhpxRuntimeDriver {
             capability,
             runtime_root: prepared.runtime_root,
             vm_rootfs: prepared.vm_rootfs,
+            system_image_manifest: prepared.system_image_manifest,
+            system_image_manifest_sha256: prepared.system_image_manifest_sha256,
             runtime_share_root: prepared.runtime_share_root,
             recovery_directory: prepared.recovery_directory,
             factory,
@@ -745,6 +775,7 @@ impl WhpxRuntimeDriver {
             )
         })?;
         remove_plain_file_if_present(&runtime_share.join(BUNDLE_HANDOFF_MARKER_PENDING)).await?;
+        remove_directory_if_empty(&runtime_share.join("run")).await?;
         remove_directory_if_empty(&runtime_share).await?;
         if let Some(container_directory) = runtime_share.parent() {
             remove_directory_if_empty(container_directory).await?;
@@ -1152,6 +1183,8 @@ trait UtilityVmOwner: Send + Sync {
 struct LiveUtilityVmFactory {
     shim: PathBuf,
     vm_rootfs: PathBuf,
+    system_image_manifest: PathBuf,
+    system_image_manifest_sha256: String,
     console_directory: PathBuf,
     recovery_directory: PathBuf,
 }
@@ -1174,6 +1207,8 @@ impl UtilityVmFactory for LiveUtilityVmFactory {
             UtilityVmSession::connect_with_recovery(
                 &self.shim,
                 &self.vm_rootfs,
+                &self.system_image_manifest,
+                &self.system_image_manifest_sha256,
                 runtime_share,
                 &console,
                 &recovery_report,
@@ -1210,6 +1245,8 @@ struct PreparedWhpxLayout {
     shim: PathBuf,
     runtime_root: PathBuf,
     vm_rootfs: PathBuf,
+    system_image_manifest: PathBuf,
+    system_image_manifest_sha256: String,
     runtime_share_root: PathBuf,
     console_directory: PathBuf,
     recovery_directory: PathBuf,
@@ -1220,55 +1257,84 @@ impl PreparedWhpxLayout {
         let shim = canonical_plain_file(&config.shim, "WHPX shim").await?;
         let runtime_root =
             canonical_plain_directory(&config.runtime_root, "WHPX runtime root").await?;
-        let vm_rootfs = canonical_plain_directory(&config.vm_rootfs, "WHPX guest root").await?;
+        let vm_rootfs = canonical_plain_directory(&config.vm_rootfs, "WHPX bootstrap root").await?;
         if vm_rootfs == runtime_root || !vm_rootfs.starts_with(&runtime_root) {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "WHPX guest system root must be a strict descendant of protected runtime root {}: {}",
+                    "WHPX bootstrap root must be a strict descendant of protected runtime root {}: {}",
                     runtime_root.display(),
                     vm_rootfs.display()
                 ),
             )
             .for_operation("open-whpx-driver-candidate"));
         }
-        let guest_agent = canonical_plain_file(
-            &vm_rootfs.join("usr/bin/a3s-oci-agent"),
-            "fixed WHPX guest agent",
-        )
-        .await?;
-        if !guest_agent.starts_with(&vm_rootfs) {
-            return Err(Error::new(
+        let mut bootstrap_entries = tokio::fs::read_dir(&vm_rootfs).await.map_err(|error| {
+            path_error(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "fixed WHPX guest agent escapes system root {}: {}",
-                    vm_rootfs.display(),
-                    guest_agent.display()
+                    "failed to inspect WHPX bootstrap root {}: {error}",
+                    vm_rootfs.display()
                 ),
             )
-            .for_operation("open-whpx-driver-candidate"));
-        }
-        let runtime_share_mount_point = canonical_plain_directory(
-            &vm_rootfs.join(AGENT_RUNTIME_SHARE_GUEST_ROOT.trim_start_matches('/')),
-            "fixed WHPX runtime-share mount point",
-        )
-        .await?;
-        if !runtime_share_mount_point.starts_with(&vm_rootfs) {
+        })?;
+        if bootstrap_entries
+            .next_entry()
+            .await
+            .map_err(|error| {
+                path_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "failed to enumerate WHPX bootstrap root {}: {error}",
+                        vm_rootfs.display()
+                    ),
+                )
+            })?
+            .is_some()
+        {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "fixed WHPX runtime-share mount point escapes system root {}: {}",
-                    vm_rootfs.display(),
-                    runtime_share_mount_point.display()
+                    "WHPX bootstrap root must be empty because the manifest-bound ext4 disk owns the guest system root: {}",
+                    vm_rootfs.display()
                 ),
             )
             .for_operation("open-whpx-driver-candidate"));
         }
 
+        let system_image_manifest =
+            canonical_plain_file(&config.system_image_manifest, "WHPX system-image manifest")
+                .await?;
+        let system_image_directory = system_image_manifest.parent().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "WHPX system-image manifest has no parent directory: {}",
+                    system_image_manifest.display()
+                ),
+            )
+            .for_operation("open-whpx-driver-candidate")
+        })?;
+        if system_image_manifest.starts_with(&runtime_root)
+            || runtime_root.starts_with(system_image_directory)
+        {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "WHPX immutable system-image assets and mutable runtime root must be disjoint: {} and {}",
+                    system_image_directory.display(),
+                    runtime_root.display()
+                ),
+            )
+            .for_operation("open-whpx-driver-candidate"));
+        }
+        let system_image_manifest_sha256 =
+            crate::agent_session::sha256_path(&system_image_manifest)
+                .await
+                .map_err(|reason| path_error(ErrorCode::FailedPrecondition, reason))?;
+
         protect_path(runtime_root.clone()).await?;
         protect_path(vm_rootfs.clone()).await?;
-        protect_path(guest_agent).await?;
-        protect_path(runtime_share_mount_point).await?;
         let configured_runtime_share_root = config.runtime_share_root;
         ensure_private_directory(configured_runtime_share_root.clone(), "runtime-share").await?;
         let runtime_share_root =
@@ -1281,7 +1347,7 @@ impl PreparedWhpxLayout {
             return Err(Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "WHPX system root and writable runtime-share root must be disjoint: {} and {}",
+                    "WHPX bootstrap root and writable runtime-share root must be disjoint: {} and {}",
                     vm_rootfs.display(),
                     runtime_share_root.display()
                 ),
@@ -1298,6 +1364,8 @@ impl PreparedWhpxLayout {
             shim,
             runtime_root,
             vm_rootfs,
+            system_image_manifest,
+            system_image_manifest_sha256,
             runtime_share_root,
             console_directory,
             recovery_directory,
@@ -1441,7 +1509,9 @@ async fn ensure_exact_runtime_share_path(
         "generation-share",
     )
     .await?;
-    exact_runtime_share_path(runtime_share_root, target).await
+    let runtime_share = exact_runtime_share_path(runtime_share_root, target).await?;
+    ensure_private_directory(runtime_share.join("run"), "runtime-state").await?;
+    Ok(runtime_share)
 }
 
 async fn existing_exact_runtime_share_path(
@@ -2324,10 +2394,13 @@ mod tests {
         fn new() -> Self {
             let temporary = tempfile::tempdir().expect("temporary WHPX fixture");
             let vm_rootfs = temporary.path().join("vm-root");
+            let system_image_manifest = temporary.path().join("system-image.json");
             let runtime_share_root = temporary.path().join("shares");
             let recovery_directory = temporary.path().join("recovery");
             let bundle_directory = runtime_share_root.join("whpx-test/1/workloads/test");
             std::fs::create_dir(&vm_rootfs).expect("VM root directory");
+            std::fs::write(&system_image_manifest, b"manifest")
+                .expect("system-image manifest fixture");
             std::fs::create_dir_all(&bundle_directory).expect("bundle directory");
             std::fs::create_dir(&recovery_directory).expect("recovery directory");
             let vm_rootfs = std::fs::canonicalize(vm_rootfs).expect("canonical WHPX fixture root");
@@ -2353,6 +2426,8 @@ mod tests {
                 capability: candidate_capability(),
                 runtime_root: runtime_root.clone(),
                 vm_rootfs: vm_rootfs.clone(),
+                system_image_manifest,
+                system_image_manifest_sha256: "fixture-manifest-sha256".to_string(),
                 runtime_share_root: runtime_share_root.clone(),
                 recovery_directory: recovery_directory.clone(),
                 factory: factory_dyn,
@@ -2523,13 +2598,20 @@ mod tests {
         let shim = temporary.path().join("a3s-oci-krun-shim.exe");
         let runtime_root = temporary.path().join("runtime");
         let system_root = runtime_root.join("system");
-        std::fs::create_dir_all(system_root.join("usr/bin")).expect("agent directory");
-        std::fs::create_dir_all(system_root.join("run/a3s-oci-runtime"))
-            .expect("runtime-share mount point");
+        let asset_root = temporary.path().join("assets");
+        let system_image_manifest = asset_root.join("system-image.json");
+        std::fs::create_dir_all(&system_root).expect("bootstrap root");
+        std::fs::create_dir_all(&asset_root).expect("asset root");
         std::fs::write(&shim, b"shim").expect("shim fixture");
-        std::fs::write(system_root.join("usr/bin/a3s-oci-agent"), b"agent").expect("agent fixture");
-        let config = WhpxRuntimeDriverConfig::new(&shim, &runtime_root, &system_root);
+        std::fs::write(&system_image_manifest, b"manifest").expect("manifest fixture");
+        let config = WhpxRuntimeDriverConfig::new(
+            &shim,
+            &runtime_root,
+            &system_root,
+            &system_image_manifest,
+        );
         assert_eq!(config.runtime_share_root(), runtime_root.join("shares"));
+        assert_eq!(config.system_image_manifest(), system_image_manifest);
 
         let prepared = PreparedWhpxLayout::open(config)
             .await
@@ -2537,25 +2619,63 @@ mod tests {
         assert!(prepared.runtime_share_root.is_dir());
         assert!(!prepared.runtime_share_root.starts_with(&prepared.vm_rootfs));
         assert!(!prepared.vm_rootfs.starts_with(&prepared.runtime_share_root));
+        assert_eq!(prepared.system_image_manifest_sha256.len(), 64);
+        assert!(prepared
+            .system_image_manifest_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
     }
 
     #[tokio::test]
-    async fn prepared_layout_requires_the_fixed_system_root_mount_point() {
+    async fn prepared_layout_rejects_a_nonempty_bootstrap_root() {
         let temporary = tempfile::tempdir().expect("temporary WHPX layout");
         let shim = temporary.path().join("a3s-oci-krun-shim.exe");
         let runtime_root = temporary.path().join("runtime");
         let system_root = runtime_root.join("system");
-        std::fs::create_dir_all(system_root.join("usr/bin")).expect("agent directory");
+        let asset_root = temporary.path().join("assets");
+        let system_image_manifest = asset_root.join("system-image.json");
+        std::fs::create_dir_all(&system_root).expect("bootstrap root");
+        std::fs::create_dir_all(&asset_root).expect("asset root");
         std::fs::write(&shim, b"shim").expect("shim fixture");
-        std::fs::write(system_root.join("usr/bin/a3s-oci-agent"), b"agent").expect("agent fixture");
+        std::fs::write(system_root.join("unexpected"), b"mutable root").expect("root fixture");
+        std::fs::write(&system_image_manifest, b"manifest").expect("manifest fixture");
 
         let error = PreparedWhpxLayout::open(WhpxRuntimeDriverConfig::new(
             &shim,
             &runtime_root,
             &system_root,
+            &system_image_manifest,
         ))
         .await
-        .expect_err("missing runtime-share mount point must fail");
+        .expect_err("nonempty bootstrap root must fail");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn prepared_layout_rejects_system_assets_below_the_mutable_runtime_root() {
+        let temporary = tempfile::tempdir().expect("temporary WHPX layout");
+        let shim = temporary.path().join("a3s-oci-krun-shim.exe");
+        let runtime_root = temporary.path().join("runtime");
+        let bootstrap_root = runtime_root.join("bootstrap");
+        let system_image_manifest = runtime_root.join("assets/system-image.json");
+        std::fs::create_dir_all(&bootstrap_root).expect("bootstrap root");
+        std::fs::create_dir_all(
+            system_image_manifest
+                .parent()
+                .expect("manifest parent fixture"),
+        )
+        .expect("asset root");
+        std::fs::write(&shim, b"shim").expect("shim fixture");
+        std::fs::write(&system_image_manifest, b"manifest").expect("manifest fixture");
+
+        let error = PreparedWhpxLayout::open(WhpxRuntimeDriverConfig::new(
+            &shim,
+            &runtime_root,
+            &bootstrap_root,
+            &system_image_manifest,
+        ))
+        .await
+        .expect_err("mutable runtime roots must not contain immutable system assets");
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
     }
 

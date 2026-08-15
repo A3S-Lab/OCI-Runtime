@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A reproducible, manifest-bound Windows WHPX system image. The new x86_64
+  builder pins Alpine 3.22.5, Linux 6.12.91, the Box/libkrun/firmware source
+  revisions, native DLL and kernel digests, filesystem identity, and the
+  protocol-v10 compatibility level. The Windows shim rejects unknown or
+  drifted manifest data, reparse paths, replaced file identities, and loaded
+  DLL mismatches; read-only handles pin the manifest, ext4 image, `krun.dll`,
+  and `libkrunfw.dll` through VM entry. libkrun receives the ext4 image as a
+  read-only block root, while an empty bootstrap directory and a separate
+  writable runtime share carry only bundle, token, and recovery data. The
+  manifest digest is also part of the driver capability binding, so durable
+  service reopen rejects asset changes. CI now
+  publishes the system image and a v2 WHPX qualification artifact with
+  disjoint `bin/` and `system-image/` directories. Fresh-host WHPX SDK and
+  recovery qualification remains open.
 - Durable Host journals for File upload and Filesystem mkdir, move, and remove.
   `a3s.oci.operation.v3` retains each complete validated request and typed
   response, keeps prepared work resumable, replays completed results without a

@@ -411,11 +411,11 @@ from one writable host share. The runtime accepts only the plain directory at
 only that exact directory to `krun_add_virtiofs` with tag
 `a3s-oci-runtime`. The Linux agent must mount it at
 `/run/a3s-oci-runtime` before it can read the one-time token or connect to the
-host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v2` records whether the
-device was configured; the host requires that field for candidate-driver
-sessions while diagnostic and macOS sessions remain valid without the extra
-device. Bundle paths, token files, and recovery-report paths are then validated
-below the fixed guest mount rather than below the system root.
+host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v4` records the separate
+device plus the exact immutable boot assets. Candidate-driver sessions require
+the runtime-share evidence and the digest of the selected system-image
+manifest. Bundle paths, token files, and recovery-report paths are then
+validated below the fixed guest mount rather than below the system root.
 
 macOS tests create a random private directory below `/private/tmp` with mode
 `0700`, bind a `0600` Unix socket, reject collisions and symlinks, and remove
@@ -426,14 +426,16 @@ shim. An unrelated peer is rejected before protocol bytes are read. A direct
 child with the wrong token is rejected during the following authentication
 step.
 
-The retained real WHPX `agent-vm-smoke` additionally boots the static musl
-Linux agent, carries its CID-host port 4093 connection through libkrun to that
-protected pipe, authenticates the token, negotiates protocol version 9, and
-retains bounded host and shim evidence. That qualified v9 guest advertises the exact
-20 workload operations: `create`, `state`, `start`, `kill`, `delete`, `wait`,
-`exec`, `signal-process`, `wait-process`, `pause`, `resume`, `processes`,
-`update`, `stats`, `read-output`, `write-stdin`, `close-stdin`, `resize`,
-`file`, and `filesystem`.
+The last retained real WHPX `agent-vm-smoke` booted the static musl Linux
+agent, carried its CID-host port 4093 connection through libkrun to that
+protected pipe, authenticated the token, and negotiated protocol version 9.
+That qualified guest advertised the exact 20 workload operations: `create`,
+`state`, `start`, `kill`, `delete`, `wait`, `exec`, `signal-process`,
+`wait-process`, `pause`, `resume`, `processes`, `update`, `stats`,
+`read-output`, `write-stdin`, `close-stdin`, `resize`, `file`, and
+`filesystem`. The current WHPX path boots the manifest-bound protocol-v10
+image and also requires `acknowledge-operations`; its fresh-host qualification
+is still open.
 Before the utility-VM owner waits for the shim, it explicitly closes the
 shared client transport. This waits for an in-flight request and invalidates
 all retained clones, so a forgotten client handle cannot keep the guest or

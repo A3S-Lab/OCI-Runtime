@@ -2,6 +2,8 @@
 param(
     [Parameter(Mandatory)]
     [string]$RootfsArchive,
+    [Parameter(Mandatory)]
+    [string]$SystemImageManifest,
     [ValidateRange(0, 1000000)]
     [int]$Iterations = 25,
     [ValidateRange(0, 31536000)]
@@ -66,10 +68,11 @@ $fixtureAssetDirectory = Join-Path $PSScriptRoot 'fixtures\windows-soak'
 $cli = Join-Path $repositoryRoot 'target\debug\a3s-oci.exe'
 $shim = Join-Path $repositoryRoot 'target\debug\a3s-oci-krun-shim.exe'
 $krunDll = Join-Path $repositoryRoot 'target\debug\krun.dll'
-$agent = Join-Path $repositoryRoot (
-    'target\x86_64-unknown-linux-musl\release\a3s-oci-agent'
-)
+$firmwareDll = Join-Path $repositoryRoot 'target\debug\libkrunfw.dll'
 $rootfsArchive = (Resolve-Path -LiteralPath $RootfsArchive -ErrorAction Stop).Path
+$systemImageManifest = (
+    Resolve-Path -LiteralPath $SystemImageManifest -ErrorAction Stop
+).Path
 $tar = (Get-Command tar.exe -ErrorAction Stop).Source
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
@@ -80,9 +83,43 @@ if ($archiveItem.PSIsContainer -or $archiveItem.Length -le 0) {
 if ($archiveItem.PSObject.Properties.Name -contains 'LinkType' -and $archiveItem.LinkType) {
     throw "Rootfs archive must not be a link: $rootfsArchive"
 }
+$expectedRootfsSha256 = '4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282'
+$rootfsInputSha256 = (
+    Get-FileHash -LiteralPath $rootfsArchive -Algorithm SHA256
+).Hash.ToLowerInvariant()
+if ($rootfsInputSha256 -ne $expectedRootfsSha256) {
+    throw "Rootfs SHA-256 mismatch: expected $expectedRootfsSha256, found $rootfsInputSha256"
+}
 if (-not (Test-Path -LiteralPath $fixtureConfig -PathType Leaf)) {
     throw "Soak fixture configuration is missing: $fixtureConfig"
 }
+$manifestItem = Get-Item -LiteralPath $systemImageManifest -Force
+if ($manifestItem.PSIsContainer -or $manifestItem.Length -le 0) {
+    throw "System-image manifest must be a non-empty regular file: $systemImageManifest"
+}
+if ($manifestItem.PSObject.Properties.Name -contains 'LinkType' -and $manifestItem.LinkType) {
+    throw "System-image manifest must not be a link: $systemImageManifest"
+}
+$systemImage = Get-Content -LiteralPath $systemImageManifest -Raw | ConvertFrom-Json
+if ($systemImage.schema_version -ne 'a3s.oci.windows-system-image.v1' -or
+    $systemImage.architecture -ne 'x86_64' -or
+    $systemImage.image.name -ne 'a3s-oci-system.ext4') {
+    throw "Unexpected Windows system-image manifest: $systemImageManifest"
+}
+$systemImagePath = Join-Path $manifestItem.DirectoryName $systemImage.image.name
+if (-not (Test-Path -LiteralPath $systemImagePath -PathType Leaf)) {
+    throw "Windows system image is missing: $systemImagePath"
+}
+$systemImageSha256 = (
+    Get-FileHash -LiteralPath $systemImagePath -Algorithm SHA256
+).Hash.ToLowerInvariant()
+if ($systemImageSha256 -ne $systemImage.image.sha256 -or
+    (Get-Item -LiteralPath $systemImagePath).Length -ne [uint64]$systemImage.image.size) {
+    throw "Windows system image does not match its manifest: $systemImagePath"
+}
+$systemImageManifestSha256 = (
+    Get-FileHash -LiteralPath $systemImageManifest -Algorithm SHA256
+).Hash.ToLowerInvariant()
 
 $runId = '{0}-{1}' -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'), $PID
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
@@ -115,8 +152,8 @@ $failure = $null
 $commit = $null
 $worktreeStatus = @()
 $rootfsArchiveSha256 = $null
-$agentSha256 = $null
 $krunDllSha256 = $null
+$firmwareDllSha256 = $null
 $startedAt = [DateTime]::UtcNow
 $soakStartedAt = $null
 $serialInitialLogBytes = 0
@@ -604,22 +641,17 @@ function New-SoakFixture {
     if (Test-Path -LiteralPath $fixture) {
         throw "Refusing to overwrite an existing fixture: $fixture"
     }
-    $vmRootfs = Join-Path $fixture 'vm'
-    $bundle = Join-Path $vmRootfs 'bundle'
+    $vmRootfs = Join-Path $fixture 'bootstrap'
+    $runtimeShare = Join-Path $fixture 'runtime-share'
+    $bundle = Join-Path $runtimeShare 'bundle'
     $containerRootfs = Join-Path $bundle 'rootfs'
-    New-Item -ItemType Directory -Path $vmRootfs | Out-Null
-    & $script:tar -xf $script:rootfsArchive -C $vmRootfs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to extract VM rootfs for fixture $Name"
-    }
+    New-Item -ItemType Directory -Path `
+        $vmRootfs, $runtimeShare, (Join-Path $runtimeShare 'run') | Out-Null
     New-Item -ItemType Directory -Path $containerRootfs | Out-Null
     & $script:tar -xf $script:rootfsArchive -C $containerRootfs
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to extract container rootfs for fixture $Name"
     }
-    Copy-Item -LiteralPath $script:agent `
-        -Destination (Join-Path $vmRootfs 'usr\bin\a3s-oci-agent') -Force
-
     $config = Get-Content -LiteralPath $script:fixtureConfig -Raw | ConvertFrom-Json
     $config.linux.cgroupsPath = "a3s-oci-windows-soak-$Name"
     $scenarioMetadata = [pscustomobject]@{
@@ -773,6 +805,7 @@ function New-SoakFixture {
         Variant = $Variant
         Root = $fixture
         VmRootfs = $vmRootfs
+        RuntimeShare = $runtimeShare
         Bundle = $bundle
         Marker = Join-Path $containerRootfs '.a3s-oci-create-start-smoke'
         Scenario = $scenarioMetadata
@@ -787,7 +820,7 @@ function New-SecondBundle {
         [string]$Name
     )
 
-    $bundle = Join-Path $Fixture.VmRootfs $Name
+    $bundle = Join-Path $Fixture.RuntimeShare $Name
     $containerRootfs = Join-Path $bundle 'rootfs'
     if (Test-Path -LiteralPath $bundle) {
         throw "Refusing to overwrite an existing second bundle: $bundle"
@@ -809,16 +842,20 @@ function Get-FixtureAudit {
         [object]$Fixture
     )
 
-    $logs = @(Get-ChildItem -LiteralPath $Fixture.VmRootfs -File -Filter '*.log' `
+    $bootstrapRootEntries = @(
+        Get-ChildItem -LiteralPath $Fixture.VmRootfs -Force `
+            -ErrorAction SilentlyContinue
+    )
+    $logs = @(Get-ChildItem -LiteralPath $Fixture.RuntimeShare -File -Filter '*.log' `
         -Force -ErrorAction SilentlyContinue)
     $tokenHits = @(
         $logs | Select-String -SimpleMatch 'A3S_OCI_AGENT_SESSION_TOKEN='
     )
     $bootstrapDirectories = @(
-        Get-ChildItem -LiteralPath $Fixture.VmRootfs -Directory -Force |
+        Get-ChildItem -LiteralPath $Fixture.RuntimeShare -Directory -Force |
             Where-Object { $_.Name -like '.a3s-oci-bootstrap-*' }
     )
-    $runtimeParent = Join-Path $Fixture.VmRootfs 'run'
+    $runtimeParent = Join-Path $Fixture.RuntimeShare 'run'
     $runtimeDirectories = @()
     if (Test-Path -LiteralPath $runtimeParent -PathType Container) {
         $runtimeDirectories = @(
@@ -831,6 +868,7 @@ function Get-FixtureAudit {
         $logBytes += $log.Length
     }
     [pscustomobject]@{
+        BootstrapRootEntries = $bootstrapRootEntries.Count
         BootstrapDirectories = $bootstrapDirectories.Count
         RuntimeDirectories = $runtimeDirectories.Count
         DirectTokenLogHits = $tokenHits.Count
@@ -847,6 +885,9 @@ function Assert-RuntimeAudit {
         [object]$Audit
     )
 
+    if ($Audit.BootstrapRootEntries -ne 0) {
+        throw "$Label modified the empty VM bootstrap root"
+    }
     if ($Audit.BootstrapDirectories -ne 0) {
         throw "$Label left $($Audit.BootstrapDirectories) bootstrap directories"
     }
@@ -924,6 +965,8 @@ function Start-OciSmoke {
         'oci-vm-smoke',
         '--shim', $script:shim,
         '--vm-rootfs', $Fixture.VmRootfs,
+        '--system-image-manifest', $script:systemImageManifest,
+        '--runtime-share', $Fixture.RuntimeShare,
         '--bundle', $Fixture.Bundle,
         '--console', $Console
     )
@@ -943,6 +986,8 @@ function Start-MultiContainerSmoke {
         'windows-oci-vm-multi-container-smoke',
         '--shim', $script:shim,
         '--vm-rootfs', $Fixture.VmRootfs,
+        '--system-image-manifest', $script:systemImageManifest,
+        '--runtime-share', $Fixture.RuntimeShare,
         '--bundle-a', $Fixture.Bundle,
         '--bundle-b', $BundleB,
         '--console', $Console
@@ -964,6 +1009,8 @@ function Start-LifecycleFaultSmoke {
         'oci-vm-fault-cleanup',
         '--shim', $script:shim,
         '--vm-rootfs', $Fixture.VmRootfs,
+        '--system-image-manifest', $script:systemImageManifest,
+        '--runtime-share', $Fixture.RuntimeShare,
         '--bundle', $Fixture.Bundle,
         '--console', $Console,
         '--fault-after', $Fault
@@ -1381,10 +1428,14 @@ function Write-Summary {
         worktree_dirty = $script:worktreeStatus.Count -gt 0
         rootfs_archive = $script:rootfsArchive
         rootfs_archive_sha256 = $script:rootfsArchiveSha256
-        guest_agent = $script:agent
-        guest_agent_sha256 = $script:agentSha256
+        system_image_manifest = $script:systemImageManifest
+        system_image_manifest_sha256 = $script:systemImageManifestSha256
+        system_image = $script:systemImagePath
+        system_image_sha256 = $script:systemImageSha256
         native_krun = $script:krunDll
         native_krun_sha256 = $script:krunDllSha256
+        firmware_dll = $script:firmwareDll
+        firmware_dll_sha256 = $script:firmwareDllSha256
         started_at = $script:startedAt.ToString('o')
         soak_started_at = if ($null -eq $script:soakStartedAt) {
             $null
@@ -1490,26 +1541,19 @@ try {
     ).Hash.ToLowerInvariant()
 
     if (-not $SkipBuild) {
-        Invoke-LoggedNative -Label 'build-guest-agent' -FilePath 'cargo.exe' `
-            -Arguments @(
-                'zigbuild',
-                '-p', 'a3s-oci-agent',
-                '--release',
-                '--target', 'x86_64-unknown-linux-musl'
-            )
         Invoke-LoggedNative -Label 'build-windows' -FilePath 'cargo.exe' `
             -Arguments @('build', '-p', 'a3s-oci-cli', '-p', 'a3s-oci-krun')
     }
-    foreach ($path in @($cli, $shim, $krunDll, $agent)) {
+    foreach ($path in @($cli, $shim, $krunDll, $firmwareDll)) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Required soak binary is missing: $path"
         }
     }
-    $agentSha256 = (
-        Get-FileHash -LiteralPath $agent -Algorithm SHA256
-    ).Hash.ToLowerInvariant()
     $krunDllSha256 = (
         Get-FileHash -LiteralPath $krunDll -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    $firmwareDllSha256 = (
+        Get-FileHash -LiteralPath $firmwareDll -Algorithm SHA256
     ).Hash.ToLowerInvariant()
 
     $operatingSystem = Get-ItemProperty `

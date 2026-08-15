@@ -1075,13 +1075,23 @@ real-driver coverage remains open for the other utility-VM backends.
     exact owner termination, both Recover fault boundaries, service reopen,
     terminal replay, stopped-only delete, and complete transient cleanup.
 - [ ] Boot the pinned A3S Linux kernel and immutable system root.
-  - [ ] Record source revisions, reproducible build inputs, checksums, and the
+  - [x] Record source revisions, reproducible build inputs, checksums, and the
     runtime-to-guest compatibility level in the release evidence.
-  - [ ] Mount the immutable system root separately from the protected
+  - [x] Mount the immutable system root separately from the protected
     per-generation runtime share and reject any digest or provenance drift
     before VM entry.
   - [ ] Run the complete WHPX SDK and recovery matrices against those exact
     assets on a fresh Windows host.
+
+  The August 15, 2026 implementation builds the Alpine 3.22.5 x86_64 ext4
+  image twice and requires byte-for-byte equality, binds Linux 6.12.91 and the
+  Box/libkrun/firmware source revisions in `a3s.oci.windows-system-image.v1`,
+  pins the manifest, image, `krun.dll`, and `libkrunfw.dll` with read-only
+  Windows handles, rejects reparse paths and identity changes, and rehashes
+  every asset immediately before VM entry. The shim attaches the image as a
+  read-only virtio-blk root and exports bundle/token/recovery data only through
+  the separate writable runtime share. These two implementation items do not
+  close the parent gate until a fresh WHPX host retains the full matrix.
 - [x] Establish the named-pipe/vsock bridge.
 - [x] Negotiate the guest protocol and retain boot evidence.
 - [x] Run a fixed configured process through distinct OCI create and start

@@ -8,7 +8,7 @@ pub const KRUN_CONTEXT_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-context-smoke.
 /// Schema emitted by the real utility-VM entry smoke.
 pub const KRUN_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-vm-smoke.v2";
 /// Schema emitted while booting the negotiation-only guest agent.
-pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v3";
+pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v4";
 
 /// Exact immutable macOS boot assets observed by the isolated VM worker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +46,70 @@ impl MacosBootAssetsEvidence {
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         }) && self.system_image_size > 0
+            && self.kernel_bundle_size > 0
+            && self.kernel_guest_load_address.starts_with("0x")
+            && self.kernel_entry_address.starts_with("0x")
+            && self.root_disk_read_only
+            && self.runtime_share_separate
+    }
+}
+
+/// Exact immutable Windows boot assets observed by the isolated shim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowsBootAssetsEvidence {
+    pub manifest_sha256: String,
+    pub system_image_sha256: String,
+    pub system_image_size: u64,
+    pub runtime_archive_sha256: String,
+    pub krun_dll_sha256: String,
+    pub firmware_sha256: String,
+    pub box_revision: String,
+    pub libkrun_revision: String,
+    pub firmware_wrapper_revision: String,
+    pub libkrunfw_revision: String,
+    pub kernel_version: String,
+    pub kernel_source_sha256: String,
+    pub kernel_bundle_sha256: String,
+    pub kernel_bundle_size: u64,
+    pub kernel_guest_load_address: String,
+    pub kernel_entry_address: String,
+    pub root_disk_read_only: bool,
+    pub runtime_share_separate: bool,
+}
+
+impl WindowsBootAssetsEvidence {
+    /// Return whether all retained Windows asset and isolation evidence is present.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        [
+            &self.manifest_sha256,
+            &self.system_image_sha256,
+            &self.runtime_archive_sha256,
+            &self.krun_dll_sha256,
+            &self.firmware_sha256,
+            &self.kernel_source_sha256,
+            &self.kernel_bundle_sha256,
+        ]
+        .into_iter()
+        .all(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) && [
+            &self.box_revision,
+            &self.libkrun_revision,
+            &self.firmware_wrapper_revision,
+            &self.libkrunfw_revision,
+        ]
+        .into_iter()
+        .all(|revision| {
+            revision.len() == 40
+                && revision
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) && !self.kernel_version.is_empty()
+            && self.system_image_size > 0
             && self.kernel_bundle_size > 0
             && self.kernel_guest_load_address.starts_with("0x")
             && self.kernel_entry_address.starts_with("0x")
@@ -141,6 +205,8 @@ pub struct KrunVmSmokeReport {
     pub runtime_share_configured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub macos_boot_assets: Option<MacosBootAssetsEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_boot_assets: Option<WindowsBootAssetsEvidence>,
     pub workload_configured: bool,
     pub console_configured: bool,
     pub vm_entered: bool,
@@ -167,6 +233,7 @@ impl KrunVmSmokeReport {
             rootfs_configured: false,
             runtime_share_configured: false,
             macos_boot_assets: None,
+            windows_boot_assets: None,
             workload_configured: false,
             console_configured: false,
             vm_entered: false,
@@ -232,6 +299,8 @@ pub struct KrunAgentVmSmokeReport {
     pub runtime_share_configured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub macos_boot_assets: Option<MacosBootAssetsEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_boot_assets: Option<WindowsBootAssetsEvidence>,
     pub agent_binary_present: bool,
     pub agent_vsock_configured: bool,
     pub workload_configured: bool,
@@ -258,6 +327,7 @@ impl KrunAgentVmSmokeReport {
             rootfs_configured: false,
             runtime_share_configured: false,
             macos_boot_assets: None,
+            windows_boot_assets: None,
             agent_binary_present: false,
             agent_vsock_configured: false,
             workload_configured: false,
@@ -294,12 +364,23 @@ impl KrunAgentVmSmokeReport {
             && self.context_created
             && self.vm_configured
             && self.rootfs_configured
-            && (!matches!(self.platform, HostPlatform::Macos)
-                || (self.runtime_share_configured
-                    && self
-                        .macos_boot_assets
-                        .as_ref()
-                        .is_some_and(MacosBootAssetsEvidence::is_success)))
+            && match self.platform {
+                HostPlatform::Windows => {
+                    self.runtime_share_configured
+                        && self
+                            .windows_boot_assets
+                            .as_ref()
+                            .is_some_and(WindowsBootAssetsEvidence::is_success)
+                }
+                HostPlatform::Macos => {
+                    self.runtime_share_configured
+                        && self
+                            .macos_boot_assets
+                            .as_ref()
+                            .is_some_and(MacosBootAssetsEvidence::is_success)
+                }
+                _ => true,
+            }
             && self.agent_binary_present
             && self.agent_vsock_configured
             && self.workload_configured
