@@ -39,6 +39,25 @@ struct Cli {
 enum Command {
     /// Create, configure, and release one libkrun context without booting a VM.
     ContextSmoke,
+    /// Repeatedly boot WHPX VMs in this process and verify native handle cleanup.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    WhpxHandleReclamationSmoke {
+        /// Extracted portable OCI root filesystem presented to every VM.
+        #[arg(long, value_name = "DIR")]
+        rootfs: PathBuf,
+        /// Exact immutable Windows system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// Writable host directory exported to every qualification VM.
+        #[arg(long, value_name = "DIR")]
+        runtime_share: PathBuf,
+        /// Existing directory that receives one console log per VM.
+        #[arg(long, value_name = "DIR")]
+        console_directory: PathBuf,
+        /// Number of measured VM lifecycles after one warmup lifecycle.
+        #[arg(long, default_value_t = 8, value_name = "COUNT")]
+        iterations: u16,
+    },
     /// Boot a utility VM and verify a command ran inside the supplied rootfs.
     VmSmoke {
         /// Extracted Linux root filesystem presented as the guest root.
@@ -137,6 +156,32 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::ContextSmoke => {
             let report = a3s_oci_krun::context_smoke();
+            let succeeded = report.is_success();
+            if let Err(error) = write_json(&report) {
+                eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");
+                return ExitCode::FAILURE;
+            }
+            if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            }
+        }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        Command::WhpxHandleReclamationSmoke {
+            rootfs,
+            system_image_manifest,
+            runtime_share,
+            console_directory,
+            iterations,
+        } => {
+            let report = a3s_oci_krun::whpx_handle_reclamation_smoke(
+                &rootfs,
+                &system_image_manifest,
+                &runtime_share,
+                &console_directory,
+                iterations,
+            );
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
                 eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");

@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A same-process Windows WHPX native-handle reclamation gate. One isolated
+  shim PID now warms a complete VM and then runs eight measured VMs with the
+  manifest-bound read-only system image, portable OCI rootfs, writable
+  virtiofs share, plain-vsock mapping, console, and fixed Linux marker
+  workload. The versioned report records `GetProcessHandleCount` after every
+  returned `krun_start_enter`, exact boot-asset evidence, per-cycle workload
+  and cleanup results, and requires the final count to return to the warmed
+  baseline within two handles. The PowerShell wrapper additionally binds the
+  evidence to a clean source revision and exact input, shim, `krun.dll`, and
+  firmware digests. A passing fresh-host run with the fixed handle-safe DLL is
+  still required before WHPX becomes `experimental`. A manual CI dispatch now
+  builds the revision-bound bundle and runs this gate, the formal driver,
+  owner-death recovery, and complete soak on the self-hosted Hyper-V runner,
+  retaining all four evidence directories even on failure.
 - Transactional OCI Linux sysctl enforcement for known namespaced controls.
   One SDK parser preserves OCI dot/slash notation without losing literal dots,
   rejects host-global controls, traversal, aliases, and `kernel.hostname`, and

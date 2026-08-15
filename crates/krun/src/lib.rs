@@ -28,6 +28,8 @@ mod macos_system_image;
 mod macos_vm_smoke;
 mod report;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod windows_handle_reclamation;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod windows_system_image;
 
 pub use a3s_oci_agent_protocol::{AgentVsockEndpoint, AGENT_VSOCK_PORT};
@@ -37,9 +39,31 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 pub use agent_smoke::{agent_vm_smoke, AgentVmHandoff};
 pub use report::{
     KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunVmSmokeReport, MacosBootAssetsEvidence,
-    WindowsBootAssetsEvidence, KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION,
-    KRUN_CONTEXT_SMOKE_SCHEMA_VERSION, KRUN_VM_SMOKE_SCHEMA_VERSION,
+    WhpxHandleReclamationSample, WhpxHandleReclamationSmokeReport, WindowsBootAssetsEvidence,
+    KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,
+    KRUN_VM_SMOKE_SCHEMA_VERSION, WHPX_HANDLE_RECLAMATION_ALLOWED_FINAL_DELTA,
+    WHPX_HANDLE_RECLAMATION_SMOKE_SCHEMA_VERSION,
 };
+
+/// Run repeated complete Windows WHPX lifecycles in one shim process and
+/// verify that native process handles return to the warmed baseline.
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[must_use]
+pub fn whpx_handle_reclamation_smoke(
+    rootfs: &Path,
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    console_directory: &Path,
+    iterations: u16,
+) -> WhpxHandleReclamationSmokeReport {
+    windows_handle_reclamation::run(
+        rootfs,
+        system_image_manifest,
+        runtime_share,
+        console_directory,
+        iterations,
+    )
+}
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const VM_SMOKE_TOKEN: &str = "a3s-oci-whpx-vm-smoke-v1";

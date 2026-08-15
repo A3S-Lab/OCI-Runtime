@@ -15,8 +15,9 @@ The runtime:
 4. optionally creates and deletes a WHPX partition object as a smoke test;
 5. links the `a3s-libkrun-sys 3.1.0` FFI ABI only into an isolated shim and
    stages a runtime-owned, checksum-verified native bundle with firmware
-   provenance from `A3S-Lab/Box@93fc281` and segmented WHPX stream plus
-   writable virtio-fs flush fixes from `A3S-Lab/libkrun@dc5519f`;
+   provenance from `A3S-Lab/Box@93fc281` and segmented stream, writable
+   virtio-fs flush, and same-process native-resource reclamation fixes from
+   `A3S-Lab/libkrun@75ec190`;
 6. creates, configures for one vCPU and 128 MiB, replaces implicit TSI with a
    zero-feature plain-vsock device, maps guest port 4093 to a validated bare
    Windows pipe name, and releases one real libkrun context without entering a
@@ -70,6 +71,13 @@ The runtime:
     revision and digest in `a3s.oci.windows-system-image.v1`, pins all boot
     inputs with read-only Windows handles, and switches from the empty
     bootstrap share to that read-only block root before starting the agent.
+19. exposes a same-process reclamation gate that warms one complete VM, then
+    starts eight more VMs through the same shim process with the immutable
+    block root, portable OCI rootfs, writable virtiofs share, plain-vsock
+    mapping, console, and a fixed Linux command. It samples
+    `GetProcessHandleCount` after every returned `krun_start_enter` and
+    requires the final count to return to the warmed baseline within a
+    two-handle runtime margin.
 
 Product bundle preparation no longer needs to guess the runtime generation.
 An explicitly annotated, digest-bound `dev.a3s.bundle-handoff` attachment lets
@@ -127,6 +135,20 @@ A successful libkrun VM smoke additionally proves that:
   marker contents;
 - the guest returns exit code zero and the host removes the marker;
 - fatal WHPX exits are not accepted as successful workload completion.
+
+A successful same-process handle-reclamation smoke additionally proves that:
+
+- Windows process exit cannot hide a WHPX, vCPU, timer, virtiofs, vsock,
+  console, or stdin-reader handle leak;
+- the manifest-bound immutable system root and adjacent native DLLs are
+  reverified before every VM entry;
+- one warmup and all measured workloads return normally from
+  `krun_start_enter`, write and remove their exact markers, and retain a
+  non-empty console log;
+- every sample comes from the same recorded shim PID;
+- the writable runtime share returns to its pre-run inventory; and
+- the final process handle count is no more than two handles above the warmed
+  baseline.
 
 A successful end-to-end agent VM smoke additionally proves that:
 
@@ -278,6 +300,17 @@ sync. All entries are validated before the first metadata mutation.
 
 Run the complete gate from an x86-64 Windows host with WHPX enabled:
 
+The preferred path dispatches the revision-bound build and all four real-host
+profiles in one workflow. It waits for a self-hosted runner carrying the
+`windows` and `hyperv` labels and uploads
+`windows-whpx-real-host-evidence` even when a profile fails:
+
+```powershell
+gh workflow run ci.yml --repo A3S-Lab/OCI-Runtime `
+  --ref <exact-branch-or-commit> `
+  -f run_windows_whpx_qualification=true
+```
+
 Every successful CI run retains `windows-whpx-qualification` for 14 days. Its
 v2 manifest binds the exact source and workflow commits, and lists every file
 size and SHA-256 digest. `bin/` contains the CLI, shim, `krun.dll`, and
@@ -326,6 +359,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -RootfsArchive C:\path\to\alpine-minirootfs.tar `
   -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json
 ```
+
+Run the same-process native-handle gate separately. This command must use a
+`krun.dll` built from the handle-reclamation libkrun revision recorded by the
+system-image manifest; an older DLL is expected to fail the final count:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\windows-whpx-handle-reclamation.ps1 `
+  -RootfsArchive C:\path\to\alpine-minirootfs.tar `
+  -SystemImageManifest C:\a3s\oci-artifacts\windows\system-image\system-image.json
+```
+
+The default report `a3s.oci.krun-whpx-handle-reclamation-smoke.v1` contains
+the cold and warmed process-handle counts, every post-cycle count and delta,
+the peak and final counts, exact boot-asset evidence, per-VM marker and console
+results, and runtime-share cleanup. The wrapper retains that report, console
+logs, stderr, source revision, input and binary digests, process inventory,
+and `a3s.oci.windows-whpx-handle-reclamation-run.v1` summary in a new output
+directory.
 
 The default profile requires:
 
@@ -520,14 +572,15 @@ terminal replay, stopped-only delete, and complete transient cleanup.
 ## Next Windows gate
 
 The version-pinned image, read-only root attachment, source/digest manifest,
-pre-entry drift checks, and separate runtime-share path are implemented. They
-do not count as real WHPX evidence until the following two gates pass:
+pre-entry drift checks, separate runtime-share path, and same-process
+reclamation harness are implemented. They do not count as real WHPX evidence
+until the following two gates pass:
 
 1. rerun the complete WHPX SDK, soak, owner-death, and service-recovery
    matrices against the exact v1 manifest on a fresh WHPX-enabled Windows
    host, retaining the v4 boot evidence in every session;
-2. prove that every in-process native WHPX/libkrun handle is reclaimed without
-   relying on Windows process teardown.
+2. run the same-process reclamation harness with the fixed handle-safe
+   `krun.dll` and retain a passing warmed-baseline report from that host.
 
 Broader namespace, mount, capability, resource, seccomp, hook, and shared-guest
 coverage remains part of the shared executor, OCI conformance, and later

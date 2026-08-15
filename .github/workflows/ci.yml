@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_windows_whpx_qualification:
+        description: Run the complete WHPX matrix on the self-hosted Hyper-V runner
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -879,6 +886,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
+        name: Validate WHPX qualification PowerShell
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/windows-whpx-handle-reclamation.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'The WHPX handle-reclamation script contains syntax errors.'
+          }
+      - if: runner.os == 'Windows'
         name: Verify Windows libkrun context
         run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
       - if: runner.os == 'Windows'
@@ -963,6 +985,160 @@ jobs:
           name: windows-whpx-qualification
           path: ${{ runner.temp }}/a3s-oci-windows-whpx-qualification
           if-no-files-found: error
+          retention-days: 14
+
+  windows-whpx-qualification:
+    name: windows-whpx-qualification (x86_64)
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_windows_whpx_qualification
+    needs: test
+    runs-on: [self-hosted, windows, hyperv]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download fixed WHPX qualification bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-whpx-qualification
+          path: ${{ runner.temp }}/a3s-oci-windows-whpx-qualification
+      - name: Stage fixed binaries and rootfs archive
+        shell: pwsh
+        run: |
+          $artifact = Join-Path $env:RUNNER_TEMP `
+            'a3s-oci-windows-whpx-qualification'
+          $artifactManifestPath = Join-Path $artifact 'artifact-manifest.json'
+          if (-not (Test-Path -LiteralPath $artifactManifestPath -PathType Leaf)) {
+            throw "Missing WHPX artifact manifest: $artifactManifestPath"
+          }
+          $artifactManifest = Get-Content -LiteralPath $artifactManifestPath `
+            -Raw | ConvertFrom-Json
+          if ($artifactManifest.schema_version -ne `
+                'a3s.oci.windows-whpx-qualification-artifact.v2' -or
+              $artifactManifest.source_commit -ne $env:GITHUB_SHA -or
+              $artifactManifest.workflow_commit -ne $env:GITHUB_SHA) {
+            throw 'The WHPX artifact is not bound to this workflow revision.'
+          }
+          $expectedFiles = @(
+            'bin/a3s-oci.exe',
+            'bin/a3s-oci-krun-shim.exe',
+            'bin/krun.dll',
+            'bin/libkrunfw.dll',
+            'system-image/system-image.json',
+            'system-image/a3s-oci-system.ext4',
+            'system-image/a3s-oci-system.ext4.xz'
+          )
+          if (@($artifactManifest.files).Count -ne $expectedFiles.Count) {
+            throw 'The WHPX artifact manifest has an unexpected file count.'
+          }
+          $artifactPrefix = $artifact.TrimEnd('\') + '\'
+          foreach ($expectedName in $expectedFiles) {
+            $matches = @($artifactManifest.files | Where-Object {
+              $_.name -eq $expectedName
+            })
+            if ($matches.Count -ne 1) {
+              throw "Missing or duplicate WHPX artifact entry: $expectedName"
+            }
+            $entry = $matches[0]
+            $path = [IO.Path]::GetFullPath((
+              Join-Path $artifact $expectedName.Replace('/', '\')
+            ))
+            if (-not $path.StartsWith(
+                  $artifactPrefix,
+                  [StringComparison]::OrdinalIgnoreCase
+                ) -or
+                -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Unsafe or missing WHPX artifact path: $expectedName"
+            }
+            $item = Get-Item -LiteralPath $path
+            $sha256 = (
+              Get-FileHash -LiteralPath $path -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+            if ($item.Length -ne [uint64]$entry.size -or
+                $sha256 -ne $entry.sha256) {
+              throw "WHPX artifact digest mismatch: $expectedName"
+            }
+          }
+          $bin = Join-Path $artifact 'bin'
+          $target = Join-Path $env:GITHUB_WORKSPACE 'target\debug'
+          New-Item -ItemType Directory -Path $target -Force | Out-Null
+          foreach ($name in @(
+            'a3s-oci.exe',
+            'a3s-oci-krun-shim.exe',
+            'krun.dll',
+            'libkrunfw.dll'
+          )) {
+            $source = Join-Path $bin $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Missing fixed WHPX qualification binary: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination $target
+          }
+
+          $rootfs = Join-Path $env:RUNNER_TEMP `
+            'alpine-minirootfs-3.22.5-x86_64.tar.gz'
+          Invoke-WebRequest `
+            -Uri 'https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-minirootfs-3.22.5-x86_64.tar.gz' `
+            -OutFile $rootfs
+          $expected = `
+            '4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282'
+          $actual = (
+            Get-FileHash -LiteralPath $rootfs -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Downloaded rootfs SHA-256 mismatch: $actual"
+          }
+          "A3S_OCI_WHPX_ROOTFS_ARCHIVE=$rootfs" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "A3S_OCI_WHPX_SYSTEM_IMAGE_MANIFEST=$(Join-Path $artifact 'system-image\system-image.json')" | `
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Same-process native-handle reclamation
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\scripts\windows-whpx-handle-reclamation.ps1 `
+            -RootfsArchive $env:A3S_OCI_WHPX_ROOTFS_ARCHIVE `
+            -SystemImageManifest $env:A3S_OCI_WHPX_SYSTEM_IMAGE_MANIFEST `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'whpx-handle-reclamation') `
+            -SkipBuild
+      - name: Qualification-only RuntimeDriver lifecycle
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\scripts\windows-whpx-driver-smoke.ps1 `
+            -RootfsArchive $env:A3S_OCI_WHPX_ROOTFS_ARCHIVE `
+            -SystemImageManifest $env:A3S_OCI_WHPX_SYSTEM_IMAGE_MANIFEST `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'whpx-driver') `
+            -SkipBuild
+      - name: Owner-death and service-recovery matrix
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\scripts\windows-whpx-recovery-smoke.ps1 `
+            -RootfsArchive $env:A3S_OCI_WHPX_ROOTFS_ARCHIVE `
+            -SystemImageManifest $env:A3S_OCI_WHPX_SYSTEM_IMAGE_MANIFEST `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'whpx-recovery') `
+            -SkipBuild
+      - name: Complete WHPX SDK and soak matrix
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File .\scripts\windows-whpx-soak.ps1 `
+            -RootfsArchive $env:A3S_OCI_WHPX_ROOTFS_ARCHIVE `
+            -SystemImageManifest $env:A3S_OCI_WHPX_SYSTEM_IMAGE_MANIFEST `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'whpx-soak') `
+            -SkipBuild
+      - if: always()
+        name: Upload complete WHPX qualification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-whpx-real-host-evidence
+          path: |
+            ${{ runner.temp }}/whpx-handle-reclamation
+            ${{ runner.temp }}/whpx-driver
+            ${{ runner.temp }}/whpx-recovery
+            ${{ runner.temp }}/whpx-soak
+          if-no-files-found: warn
           retention-days: 14
 
   native-linux-arm64:

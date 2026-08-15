@@ -7,13 +7,13 @@ The Windows x86_64 shim carries one deterministic native runtime archive:
 `runtime/windows-x86_64/krun-windows-x64.tar.xz`
 
 Its SHA-256 is
-`ce178184bc9e309c9f8fef181312cd6c398fc825807124e31afab949b790627e`.
+`734f69936e5c6caee5f67ff5daf68a52d90d7f6f0be3dae41907f009db39c847`.
 The build script verifies the archive and every extracted file before linking
 or staging them:
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `krun.dll` | 7,428,608 | `f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e` |
+| `krun.dll` | 7,433,728 | `ac7724209635505c4ae7b3ba36edeb7fc5597353e6ffcc7351fbf97af1e0d5e5` |
 | `krun.lib` | 11,870 | `3ac760758158bd4d2d6570db58037d47cd370a8e6ea04ccf54a8b24fd1fdec3d` |
 | `libkrunfw.dll` | 21,473,280 | `44f25540f58155c01258fe123617636fdc6cff27873e38e71dbc75f139602077` |
 
@@ -30,12 +30,14 @@ Repacking the prior archive with this command reproduced its SHA-256 exactly;
 two independent staging directories produced the new hash above.
 
 `krun.dll` and `krun.lib` were built from
-[`A3S-Lab/libkrun@dc5519f`](https://github.com/A3S-Lab/libkrun/commit/dc5519faeabd8bf38d984ed29c44e6da977f0b5c).
-That revision retains segmented Windows host-to-guest stream reads and opens
-writable virtio-fs files with write access before `fsync`, allowing the guest
-to durably publish its authenticated shutdown report. The native build
-controls are in that revision. License notices, firmware provenance, and the
-corresponding kernel source are recorded by
+[`A3S-Lab/libkrun@75ec190`](https://github.com/A3S-Lab/libkrun/commit/75ec19097a337a60076a2ebff7cdad6acf8ca69c).
+That revision retains segmented Windows host-to-guest stream reads and
+writable virtio-fs flush support. It also cancels and joins vCPU, monitor,
+timer, virtiofs, vsock, and stdin-reader workers, releases the WHPX partition
+last, and removes the Windows VM-entry ownership leaks so repeated entries can
+return without relying on process teardown. The native build controls and
+required guest-wrapper Rust target are in the same revision. License notices,
+firmware provenance, and the corresponding kernel source are recorded by
 [`A3S-Lab/Box@93fc281`](https://github.com/A3S-Lab/Box/commit/93fc281a798cdfd8ee463f69add3f6989d561ee3)
 under `src/deps/libkrun-sys`.
 

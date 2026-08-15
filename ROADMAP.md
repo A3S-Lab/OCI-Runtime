@@ -1039,8 +1039,9 @@ real-driver coverage remains open for the other utility-VM backends.
 - [x] Create and delete a real WHPX partition object.
 - [x] Pin the `a3s-libkrun-sys 3.1.0` FFI ABI and stage a runtime-owned,
   checksum-verified Windows bundle for the isolated shim, with firmware
-  provenance from `A3S-Lab/Box@93fc281` and segmented WHPX stream plus
-  writable virtio-fs flush fixes from `A3S-Lab/libkrun@dc5519f`.
+  provenance from `A3S-Lab/Box@93fc281` and segmented stream, writable
+  virtio-fs flush, and same-process native-resource reclamation fixes from
+  `A3S-Lab/libkrun@75ec190`.
 - [x] Create, configure, and release a real context using the Windows WHPX
   libkrun build.
 - [x] Configure a plain-vsock device and the fixed guest control port through
@@ -1132,6 +1133,14 @@ real-driver coverage remains open for the other utility-VM backends.
   runtime directories.
 - [ ] Prove in-process native handle reclamation independently of Windows
   process teardown.
+  - [x] Add a versioned qualification command that holds one shim PID across a
+    warmup and eight measured VM entries, exercises the immutable block root,
+    portable OCI rootfs, writable virtiofs, plain vsock, console, and fixed
+    Linux workload, samples `GetProcessHandleCount` after every return, and
+    requires the final count to restore the warmed baseline within two
+    handles.
+  - [ ] Run that command with the fixed handle-safe `krun.dll` on a clean,
+    fresh WHPX host and retain its per-cycle and wrapper JSON evidence.
 
 Exit gate: a fresh Windows host test boots a utility VM, runs the fixed OCI
 bundle, validates negative isolation cases, retains exact terminal evidence

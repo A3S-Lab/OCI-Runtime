@@ -14,12 +14,12 @@ export A3S_SYSTEM_IMAGE_ALPINE_SIZE=3638276
 export A3S_SYSTEM_IMAGE_FILESYSTEM_UUID='a3a30c1a-2026-4000-8000-000000000011'
 export A3S_SYSTEM_IMAGE_DIRECTORY_HASH_SEED='a3a30c1a-2026-4000-8000-000000000012'
 export A3S_SYSTEM_IMAGE_RUNTIME_JSON='{
-  "archive_size": 8106464,
-  "archive_sha256": "ce178184bc9e309c9f8fef181312cd6c398fc825807124e31afab949b790627e",
+  "archive_size": 8108976,
+  "archive_sha256": "734f69936e5c6caee5f67ff5daf68a52d90d7f6f0be3dae41907f009db39c847",
   "krun_dll": {
     "name": "krun.dll",
-    "size": 7428608,
-    "sha256": "f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e"
+    "size": 7433728,
+    "sha256": "ac7724209635505c4ae7b3ba36edeb7fc5597353e6ffcc7351fbf97af1e0d5e5"
   },
   "import_library": {
     "name": "krun.lib",
@@ -33,7 +33,7 @@ export A3S_SYSTEM_IMAGE_RUNTIME_JSON='{
   },
   "sources": {
     "box_revision": "93fc281a798cdfd8ee463f69add3f6989d561ee3",
-    "libkrun_revision": "dc5519faeabd8bf38d984ed29c44e6da977f0b5c",
+    "libkrun_revision": "75ec19097a337a60076a2ebff7cdad6acf8ca69c",
     "firmware_wrapper_revision": "2692169b7567363244fdd21cb83de3220ebf3021",
     "libkrunfw_revision": "ec4b297964877d83432f9ccda6dad8ff6e9de3e4",
     "kernel_version": "6.12.91",

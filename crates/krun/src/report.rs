@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::VmConfig;
 
+mod whpx_handle_reclamation;
+
+pub use whpx_handle_reclamation::{
+    WhpxHandleReclamationSample, WhpxHandleReclamationSmokeReport,
+    WHPX_HANDLE_RECLAMATION_ALLOWED_FINAL_DELTA, WHPX_HANDLE_RECLAMATION_SMOKE_SCHEMA_VERSION,
+};
+
 /// Schema emitted by the libkrun context smoke.
 pub const KRUN_CONTEXT_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-context-smoke.v2";
 /// Schema emitted by the real utility-VM entry smoke.
