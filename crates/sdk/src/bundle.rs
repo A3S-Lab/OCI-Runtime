@@ -1,5 +1,10 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+use cap_fs_ext::OsMetadataExt as _;
+use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptions};
 use oci_spec::runtime::Spec;
 use semver::Version;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -64,41 +69,12 @@ impl OciBundle {
         }
 
         let config_path = directory.join(CONFIG_FILE_NAME);
-        let file = tokio::fs::File::open(&config_path).await.map_err(|error| {
-            Error::new(
-                ErrorCode::InvalidArgument,
-                format!(
-                    "failed to open OCI configuration {}: {error}",
-                    config_path.display()
-                ),
-            )
-            .for_operation("load-bundle")
-        })?;
-        let config_metadata = file.metadata().await.map_err(|error| {
-            Error::new(
-                ErrorCode::InvalidArgument,
-                format!(
-                    "failed to inspect OCI configuration {}: {error}",
-                    config_path.display()
-                ),
-            )
-            .for_operation("load-bundle")
-        })?;
-        if !config_metadata.is_file() {
-            return Err(Error::new(
-                ErrorCode::InvalidArgument,
-                format!(
-                    "OCI configuration is not a regular file: {}",
-                    config_path.display()
-                ),
-            )
-            .for_operation("load-bundle"));
-        }
-        if config_metadata.len() > MAX_CONFIG_BYTES {
-            return Err(config_too_large(&config_path, config_metadata.len()));
+        let (file, config_size) = open_root_config(&directory).await?;
+        if config_size > MAX_CONFIG_BYTES {
+            return Err(config_too_large(&config_path, config_size));
         }
 
-        let mut bytes = Vec::with_capacity(config_metadata.len() as usize);
+        let mut bytes = Vec::with_capacity(config_size as usize);
         file.take(MAX_CONFIG_BYTES + 1)
             .read_to_end(&mut bytes)
             .await
@@ -234,6 +210,82 @@ impl OciBundle {
         })?;
         OciSemanticValidator::new()?.validate(phase, &raw)
     }
+}
+
+async fn open_root_config(directory: &Path) -> Result<(tokio::fs::File, u64)> {
+    let directory = directory.to_path_buf();
+    let config_path = directory.join(CONFIG_FILE_NAME);
+    let (file, size) = tokio::task::spawn_blocking(move || {
+        let root = Dir::open_ambient_dir(&directory, ambient_authority()).map_err(|error| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "failed to pin OCI bundle directory {}: {error}",
+                    directory.display()
+                ),
+            )
+            .for_operation("load-bundle")
+        })?;
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let file = root
+            .open_with(CONFIG_FILE_NAME, &options)
+            .map_err(|error| {
+                Error::new(
+                    ErrorCode::InvalidArgument,
+                    format!(
+                        "OCI configuration is missing or not a plain file: {}: {error}",
+                        config_path.display()
+                    ),
+                )
+                .for_operation("load-bundle")
+            })?;
+        let metadata = file.metadata().map_err(|error| {
+            Error::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "failed to inspect OCI configuration {}: {error}",
+                    config_path.display()
+                ),
+            )
+            .for_operation("load-bundle")
+        })?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata_is_reparse_point(&metadata)
+        {
+            return Err(Error::new(
+                ErrorCode::InvalidArgument,
+                format!(
+                    "OCI configuration is not a plain file: {}",
+                    config_path.display()
+                ),
+            )
+            .for_operation("load-bundle"));
+        }
+        Ok((file.into_std(), metadata.len()))
+    })
+    .await
+    .map_err(|error| {
+        Error::new(
+            ErrorCode::Internal,
+            format!("OCI bundle configuration task failed: {error}"),
+        )
+        .for_operation("load-bundle")
+    })??;
+    Ok((tokio::fs::File::from_std(file), size))
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &cap_std::fs::Metadata) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+const fn metadata_is_reparse_point(_metadata: &cap_std::fs::Metadata) -> bool {
+    false
 }
 
 impl Serialize for OciBundle {
@@ -484,6 +536,53 @@ mod tests {
         assert_eq!(bundle.config_json(), config_json);
         assert_eq!(bundle.config_bytes(), config_json.as_bytes());
         assert!(bundle.directory().is_absolute());
+    }
+
+    #[tokio::test]
+    async fn requires_config_json_at_bundle_root() {
+        let temporary = tempfile::tempdir().expect("create temporary bundle");
+        let nested = temporary.path().join("nested");
+        std::fs::create_dir(&nested).expect("create nested directory");
+        let config = serde_json::to_vec(&complete_v1_3_fixture()).expect("encode fixture");
+        std::fs::write(temporary.path().join("configuration.json"), &config)
+            .expect("write wrong configuration name");
+        std::fs::write(nested.join("config.json"), config).expect("write nested configuration");
+
+        let error = OciBundle::load(temporary.path())
+            .await
+            .expect_err("only a root config.json may define the bundle");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("config.json"));
+
+        std::fs::create_dir(temporary.path().join("config.json"))
+            .expect("create directory at configuration path");
+        let error = OciBundle::load(temporary.path())
+            .await
+            .expect_err("bundle config.json must be a plain file");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("not a plain file"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_symlinked_config_json() {
+        let temporary = tempfile::tempdir().expect("create temporary directory");
+        let bundle = temporary.path().join("bundle");
+        std::fs::create_dir(&bundle).expect("create bundle directory");
+        let external = temporary.path().join("external-config.json");
+        std::fs::write(
+            &external,
+            serde_json::to_vec(&complete_v1_3_fixture()).expect("encode fixture"),
+        )
+        .expect("write external configuration");
+        std::os::unix::fs::symlink(&external, bundle.join("config.json"))
+            .expect("link external configuration into bundle");
+
+        let error = OciBundle::load(&bundle)
+            .await
+            .expect_err("bundle config.json must be a plain file in the bundle root");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("not a plain file"));
     }
 
     #[tokio::test]

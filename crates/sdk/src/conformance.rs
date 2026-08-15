@@ -12,6 +12,23 @@ const OCI_RUNTIME_SPEC_VERSION: &str = "1.3.0";
 const OCI_RUNTIME_SPEC_COMMIT: &str = "92249139eea7161e13745abd4cb6d0ea02a3227a";
 const NORMATIVE_COVERAGE_SCHEMA_VERSION: &str = "a3s.oci.normative-coverage.v1";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OciNonSemanticRule {
+    id: &'static str,
+    owner: &'static str,
+}
+
+impl OciNonSemanticRule {
+    const fn new(id: &'static str, owner: &'static str) -> Self {
+        Self { id, owner }
+    }
+}
+
+const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[OciNonSemanticRule::new(
+    "oci.bundle.config.root-file",
+    "runtime-bundle",
+)];
+
 const SPECIFICATION_DOCUMENTS: &[EmbeddedSpecificationDocument] = &[
     EmbeddedSpecificationDocument::new(
         "spec.md",
@@ -431,7 +448,7 @@ impl OciNormativeInventory {
             }
             verify_coverage_item(item)?;
         }
-        verify_semantic_rule_coverage(manifest)?;
+        verify_rule_coverage(manifest)?;
         Ok(())
     }
 }
@@ -709,12 +726,26 @@ fn verify_evidence_binding(binding: &OciNormativeEvidenceBinding) -> Result<()> 
     Ok(())
 }
 
-fn verify_semantic_rule_coverage(manifest: &OciNormativeCoverageManifest) -> Result<()> {
-    let registry = crate::OciSemanticValidator::rules();
-    let registered = registry.iter().map(|rule| rule.id).collect::<BTreeSet<_>>();
-    if registered.len() != registry.len() {
+fn verify_rule_coverage(manifest: &OciNormativeCoverageManifest) -> Result<()> {
+    let semantic_rules = crate::OciSemanticValidator::rules();
+    let mut registered = BTreeMap::new();
+    for rule in semantic_rules {
+        if registered.insert(rule.id, None).is_some() {
+            return Err(coverage_error(
+                "normative rule registry contains duplicate rule IDs",
+            ));
+        }
+    }
+    for rule in NON_SEMANTIC_RULES {
+        if registered.insert(rule.id, Some(rule.owner)).is_some() {
+            return Err(coverage_error(
+                "normative rule registry contains duplicate rule IDs",
+            ));
+        }
+    }
+    if registered.len() != semantic_rules.len() + NON_SEMANTIC_RULES.len() {
         return Err(coverage_error(
-            "semantic rule registry contains duplicate rule IDs",
+            "normative rule registry contains duplicate rule IDs",
         ));
     }
 
@@ -725,17 +756,38 @@ fn verify_semantic_rule_coverage(manifest: &OciNormativeCoverageManifest) -> Res
         .collect::<BTreeSet<_>>();
     if let Some(unknown) = referenced
         .iter()
-        .find(|rule_id| !registered.contains(**rule_id))
+        .find(|rule_id| !registered.contains_key(**rule_id))
     {
         return Err(coverage_error(format!(
-            "normative coverage references unknown semantic rule {unknown}"
+            "normative coverage references unknown rule {unknown}"
         )));
     }
-    if let Some(orphan) = registry.iter().find(|rule| {
+    for item in &manifest.items {
+        for rule_id in &item.rule_ids {
+            if let Some(Some(owner)) = registered.get(rule_id.as_str()) {
+                if item.owner != *owner {
+                    return Err(coverage_error(format!(
+                        "normative rule {rule_id} belongs to {owner}, not {}",
+                        item.owner
+                    )));
+                }
+            }
+        }
+    }
+    if let Some(orphan) = semantic_rules.iter().find(|rule| {
         rule.kind == crate::OciSemanticRuleKind::Normative && !referenced.contains(rule.id)
     }) {
         return Err(coverage_error(format!(
             "normative semantic rule {} has no specification evidence binding",
+            orphan.id
+        )));
+    }
+    if let Some(orphan) = NON_SEMANTIC_RULES
+        .iter()
+        .find(|rule| !referenced.contains(rule.id))
+    {
+        return Err(coverage_error(format!(
+            "normative non-semantic rule {} has no specification evidence binding",
             orphan.id
         )));
     }
@@ -784,10 +836,7 @@ mod tests {
 
     #[test]
     fn checked_in_normative_manifest_matches_the_pinned_corpus() {
-        let manifest: OciNormativeCoverageManifest = serde_json::from_str(include_str!(
-            "../../../conformance/oci-1.3.0-normative-coverage.json"
-        ))
-        .expect("decode checked-in normative coverage");
+        let manifest = checked_in_manifest();
         let evidence: OciNormativeEvidenceManifest = serde_json::from_str(include_str!(
             "../../../conformance/oci-1.3.0-normative-evidence.json"
         ))
@@ -796,6 +845,48 @@ mod tests {
             .coverage_with_evidence(&evidence)
             .expect("checked-in normative evidence must be complete and current");
         assert_eq!(manifest, generated);
+    }
+
+    #[test]
+    fn coverage_verifier_rejects_unknown_rule_ids() {
+        let inventory = OciNormativeInventory::new();
+        let mut manifest = checked_in_manifest();
+        let item = manifest
+            .items
+            .iter_mut()
+            .find(|item| {
+                item.rule_ids
+                    .iter()
+                    .any(|rule| rule == "oci.bundle.config.root-file")
+            })
+            .expect("root config evidence item");
+        item.rule_ids = vec!["oci.bundle.config.unknown".to_string()];
+
+        let error = inventory
+            .verify_coverage(&manifest)
+            .expect_err("unknown evidence rules must fail closed");
+        assert!(error.message.contains("references unknown rule"));
+    }
+
+    #[test]
+    fn coverage_verifier_rejects_non_semantic_rule_owner_drift() {
+        let inventory = OciNormativeInventory::new();
+        let mut manifest = checked_in_manifest();
+        let item = manifest
+            .items
+            .iter_mut()
+            .find(|item| {
+                item.rule_ids
+                    .iter()
+                    .any(|rule| rule == "oci.bundle.config.root-file")
+            })
+            .expect("root config evidence item");
+        item.owner = "runtime-lifecycle".to_string();
+
+        let error = inventory
+            .verify_coverage(&manifest)
+            .expect_err("non-semantic rule owner drift must fail closed");
+        assert!(error.message.contains("belongs to runtime-bundle"));
     }
 
     #[test]
@@ -824,5 +915,12 @@ mod tests {
             canonical_text_sha256("first\r\nsecond\r\n"),
             canonical_text_sha256("first\nsecond\n")
         );
+    }
+
+    fn checked_in_manifest() -> OciNormativeCoverageManifest {
+        serde_json::from_str(include_str!(
+            "../../../conformance/oci-1.3.0-normative-coverage.json"
+        ))
+        .expect("decode checked-in normative coverage")
     }
 }

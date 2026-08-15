@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Owner-bound normative evidence for non-semantic runtime enforcement. Bundle
+  loading now pins the canonical directory, opens only the root `config.json`
+  entry without following symlinks or Windows reparse points, and rejects a
+  missing, renamed, nested, non-file, or redirected configuration before
+  decoding it. The evidence verifier combines the existing semantic-rule
+  registry with an explicit owner-bound execution-rule registry, rejecting
+  unknown, duplicate, orphaned, or owner-drifted rules. The three RFC 2119
+  occurrences defining the root `config.json` contract move from pending to
+  enforced, reducing the pending OCI 1.3.0 ledger from 617 to 614 entries.
 - A reproducible, manifest-bound Windows WHPX system image. The new x86_64
   builder pins Alpine 3.22.5, Linux 6.12.91, the Box/libkrun/firmware source
   revisions, native DLL and kernel digests, filesystem identity, and the

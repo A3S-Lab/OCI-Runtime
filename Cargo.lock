@@ -145,6 +145,8 @@ dependencies = [
  "a3s-oci-core",
  "async-trait",
  "base64",
+ "cap-fs-ext",
+ "cap-std",
  "jsonschema",
  "oci-spec 0.10.0",
  "semver",
@@ -155,6 +157,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

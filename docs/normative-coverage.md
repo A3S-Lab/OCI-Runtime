@@ -34,8 +34,8 @@ The v1.3.0 corpus currently contains 764 entries:
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
 | `validated` | 24 | Exact semantic rules with positive and negative SDK tests |
-| `enforced` | 14 | OCI `oomScoreAdj`, scheduler, and I/O-priority representation and application semantics enforced by the Linux executor |
-| `pending-review` | 617 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `enforced` | 17 | Root `config.json` placement plus OCI `oomScoreAdj`, scheduler, and I/O-priority semantics enforced by the bundle loader and Linux executor |
+| `pending-review` | 614 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
@@ -57,10 +57,11 @@ non-empty rule and test evidence. The verifier rejects:
 Reviewed promotions live in
 `conformance/oci-1.3.0-normative-evidence.json`. The generator applies that
 small source-of-truth file to a fresh 764-entry baseline and produces
-`conformance/oci-1.3.0-normative-coverage.json`. The SDK's typed 73-rule
-registry is checked in both directions: an evidence rule must exist, and every
-rule classified as directly normative must have at least one requirement
-binding.
+`conformance/oci-1.3.0-normative-coverage.json`. The SDK semantic-rule registry
+and the owner-bound non-semantic execution-rule registry are checked in both
+directions: an evidence rule must exist, every non-semantic rule must retain
+its declared owner, and every directly normative rule must have at least one
+requirement binding.
 
 Promotion is monotonic in reviewed commits:
 

@@ -327,10 +327,16 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "This REQUIRED file MUST reside in the root of the bundle directory and MUST be named `config.json`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-bundle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.bundle.config.root-file"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_symlinked_config_json",
+        "bundle::tests::requires_config_json_at_bundle_root"
+      ]
     },
     {
       "id": "sha256:96c5bcacf765426a9e9cedb8bc2d5e0d6fba22d898470564f25db18b9531be82",
@@ -341,10 +347,16 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "This REQUIRED file MUST reside in the root of the bundle directory and MUST be named `config.json`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-bundle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.bundle.config.root-file"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_symlinked_config_json",
+        "bundle::tests::requires_config_json_at_bundle_root"
+      ]
     },
     {
       "id": "sha256:f818cdc28aa3a44fdf50ebf61d60bb050081f7b5b00d7879f85b60b6ea18be34",
@@ -355,10 +367,16 @@
       "keyword": "must",
       "occurrence": 3,
       "source": "This REQUIRED file MUST reside in the root of the bundle directory and MUST be named `config.json`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-bundle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.bundle.config.root-file"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "bundle::tests::rejects_symlinked_config_json",
+        "bundle::tests::requires_config_json_at_bundle_root"
+      ]
     },
     {
       "id": "sha256:ff44d4af7f856a623de0f423fa1f37b4b45ed1c8cabf69d3cd9442bce14c99b8",
