@@ -14,7 +14,7 @@ use crate::{
     RuntimeOperation, StartRequest, StateRequest,
 };
 
-use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireResult};
+use super::wire::{read_frame, write_frame, ClientMessage, ServerMessage, WireRequest, WireResult};
 use super::{serve_transport_connection, RuntimeTransportClient};
 
 #[derive(Default)]
@@ -395,6 +395,72 @@ async fn server_rejects_the_reserved_zero_request_id() {
         .expect_err("zero request ID must fail");
     assert_eq!(error.code, ErrorCode::Internal);
     assert!(error.message.contains("zero SDK request ID"));
+}
+
+#[test]
+fn state_wire_request_requires_container_id() {
+    let mut encoded = serde_json::to_value(ClientMessage::Request {
+        protocol: 3,
+        request_id: 1,
+        request: Box::new(WireRequest::State(StateRequest {
+            target: crate::ContainerTarget::current(
+                ContainerId::new("state-wire-container").expect("container ID"),
+            ),
+        })),
+    })
+    .expect("encode valid state request");
+    let target = encoded
+        .get_mut("request")
+        .and_then(|request| request.get_mut("request"))
+        .and_then(|request| request.get_mut("target"))
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("state target object");
+    assert!(target.remove("id").is_some());
+
+    let error = serde_json::from_value::<ClientMessage>(encoded)
+        .expect_err("state request without a container ID must fail decoding");
+    assert!(error.to_string().contains("id"));
+}
+
+#[test]
+fn create_wire_request_requires_bundle_and_container_id() {
+    let bundle = OciBundle::from_json(
+        std::env::current_dir()
+            .expect("current directory")
+            .join("required-create-wire-bundle"),
+        "{\"ociVersion\":\"1.3.0\",\"root\":{\"path\":\"rootfs\"}}",
+    )
+    .expect("valid bundle");
+    let attachments =
+        CreateAttachments::from_bundle(&bundle, ProcessIo::default()).expect("attachment contract");
+    let encoded = serde_json::to_value(ClientMessage::Request {
+        protocol: 3,
+        request_id: 1,
+        request: Box::new(WireRequest::Create(CreateRequest {
+            context: OperationContext::new(
+                OperationId::new("required-create-wire").expect("operation ID"),
+            ),
+            id: ContainerId::new("required-create-wire-container").expect("container ID"),
+            bundle,
+            isolation: IsolationRequest::SharedHostKernel,
+            attachments,
+        })),
+    })
+    .expect("encode valid create request");
+
+    for required_field in ["id", "bundle"] {
+        let mut missing = encoded.clone();
+        let request = missing
+            .get_mut("request")
+            .and_then(|request| request.get_mut("request"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("create request object");
+        assert!(request.remove(required_field).is_some());
+
+        let error = serde_json::from_value::<ClientMessage>(missing)
+            .expect_err("create request without a required argument must fail decoding");
+        assert!(error.to_string().contains(required_field));
+    }
 }
 
 #[tokio::test]

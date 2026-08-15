@@ -124,6 +124,87 @@
     },
     {
       "requirementIds": [
+        "sha256:ecb286de5aff2aab4188c4d0fed13d4166a05317d3fea2022f0991c3315bfa0d"
+      ],
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.query-state.id.required"
+      ],
+      "testIds": [
+        "transport::tests::state_wire_request_requires_container_id"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:d7d8c9b977b69693f7e90301a59ebb9fa946ec981dba68675a87240f47ff4570"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.query-state.existing-container"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:3a6960bbb80a4f7cae4b5da1f9234d838715669daa58042718d6b7bdd2cca5d8"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.query-state.exact-state"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::create_is_durable_idempotent_and_generation_fenced"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:c8319c81b5dc728f8249cee2ea433145333483722de0bffc6a3513e83e719512"
+      ],
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.create.arguments.required"
+      ],
+      "testIds": [
+        "transport::tests::create_wire_request_requires_bundle_and_container_id"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:1d7fb0af2ece86a56ddfcba16ea503505db9d1842f9d85d51aecce852653456b",
+        "sha256:a7ec143ff2f167da45034e1bb792e1b71bb9fdad76b86238739d7a8d7f9dd6ba"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.create.id.valid-and-unique"
+      ],
+      "testIds": [
+        "id::tests::deserialization_cannot_bypass_validation",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:1790c3e7cc4ebef2cfe0ec2fdae097158099e80552facb392a8cd141329591c9"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.create.new-container"
+      ],
+      "testIds": [
+        "state::tests::create_is_durable_idempotent_and_generation_fenced"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:54cc9754381cfe1353bfa0b6cfa81e7e54d04ccd86beea111662f3bbcbba5b8d"
       ],
       "disposition": "enforced",
