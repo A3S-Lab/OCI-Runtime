@@ -6,6 +6,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Exact Create and Query State operation contracts at the public SDK boundary.
+  Raw wire tests reject State without a container ID and Create without either
+  the container ID or bundle before dispatch. Runtime evidence also rejects
+  invalid or duplicate live IDs without creating a second container, reports
+  a missing container, durably creates a fresh exact generation, and returns
+  its complete generation-fenced State. Seven OCI 1.3.0 entries move from
+  pending to enforced, reducing the ledger from 595 to 588 entries.
 - Owner-bound OCI State enforcement for required version, ID, status, and
   bundle fields; host-unique live container IDs; positive created/running
   Linux PIDs; stopped-state PID removal; exact optional annotations; and the

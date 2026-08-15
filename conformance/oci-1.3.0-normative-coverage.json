@@ -983,10 +983,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST [generate an error](#errors) if it is not provided the ID of a container.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.query-state.id.required"
+      ],
+      "testIds": [
+        "transport::tests::state_wire_request_requires_container_id"
+      ]
     },
     {
       "id": "sha256:d7d8c9b977b69693f7e90301a59ebb9fa946ec981dba68675a87240f47ff4570",
@@ -997,10 +1001,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Attempting to query a container that does not exist MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.query-state.existing-container"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:3a6960bbb80a4f7cae4b5da1f9234d838715669daa58042718d6b7bdd2cca5d8",
@@ -1011,10 +1019,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST return the state of a container as specified in the [State](#state) section.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.query-state.exact-state"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::create_is_durable_idempotent_and_generation_fenced"
+      ]
     },
     {
       "id": "sha256:c8319c81b5dc728f8249cee2ea433145333483722de0bffc6a3513e83e719512",
@@ -1025,10 +1038,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST [generate an error](#errors) if it is not provided a path to the bundle and the container ID to associate with the container.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-transport",
+      "ruleIds": [
+        "oci.runtime.create.arguments.required"
+      ],
+      "testIds": [
+        "transport::tests::create_wire_request_requires_bundle_and_container_id"
+      ]
     },
     {
       "id": "sha256:1d7fb0af2ece86a56ddfcba16ea503505db9d1842f9d85d51aecce852653456b",
@@ -1039,10 +1056,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If the ID provided is not unique across all containers within the scope of the runtime, or is not valid in any other way, the implementation MUST [generate an error](#errors) and a new container MUST NOT be created.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.id.valid-and-unique"
+      ],
+      "testIds": [
+        "id::tests::deserialization_cannot_bypass_validation",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:a7ec143ff2f167da45034e1bb792e1b71bb9fdad76b86238739d7a8d7f9dd6ba",
@@ -1053,10 +1075,15 @@
       "keyword": "must-not",
       "occurrence": 2,
       "source": "If the ID provided is not unique across all containers within the scope of the runtime, or is not valid in any other way, the implementation MUST [generate an error](#errors) and a new container MUST NOT be created.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.id.valid-and-unique"
+      ],
+      "testIds": [
+        "id::tests::deserialization_cannot_bypass_validation",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:1790c3e7cc4ebef2cfe0ec2fdae097158099e80552facb392a8cd141329591c9",
@@ -1067,10 +1094,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This operation MUST create a new container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.new-container"
+      ],
+      "testIds": [
+        "state::tests::create_is_durable_idempotent_and_generation_fenced"
+      ]
     },
     {
       "id": "sha256:4294dbb2c79d357967f29de29f97a63567e59d591367cd18306e1af23a6becdd",
