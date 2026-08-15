@@ -1975,6 +1975,70 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
 }
 
 #[tokio::test]
+async fn source_config_updates_after_create_do_not_affect_start() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle_directory = temporary.path().join("bundle");
+    std::fs::create_dir(&bundle_directory).expect("bundle directory");
+    let source_config = bundle_directory.join("config.json");
+    std::fs::write(&source_config, TEST_CONFIG).expect("write source configuration");
+    let bundle = OciBundle::load(&bundle_directory)
+        .await
+        .expect("load source bundle");
+    let original_digest = bundle.config_digest().to_string();
+    let create = CreateRequest {
+        context: OperationContext::new(operation_id("immutable-config-create")),
+        id: container_id("immutable-config-container"),
+        attachments: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("attachment contract"),
+        bundle,
+        isolation: IsolationRequest::DedicatedVm,
+    };
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+    let created = service
+        .create(create.clone())
+        .await
+        .expect("create container");
+
+    let mut changed: serde_json::Value =
+        serde_json::from_str(TEST_CONFIG).expect("decode source configuration");
+    changed["process"]["args"] = serde_json::json!(["/bin/false"]);
+    std::fs::write(
+        &source_config,
+        serde_json::to_vec_pretty(&changed).expect("encode changed source configuration"),
+    )
+    .expect("change source configuration after create");
+
+    drop(service);
+    let reopened = open_service(&temporary, Arc::clone(&driver)).await;
+    let target = ContainerTarget::exact(create.id, created.generation);
+    reopened
+        .start(StartRequest {
+            context: OperationContext::new(operation_id("immutable-config-start")),
+            target,
+        })
+        .await
+        .expect("start from durable configuration snapshot");
+
+    let calls = driver.calls();
+    let DriverCall::Start(start) = calls
+        .iter()
+        .find(|call| matches!(call, DriverCall::Start(_)))
+        .expect("driver start call")
+    else {
+        unreachable!("filtered driver call must be start");
+    };
+    assert_eq!(start.bundle.config_json(), TEST_CONFIG);
+    assert_eq!(start.bundle.config_digest(), original_digest);
+    assert_ne!(
+        start.bundle.config_bytes(),
+        std::fs::read(&source_config)
+            .expect("read changed source configuration")
+            .as_slice()
+    );
+}
+
+#[tokio::test]
 async fn create_uses_driver_staged_bundle_without_rewriting_public_bundle_identity() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let source = temporary.path().join("caller-bundle");

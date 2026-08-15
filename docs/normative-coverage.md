@@ -34,8 +34,8 @@ The v1.3.0 corpus currently contains 764 entries:
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
 | `validated` | 26 | Exact semantic and bundle-validation rules with positive and negative SDK tests |
-| `enforced` | 17 | Root `config.json` placement plus OCI `oomScoreAdj`, scheduler, and I/O-priority semantics enforced by the bundle loader and Linux executor |
-| `pending-review` | 612 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `enforced` | 18 | Root `config.json` placement, post-create configuration immutability, and OCI `oomScoreAdj`, scheduler, and I/O-priority semantics enforced by the bundle loader, runtime lifecycle, and Linux executor |
+| `pending-review` | 611 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain

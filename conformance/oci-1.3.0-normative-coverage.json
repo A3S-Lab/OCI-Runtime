@@ -667,10 +667,15 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "Any updates to [`config.json`](config.md) after this step MUST NOT affect the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.config.immutable-after-create"
+      ],
+      "testIds": [
+        "service::tests::source_config_updates_after_create_do_not_affect_start",
+        "state::tests::create_is_durable_idempotent_and_generation_fenced"
+      ]
     },
     {
       "id": "sha256:1acf3ad33a764caed4e26c5f956258b1b75c08b9b63e34de9f1a5febb57a6be4",
