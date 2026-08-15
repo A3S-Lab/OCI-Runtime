@@ -6,7 +6,7 @@ use crate::AgentVmSmokeReport;
 
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v17";
+    "a3s.oci.native-linux-multi-container-smoke.v18";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
 pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v11";
 /// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.
@@ -240,12 +240,21 @@ pub struct InitializationEvidence {
     pub direct_argv_verified: bool,
     /// Whether a non-zero init exit remained an exact normal exit status.
     pub nonzero_exit_verified: bool,
+    /// Whether a failing prestart hook rejected create and rolled back all
+    /// visible runtime state.
+    pub prestart_failure_rolled_back: bool,
+    /// Whether a failing createRuntime hook rejected create and rolled back
+    /// all visible runtime state.
+    pub create_runtime_failure_rolled_back: bool,
     /// Whether a failing createContainer hook rejected create and rolled back
     /// all visible runtime state.
-    pub create_hook_failure_rolled_back: bool,
+    pub create_container_failure_rolled_back: bool,
     /// Whether a failing startContainer hook rejected start and allowed exact
     /// force cleanup of the created record.
-    pub start_hook_failure_rolled_back: bool,
+    pub start_container_failure_rolled_back: bool,
+    /// Whether a failing poststart hook stopped the launched process and
+    /// allowed exact force cleanup of the created record.
+    pub poststart_failure_rolled_back: bool,
     /// Whether a timed-out prestart hook was terminated and rolled back before
     /// any container state became visible.
     pub hook_timeout_rolled_back: bool,
@@ -264,8 +273,11 @@ impl InitializationEvidence {
             && self.executable_script_verified
             && self.direct_argv_verified
             && self.nonzero_exit_verified
-            && self.create_hook_failure_rolled_back
-            && self.start_hook_failure_rolled_back
+            && self.prestart_failure_rolled_back
+            && self.create_runtime_failure_rolled_back
+            && self.create_container_failure_rolled_back
+            && self.start_container_failure_rolled_back
+            && self.poststart_failure_rolled_back
             && self.hook_timeout_rolled_back
             && self.poststop_failure_warning_only
             && self.all_profiles_removed
@@ -803,8 +815,11 @@ mod tests {
             executable_script_verified: true,
             direct_argv_verified: true,
             nonzero_exit_verified: true,
-            create_hook_failure_rolled_back: true,
-            start_hook_failure_rolled_back: true,
+            prestart_failure_rolled_back: true,
+            create_runtime_failure_rolled_back: true,
+            create_container_failure_rolled_back: true,
+            start_container_failure_rolled_back: true,
+            poststart_failure_rolled_back: true,
             hook_timeout_rolled_back: true,
             poststop_failure_warning_only: true,
             all_profiles_removed: true,
@@ -812,7 +827,7 @@ mod tests {
         assert!(complete.is_success());
 
         let mut incomplete = complete;
-        incomplete.hook_timeout_rolled_back = false;
+        incomplete.poststart_failure_rolled_back = false;
         assert!(!incomplete.is_success());
     }
 

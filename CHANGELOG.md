@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete owner-bound OCI Hook evidence. Native Linux multi-container report
+  v18 now drives independent failing prestart, createRuntime, createContainer,
+  startContainer, and poststart hooks, requires typed failure plus exact stopped
+  cleanup for every phase, retains bounded timeout/process-group termination,
+  and proves poststop failure remains warning-only. Six registered enforcement
+  rules bind command handling, runtime/container namespace placement, lifecycle
+  order, exact State on stdin, and failure policy. Sixty-four OCI 1.3.0 entries
+  move from pending to enforced, reducing the ledger from 573 to 509 entries.
 - Exact create-to-delete lifecycle operation evidence. Raw wire tests reject
   Start, Kill, and Delete requests without a container ID, while the Host
   boundary test retains the configured start argv, exact signal and all flag,

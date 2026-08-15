@@ -604,7 +604,7 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v17"
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v18"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -695,8 +695,11 @@ run_multi_container_smoke() {
      and .initialization.executable_script_verified
      and .initialization.direct_argv_verified
      and .initialization.nonzero_exit_verified
-     and .initialization.create_hook_failure_rolled_back
-     and .initialization.start_hook_failure_rolled_back
+     and .initialization.prestart_failure_rolled_back
+     and .initialization.create_runtime_failure_rolled_back
+     and .initialization.create_container_failure_rolled_back
+     and .initialization.start_container_failure_rolled_back
+     and .initialization.poststart_failure_rolled_back
      and .initialization.hook_timeout_rolled_back
      and .initialization.poststop_failure_warning_only
      and .initialization.all_profiles_removed

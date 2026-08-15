@@ -401,7 +401,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v17` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v18` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -473,10 +473,12 @@ matrices:
   artifacts must be removed.
 - Init runs cover inline shell, an executable rootfs script with an exact
   environment variable, direct BusyBox argv without a shell, and a normal
-  nonzero exit of 42. Negative OCI Hook runs require createContainer failure
-  rollback, startContainer failure followed by force cleanup, bounded prestart
-  timeout and process-group termination, and warning-only poststop failure.
-  The service list and every exact target must be empty afterward.
+  nonzero exit of 42. Negative OCI Hook runs independently require prestart,
+  createRuntime, and createContainer failures to roll create back before any
+  state is visible; startContainer and poststart failures to stop the process
+  and permit exact force cleanup; bounded prestart timeout and process-group
+  termination; and warning-only poststop failure. The service list and every
+  exact target must be empty afterward.
 
 GitHub Actions runs the gate on x86_64 and aarch64 both without `/dev/kvm` and
 with a present but unusable placeholder at that path.
@@ -626,9 +628,9 @@ following pass:
   multi-architecture/notification seccomp, and broader sysctl enforcement;
 - live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
-- broader Hook rollback/recovery/security-negative and adversarial soak beyond
-  the retained create/start/timeout/poststop matrix, durable recovery for the
-  remaining mutating operations, descriptor-relative path handling,
+- Hook crash-recovery, security-negative, and adversarial soak beyond the
+  retained six-phase failure/timeout matrix, durable recovery for the remaining
+  mutating operations, descriptor-relative path handling,
   transport-level fault injection, and adversarial cleanup beyond the bounded
   native lifecycle churn gate;
 - the complete A3S Box Rust, Python, and TypeScript Sandbox SDK suites on

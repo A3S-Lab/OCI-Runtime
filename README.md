@@ -410,7 +410,7 @@ namespace, the executor pins and type-checks that namespace, observes its real
 UID/GID maps through a short-lived namespace helper, and rechecks the namespace
 identity before entry. The same detached-mount path then supplies the six
 default devices with namespace-root ownership. Native Linux multi-container
-v17 and real Apple Silicon utility-VM multi-container v11 both verify the
+v18 and real Apple Silicon utility-VM multi-container v11 both verify the
 device type, major/minor number, mode, ownership, workload access, and cleanup.
 The same reports cover the image's `/dev` with a fresh tmpfs and require the
 four OCI Linux links to resolve to their exact `/proc/self/fd` targets after
@@ -429,8 +429,8 @@ The repository turns release claims into checked inventories:
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 73 |
-| Owner-bound non-semantic rules | 30 |
-| OCI normative dispositions | 56 enforced · 26 validated · 573 pending review |
+| Owner-bound non-semantic rules | 36 |
+| OCI normative dispositions | 120 enforced · 26 validated · 509 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |

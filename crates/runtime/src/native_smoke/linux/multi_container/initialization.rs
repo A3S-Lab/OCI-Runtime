@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use a3s_oci_sdk::{
-    ContainerId, ContainerTarget, DeleteMode, DeleteRequest, Error, ExitStatus, ListRequest,
-    OciBundle, RuntimeClient, StartRequest,
+    ContainerTarget, DeleteMode, DeleteRequest, Error, ExitStatus, ListRequest, OciBundle,
+    RuntimeClient, StartRequest,
 };
 use serde_json::{json, Map, Value};
 use tokio::time::timeout;
@@ -24,8 +24,11 @@ pub(super) struct InitializationFixture {
     external_script: OciBundle,
     direct_argv: OciBundle,
     nonzero_exit: OciBundle,
-    create_hook_failure: OciBundle,
-    start_hook_failure: OciBundle,
+    prestart_failure: OciBundle,
+    create_runtime_failure: OciBundle,
+    create_container_failure: OciBundle,
+    start_container_failure: OciBundle,
+    poststart_failure: OciBundle,
     hook_timeout: OciBundle,
     poststop_failure: OciBundle,
     evidence_directory: PathBuf,
@@ -128,21 +131,45 @@ impl InitializationFixture {
             None,
             &format!("a3s-oci-init-nonzero-{nonce}"),
         )?;
-        let create_hook_failure = build_profile(
+        let prestart_failure = build_profile(
+            base,
+            mount,
+            sleeping_init(),
+            json!(["PATH=/bin"]),
+            Some(hooks("prestart", "exit 11", 2)),
+            &format!("a3s-oci-hook-prestart-{nonce}"),
+        )?;
+        let create_runtime_failure = build_profile(
+            base,
+            mount,
+            sleeping_init(),
+            json!(["PATH=/bin"]),
+            Some(hooks("createRuntime", "exit 13", 2)),
+            &format!("a3s-oci-hook-create-runtime-{nonce}"),
+        )?;
+        let create_container_failure = build_profile(
             base,
             mount,
             sleeping_init(),
             json!(["PATH=/bin"]),
             Some(hooks("createContainer", "exit 17", 2)),
-            &format!("a3s-oci-hook-create-{nonce}"),
+            &format!("a3s-oci-hook-create-container-{nonce}"),
         )?;
-        let start_hook_failure = build_profile(
+        let start_container_failure = build_profile(
             base,
             mount,
             sleeping_init(),
             json!(["PATH=/bin"]),
             Some(hooks("startContainer", "exit 19", 2)),
-            &format!("a3s-oci-hook-start-{nonce}"),
+            &format!("a3s-oci-hook-start-container-{nonce}"),
+        )?;
+        let poststart_failure = build_profile(
+            base,
+            mount,
+            sleeping_init(),
+            json!(["PATH=/bin"]),
+            Some(hooks("poststart", "exit 21", 2)),
+            &format!("a3s-oci-hook-poststart-{nonce}"),
         )?;
         let hook_timeout = build_profile(
             base,
@@ -166,8 +193,11 @@ impl InitializationFixture {
             external_script,
             direct_argv,
             nonzero_exit,
-            create_hook_failure,
-            start_hook_failure,
+            prestart_failure,
+            create_runtime_failure,
+            create_container_failure,
+            start_container_failure,
+            poststart_failure,
             hook_timeout,
             poststop_failure,
             evidence_directory,
@@ -217,44 +247,89 @@ pub(super) async fn exercise(
         run_expected_exit(client, &fixture.nonzero_exit, nonce, "init-nonzero", 42).await?;
     report.initialization.nonzero_exit_verified = true;
 
-    let create_failure_id = container_id(nonce, "hook-create-failure")?;
-    expect_create_failure(
+    let prestart_failure_target = run_create_failure(
         client,
-        &fixture.create_hook_failure,
+        &fixture.prestart_failure,
         nonce,
-        "hook-create-failure",
-        create_failure_id.clone(),
-        "createContainer hook",
+        "hook-prestart-failure",
+        "prestart hook",
     )
     .await?;
-    let create_failure_target = ContainerTarget::current(create_failure_id);
-    report.initialization.create_hook_failure_rolled_back = state_is_missing(
+    report.initialization.prestart_failure_rolled_back = state_is_missing(
         client,
-        &create_failure_target,
-        "create-hook failure after rollback",
+        &prestart_failure_target,
+        "prestart-hook failure after rollback",
     )
     .await?;
 
-    let timeout_id = container_id(nonce, "hook-timeout")?;
-    expect_create_failure(
+    let create_runtime_failure_target = run_create_failure(
+        client,
+        &fixture.create_runtime_failure,
+        nonce,
+        "hook-create-runtime-failure",
+        "createRuntime hook",
+    )
+    .await?;
+    report.initialization.create_runtime_failure_rolled_back = state_is_missing(
+        client,
+        &create_runtime_failure_target,
+        "createRuntime-hook failure after rollback",
+    )
+    .await?;
+
+    let create_container_failure_target = run_create_failure(
+        client,
+        &fixture.create_container_failure,
+        nonce,
+        "hook-create-container-failure",
+        "createContainer hook",
+    )
+    .await?;
+    report.initialization.create_container_failure_rolled_back = state_is_missing(
+        client,
+        &create_container_failure_target,
+        "createContainer-hook failure after rollback",
+    )
+    .await?;
+
+    let timeout_target = run_create_failure(
         client,
         &fixture.hook_timeout,
         nonce,
         "hook-timeout",
-        timeout_id.clone(),
         "prestart hook",
     )
     .await?;
-    let timeout_target = ContainerTarget::current(timeout_id);
     report.initialization.hook_timeout_rolled_back =
         state_is_missing(client, &timeout_target, "timed-out hook after rollback").await?;
 
-    let start_failure_target =
-        run_start_failure(client, &fixture.start_hook_failure, nonce).await?;
-    report.initialization.start_hook_failure_rolled_back = state_is_missing(
+    let start_container_failure_target = run_start_failure(
         client,
-        &start_failure_target,
-        "start-hook failure after force delete",
+        &fixture.start_container_failure,
+        nonce,
+        "hook-start-container-failure",
+        "startContainer hook",
+    )
+    .await?;
+    report.initialization.start_container_failure_rolled_back = state_is_missing(
+        client,
+        &start_container_failure_target,
+        "startContainer-hook failure after force delete",
+    )
+    .await?;
+
+    let poststart_failure_target = run_start_failure(
+        client,
+        &fixture.poststart_failure,
+        nonce,
+        "hook-poststart-failure",
+        "poststart hook",
+    )
+    .await?;
+    report.initialization.poststart_failure_rolled_back = state_is_missing(
+        client,
+        &poststart_failure_target,
+        "poststart-hook failure after force delete",
     )
     .await?;
 
@@ -272,9 +347,37 @@ pub(super) async fn exercise(
         && state_is_missing(client, &script_target, "script init after delete").await?
         && state_is_missing(client, &direct_target, "direct init after delete").await?
         && state_is_missing(client, &nonzero_target, "nonzero init after delete").await?
-        && state_is_missing(client, &create_failure_target, "create hook after matrix").await?
+        && state_is_missing(
+            client,
+            &prestart_failure_target,
+            "prestart hook after matrix",
+        )
+        .await?
+        && state_is_missing(
+            client,
+            &create_runtime_failure_target,
+            "createRuntime hook after matrix",
+        )
+        .await?
+        && state_is_missing(
+            client,
+            &create_container_failure_target,
+            "createContainer hook after matrix",
+        )
+        .await?
         && state_is_missing(client, &timeout_target, "timeout hook after matrix").await?
-        && state_is_missing(client, &start_failure_target, "start hook after matrix").await?
+        && state_is_missing(
+            client,
+            &start_container_failure_target,
+            "startContainer hook after matrix",
+        )
+        .await?
+        && state_is_missing(
+            client,
+            &poststart_failure_target,
+            "poststart hook after matrix",
+        )
+        .await?
         && state_is_missing(client, &poststop_target, "poststop hook after delete").await?;
     require(
         report.initialization.is_success(),
@@ -337,15 +440,15 @@ async fn run_expected_exit(
     Ok(target)
 }
 
-async fn expect_create_failure(
+async fn run_create_failure(
     client: &RuntimeClient,
     bundle: &OciBundle,
     nonce: &str,
     label: &str,
-    id: ContainerId,
     expected_message: &str,
-) -> Result<(), String> {
-    let request = create_request(nonce, &format!("{label}-create"), id, bundle)?;
+) -> Result<ContainerTarget, String> {
+    let id = container_id(nonce, label)?;
+    let request = create_request(nonce, &format!("{label}-create"), id.clone(), bundle)?;
     let error = expected_error(&format!("create {label}"), client.create(request)).await?;
     require(
         error.message.contains(expected_message),
@@ -353,44 +456,49 @@ async fn expect_create_failure(
             "create {label} error omitted {expected_message:?}: {}",
             error.message
         ),
-    )
+    )?;
+    Ok(ContainerTarget::current(id))
 }
 
 async fn run_start_failure(
     client: &RuntimeClient,
     bundle: &OciBundle,
     nonce: &str,
+    label: &str,
+    expected_message: &str,
 ) -> Result<ContainerTarget, String> {
-    let label = "hook-start-failure";
     let id = container_id(nonce, label)?;
     let created = native_call(
-        "create start-hook failure profile",
+        &format!("create {label}"),
         client.create(create_request(
             nonce,
-            "hook-start-failure-create",
+            &format!("{label}-create"),
             id.clone(),
             bundle,
         )?),
     )
     .await?;
-    require_created(&created, "start-hook failure profile")?;
+    require_created(&created, label)?;
     let target = ContainerTarget::exact(id, created.generation);
     let error = expected_error(
-        "start start-hook failure profile",
+        &format!("start {label}"),
         client.start(StartRequest {
-            context: operation(nonce, "hook-start-failure-start")?,
+            context: operation(nonce, &format!("{label}-start"))?,
             target: target.clone(),
         }),
     )
     .await?;
     require(
-        error.message.contains("startContainer hook"),
-        format!("start-hook error omitted its phase: {}", error.message),
+        error.message.contains(expected_message),
+        format!(
+            "start {label} error omitted {expected_message:?}: {}",
+            error.message
+        ),
     )?;
     native_call(
-        "force delete start-hook failure profile",
+        &format!("force delete {label}"),
         client.delete(DeleteRequest {
-            context: operation(nonce, "hook-start-failure-delete")?,
+            context: operation(nonce, &format!("{label}-delete"))?,
             target: target.clone(),
             mode: DeleteMode::Force,
         }),
