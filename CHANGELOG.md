@@ -6,6 +6,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Owner-bound runtime state gates for start, kill, and stopped-only delete.
+  Tests now prove each invalid-state request returns an error without changing
+  container state or writing an operation journal, reducing the pending OCI
+  1.3.0 ledger from 610 to 604 entries.
 - Runtime-lifecycle evidence that caller-side `config.json` changes after
   create cannot affect the container. A Host reopen test mutates the source
   process, then proves start receives the original private snapshot and digest.
