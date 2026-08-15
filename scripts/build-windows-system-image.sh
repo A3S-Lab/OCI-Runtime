@@ -7,7 +7,7 @@ source "$script_directory/lib/build-system-image.sh"
 
 export A3S_SYSTEM_IMAGE_SCHEMA_VERSION='a3s.oci.windows-system-image.v1'
 export A3S_SYSTEM_IMAGE_ARCHITECTURE='x86_64'
-export A3S_SYSTEM_IMAGE_ELF_PATTERN='ELF 64-bit.*x86-64.*statically linked'
+export A3S_SYSTEM_IMAGE_ELF_PATTERN='ELF 64-bit.*x86-64.*(static-pie|statically) linked'
 export A3S_SYSTEM_IMAGE_ALPINE_URL='https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/alpine-minirootfs-3.22.5-x86_64.tar.gz'
 export A3S_SYSTEM_IMAGE_ALPINE_SHA256='4b4daa9fe2fc696c4919c4412a4c3d3e770d8fb70292a004a2c72f5096175282'
 export A3S_SYSTEM_IMAGE_ALPINE_SIZE=3638276
