@@ -326,11 +326,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
-- Run CLI parsing, the Tokio runtime, and command dispatch on an explicit 8 MiB
-  worker stack. Windows debug binaries no longer overflow the platform's 1 MiB
-  main-thread stack before even `features` or fail-closed smoke commands can
-  return. Command selection now heap-boxes only the chosen branch, with a
-  bounded-stack construction regression test.
+- On Windows, run CLI parsing, the Tokio runtime, and command dispatch on an
+  explicit 8 MiB worker stack. Debug binaries no longer overflow the
+  platform's 1 MiB main-thread stack before even `features` or fail-closed
+  smoke commands can return. Non-Windows entry remains on the process main
+  thread so Linux rootless security bootstrap still precedes every worker.
+  Command selection heap-boxes only the chosen branch, with a bounded-stack
+  construction regression test.
 - Clean every live device-target manifest during Linux executor shutdown
   before removing the Guest runtime root. VM owner replacement now removes OCI
   rootfs placeholders such as `dev/null`, so the fresh Guest can prepare the

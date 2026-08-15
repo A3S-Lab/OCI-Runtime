@@ -608,8 +608,10 @@ enum CliError {
 // Windows reserves only 1 MiB for the process main thread. Keep Clap parsing,
 // the Tokio runtime, and concrete command futures on an explicitly sized stack
 // that matches the common Unix main-thread reservation.
+#[cfg(target_os = "windows")]
 const CLI_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 
+#[cfg(target_os = "windows")]
 fn main() -> ExitCode {
     let worker = match std::thread::Builder::new()
         .name("a3s-oci-command".to_string())
@@ -629,6 +631,11 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn main() -> ExitCode {
+    cli_main()
 }
 
 #[inline(never)]
