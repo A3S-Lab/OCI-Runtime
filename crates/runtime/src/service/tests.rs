@@ -27,11 +27,11 @@ use a3s_oci_sdk::{
     ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
     Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
     TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    ATTACHMENT_SCHEMA_V1, OCI_LINUX_CAPABILITY_NAMES,
+    ATTACHMENT_SCHEMA_V1, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MOUNT_OPTIONS,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use super::{HostRuntimeService, RECOGNIZED_LINUX_MOUNT_OPTIONS};
+use super::HostRuntimeService;
 #[cfg(target_os = "linux")]
 use crate::DriverCreateAttachments;
 use crate::{
@@ -1451,16 +1451,25 @@ async fn reports_only_operations_that_are_currently_implemented() {
     assert_eq!(info.oci.oci_version_min(), "1.0.0");
     assert_eq!(info.oci.oci_version_max(), "1.3.0");
     assert_eq!(info.oci.hooks().as_deref(), Some([].as_slice()));
-    assert_eq!(
-        info.oci.mount_options().as_deref(),
-        Some(
-            RECOGNIZED_LINUX_MOUNT_OPTIONS
-                .iter()
-                .map(|option| (*option).to_string())
-                .collect::<Vec<_>>()
-                .as_slice()
-        )
-    );
+    let mount_options = info
+        .oci
+        .mount_options()
+        .as_deref()
+        .expect("Linux mount options");
+    assert_eq!(mount_options.len(), OCI_LINUX_MOUNT_OPTIONS.len());
+    assert!(mount_options.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(!mount_options.iter().any(|option| option == "tmpcopyup"));
+    assert!(mount_options.iter().any(|option| option == "rnodev"));
+    for option in OCI_LINUX_MOUNT_OPTIONS
+        .iter()
+        .map(|option| option.name())
+        .filter(|option| *option != "tmpcopyup")
+    {
+        assert!(
+            mount_options.iter().any(|reported| reported == option),
+            "supported OCI mount option `{option}` is not advertised"
+        );
+    }
     let linux = info.oci.linux().as_ref().expect("Linux feature report");
     assert_eq!(
         linux.namespaces().as_deref(),

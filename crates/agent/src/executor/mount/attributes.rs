@@ -102,7 +102,10 @@ fn option_attribute(option: &str) -> Option<(bool, u64)> {
         "rnodiratime" => Some((false, MOUNT_ATTR_NODIRATIME)),
         "rdiratime" => Some((true, MOUNT_ATTR_NODIRATIME)),
         "rrelatime" => Some((false, 0)),
-        "rnorelatime" => Some((true, 0)),
+        // mount_setattr represents relatime as the zero atime value. Turning
+        // relatime off therefore has to select the only positive atime mode:
+        // strictatime.
+        "rnorelatime" => Some((false, MOUNT_ATTR_STRICTATIME)),
         "rstrictatime" => Some((false, MOUNT_ATTR_STRICTATIME)),
         "rnostrictatime" => Some((true, MOUNT_ATTR_STRICTATIME)),
         "rnosymfollow" => Some((false, MOUNT_ATTR_NOSYMFOLLOW)),

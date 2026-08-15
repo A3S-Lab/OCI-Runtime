@@ -22,6 +22,7 @@ const MAX_MOUNT_OPTIONS: usize = 4_096;
 pub(super) use attributes::{
     MOUNT_ATTR_ATIME, MOUNT_ATTR_NOATIME, MOUNT_ATTR_NODEV, MOUNT_ATTR_NODIRATIME,
     MOUNT_ATTR_NOEXEC, MOUNT_ATTR_NOSUID, MOUNT_ATTR_NOSYMFOLLOW, MOUNT_ATTR_RDONLY,
+    MOUNT_ATTR_STRICTATIME,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,6 +371,10 @@ impl MountPlan {
                 .is_some_and(|attributes| attributes.attr_set & attributes::MOUNT_ATTR_RDONLY != 0);
         let detached_bind =
             namespaces.new_user() && bind && requests_readonly && detached_bind_compatible;
+        // An explicit bind remount applies the requested attributes in the
+        // first mount(2) call. Only ordinary bind creation needs the follow-up
+        // remount used to apply VFS attributes.
+        let remount_bind = remount_bind && flags & libc::MS_REMOUNT == 0;
         Ok(Self {
             index,
             destination,

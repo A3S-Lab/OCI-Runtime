@@ -2039,10 +2039,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Runtimes MUST/SHOULD/MAY implement the following option strings for Linux:",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:d9b3e828023b63605d93e68ed9f038e7b1dd417a83906cd8e605e45b5ebb2c4d",
@@ -2053,10 +2061,18 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "Runtimes MUST/SHOULD/MAY implement the following option strings for Linux:",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:34072c6fd4ce6983f9f945fc3252c1fa9cf5ad08276017ff9467bc5b49874b8b",
@@ -2067,10 +2083,15 @@
       "keyword": "may",
       "occurrence": 3,
       "source": "Runtimes MUST/SHOULD/MAY implement the following option strings for Linux:",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "conformant",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.optional-tmpcopyup"
+      ],
+      "testIds": [
+        "executor::mount_tests::rejects_unimplemented_optional_tmpcopyup_without_advertising_support",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:9bd6b663bb7fcbd9b4b456cb743498912dfca37ce47941ae7d5d43ac71a56a88",
@@ -2081,10 +2102,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`async` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:fc6678e86a6818d4a81a573ead141aa700400134398065864521008f1828c838",
@@ -2095,10 +2124,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`atime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:e1b2ec25bd77446cfa21df3240421950cd93ded06c658a25ca951b62296c47fb",
@@ -2109,10 +2146,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`bind` | MUST | Bind mount [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:f8d807f6699e9690b5dd7e5ac52314bf67859bc698f3f70e42b1dee3d2928828",
@@ -2123,10 +2168,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`defaults` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:7340a84cbcf3000ded8ad0e7fc266ff918649e0804b2635f1fae87a0b102895c",
@@ -2137,10 +2190,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`dev` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:fc47d0b343c957bf73b9b0e9e660c93c4a49da524e5483fd10085f0825b25ce1",
@@ -2151,10 +2212,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`diratime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:5cc095e3d753901d1f9e484842eef39c9e5e2c602667866023a0ed628e89e7f0",
@@ -2165,10 +2234,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`dirsync` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:5daa4f62d065960e0170a458cd2e4060fd3d6c9debad59dc1d01331007db2a3b",
@@ -2179,10 +2256,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`exec` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:e23a407b98a42dab60d4946c34dfee733e178421fc53740efa1cec5c342ff6ea",
@@ -2193,10 +2278,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`iversion` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:a671726964dac84f3eca5715ee2bc873b7bd816a58b51c8ae7c3154d6d675b51",
@@ -2207,10 +2300,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`lazytime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:24a490fa882e811e35058c33e3e31f43b463540daed10380236373f0945da124",
@@ -2221,10 +2322,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`loud` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:70c048e25841824835d02548cb5252235a13ea3c0596df2c2beb762e370b6341",
@@ -2235,10 +2344,18 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "`mand` | MAY | [^1] (Deprecated in kernel 5.15, util-linux 2.38)",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:1144fbc9422b46206e2022bf24fea222c256a1bb160a344dba85223175125a51",
@@ -2249,10 +2366,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`noatime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:0bffa9451150bdab06ada952d59f6d733dd188c0e5b3b84c6473472750cbb3b3",
@@ -2263,10 +2388,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`nodev` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:27e6736f8aec1c557aa6d52355d88372f303c8b6b3943cbd707efcc14080a86c",
@@ -2277,10 +2410,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`nodiratime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:176c0dfd7f195ee03e26a5cc90aa964af3ef8fc6ec037ec01c185b24c5da69fa",
@@ -2291,10 +2432,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`noexec` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:27f27fd364e1f6da54e72cb9633a450140453ca0e7d4ff0b4cd21f8e5d620357",
@@ -2305,10 +2454,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`noiversion` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:d17c10d45a5a1c3c6c320e7fb58ec7f84f198420145dae0df779f14bda83b3e4",
@@ -2319,10 +2476,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`nolazytime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:e7e26fa8a50c504664fbc927ec60136eb82a5a7423770f1a9c0cbf0da054faa5",
@@ -2333,10 +2498,18 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "`nomand` | MAY | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:76444490a25b448cfc855ac97c28e3572a5560eb15aa770771c87f0561ccabed",
@@ -2347,10 +2520,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`norelatime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:9de603456b5c114e29faa8a80ddf3dcb6df5f509483f62964af16dba8903f5e8",
@@ -2361,10 +2542,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`nostrictatime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:c2527b9aca2721fe929ef3db68eea057ac018e24186ccb19294773330936c73c",
@@ -2375,10 +2564,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`nosuid` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:8ba506ad89324cf5ddd585c044af3044a8ff0153086e0c3b8a36a4ac2b5b4ab6",
@@ -2389,10 +2586,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`nosymfollow` | SHOULD | [^1] (Introduced in kernel 5.10, util-linux 2.38)",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:1e8a83e51c737138173e308726cbc3915e85e41c81fa182c7a91d76763e4cced",
@@ -2403,10 +2608,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`private` | MUST | Bind mount propagation [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:2dd3ace9ba456e86ba581b11dfc40f7b7d0cd82ccfad2409ca65bc604ad7ea06",
@@ -2417,10 +2630,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`ratime` | SHOULD | Recursive `atime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:4b4b071f78b9cb57d9c9e81c2f9eecf6412072570105a954838f22e9f3925d2e",
@@ -2431,10 +2652,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`rbind` | MUST | Recursive bind mount [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:24a3475d159298dd45662f66254d59868e836e2cdda603c57b63d4c6e9e27431",
@@ -2445,10 +2674,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rdev` | SHOULD | Recursive `dev` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:10cd83f714c78bed4e9dd513af9bceefe2c88c24e796b0f11b41b86698a9411f",
@@ -2459,10 +2696,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rdiratime` | SHOULD | Recursive `diratime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:4a212e0288387cab7ceeaf38fe54fa92862057a336dfec5fdce78342f44aa562",
@@ -2473,10 +2718,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`relatime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:bd77574cedc03087699cc9ca1ad3088b59817986d4acb19c5017e8db48d6d1b5",
@@ -2487,10 +2740,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`remount` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:41c8845de6cfe762dc61654a5a4461b25119d4ce46228fe775c76ba106b2f6f9",
@@ -2501,10 +2762,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rexec` | SHOULD | Recursive `dev` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:328c29451d52205e4dd6d77f77a95ab66698e7e81731b3acf0695d9908f2b3f6",
@@ -2515,10 +2784,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rnoatime` | SHOULD | Recursive `noatime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:d97c4fca1aebe4798f1d8c08caacaee26ceb1c20fee79ee36540a497929ef82f",
@@ -2529,10 +2806,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rnodiratime` | SHOULD | Recursive `nodiratime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:2bc8d9edbb24f5b6b003a994258f749f90d44155c6fb8f6a4fca1b7f53878397",
@@ -2543,10 +2828,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rnoexec` | SHOULD | Recursive `noexec` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:1e4d485d669e9010a6d9f9b4ab2632907a20e028392fc6c2efa91ebaec2dd978",
@@ -2557,10 +2850,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rnorelatime` | SHOULD | Recursive `norelatime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:9cb71d7261a9764a0be774a29f87ac4fe6710ec357eb31b9cb03aa342a2202c8",
@@ -2571,10 +2872,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rnostrictatime` | SHOULD | Recursive `nostrictatime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:87a404dd82d1221df2fb51bf3b83c2c4046e343fec8fbac825f9fb433a39feec",
@@ -2585,10 +2894,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rnosuid` | SHOULD | Recursive `nosuid` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:85809d4c5a069ac144d0768d280b83ef01186f84121aaa13f246df6b9a89cfd2",
@@ -2599,10 +2916,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rnosymfollow` | SHOULD | Recursive `nosymfollow` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:4f1b8c3a62ceccf04f0536299fb9edebe43e744b147111f521829dfb82084810",
@@ -2613,10 +2938,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`ro` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:a4876d6de6e0c56ad77d1d7113ab483999bfc21ac7d59103b8fc9b67973b2a4f",
@@ -2627,10 +2960,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`rprivate` | MUST | Bind mount propagation [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:a1d5a43d9c4a1320ab54b739a89dcbae65c616a19e04ca7b5b145bfca859e746",
@@ -2641,10 +2982,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rrelatime ` | SHOULD | Recursive `relatime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:06502054ed25194175eb16c3bf36e2fde843800802a0ef4058e32ca25f63a14f",
@@ -2655,10 +3004,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rro` | SHOULD | Recursive `ro` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:714097a07d245f4a3e964e1d6cbcdf56c1c86ddcfd0d8a72d4924edbc0834836",
@@ -2669,10 +3026,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rrw` | SHOULD | Recursive `rw` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:0d3b5069ad96288a83552112a78d5a955b71f803c0a6982ec23aa6be41bd627e",
@@ -2683,10 +3048,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`rshared` | MUST | Bind mount propagation [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:32d3d38078d2f658071578a9f88d5013188a329a13026ec2a9d95f38c38a0913",
@@ -2697,10 +3070,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`rslave` | MUST | Bind mount propagation [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:aa4974463ac439983f9548bff6d79ad98123f097e326c87927c79065ac335270",
@@ -2711,10 +3092,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rstrictatime` | SHOULD | Recursive `strictatime` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:51586e698c90062b09ab388eb5696e80aa220f4d6768c919a8621dda6be041e0",
@@ -2725,10 +3114,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rsuid` | SHOULD | Recursive `suid` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:b24ed3dc2f46796079ac4f4daea93affab2a4ae298daf5b80c9b343583305d17",
@@ -2739,10 +3136,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`rsymfollow` | SHOULD | Recursive `symfollow` [^3]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:71848514562cb2f9e929a68780dbc8a0da44243679bad96c3b283030ebe20b9b",
@@ -2753,10 +3158,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`runbindable` | MUST | Bind mount propagation [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:f174b40ebba6b59e3d42edc03fc31e726c8081b219371c0264e5c0b8f225ef82",
@@ -2767,10 +3180,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`rw` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:ca02a100400db2253c118a8f228056f0ecb5575e3a51c05bb983df798f3e1071",
@@ -2781,10 +3202,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`shared` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:1fe2eaa054505a2ac3751f6e5362f88d6ea3729524e668c5b351db8b68ae670d",
@@ -2795,10 +3224,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`silent` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:f4b7072563530f5976ba18ee26b33eb59630e5eb59f1a4e5628f71e7a1ccb338",
@@ -2809,10 +3246,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`slave` | MUST | Bind mount propagation [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:387bedc937d56d3dff803a49d28c69e0278841ffcdb21f7e06be1ae3ab1621c8",
@@ -2823,10 +3268,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`strictatime` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:10a2949e4836780380eaad5e14dc7ffc7c4f2b16df3da12bfc36462da00ce210",
@@ -2837,10 +3290,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`suid` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:24020d9e21a352a9bc8654d7afcfdd83848af60bfac0197c3c49962ee783ce68",
@@ -2851,10 +3312,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`symfollow` | SHOULD | Opposite of `nosymfollow`",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:79f0c8f7930092c4f7bfbab1f745b9923ce4d5ad3732365763c0ef92437b561e",
@@ -2865,10 +3334,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`sync` | MUST | [^1]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:780d4089a05f4cff5f77456656abd6ce28c9aa5a48ba597fbeae342895eebb58",
@@ -2879,10 +3356,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "`tmpcopyup` | MAY | copy up the contents to a tmpfs",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "conformant",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.optional-tmpcopyup"
+      ],
+      "testIds": [
+        "executor::mount_tests::rejects_unimplemented_optional_tmpcopyup_without_advertising_support",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:44eec9b3d35ad0908b9c34987255170ffe620db8d3d8db6aae28aec21324fbe1",
@@ -2893,10 +3375,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`unbindable` | MUST | Bind mount propagation [^2]",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:dfb020cec5c6f2e92d19fe09a1ddf6a0262972b82bff0abf38a620ae9522cf06",
@@ -2907,10 +3397,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:a0c7c8f05c6fdfda015d3289f18ec270cd5abb53c7a171311d67c467ada203b0",
@@ -2921,10 +3419,18 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:e66abf3c102b45113be9613093a6339ad55fab67fa789a834a155ed238c2dee9",
@@ -2935,10 +3441,18 @@
       "keyword": "should-not",
       "occurrence": 3,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:f2ed482602c4f6ce60a34d5e86de4e4db167bd930c39389e5e4c2032b2e2300e",
@@ -2949,10 +3463,18 @@
       "keyword": "must",
       "occurrence": 4,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:4260862301ca5b6a6eec2968bb1a8d18f0d66af153c8a4ead190343f5c1e0c25",
@@ -2963,10 +3485,18 @@
       "keyword": "may",
       "occurrence": 5,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:cce08c924b24378fb23e7c06a72075c34eb44bcaff6df6cb251fbf85bae493bc",
@@ -2977,10 +3507,18 @@
       "keyword": "must",
       "occurrence": 6,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:428bbcf03ad2c2283958c33fd3167dd86d4b978bed1bae740823c9a0b4c3ce2a",
@@ -2991,10 +3529,18 @@
       "keyword": "must",
       "occurrence": 7,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:db9fcba481cd92b7cc471954626fcd39f5b06b46a63b2f2692362a897215600b",
@@ -3005,10 +3551,18 @@
       "keyword": "should",
       "occurrence": 8,
       "source": "`idmap` | SHOULD | Indicates that the mount MUST have an idmapping applied. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:b8f0ac151dff474d63730066d66edd27bd9c3ab92510d51329147a69d852d3ea",
@@ -3019,10 +3573,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:b9621d246add7034b87ffb4e0716c6c5a18e793a5eae2df61fe3bb4d10c7b751",
@@ -3033,10 +3595,18 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:56ebf4d9421e81be33b2cf20e7c546b382cef96337d674f4e15e0658ee59ee26",
@@ -3047,10 +3617,18 @@
       "keyword": "should-not",
       "occurrence": 3,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:cd9b38c0f4ac3bf32412976ed56f930a1d30df3496e579aa0dff8d38e1c9abf9",
@@ -3061,10 +3639,18 @@
       "keyword": "must",
       "occurrence": 4,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:487b2d7bd2e61c9578335c8be9f443401f5d070c2a99072972d7266b2d24863b",
@@ -3075,10 +3661,18 @@
       "keyword": "may",
       "occurrence": 5,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:1d9294292940fe307e2a2a7f4855be42a49e18499213bcdee32e7bd3a38f7d33",
@@ -3089,10 +3683,18 @@
       "keyword": "must",
       "occurrence": 6,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:c9de52ef02176e2ce5402bffb8abd18771244f811890de6fc98b1820375ca454",
@@ -3103,10 +3705,18 @@
       "keyword": "must",
       "occurrence": 7,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:361073f341e0930335ad5d6a9124d13e660d207eaf42a77b6b36d3c5a7ed5e93",
@@ -3117,10 +3727,18 @@
       "keyword": "should",
       "occurrence": 8,
       "source": "`ridmap` | SHOULD | Indicates that the mount MUST have an idmapping applied, and the mapping is applied recursively [^3]. This option SHOULD NOT be passed to the underlying [`mount(2)`][mount.2] call. If `uidMappings` or `gidMappings` are specified for the mount, the runtime MUST use those values for the mount's mapping. If they are not specified, the runtime MAY use the container's user namespace mapping, otherwise an [error MUST be returned](runtime.md#errors). If there are no `uidMappings` and `gidMappings` specified and the container isn't using user namespaces, an [error MUST be returned](runtime.md#errors). This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::recursive_idmap_inherits_the_new_container_user_namespace_mappings",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:f7debd62026ed68aa4f32016c140cc2fcaad744e917cc9ab0392e8614c597501",
@@ -3131,10 +3749,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The \"MUST\" options correspond to [`mount(8)`][mount.8].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:e1abccd45cb2aedd01ab400baed9108a3df6684858f2166d56214c0f66a1f597",
@@ -3145,10 +3771,18 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Runtimes MAY also implement custom option strings that are not listed in the table above.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:bd547d6f60cbafe231734dcbabfd18c0d0ef5d29bc39712a4f63bb805144ad3e",
@@ -3159,10 +3793,18 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "If a custom option string is already recognized by [`mount(8)`][mount.8], the runtime SHOULD follow the behavior of [`mount(8)`][mount.8].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.control"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "executor::mount_tests::recognizes_every_supported_oci_linux_mount_option_as_control_data",
+        "executor::mount_tests::recursive_norelatime_selects_strict_atime",
+        "executor::mount_tests::explicit_bind_remount_does_not_schedule_a_second_attribute_remount",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.recursive_mount_attributes_enforced"
+      ]
     },
     {
       "id": "sha256:2836cb3024449d8b2c9a922f43bc1b7418ccc112695b6fc000d684c4d01fb728",
@@ -3173,10 +3815,14 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "Runtimes SHOULD treat unknown options as [filesystem-specific ones][mount.8-filesystem-specific])",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.filesystem-specific-pass-through"
+      ],
+      "testIds": [
+        "executor::mount_tests::passes_unknown_mount_options_to_filesystem_specific_data"
+      ]
     },
     {
       "id": "sha256:0834a73bd251083f54d962bde572fcbbc05925424006f1c75abab42ab990cd4d",
@@ -11475,10 +12121,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`mountOptions`** (array of strings, OPTIONAL) The recognized names of the mount options, including options that might not be supported by the host operating system.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-options.recognized"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:6e96a5f9fea314f283a05b2659d2eac3390408d94671aeb0215c857e9519e03d",
@@ -11489,10 +12140,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array as the [`options` of `mounts` objects in `config.json`](config.md#mounts).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-options.recognized"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:155d9f503fb16a8ebfb5fee890d8ded62bb2a4eea178191e6698c15dde28a519",
@@ -11503,10 +12159,15 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "* Linux: this array SHOULD NOT contain filesystem-specific mount options that are passed to the [mount(2)][mount.2] syscall as `const void *data`.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-options.recognized"
+      ],
+      "testIds": [
+        "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:f23a0af9cbf337f46d1845ddc42002b7026daa65aff1b25a06cf57aea9c244f8",

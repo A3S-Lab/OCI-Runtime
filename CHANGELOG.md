@@ -6,6 +6,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete OCI 1.3 Linux mount-option control coverage. A new SDK registry is
+  the source of truth for all 61 standard option names and their requirement
+  levels. The Linux executor recognizes every required and recommended
+  control option, preserves unknown options as filesystem-specific data,
+  rejects optional `tmpcopyup` with a typed `Unsupported` error, maps recursive
+  `rnorelatime` to strict-atime semantics, and avoids a duplicate bind remount
+  when `remount` was explicit. Feature reporting derives its sorted 61-name
+  result from the same registry, excludes `tmpcopyup`, and retains the
+  `rnodev` extension. Five owner-bound rules move 80 requirements to enforced
+  and two optional requirements to conformant; three related feature-report
+  requirements also move to enforced. The ledger now records 221 enforced,
+  25 validated, two conformant, and 407 pending entries.
 - Exact OCI capability and `noNewPrivileges` enforcement evidence. The SDK now
   owns the 41 recognized Linux capability names and kernel numbers used by
   both execution and feature reporting. Init and exec read back bounding,

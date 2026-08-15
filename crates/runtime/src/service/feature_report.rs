@@ -7,75 +7,26 @@ use a3s_oci_sdk::oci_spec::runtime::{
     MountExtensionsBuilder, NetDevicesBuilder, SeccompBuilder, SelinuxBuilder,
 };
 use a3s_oci_sdk::{
-    Error, ErrorCode, Result, OCI_LINUX_CAPABILITY_NAMES, OCI_RUNTIME_SPEC_VERSION_MAX,
-    OCI_RUNTIME_SPEC_VERSION_MIN,
+    Error, ErrorCode, Result, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MOUNT_OPTIONS,
+    OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 
 use crate::driver::OciHookPhase;
 
-pub(super) const RECOGNIZED_LINUX_MOUNT_OPTIONS: &[&str] = &[
-    "async",
-    "atime",
-    "bind",
-    "defaults",
-    "dev",
-    "diratime",
-    "dirsync",
-    "exec",
-    "idmap",
-    "iversion",
-    "lazytime",
-    "loud",
-    "mand",
-    "noatime",
-    "nodev",
-    "nodiratime",
-    "noexec",
-    "noiversion",
-    "nolazytime",
-    "nomand",
-    "norelatime",
-    "nostrictatime",
-    "nosuid",
-    "nosymfollow",
-    "private",
-    "ratime",
-    "rbind",
-    "rdev",
-    "rdiratime",
-    "relatime",
-    "remount",
-    "rexec",
-    "ridmap",
-    "rnoatime",
-    "rnodev",
-    "rnodiratime",
-    "rnoexec",
-    "rnorelatime",
-    "rnostrictatime",
-    "rnosuid",
-    "rnosymfollow",
-    "ro",
-    "rprivate",
-    "rrelatime",
-    "rro",
-    "rrw",
-    "rshared",
-    "rslave",
-    "rstrictatime",
-    "rsuid",
-    "rsymfollow",
-    "runbindable",
-    "rw",
-    "shared",
-    "silent",
-    "slave",
-    "strictatime",
-    "suid",
-    "symfollow",
-    "sync",
-    "unbindable",
-];
+const A3S_CUSTOM_LINUX_MOUNT_OPTIONS: &[&str] = &["rnodev"];
+const A3S_UNIMPLEMENTED_OPTIONAL_LINUX_MOUNT_OPTIONS: &[&str] = &["tmpcopyup"];
+
+pub(super) fn recognized_linux_mount_options() -> Vec<String> {
+    let mut options = OCI_LINUX_MOUNT_OPTIONS
+        .iter()
+        .map(|option| option.name())
+        .filter(|name| !A3S_UNIMPLEMENTED_OPTIONAL_LINUX_MOUNT_OPTIONS.contains(name))
+        .chain(A3S_CUSTOM_LINUX_MOUNT_OPTIONS.iter().copied())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    options.sort_unstable();
+    options
+}
 
 pub(super) fn build(has_lifecycle: bool, hooks: &[OciHookPhase]) -> Result<Features> {
     let annotations = HashMap::from([
@@ -102,12 +53,7 @@ pub(super) fn build(has_lifecycle: bool, hooks: &[OciHookPhase]) -> Result<Featu
                 .map(|phase| phase.as_str().to_string())
                 .collect::<Vec<_>>(),
         )
-        .mount_options(
-            RECOGNIZED_LINUX_MOUNT_OPTIONS
-                .iter()
-                .map(|option| (*option).to_string())
-                .collect::<Vec<_>>(),
-        )
+        .mount_options(recognized_linux_mount_options())
         .linux(compiled_linux_features()?)
         .annotations(annotations)
         .potentially_unsafe_config_annotations(Vec::<String>::new())

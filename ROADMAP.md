@@ -462,7 +462,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 492-entry pending normative evidence backlog.
+- [ ] Close the 407-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1299,6 +1299,13 @@ leak. Only then may KVM become `experimental`.
 - [x] Apply OCI mount entries in listed order, including safe missing
   directory/file target creation, bind/rbind, common VFS flags, propagation
   modes, and filesystem-specific data.
+- [x] Own the complete OCI 1.3 Linux mount-option registry in the SDK, consume
+  every required and recommended control option without forwarding it as
+  filesystem data, preserve unknown filesystem-specific options, reject the
+  optional unimplemented `tmpcopyup` behavior explicitly, and derive the
+  sorted feature report from the same registry. All 82 Linux mount-option
+  normative entries are owner-bound: 80 enforced and two optional entries
+  conformant through explicit rejection and honest feature reporting.
 - [x] After all mounts are in place, create the conditional OCI Linux
   `/dev/fd`, `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` links without
   replacing conflicting container content. Verify their exact targets through

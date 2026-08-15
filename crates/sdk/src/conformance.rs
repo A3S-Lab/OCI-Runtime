@@ -45,6 +45,20 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.features.capabilities.recognized",
         "runtime-feature-report",
     ),
+    OciNonSemanticRule::new(
+        "oci.linux.features.mount-options.recognized",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new("oci.linux.mount-options.control", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.mount-options.filesystem-specific-pass-through",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new("oci.linux.mount-options.idmap", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.mount-options.optional-tmpcopyup",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new("oci.linux.runtime.dev-symlinks.required", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.runtime.config.immutable-after-create",
