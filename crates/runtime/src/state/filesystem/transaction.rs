@@ -472,15 +472,16 @@ mod tests {
     #[tokio::test]
     async fn moves_the_prepared_directory_object_when_its_name_is_replaced() {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let root = temporary.path().join("state");
+        let requested_root = temporary.path().join("state");
         let external = temporary.path().join("external-directory");
         let external_sentinel = external.join("sentinel.txt");
+        let store = DurableStateStore::open(&requested_root)
+            .await
+            .expect("initialize state root");
+        let root = store.root();
         let source = root.join("containers/source");
         let displaced = root.join("containers/source.displaced");
         let destination = root.join("quarantine/destination");
-        let store = DurableStateStore::open(&root)
-            .await
-            .expect("initialize state root");
         std::fs::create_dir(&source).expect("source directory");
         std::fs::write(source.join("original.txt"), b"original-directory\n")
             .expect("original source sentinel");
