@@ -101,6 +101,7 @@ pub(super) async fn ambient_path_exists(path: &Path) -> Result<bool> {
 #[cfg(unix)]
 pub(super) fn atomic_replace_relative(
     parent: &Dir,
+    _source_file: &std::fs::File,
     source: &OsStr,
     destination: &OsStr,
     _source_display: &Path,
@@ -113,49 +114,31 @@ pub(super) fn atomic_replace_relative(
 
 #[cfg(windows)]
 pub(super) fn atomic_replace_relative(
-    _parent: &Dir,
+    parent: &Dir,
+    source_file: &std::fs::File,
     _source: &OsStr,
-    _destination: &OsStr,
-    source_display: &Path,
+    destination: &OsStr,
+    _source_display: &Path,
     destination_display: &Path,
 ) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
+    use std::os::windows::io::AsRawHandle as _;
 
-    let source = source_display
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let destination = destination_display
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    // SAFETY: both slices are NUL-terminated, live for the duration of the
-    // call, and point to distinct immutable UTF-16 path buffers. The retained
-    // capability parent prevents path replacement during the ambient API.
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        return Err(io_error(
-            "commit-state-file",
-            destination_display,
-            io::Error::last_os_error(),
-        ));
-    }
-    Ok(())
+    rename_handle_relative(
+        source_file.as_raw_handle(),
+        parent,
+        destination,
+        true,
+        "commit-state-file",
+        destination_display,
+    )?;
+    source_file
+        .sync_all()
+        .map_err(|error| io_error("sync-committed-state-file", destination_display, error))
 }
 
 #[cfg(target_os = "linux")]
 pub(super) fn rename_directory_noreplace(
+    _source_handle: &Dir,
     source_parent: &Dir,
     source: &OsStr,
     destination_parent: &Dir,
@@ -192,6 +175,7 @@ pub(super) fn rename_directory_noreplace(
 
 #[cfg(target_os = "macos")]
 pub(super) fn rename_directory_noreplace(
+    _source_handle: &Dir,
     source_parent: &Dir,
     source: &OsStr,
     destination_parent: &Dir,
@@ -228,43 +212,24 @@ pub(super) fn rename_directory_noreplace(
 
 #[cfg(windows)]
 pub(super) fn rename_directory_noreplace(
+    source_handle: &cap_std::fs::File,
     _source_parent: &Dir,
     _source: &OsStr,
-    _destination_parent: &Dir,
-    _destination: &OsStr,
-    source_display: &Path,
+    destination_parent: &Dir,
+    destination: &OsStr,
+    _source_display: &Path,
     destination_display: &Path,
 ) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+    use std::os::windows::io::AsRawHandle as _;
 
-    let source = source_display
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let destination = destination_display
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    // SAFETY: both buffers are live and NUL-terminated. Omitting the replace
-    // flag makes a concurrently created destination fail closed.
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        return Err(io_error(
-            "commit-state-directory",
-            destination_display,
-            io::Error::last_os_error(),
-        ));
-    }
-    Ok(())
+    rename_handle_relative(
+        source_handle.as_raw_handle(),
+        destination_parent,
+        destination,
+        false,
+        "commit-state-directory",
+        destination_display,
+    )
 }
 
 #[cfg(unix)]
@@ -297,6 +262,143 @@ pub(super) fn verify_moved_directory(
                 "moved durable directory identity changed during commit: {}",
                 destination_display.display()
             ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(super) fn verify_moved_directory(
+    source: &cap_std::fs::File,
+    destination_parent: &Dir,
+    destination_name: &OsStr,
+    destination_display: &Path,
+) -> Result<()> {
+    use cap_fs_ext::{DirExt as _, MetadataExt as _};
+
+    let destination = destination_parent
+        .open_dir_nofollow(destination_name)
+        .map_err(|error| io_error("verify-state-directory-move", destination_display, error))?;
+    let source_metadata = source
+        .metadata()
+        .map_err(|error| io_error("verify-state-directory-source", destination_display, error))?;
+    let destination_metadata = destination.dir_metadata().map_err(|error| {
+        io_error(
+            "verify-state-directory-destination",
+            destination_display,
+            error,
+        )
+    })?;
+    if source_metadata.dev() != destination_metadata.dev()
+        || source_metadata.ino() != destination_metadata.ino()
+    {
+        return Err(state_error(
+            ErrorCode::FailedPrecondition,
+            "verify-state-directory-move",
+            format!(
+                "moved durable directory identity changed during commit: {}",
+                destination_display.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn rename_handle_relative(
+    source_handle: windows_sys::Win32::Foundation::HANDLE,
+    destination_parent: &Dir,
+    destination_name: &OsStr,
+    replace: bool,
+    operation: &'static str,
+    destination_display: &Path,
+) -> Result<()> {
+    use std::mem::{offset_of, size_of};
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
+
+    let destination = destination_name.encode_wide().collect::<Vec<_>>();
+    let name_bytes = destination
+        .len()
+        .checked_mul(size_of::<u16>())
+        .ok_or_else(|| {
+            state_error(
+                ErrorCode::Internal,
+                "encode-state-path",
+                format!(
+                    "durable state filename is too large: {}",
+                    destination_display.display()
+                ),
+            )
+        })?;
+    let file_name_offset = offset_of!(FILE_RENAME_INFO, FileName);
+    let buffer_bytes = size_of::<FILE_RENAME_INFO>()
+        .checked_add(name_bytes)
+        .ok_or_else(|| {
+            state_error(
+                ErrorCode::Internal,
+                "encode-state-path",
+                format!(
+                    "durable state rename buffer is too large: {}",
+                    destination_display.display()
+                ),
+            )
+        })?;
+    let buffer_length = u32::try_from(buffer_bytes).map_err(|error| {
+        state_error(
+            ErrorCode::Internal,
+            "encode-state-path",
+            format!(
+                "durable state rename buffer cannot be represented: {}: {error}",
+                destination_display.display()
+            ),
+        )
+    })?;
+    let mut buffer = vec![0usize; buffer_bytes.div_ceil(size_of::<usize>())];
+    let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    // SAFETY: `buffer` is aligned for FILE_RENAME_INFO and has room for its
+    // fixed header plus the complete non-NUL-terminated UTF-16 filename.
+    unsafe {
+        (*information).Anonymous.ReplaceIfExists = u8::from(replace);
+        (*information).RootDirectory = destination_parent.as_raw_handle();
+        (*information).FileNameLength = u32::try_from(name_bytes).map_err(|error| {
+            state_error(
+                ErrorCode::Internal,
+                "encode-state-path",
+                format!(
+                    "durable state filename cannot be represented: {}: {error}",
+                    destination_display.display()
+                ),
+            )
+        })?;
+        std::ptr::copy_nonoverlapping(
+            destination.as_ptr(),
+            buffer
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(file_name_offset)
+                .cast::<u16>(),
+            destination.len(),
+        );
+    }
+    // SAFETY: the source and destination-parent handles are live, and the
+    // variable-length FILE_RENAME_INFO buffer is initialized as documented.
+    let result = unsafe {
+        SetFileInformationByHandle(
+            source_handle,
+            FileRenameInfo,
+            information.cast(),
+            buffer_length,
+        )
+    };
+    if result == 0 {
+        return Err(io_error(
+            operation,
+            destination_display,
+            io::Error::last_os_error(),
         ));
     }
     Ok(())

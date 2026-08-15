@@ -14,10 +14,16 @@ use serde::de::DeserializeOwned;
 use tokio::io::AsyncReadExt;
 
 use crate::fault::{DurableMutation, FaultInjector};
+#[cfg(windows)]
+use cap_fs_ext::OsMetadataExt as _;
+#[cfg(any(unix, windows))]
+use cap_std::fs::OpenOptionsExt;
 #[cfg(unix)]
-use cap_std::fs::{DirBuilder, DirBuilderExt, OpenOptionsExt, Permissions, PermissionsExt};
+use cap_std::fs::{DirBuilder, DirBuilderExt, Permissions, PermissionsExt};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 
 use super::model::{RuntimeRootMarker, ROOT_SCHEMA_VERSION};
 
@@ -159,7 +165,7 @@ impl StateFilesystem {
             let metadata = directory
                 .dir_metadata()
                 .map_err(|error| io_error("inspect-state-root-capability", &root, error))?;
-            if !metadata.is_dir() {
+            if !metadata.is_dir() || metadata_is_reparse_point(&metadata) {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "open-state-root-capability",
@@ -370,6 +376,14 @@ impl StateFilesystem {
         let mut options = OpenOptions::new();
         options.read(true);
         options.follow(FollowSymlinks::No);
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_GENERIC_READ, WRITE_DAC, WRITE_OWNER,
+            };
+
+            options.access_mode(FILE_GENERIC_READ | WRITE_DAC | WRITE_OWNER);
+        }
         let file = parent.open_with(name, &options).map_err(|error| {
             state_error(
                 ErrorCode::FailedPrecondition,
@@ -383,7 +397,10 @@ impl StateFilesystem {
         let metadata = file
             .metadata()
             .map_err(|error| io_error("inspect-state-file", display, error))?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata_is_reparse_point(&metadata)
+        {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
                 "inspect-state-file",
@@ -492,7 +509,10 @@ impl StateFilesystem {
         let metadata = directory
             .dir_metadata()
             .map_err(|error| io_error("inspect-state-directory", display, error))?;
-        if !metadata.is_dir() || metadata.dev() != self.root_device {
+        if !metadata.is_dir()
+            || metadata_is_reparse_point(&metadata)
+            || metadata.dev() != self.root_device
+        {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
                 "inspect-state-directory",
@@ -523,7 +543,7 @@ impl StateFilesystem {
         let metadata = file
             .metadata()
             .map_err(|error| io_error("inspect-state-file", display, error))?;
-        if metadata.dev() != self.root_device {
+        if metadata_is_reparse_point(&metadata) || metadata.dev() != self.root_device {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
                 "inspect-state-file",
@@ -573,8 +593,7 @@ impl StateFilesystem {
         }
         #[cfg(windows)]
         {
-            let _retained = file;
-            crate::windows_security::protect_path(display)?;
+            crate::windows_security::protect_file_handle(file.as_raw_handle(), display)?;
         }
         Ok(())
     }
@@ -586,7 +605,10 @@ impl StateFilesystem {
             let (parent, name) = filesystem.resolve_parent(&path, "runtime root lock parent")?;
             match parent.symlink_metadata(&name) {
                 Ok(metadata) => {
-                    if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    if !metadata.is_file()
+                        || metadata.file_type().is_symlink()
+                        || metadata_is_reparse_point(&metadata)
+                    {
                         return Err(state_error(
                             ErrorCode::FailedPrecondition,
                             "open-state-root-lock",
@@ -604,6 +626,20 @@ impl StateFilesystem {
             options.follow(FollowSymlinks::No);
             #[cfg(unix)]
             options.mode(0o600);
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::Storage::FileSystem::{
+                    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                    WRITE_DAC, WRITE_OWNER,
+                };
+
+                options
+                    .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER);
+                // The retained lock handle must prevent an attacker from
+                // renaming the locked file and acquiring a second lock under
+                // the original name.
+                options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+            }
             let file = parent
                 .open_with(&name, &options)
                 .map_err(|error| io_error("open-state-root-lock", &path, error))?;
@@ -732,6 +768,18 @@ fn io_error(operation: &'static str, path: &Path, error: io::Error) -> Error {
         operation,
         format!("{}: {error}", path.display()),
     )
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &cap_std::fs::Metadata) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+const fn metadata_is_reparse_point(_metadata: &cap_std::fs::Metadata) -> bool {
+    false
 }
 
 #[cfg(all(test, unix))]

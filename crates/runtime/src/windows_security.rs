@@ -8,7 +8,8 @@ use std::ptr::{addr_of, null, null_mut};
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, SE_FILE_OBJECT, SE_KERNEL_OBJECT,
+    GetNamedSecurityInfoW, GetSecurityInfo, SetNamedSecurityInfoW, SetSecurityInfo, SE_FILE_OBJECT,
+    SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
     AddAccessAllowedAceEx, CopySid, CreateWellKnownSid, EqualSid, GetAce, GetLengthSid,
@@ -77,6 +78,30 @@ pub(super) fn protect_path(path: &Path) -> Result<()> {
         return Err(status_error("protect-state-path", path, status));
     }
     verify_private_path_dacl(path, &security.allowed_sids, ace_flags)
+}
+
+pub(super) fn protect_file_handle(handle: HANDLE, path: &Path) -> Result<()> {
+    let security = PrivateSecurityDescriptor::new(0, "build-state-dacl", path)?;
+
+    // SAFETY: `handle` is a live file handle opened with WRITE_OWNER and
+    // WRITE_DAC. The owner SID and ACL remain live and immutable for the call.
+    let status = unsafe {
+        SetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            security.allowed_sids[0].as_ptr(),
+            null_mut(),
+            security.acl,
+            null(),
+        )
+    };
+    if status != 0 {
+        return Err(status_error("protect-state-file", path, status));
+    }
+    verify_private_file_handle_dacl(handle, path, &security.allowed_sids)
 }
 
 pub(crate) struct PrivateSecurityDescriptor {
@@ -390,6 +415,43 @@ fn verify_private_path_dacl(
         "verify-state-dacl",
         path,
         "runtime state path",
+    )
+}
+
+fn verify_private_file_handle_dacl(
+    handle: HANDLE,
+    path: &Path,
+    allowed_sids: &[Sid],
+) -> Result<()> {
+    let mut owner = null_mut();
+    let mut dacl = null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: `handle` is live and all output pointers remain valid for the
+    // duration of the query and subsequent descriptor validation.
+    let status = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(status_error("verify-state-file-dacl", path, status));
+    }
+    verify_private_dacl(
+        descriptor,
+        owner,
+        dacl,
+        allowed_sids,
+        0,
+        "verify-state-file-dacl",
+        path,
+        "runtime state file",
     )
 }
 

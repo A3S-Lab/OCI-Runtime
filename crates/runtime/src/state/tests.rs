@@ -23,6 +23,8 @@ mod fault_matrix;
 #[cfg(unix)]
 mod filesystem_security;
 mod recovery;
+#[cfg(windows)]
+mod windows_filesystem_security;
 
 const TEST_CONFIG: &str = concat!(
     "{\n",
