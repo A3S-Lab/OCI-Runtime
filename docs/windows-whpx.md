@@ -438,15 +438,14 @@ The libkrun dependency is target-specific to the isolated shim. The main
 runtime, CLI, and SDK dependency graphs do not contain it, and the Linux target
 does not build it.
 
-The smokes and candidate recovery tests do not prove that:
+The fixed-bundle smokes do not prove that:
 
 - the pinned immutable A3S system image boots;
 - the rootful user/time namespace slice now exercised on native Linux and
   macOS, namespace joins, recursive or ID-mapped mounts, tmpfs, capabilities,
   seccomp, or hooks work through WHPX;
-- the new per-generation share and exact init exit evidence pass a fresh-host
-  owner-death/service-restart run, or arbitrary shared-guest-kernel isolation
-  policies work;
+- arbitrary shared-guest-kernel isolation policies work; the current driver
+  intentionally owns one dedicated VM per container;
 - the driver is production ready.
 
 For that reason, driver readiness remains `probe-only` even after all smokes
@@ -495,25 +494,29 @@ retryably on overrun instead of racing ahead. The report is retained across
 both sides of the recovery fault boundary and removed only by exact-generation
 delete. If neither authenticated evidence nor a pending handoff exists, the
 stopped tombstone remains usable for cleanup while `wait` still fails instead
-of inventing a result. The nominal direct-driver path now has real WHPX
-evidence; the owner-death and service-restart path has unit and fault-matrix
-coverage but still needs its fresh-host WHPX qualification.
+of inventing a result. The nominal direct-driver path and the
+owner-death/service-restart path now have real WHPX evidence. The retained
+`a3s.oci.whpx-recovery-smoke-run.v1` report at clean commit `2d91cd0` covers
+exact owner termination, both recovery fault boundaries, service reopen,
+terminal replay, stopped-only delete, and complete transient cleanup.
 
 ## Next Windows gate
 
-With the live driver boundary in place, the next vertical slice must:
+With the protected share and restart recovery qualified, the remaining R2
+promotion gate must:
 
-1. boot a version-pinned A3S system image;
-2. complete fresh-host owner-death and service-restart qualification through
-   the implemented protected per-generation runtime share;
-3. qualify the shared rootful user/time and existing-namespace slices on WHPX
-   and add advanced mount, capability, resource, seccomp, and hook enforcement;
-4. extend the current piped and terminal I/O gate with inherited-descriptor
-   handling plus arbitrary natural exit-code coverage;
-5. retain fresh-host evidence for exact init exit replay across owner-death
-   cleanup and host runtime restart;
-6. expand the retained two-container gate into arbitrary shared-guest
-   isolation and recovery evidence.
+1. boot a version-pinned A3S Linux kernel and immutable system root, bind their
+   source revisions, reproducible build inputs, checksums, and compatibility
+   level, keep that root separate from the protected writable generation
+   share, and rerun the complete WHPX SDK and recovery matrices against those
+   exact assets;
+2. prove that every in-process native WHPX/libkrun handle is reclaimed without
+   relying on Windows process teardown.
+
+Broader namespace, mount, capability, resource, seccomp, hook, and shared-guest
+coverage remains part of the shared executor, OCI conformance, and later
+readiness gates. It does not reopen the already-qualified owner-death recovery
+contract.
 
 Only completion of that gate may promote Windows driver readiness to
 `experimental`.
