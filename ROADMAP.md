@@ -249,9 +249,9 @@ Completed:
   live-session reattachment, and cross-platform cutover remain;
 - shared Linux executor support for all six OCI hook phases in normative order,
   with runtime/container namespace placement, exact OCI state on stdin,
-  bounded configuration, timeout and process-group cleanup, typed
-  create/start failures, warning-only poststop continuation, and native Linux
-  lifecycle trace evidence;
+  bounded configuration, timeout and process-group cleanup, typed rollback for
+  every failing prestart through poststart phase, warning-only poststop
+  continuation, and native Linux lifecycle trace evidence;
 - direct A3S Box compiler compatibility fixture pinned to Box commit
   `d24c951989c8ee8dbc772ccd0021713855613656`, with schema/semantic loading and
   fail-closed executor planning for its absolute rootfs, annotations,
@@ -460,7 +460,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 573-entry pending normative evidence backlog.
+- [ ] Close the 509-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1020,7 +1020,8 @@ enforce it. No property is silently ignored.
   on WHPX and the future KVM backend before promoting either driver's
   readiness. This is a per-driver release gate; it does not reopen the
   protocol contract or the completed HVF matrix.
-- [x] Implement all OCI hook phases with typed create/start failure, bounded
+- [x] Implement all OCI hook phases with typed prestart, createRuntime,
+  createContainer, startContainer, and poststart failure rollback, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.
 
@@ -1299,7 +1300,7 @@ leak. Only then may KVM become `experimental`.
 - [x] After all mounts are in place, create the conditional OCI Linux
   `/dev/fd`, `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` links without
   replacing conflicting container content. Verify their exact targets through
-  native Linux v17 and Apple Silicon utility-VM v11 retained evidence.
+  native Linux v18 and Apple Silicon utility-VM v11 retained evidence.
 - [x] Create new IPC, network, and cgroup namespaces atomically before the
   created barrier.
 - [x] Create a new PID namespace, retain a dedicated namespace PID 1
@@ -1425,7 +1426,7 @@ leak. Only then may KVM become `experimental`.
     descriptor, observe bounded non-overlapping UID/GID maps from inside the
     namespace, recheck its device/inode identity immediately before `setns`,
     and use the observed namespace-root mapping with the existing detached
-    device-source and exact-cleanup path. Native Linux multi-container v17 and
+    device-source and exact-cleanup path. Native Linux multi-container v18 and
     real Apple Silicon utility-VM multi-container v11 verify all six nodes from
     inside the joined-user workload.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence
@@ -1508,8 +1509,9 @@ and recovery suites in the Windows guest and on native Linux.
   architecture's JSON report.
 - [x] Retain a versioned real-driver configuration matrix for private,
   host-inherited, and donor-shared network namespaces; shared/read-only bind
-  and private-tmpfs storage; inline/script/direct/nonzero init; and selected
-  create/start/timeout/poststop Hook failure behavior on x86_64 and aarch64.
+  and private-tmpfs storage; inline/script/direct/nonzero init; and independent
+  prestart/createRuntime/createContainer/startContainer/poststart rollback,
+  timeout, and warning-only poststop behavior on x86_64 and aarch64.
 - [x] Prove the Box-owned production bundle and explicitly opted-in long-lived
   Native Linux owner composition on x86_64 and aarch64 through the Rust, Python,
   TypeScript, and Go SDK lifecycle, exec, filesystem, route-aware stats,

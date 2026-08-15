@@ -741,10 +741,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "3. The [`prestart` hooks](config.md#prestart) MUST be invoked by the runtime.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:012f838a6d032c51b41f3b9c3ce8d2f1cabcbd7e78b3078bdf5b4fa6677a699b",
@@ -755,10 +761,20 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If any `prestart` hook fails, the runtime MUST [generate an error](#errors), stop the container, and continue the lifecycle at step 12.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.failure-policy"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     },
     {
       "id": "sha256:9d41792e7d51df1ac2bff09189c3123e832269e25288b194461c46f8ab7036d6",
@@ -769,10 +785,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "4. The [`createRuntime` hooks](config.md#createRuntime-hooks) MUST be invoked by the runtime.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:54831447c482cbb36b220374f0380d43bbc259b310de6ac803f1cd73a9cd9295",
@@ -783,10 +805,20 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If any `createRuntime` hook fails, the runtime MUST [generate an error](#errors), stop the container, and continue the lifecycle at step 12.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.failure-policy"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     },
     {
       "id": "sha256:a76247bd93a10678c03d02c8cca04330cc805c8f0b957fcf3cdb3dd8edabdb06",
@@ -797,10 +829,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "5. The [`createContainer` hooks](config.md#createContainer-hooks) MUST be invoked by the runtime.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:df45697d31e61add4780de76662f47b9aa5f7d89b7494acc6f13e4ece56d505b",
@@ -811,10 +849,20 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If any `createContainer` hook fails, the runtime MUST [generate an error](#errors), stop the container, and continue the lifecycle at step 12.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.failure-policy"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     },
     {
       "id": "sha256:dfca80177ec5fc55c09868a776f2433d84633921c50de73d0322bf03b7d37b2a",
@@ -825,10 +873,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "7. The [`startContainer` hooks](config.md#startContainer-hooks) MUST be invoked by the runtime.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:7d3d5a796916e7c984eb1b8f45e2a7972bf2a07664fbcc50a53127c1052bfd4e",
@@ -839,10 +893,20 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If any `startContainer` hook fails, the runtime MUST [generate an error](#errors), stop the container, and continue the lifecycle at step 12.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.failure-policy"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     },
     {
       "id": "sha256:2e1690650c4f78eb64ea55af0eebeb4eec9bcaadc16fb1c61115a7f8d5a3a692",
@@ -873,10 +937,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "9. The [`poststart` hooks](config.md#poststart) MUST be invoked by the runtime.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:aff7be6971c2a9d6528884a6b26021f8470478f27f4bb20f4d32756c4bd8ae9b",
@@ -887,10 +957,20 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If any `poststart` hook fails, the runtime MUST [generate an error](#errors), stop the container, and continue the lifecycle at step 12.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.failure-policy"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     },
     {
       "id": "sha256:c24570f24d069f04b899efc739450a2019ad00325709077fcc2665373013be90",
@@ -934,10 +1014,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "13. The [`poststop` hooks](config.md#poststop) MUST be invoked by the runtime.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:f42f56c9a58b711d5f6e83d07bb9d22bcc922a6c36f721f69f7911884614b63e",
@@ -948,10 +1034,20 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If any `poststop` hook fails, the runtime MUST [log a warning](#warnings), but the remaining hooks and lifecycle continue as if the hook had succeeded.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.failure-policy"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     },
     {
       "id": "sha256:474b6e3676a68bb23f826ee37518411bc1d4fa0ca56e6efcd80ff0d2301b8da6",
@@ -4480,10 +4576,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`hooks`** (object, OPTIONAL) MAY contain any of the following properties:",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:7606d3c4076a5894bd2c9676007c4472bb5d090ca6a6a3557dc6c26eb6e3f771",
@@ -4494,10 +4596,16 @@
       "keyword": "may",
       "occurrence": 2,
       "source": "* **`hooks`** (object, OPTIONAL) MAY contain any of the following properties:",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:61f4901c6e5be7243ce8eacf7c18df07353fcb1d952aabb9f2a14677a8dfaf5d",
@@ -4508,10 +4616,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`prestart`** (array of objects, OPTIONAL, **DEPRECATED**) is an array of [`prestart` hooks](#prestart).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:cc4b67082defe2d4aeea359447815cac251e93a2183cfc248d526b6ff09a858d",
@@ -4522,10 +4636,16 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`path`** (string, REQUIRED) with similar semantics to [IEEE Std 1003.1-2008 `execv`'s *path*][ieee-1003.1-2008-functions-exec].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:ccb4ddae139f49f522c030aabfb27ba33d94e80a3b99428b48dda6c0f9ff35d8",
@@ -4555,10 +4675,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`args`** (array of strings, OPTIONAL) with the same semantics as [IEEE Std 1003.1-2008 `execv`'s *argv*][ieee-1003.1-2008-functions-exec].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:35b08d947e576ca9e5bcf4b1826340839a6216ac36db267eab26a684865167b5",
@@ -4569,10 +4695,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`env`** (array of strings, OPTIONAL) with the same semantics as [IEEE Std 1003.1-2008's `environ`][ieee-1003.1-2008-xbd-c8.1].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:c96e2ca4ced5b755d82a97542356d149c45409f411145bbcb780151ddf32d24f",
@@ -4583,10 +4715,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`timeout`** (int, OPTIONAL) is the number of seconds before aborting the hook.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:4da30351fa395af8c7916b03ddbc995d32904b8b0ded8b72721e97f9cfe107f8",
@@ -4597,10 +4735,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If set, `timeout` MUST be greater than zero.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:e343ae316c435d73053c0bd3b6016efd590c70d661912617f948aaa925383341",
@@ -4611,10 +4755,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The value of `path` MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:f657bcdb042b5c02f4719b3c88131c16c808cf9758f349b4c68c3928990dac46",
@@ -4625,10 +4774,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The `prestart` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:baefb2f239cdbd4df2ad394b1e3693c027c4d30b0fcb193a2454739620a175be",
@@ -4639,10 +4793,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`createRuntime`** (array of objects, OPTIONAL) is an array of [`createRuntime` hooks](#createRuntime-hooks).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:669ff089f2aff1405319b087af384c638bdb590f75023baaaa4e8b209f99c409",
@@ -4653,10 +4813,16 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`path`** (string, REQUIRED) with similar semantics to [IEEE Std 1003.1-2008 `execv`'s *path*][ieee-1003.1-2008-functions-exec].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:4574f1f626f0905ede6b72ebe7a483cabe1d4f91187f0520127dce04eeb3d4ed",
@@ -4686,10 +4852,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`args`** (array of strings, OPTIONAL) with the same semantics as [IEEE Std 1003.1-2008 `execv`'s *argv*][ieee-1003.1-2008-functions-exec].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:d416355dbb9454f3480bb6879ebfe4ccddefbd2fd2b70d86ef3861299d9498ff",
@@ -4700,10 +4872,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`env`** (array of strings, OPTIONAL) with the same semantics as [IEEE Std 1003.1-2008's `environ`][ieee-1003.1-2008-xbd-c8.1].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:43d87e81519d1cdb7b961316963505f9595b7a16e12937d2e5256f17ef0b5fba",
@@ -4714,10 +4892,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`timeout`** (int, OPTIONAL) is the number of seconds before aborting the hook.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:95e35c3e2e0bd784d6e849761f37d4df8f884e396eb2db722ce7d17d04e1e096",
@@ -4728,10 +4912,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If set, `timeout` MUST be greater than zero.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:00adeb6be18adce3b238df6170f2c027544dec5ba86bccc23ce56f4948c5b606",
@@ -4742,10 +4932,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The value of `path` MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:541b8bd8a75c2247da2a50af7b8680aaffb9975633c4f8441967d5978ca38e07",
@@ -4756,10 +4951,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The `createRuntime` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:4a0c8610c21e24ac54c114de415373fcabb75a9acc779b966bd0fcf480056e4e",
@@ -4770,10 +4970,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`createContainer`** (array of objects, OPTIONAL) is an array of [`createContainer` hooks](#createContainer-hooks).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:7dcdb571c132cc70782055ef440cf94b0da91c516be8eb9b96f2556503d2d227",
@@ -4784,10 +4990,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The value of `path` MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:acf124804ed8d629eec11c35ba5c1cb4f9000246c9e45cea4310861c8c957060",
@@ -4798,10 +5009,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The `createContainer` hooks MUST be executed in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.container-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness"
+      ]
     },
     {
       "id": "sha256:8489ea64a4ee91d4b9aa89296a9336b5dce5562b5551bc68b4384a1906c77b22",
@@ -4812,10 +5028,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`startContainer`** (array of objects, OPTIONAL) is an array of [`startContainer` hooks](#startContainer-hooks).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:11577a061eb7c4698aec0ada7bada58c36cbe48eea95f36913c6ad0eb394efbc",
@@ -4826,10 +5048,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The value of `path` MUST resolve in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.container-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness"
+      ]
     },
     {
       "id": "sha256:a3509d4643025962f0908b6d095a5ce33fba0dc0e36bea6c1a95b6dd0d922514",
@@ -4840,10 +5067,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The `startContainer` hooks MUST be executed in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.container-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness"
+      ]
     },
     {
       "id": "sha256:0a6704140b0071c22c79c138aae4630ff3c6b9393beb9dfa42dc63afad350116",
@@ -4854,10 +5086,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`poststart`** (array of objects, OPTIONAL) is an array of [`poststart` hooks](#poststart).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:af46cd60a4c866b0fd7331a0d3d71955bb8d417577de95cef836a95f61256a72",
@@ -4868,10 +5106,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The value of `path` MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:931d4305656554fd715066d8e90c1dd2bdff1c59f44d0f4d39e2ea7d2b76d732",
@@ -4882,10 +5125,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The `poststart` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:64d0fef4a0d21dd0e292ac2c58622933320ca13f1f8f6a8e702a9a69ddbf7f6b",
@@ -4896,10 +5144,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`poststop`** (array of objects, OPTIONAL) is an array of [`poststop` hooks](#poststop).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
     },
     {
       "id": "sha256:856cf10e58ec4dc00ce30a58bad80a622093ccfe0aaaadbd702af6cbc0605741",
@@ -4910,10 +5164,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The value of `path` MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:d10daffe9f9dd26b924200fee584596a80eb599fe44f44d4cab2265d2182fa35",
@@ -4924,10 +5183,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* The `poststop` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:340aeca20ecc475bf1081fec1dcd0f9264e6c8bab8e9e6d05d17b9aaf042f6a7",
@@ -4938,10 +5202,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Hooks MUST be called in the listed order.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:ae27e3e5172536be7556f000277a8e79f214f5764fd966b6faa5b8988444df4a",
@@ -4952,10 +5222,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The [state](runtime.md#state) of the container MUST be passed to hooks over stdin so that they may do work appropriate to the current state of the container.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.state-stdin"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hook_state_is_exact_for_live_and_stopped_phases",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:08d4fc99c5368d07d19c84c7bcf9f21eb917425a8778f9758e3bb8f8c5fd8e8e",
@@ -4966,10 +5242,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `prestart` hooks MUST be called as part of the [`create`](runtime.md#create) operation after the runtime environment has been created (according to the configuration in config.json) but before the `pivot_root` or any equivalent operation has been executed.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:e4d365191bad28b4444767e49429d98ecea757bc1e155518fe380058bc15d12d",
@@ -4980,10 +5262,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `prestart` hooks MUST be called before the `createRuntime` hooks.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:12ccd2f6e1a8ec1d86852727724cee7f80d5e130cb9c6924f64cf39f66b28110",
@@ -4994,10 +5282,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `prestart` hooks' path MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:2e68e923dfb61cd34352e7ce495facb121c70ca8cdae4bf37d4a9b28f08abf8a",
@@ -5008,10 +5301,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `prestart` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:7bed4bba281e2ed242b0167f627b6734ead396379ffaf5a4a081e2a6e8d8bb02",
@@ -5022,10 +5320,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `createRuntime` hooks MUST be called as part of the [`create`](runtime.md#create) operation after the runtime environment has been created (according to the configuration in config.json) but before the `pivot_root` or any equivalent operation has been executed.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:4345ebb2fc5a3bc3fa82498e065e940697efa5f2f22b96a9531a6c9cdd8ceeb7",
@@ -5036,10 +5340,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `createRuntime` hooks' path MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:cff7b720d25c6133774a20fb778e309fe4fe2bd1420420051d7d04d281c30e41",
@@ -5050,10 +5359,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `createRuntime` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:a55c062dd50e93e5ddffce23bf6f802b8627997440a92470adfa5a0aefddfe81",
@@ -5064,10 +5378,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `createContainer` hooks MUST be called as part of the [`create`](runtime.md#create) operation after the runtime environment has been created (according to the configuration in config.json) but before the `pivot_root` or any equivalent operation has been executed.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:11e2d7acdd86064c1775f24f40c9c16d6e6046d88f545948c42de2858324644e",
@@ -5078,10 +5398,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `createContainer` hooks MUST be called after the `createRuntime` hooks.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:aafd613de4218e6ee29c3f9ccd6bb8c8dccf983a923724dd0204ca01eafb5918",
@@ -5092,10 +5418,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `createContainer` hooks' path MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:7ff51be2f4226c6e4c84d3b2637c2be6106bae5af8ba23b416009c55d591e689",
@@ -5106,10 +5437,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `createContainer` hooks MUST be executed in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.container-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness"
+      ]
     },
     {
       "id": "sha256:e11c47f4ce640e8ec5c595c12448687497e0984d15b5ebbf45573dc6db2c5617",
@@ -5120,10 +5456,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `startContainer` hooks MUST be called [before the user-specified process is executed](runtime.md#lifecycle) as part of the [`start`](runtime.md#start) operation.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:d1dda37647d94ac3b7a22cccefa5db37369bc751a0913a1cacc2a4cd17ebec2b",
@@ -5134,10 +5476,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `startContainer` hooks' path MUST resolve in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.container-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness"
+      ]
     },
     {
       "id": "sha256:af8c62df82bb7255ad6ef750af5a795644da09a08c6c3b92f9168c8f37f9dbc4",
@@ -5148,10 +5495,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `startContainer` hooks MUST be executed in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.container-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness"
+      ]
     },
     {
       "id": "sha256:bccaaf8280eb3d81cdd98278c5d7ab51f8f08d9da82f944c6954197942786dcb",
@@ -5162,10 +5514,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `poststart` hooks MUST be called [after the user-specified process is executed](runtime.md#lifecycle) but before the [`start`](runtime.md#start) operation returns.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:b2a0873521ecabc5050669ceabbf1c60aa2bd75fdfaabddf48190f79ce33b8f5",
@@ -5176,10 +5534,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `poststart` hooks' path MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:b13cc18514299946ee11308370fe0a2a964e2bccc62e25c9701c396033b4f8a6",
@@ -5190,10 +5553,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `poststart` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:e5fc02b535e7b277edc1ea63a241afd30fba4f078bd40923cd91da28954775d9",
@@ -5204,10 +5572,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `poststop` hooks MUST be called [after the container is deleted](runtime.md#lifecycle) but before the [`delete`](runtime.md#delete) operation returns.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:cf73a4b975a091a731e3163ca8d1b673a2af9d00e55886bedc23a60bc70f65f3",
@@ -5218,10 +5592,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `poststop` hooks' path MUST resolve in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:1b4fa761a051b0615ba668be144b8ba47718e32241b72fe5aa34d9d9d4f1e79c",
@@ -5232,10 +5611,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `poststop` hooks MUST be executed in the [runtime namespace](glossary.md#runtime-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:ba20b81e3993530d237879f2e990938b18860dbd9bf9692ae149331b8e3832ad",

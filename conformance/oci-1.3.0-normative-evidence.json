@@ -767,6 +767,156 @@
         "semantic::tests::accepts_validated_normative_cross_field_boundaries",
         "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:d9b6ef48f299b8fc62b11a59e4e1ab29329f21732f71f315ce41d21bc238bf12",
+        "sha256:7606d3c4076a5894bd2c9676007c4472bb5d090ca6a6a3557dc6c26eb6e3f771",
+        "sha256:61f4901c6e5be7243ce8eacf7c18df07353fcb1d952aabb9f2a14677a8dfaf5d",
+        "sha256:cc4b67082defe2d4aeea359447815cac251e93a2183cfc248d526b6ff09a858d",
+        "sha256:2843797abcedc768fe0e3450b049d5e9fa1a92ff12a1698100fe404082ecfb5b",
+        "sha256:35b08d947e576ca9e5bcf4b1826340839a6216ac36db267eab26a684865167b5",
+        "sha256:c96e2ca4ced5b755d82a97542356d149c45409f411145bbcb780151ddf32d24f",
+        "sha256:4da30351fa395af8c7916b03ddbc995d32904b8b0ded8b72721e97f9cfe107f8",
+        "sha256:baefb2f239cdbd4df2ad394b1e3693c027c4d30b0fcb193a2454739620a175be",
+        "sha256:669ff089f2aff1405319b087af384c638bdb590f75023baaaa4e8b209f99c409",
+        "sha256:ef85c0d03cab985775eddb1f1d1dbb038ec2ade38c33d354d45733d249095d0d",
+        "sha256:d416355dbb9454f3480bb6879ebfe4ccddefbd2fd2b70d86ef3861299d9498ff",
+        "sha256:43d87e81519d1cdb7b961316963505f9595b7a16e12937d2e5256f17ef0b5fba",
+        "sha256:95e35c3e2e0bd784d6e849761f37d4df8f884e396eb2db722ce7d17d04e1e096",
+        "sha256:4a0c8610c21e24ac54c114de415373fcabb75a9acc779b966bd0fcf480056e4e",
+        "sha256:8489ea64a4ee91d4b9aa89296a9336b5dce5562b5551bc68b4384a1906c77b22",
+        "sha256:0a6704140b0071c22c79c138aae4630ff3c6b9393beb9dfa42dc63afad350116",
+        "sha256:64d0fef4a0d21dd0e292ac2c58622933320ca13f1f8f6a8e702a9a69ddbf7f6b"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.command"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hook_timeout_rolled_back",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:e343ae316c435d73053c0bd3b6016efd590c70d661912617f948aaa925383341",
+        "sha256:f657bcdb042b5c02f4719b3c88131c16c808cf9758f349b4c68c3928990dac46",
+        "sha256:00adeb6be18adce3b238df6170f2c027544dec5ba86bccc23ce56f4948c5b606",
+        "sha256:541b8bd8a75c2247da2a50af7b8680aaffb9975633c4f8441967d5978ca38e07",
+        "sha256:7dcdb571c132cc70782055ef440cf94b0da91c516be8eb9b96f2556503d2d227",
+        "sha256:af46cd60a4c866b0fd7331a0d3d71955bb8d417577de95cef836a95f61256a72",
+        "sha256:931d4305656554fd715066d8e90c1dd2bdff1c59f44d0f4d39e2ea7d2b76d732",
+        "sha256:856cf10e58ec4dc00ce30a58bad80a622093ccfe0aaaadbd702af6cbc0605741",
+        "sha256:d10daffe9f9dd26b924200fee584596a80eb599fe44f44d4cab2265d2182fa35",
+        "sha256:12ccd2f6e1a8ec1d86852727724cee7f80d5e130cb9c6924f64cf39f66b28110",
+        "sha256:2e68e923dfb61cd34352e7ce495facb121c70ca8cdae4bf37d4a9b28f08abf8a",
+        "sha256:4345ebb2fc5a3bc3fa82498e065e940697efa5f2f22b96a9531a6c9cdd8ceeb7",
+        "sha256:cff7b720d25c6133774a20fb778e309fe4fe2bd1420420051d7d04d281c30e41",
+        "sha256:aafd613de4218e6ee29c3f9ccd6bb8c8dccf983a923724dd0204ca01eafb5918",
+        "sha256:b2a0873521ecabc5050669ceabbf1c60aa2bd75fdfaabddf48190f79ce33b8f5",
+        "sha256:b13cc18514299946ee11308370fe0a2a964e2bccc62e25c9701c396033b4f8a6",
+        "sha256:cf73a4b975a091a731e3163ca8d1b673a2af9d00e55886bedc23a60bc70f65f3",
+        "sha256:1b4fa761a051b0615ba668be144b8ba47718e32241b72fe5aa34d9d9d4f1e79c"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.runtime-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:acf124804ed8d629eec11c35ba5c1cb4f9000246c9e45cea4310861c8c957060",
+        "sha256:11577a061eb7c4698aec0ada7bada58c36cbe48eea95f36913c6ad0eb394efbc",
+        "sha256:a3509d4643025962f0908b6d095a5ce33fba0dc0e36bea6c1a95b6dd0d922514",
+        "sha256:7ff51be2f4226c6e4c84d3b2637c2be6106bae5af8ba23b416009c55d591e689",
+        "sha256:d1dda37647d94ac3b7a22cccefa5db37369bc751a0913a1cacc2a4cd17ebec2b",
+        "sha256:af8c62df82bb7255ad6ef750af5a795644da09a08c6c3b92f9168c8f37f9dbc4"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.container-namespace"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:340aeca20ecc475bf1081fec1dcd0f9264e6c8bab8e9e6d05d17b9aaf042f6a7",
+        "sha256:08d4fc99c5368d07d19c84c7bcf9f21eb917425a8778f9758e3bb8f8c5fd8e8e",
+        "sha256:e4d365191bad28b4444767e49429d98ecea757bc1e155518fe380058bc15d12d",
+        "sha256:7bed4bba281e2ed242b0167f627b6734ead396379ffaf5a4a081e2a6e8d8bb02",
+        "sha256:a55c062dd50e93e5ddffce23bf6f802b8627997440a92470adfa5a0aefddfe81",
+        "sha256:11e2d7acdd86064c1775f24f40c9c16d6e6046d88f545948c42de2858324644e",
+        "sha256:e11c47f4ce640e8ec5c595c12448687497e0984d15b5ebbf45573dc6db2c5617",
+        "sha256:bccaaf8280eb3d81cdd98278c5d7ab51f8f08d9da82f944c6954197942786dcb",
+        "sha256:e5fc02b535e7b277edc1ea63a241afd30fba4f078bd40923cd91da28954775d9",
+        "sha256:1acf3ad33a764caed4e26c5f956258b1b75c08b9b63e34de9f1a5febb57a6be4",
+        "sha256:9d41792e7d51df1ac2bff09189c3123e832269e25288b194461c46f8ab7036d6",
+        "sha256:a76247bd93a10678c03d02c8cca04330cc805c8f0b957fcf3cdb3dd8edabdb06",
+        "sha256:dfca80177ec5fc55c09868a776f2433d84633921c50de73d0322bf03b7d37b2a",
+        "sha256:00f59cd965210a494e77697bc3baa44195fc31f303a75cebfc5cdff34eb608eb",
+        "sha256:357c7da9efabc539cdcd3ea44ccff45d8f098e6deebaf3266de04a39cd1506cd"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.lifecycle-order"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::control::tests::create_hook_barrier_is_distinct_from_final_readiness",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:ae27e3e5172536be7556f000277a8e79f214f5764fd966b6faa5b8988444df4a"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.state-stdin"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::hooks_verified",
+        "executor::hook::tests::hook_state_is_exact_for_live_and_stopped_phases",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:012f838a6d032c51b41f3b9c3ce8d2f1cabcbd7e78b3078bdf5b4fa6677a699b",
+        "sha256:54831447c482cbb36b220374f0380d43bbc259b310de6ac803f1cd73a9cd9295",
+        "sha256:df45697d31e61add4780de76662f47b9aa5f7d89b7494acc6f13e4ece56d505b",
+        "sha256:7d3d5a796916e7c984eb1b8f45e2a7972bf2a07664fbcc50a53127c1052bfd4e",
+        "sha256:aff7be6971c2a9d6528884a6b26021f8470478f27f4bb20f4d32756c4bd8ae9b",
+        "sha256:f42f56c9a58b711d5f6e83d07bb9d22bcc922a6c36f721f69f7911884614b63e"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.hooks.failure-policy"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     }
   ]
 }
