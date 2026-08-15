@@ -1370,7 +1370,7 @@ leak. Only then may KVM become `experimental`.
 - [x] Enforce the bounded A3S Box static device-node profile with
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   cgroup-controlled `mknod`, and verified device-node creation.
-- [ ] Complete the remaining process and rootless configuration boundary.
+- [x] Complete the remaining process and rootless configuration boundary.
   - [x] Enforce or explicitly reject supplementary credentials, I/O priority,
     CPU affinity, and unsupported rootless ID-mapping shapes before executor
     mutation.
