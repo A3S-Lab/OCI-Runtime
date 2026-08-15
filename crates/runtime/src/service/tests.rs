@@ -1858,6 +1858,7 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
     );
 
     let target = ContainerTarget::exact(create.id.clone(), created.generation);
+    let expected_target = target.clone();
     assert_eq!(
         service
             .state(StateRequest {
@@ -1964,6 +1965,47 @@ async fn rust_sdk_lifecycle_is_durable_and_exactly_replayed() {
     assert_eq!(driver_create.bundle.config_json(), TEST_CONFIG);
     assert_eq!(driver_create.target.generation, Some(Generation(1)));
     assert_eq!(driver_create.attachment_contract, create.attachments);
+
+    let DriverCall::Start(driver_start) = calls
+        .iter()
+        .find(|call| matches!(call, DriverCall::Start(_)))
+        .expect("exact driver start call")
+    else {
+        unreachable!("filtered driver call must be start");
+    };
+    assert_eq!(driver_start.target, expected_target);
+    assert_eq!(
+        driver_start
+            .bundle
+            .spec()
+            .process()
+            .as_ref()
+            .expect("start process")
+            .args()
+            .as_deref(),
+        Some(["/bin/true".to_string()].as_slice())
+    );
+
+    let DriverCall::Kill(driver_kill) = calls
+        .iter()
+        .find(|call| matches!(call, DriverCall::Kill(_)))
+        .expect("exact driver kill call")
+    else {
+        unreachable!("filtered driver call must be kill");
+    };
+    assert_eq!(driver_kill.target, expected_target);
+    assert_eq!(driver_kill.signal.get(), 15);
+    assert!(driver_kill.all);
+
+    let DriverCall::Delete(driver_delete) = calls
+        .iter()
+        .find(|call| matches!(call, DriverCall::Delete(_)))
+        .expect("exact driver delete call")
+    else {
+        unreachable!("filtered driver call must be delete");
+    };
+    assert_eq!(driver_delete.target, expected_target);
+    assert_eq!(driver_delete.mode, DeleteMode::StoppedOnly);
 
     let error = service
         .state(StateRequest {

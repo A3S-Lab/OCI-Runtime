@@ -463,6 +463,68 @@ fn create_wire_request_requires_bundle_and_container_id() {
     }
 }
 
+#[test]
+fn lifecycle_wire_requests_require_container_id() {
+    let target = crate::ContainerTarget::current(
+        ContainerId::new("lifecycle-wire-container").expect("container ID"),
+    );
+    let requests = [
+        (
+            "start",
+            WireRequest::Start(StartRequest {
+                context: OperationContext::new(
+                    OperationId::new("required-start-wire").expect("operation ID"),
+                ),
+                target: target.clone(),
+            }),
+        ),
+        (
+            "kill",
+            WireRequest::Kill(KillRequest {
+                context: OperationContext::new(
+                    OperationId::new("required-kill-wire").expect("operation ID"),
+                ),
+                target: target.clone(),
+                signal: crate::Signal::new(9).expect("signal"),
+                all: false,
+            }),
+        ),
+        (
+            "delete",
+            WireRequest::Delete(DeleteRequest {
+                context: OperationContext::new(
+                    OperationId::new("required-delete-wire").expect("operation ID"),
+                ),
+                target,
+                mode: crate::DeleteMode::StoppedOnly,
+            }),
+        ),
+    ];
+
+    for (operation, request) in requests {
+        let mut encoded = serde_json::to_value(ClientMessage::Request {
+            protocol: 3,
+            request_id: 1,
+            request: Box::new(request),
+        })
+        .expect("encode valid lifecycle request");
+        let target = encoded
+            .get_mut("request")
+            .and_then(|request| request.get_mut("request"))
+            .and_then(|request| request.get_mut("target"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("lifecycle target object");
+        assert!(target.remove("id").is_some());
+
+        let error = serde_json::from_value::<ClientMessage>(encoded)
+            .expect_err("lifecycle request without a container ID must fail decoding");
+        assert!(
+            error.to_string().contains("id"),
+            "{operation} returned an unrelated decode error: {error}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn server_validates_untrusted_wire_requests_before_dispatch() {
     let (mut client_io, server_io) = tokio::io::duplex(4096);
