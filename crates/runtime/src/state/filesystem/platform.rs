@@ -316,9 +316,11 @@ fn rename_handle_relative(
     use std::mem::{offset_of, size_of};
     use std::os::windows::ffi::OsStrExt as _;
     use std::os::windows::io::AsRawHandle as _;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FileRenameInformation, NtSetInformationFile, FILE_RENAME_INFORMATION,
     };
+    use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
     let destination = destination_name.encode_wide().collect::<Vec<_>>();
     let name_bytes = destination
@@ -334,8 +336,8 @@ fn rename_handle_relative(
                 ),
             )
         })?;
-    let file_name_offset = offset_of!(FILE_RENAME_INFO, FileName);
-    let buffer_bytes = size_of::<FILE_RENAME_INFO>()
+    let file_name_offset = offset_of!(FILE_RENAME_INFORMATION, FileName);
+    let buffer_bytes = size_of::<FILE_RENAME_INFORMATION>()
         .checked_add(name_bytes)
         .ok_or_else(|| {
             state_error(
@@ -358,8 +360,8 @@ fn rename_handle_relative(
         )
     })?;
     let mut buffer = vec![0usize; buffer_bytes.div_ceil(size_of::<usize>())];
-    let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-    // SAFETY: `buffer` is aligned for FILE_RENAME_INFO and has room for its
+    let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+    // SAFETY: `buffer` is aligned for FILE_RENAME_INFORMATION and has room for its
     // fixed header plus the complete non-NUL-terminated UTF-16 filename.
     unsafe {
         (*information).Anonymous.ReplaceIfExists = u8::from(replace);
@@ -385,20 +387,26 @@ fn rename_handle_relative(
         );
     }
     // SAFETY: the source and destination-parent handles are live, and the
-    // variable-length FILE_RENAME_INFO buffer is initialized as documented.
-    let result = unsafe {
-        SetFileInformationByHandle(
+    // variable-length FILE_RENAME_INFORMATION buffer is initialized as
+    // documented by the native file-information contract.
+    let mut io_status = std::mem::MaybeUninit::<IO_STATUS_BLOCK>::zeroed();
+    let status = unsafe {
+        NtSetInformationFile(
             source_handle,
-            FileRenameInfo,
+            io_status.as_mut_ptr(),
             information.cast(),
             buffer_length,
+            FileRenameInformation,
         )
     };
-    if result == 0 {
+    if status < 0 {
+        // SAFETY: the failed native call returned a complete NTSTATUS value.
+        let windows_error = unsafe { RtlNtStatusToDosError(status) };
+        let windows_error = i32::try_from(windows_error).unwrap_or(i32::MAX);
         return Err(io_error(
             operation,
             destination_display,
-            io::Error::last_os_error(),
+            io::Error::from_raw_os_error(windows_error),
         ));
     }
     Ok(())
