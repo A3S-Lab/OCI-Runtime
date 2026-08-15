@@ -79,6 +79,48 @@
     },
     {
       "requirementIds": [
+        "sha256:2a9eff47a379f3bdba8a0cc8c704535d77704132db18d9351a1423c991d55ab7",
+        "sha256:1c874f5bd7cfba061e72e2c3104e548290fdf57a9eda558b6a363e92e4a86dd2"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.start.created-only"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:f7bcb267f8708483e632e47fa0af6f8bbb14dda13de0fdbedcf7230165fc34a5",
+        "sha256:b707207b31a60d490a2bbbc79dbd476f73f5c0d5dca4db0f6078ef86fbc3c68f"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.kill.created-or-running"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:018091023b6bddf39465281cc3e88aee283807ed185cce860c801e2b75ac469d",
+        "sha256:63f193b3e530405bf16ccd26ac3019e4887b8c4f2d684cf6fbeab1d47106cd6b"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.delete.stopped-only"
+      ],
+      "testIds": [
+        "state::tests::created_container_can_be_killed_before_start_and_force_deleted"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:e3edff401547ac1dea717dc4be796cde5ac7aff43208ac9719e2de67c2145e6c"
       ],
       "disposition": "validated",

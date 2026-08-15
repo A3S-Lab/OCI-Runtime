@@ -1134,10 +1134,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Attempting to `start` a container that is not [`created`](#state) MUST have no effect on the container and MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.start.created-only"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:1c874f5bd7cfba061e72e2c3104e548290fdf57a9eda558b6a363e92e4a86dd2",
@@ -1148,10 +1152,14 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "Attempting to `start` a container that is not [`created`](#state) MUST have no effect on the container and MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.start.created-only"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:71b0e3a3947247d7d2c5a6645e019cd5f99125a0e7e333be845f0fc165476a84",
@@ -1210,10 +1218,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Attempting to send a signal to a container that is neither [`created` nor `running`](#state) MUST have no effect on the container and MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.kill.created-or-running"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:b707207b31a60d490a2bbbc79dbd476f73f5c0d5dca4db0f6078ef86fbc3c68f",
@@ -1224,10 +1236,14 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "Attempting to send a signal to a container that is neither [`created` nor `running`](#state) MUST have no effect on the container and MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.kill.created-or-running"
+      ],
+      "testIds": [
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
     },
     {
       "id": "sha256:d4cb8a17454fc931ca64d8112b0a5c774a002a625c8ec383626055284a9cda76",
@@ -1266,10 +1282,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Attempting to `delete` a container that is not [`stopped`](#state) MUST have no effect on the container and MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.delete.stopped-only"
+      ],
+      "testIds": [
+        "state::tests::created_container_can_be_killed_before_start_and_force_deleted"
+      ]
     },
     {
       "id": "sha256:63f193b3e530405bf16ccd26ac3019e4887b8c4f2d684cf6fbeab1d47106cd6b",
@@ -1280,10 +1300,14 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "Attempting to `delete` a container that is not [`stopped`](#state) MUST have no effect on the container and MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.delete.stopped-only"
+      ],
+      "testIds": [
+        "state::tests::created_container_can_be_killed_before_start_and_force_deleted"
+      ]
     },
     {
       "id": "sha256:1fc847889a3172f36fa379c59245ecca0138e9970c4d9d19d8d8df24015cddda",

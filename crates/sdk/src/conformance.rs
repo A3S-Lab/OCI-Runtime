@@ -32,6 +32,9 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.runtime.config.immutable-after-create",
         "runtime-lifecycle",
     ),
+    OciNonSemanticRule::new("oci.runtime.delete.stopped-only", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.kill.created-or-running", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.start.created-only", "runtime-lifecycle"),
 ];
 
 const SPECIFICATION_DOCUMENTS: &[EmbeddedSpecificationDocument] = &[

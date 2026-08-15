@@ -532,6 +532,13 @@ async fn core_lifecycle_is_idempotent_and_generation_safe() {
         .join("operations")
         .join("start-2.json")
         .exists());
+    assert_eq!(
+        store
+            .state(&target)
+            .await
+            .expect("running state is unchanged"),
+        running
+    );
 
     let kill = KillRequest {
         context: OperationContext::new(operation_id("kill-1")),
@@ -551,7 +558,31 @@ async fn core_lifecycle_is_idempotent_and_generation_safe() {
     assert_eq!(*stopped.state.pid(), None);
     assert_eq!(
         store.prepare_kill(&kill).await.expect("replay kill"),
-        RecordOperationPreparation::Replayed(stopped)
+        RecordOperationPreparation::Replayed(stopped.clone())
+    );
+
+    let stopped_kill = KillRequest {
+        context: OperationContext::new(operation_id("kill-stopped")),
+        target: target.clone(),
+        signal: Signal::new(9).expect("signal"),
+        all: false,
+    };
+    let kill_error = store
+        .prepare_kill(&stopped_kill)
+        .await
+        .expect_err("stopped containers cannot be signaled");
+    assert_eq!(kill_error.code, ErrorCode::FailedPrecondition);
+    assert!(!store
+        .root()
+        .join("operations")
+        .join("kill-stopped.json")
+        .exists());
+    assert_eq!(
+        store
+            .state(&target)
+            .await
+            .expect("stopped state is unchanged"),
+        stopped
     );
 
     let delete = DeleteRequest {
@@ -1031,6 +1062,20 @@ async fn created_container_can_be_killed_before_start_and_force_deleted() {
         .await
         .expect_err("OCI delete must reject a created container");
     assert_eq!(error.code, ErrorCode::FailedPrecondition);
+    assert!(!store
+        .root()
+        .join("operations")
+        .join("delete-stopped-only.json")
+        .exists());
+    assert_eq!(
+        *store
+            .state(&target)
+            .await
+            .expect("created state is unchanged")
+            .state
+            .status(),
+        ContainerState::Created
+    );
 
     let kill = KillRequest {
         context: OperationContext::new(operation_id("kill-created")),
