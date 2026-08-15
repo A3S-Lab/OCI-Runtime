@@ -401,7 +401,7 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
 The two simultaneously live bundles must use distinct cgroup v2 paths; the
 checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
 
-The `a3s.oci.native-linux-multi-container-smoke.v16` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v17` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
 independent wait/state progress, both marker removals, executor shutdown, and
 complete durable-session removal. It then keeps a prepared donor behind its
@@ -439,23 +439,27 @@ requires:
 1. every missing directory and file mount destination to exist before start
    while the evidence file remains absent;
 2. start to release the prepared workload;
-3. the root mount to belong to a new shared peer group;
-4. `/proc/sys` to be a distinct read-only mount, `/proc/meminfo` to be replaced
+3. a fresh tmpfs to cover the image's `/dev`, followed by `/dev/fd`,
+   `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` resolving to the exact
+   `/proc/self/fd`, `/proc/self/fd/0`, `/proc/self/fd/1`, and
+   `/proc/self/fd/2` targets after mount processing;
+4. the root mount to belong to a new shared peer group;
+5. `/proc/sys` to be a distinct read-only mount, `/proc/meminfo` to be replaced
    by a private empty read-only file, and `/proc/irq` by an empty read-only
    directory;
-5. recursive read-only, nosuid, nodev, noexec, noatime, nodiratime, and
+6. recursive read-only, nosuid, nodev, noexec, noatime, nodiratime, and
    nosymfollow attributes to hold on both an rbind target and its nested
    submount while the source mounts remain writable and executable;
-6. detached `idmap` and `ridmap` filesystem mounts to expose the exact
+7. detached `idmap` and `ridmap` filesystem mounts to expose the exact
    requested UID/GID ownership;
-7. the original nested bind source to remain owned by `0:0`, non-recursive
+8. the original nested bind source to remain owned by `0:0`, non-recursive
    `idmap` to map only the rbind top level to `1000:1000`, and recursive
    `ridmap` to map both the top level and real nested submount to `2000:2000`;
-8. a file on an initial-user-namespace tmpfs to remain readable with its exact
+9. a file on an initial-user-namespace tmpfs to remain readable with its exact
    mode through a kernel-enforced read-only, nosuid, nodev, and noexec bind in
    the container user namespace, while rejecting a write;
-9. the rootfs to be read-only and reject a write;
-10. exact ordered evidence, a normal zero exit, deleted state, and removal of
+10. the rootfs to be read-only and reject a write;
+11. exact ordered evidence, a normal zero exit, deleted state, and removal of
    all host-side fixture paths.
 
 The same real-driver invocation also retains two product-facing configuration

@@ -601,12 +601,15 @@ fn finish_create_environment(
         if !DevicePlan::uses_prepared_sources(prepared_devices) {
             plan.devices.create_all()?;
         }
+        rootfs::create_required_dev_symlinks(Path::new("/"))?;
         rootfs::finalize(
             plan.rootfs_propagation,
             &plan.readonly_paths,
             &plan.masked_paths,
             plan.root_readonly,
         )?;
+    } else {
+        rootfs::create_required_dev_symlinks(rootfs)?;
     }
     Ok(())
 }
