@@ -128,12 +128,13 @@ record has been released.
 
 Durable state now pins its canonical root as a directory capability. All
 descendant reads, enumeration, creation, replacement, and quarantine moves are
-resolved from retained directory handles. macOS and Linux gates prove that an
-ambient-root rename, layout or transaction symlink, foreign filesystem, and
-same-device Linux bind-mount replacement cannot redirect a mutation. The
-Windows implementation cross-compiles with the same no-follow traversal and
-retained-parent commit boundary; real reparse-point replacement qualification
-remains open before R1 can close.
+resolved from retained directory handles. macOS, Linux, and Windows gates prove
+that an ambient-root rename, layout or transaction symlink/reparse-point
+substitution, foreign filesystem handle, same-device Linux bind-mount
+replacement, or racing Windows file/directory destination replacement cannot
+redirect a mutation. Windows commits each already-open source object relative
+to a retained destination-parent handle and applies file DACLs through that
+same opened object.
 
 The exact containerd API, identity, installation, restart, cleanup, and
 qualification boundary is documented in
@@ -426,7 +427,7 @@ The repository turns release claims into checked inventories:
 | Typed semantic validation rules | 73 |
 | OCI normative dispositions | 14 enforced · 24 validated · 617 pending review |
 | Registered durable commit fault stages | 741 |
-| Durable-state replacement qualification | macOS/Linux complete, including a real Linux bind mount; Windows reparse-point matrix open |
+| Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
@@ -467,7 +468,6 @@ qualification must all pass before a driver becomes `supported`.
 ### Still intentionally open
 
 - complete review and enforcement of pending OCI normative entries;
-- real Windows durable-state reparse-point replacement qualification;
 - real-host qualification of descriptor-confined filesystem sessions on each
   remaining utility-VM driver;
 - production-ready Native Linux and utility-VM drivers;

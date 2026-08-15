@@ -31,9 +31,9 @@ The state root:
   disables inherited access, and verifies the owner plus every applied ACE
   type, mask, flag, and principal;
 - commits files by atomic rename plus directory sync on Unix;
-- commits files with `MoveFileExW`, replacement, and write-through semantics
-  on Windows while retaining the capability parent that guards the resolved
-  directory.
+- commits an already-open file or directory handle with
+  `NtSetInformationFile(FileRenameInformation)` relative to the retained
+  destination-parent handle on Windows.
 
 A Windows state root therefore requires a filesystem with persistent ACL
 support. Opening the root fails closed when ownership or the protected DACL
@@ -47,18 +47,23 @@ replacement over a live layout directory inside a private mount namespace;
 `statx` mount identities make the operation fail before external mutation.
 macOS uses `fstatfs` identity for the same boundary.
 
-The remaining platform gate is a real Windows reparse-point replacement
-matrix. The Windows capability path and retained-parent replacement code
-cross-compile for `x86_64-pc-windows-msvc`, but R1 remains open until a Windows
-host proves root, layout, transaction, file-replacement, and directory-move
-substitution all fail without touching an external target.
+Windows CI covers a reparse-point root, layout-directory and transaction-file
+substitution, source-name replacement after the source file is opened, racing
+destination replacement, retained root and lock handles, and exact-handle
+directory moves. Each case fails closed or commits the pinned object without
+touching the external target.
 
 The implementation uses the security descriptor supplied directly to
 [`CreateDirectoryW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createdirectoryw)
-for first creation, applies protected DACLs with
+for first directory creation. It applies and verifies directory DACLs with
 [`SetNamedSecurityInfoW`](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow),
-and reads them back with
-[`GetNamedSecurityInfoW`](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getnamedsecurityinfow).
+and
+[`GetNamedSecurityInfoW`](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getnamedsecurityinfow),
+while transaction-file DACLs are applied and verified through the already-open
+handle with
+[`SetSecurityInfo`](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)
+and
+[`GetSecurityInfo`](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo).
 
 ## Layout
 
@@ -269,8 +274,9 @@ recovery, file transfer, and filesystem operations, for another 44 boundaries.
 
 On Unix the final file and directory boundaries follow explicit directory
 `sync_all` calls. Windows reaches the same logical checkpoints after its
-write-through `MoveFileExW` replacement or move because a separate directory
-sync primitive is not used there.
+flushed and synced source handle is renamed relative to the retained
+destination-parent handle with `NtSetInformationFile` because a separate
+directory sync primitive is not used there.
 
 Each test fails exactly once, drops the store or host service, reopens the same
 state root, and replays the original operation. Recovery must preserve
@@ -293,12 +299,12 @@ owner-death grace and returns a retryable error if it overruns. If neither a
 report nor marker exists, recovery still yields a stopped cleanup tombstone
 without fabricated exit evidence.
 
-The remaining persistence gates are startup-wide orphan scanning, real Windows
-reparse-point replacement qualification, real-host qualification of restart-
-stable WHPX exit evidence (or qualified reattachment where another driver
-promises it), and equivalent real-driver replacement evidence outside HVF. The
-portable matrix already reopens the durable host around a new authenticated
-connection and driver at all nine request/response stages for create, state,
+The remaining persistence gates are startup-wide orphan scanning, real-host
+qualification of restart-stable WHPX exit evidence (or qualified reattachment
+where another driver promises it), and equivalent real-driver replacement
+evidence outside HVF. The portable matrix already reopens the durable host
+around a new authenticated connection and driver at all nine request/response
+stages for create, state,
 start, kill, delete, wait, exec, signal-process, wait-process, pause, resume,
 processes, update, stats, read-output, write-stdin, close-stdin, resize, file,
 and filesystem, retaining all 180 operation-stage pairs. Durably journaled host

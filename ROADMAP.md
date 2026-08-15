@@ -411,9 +411,9 @@ Completed:
   recovery;
 - a pinned durable-state root capability used for descendant traversal, reads,
   enumeration, directory creation, file creation, file replacement, and
-  quarantine moves. macOS and Linux reject symlink substitution and mount
-  replacement, including a real same-device Linux bind-mount gate; the same
-  no-follow capability implementation cross-compiles for Windows;
+  quarantine moves. macOS, Linux, and Windows reject symlink/reparse-point
+  substitution and path replacement; Linux additionally passes a real
+  same-device bind-mount gate;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -423,8 +423,6 @@ Not yet complete:
 
 - equivalent real-host utility-VM transport/reopen qualification for WHPX and
   the future KVM driver; the complete 180-path HVF matrix is retained;
-- real Windows reparse-point replacement qualification for the capability-
-  rooted durable-state implementation;
 - complete shared guest OCI executor;
 - a production workload driver;
 - OCI hook rollback, crash recovery, security-negative, and soak
@@ -483,7 +481,7 @@ enforce it. No property is silently ignored.
   checks, bounded reads, and atomic file replacement.
 - [x] Create, apply, and verify runtime ownership plus protected Windows state
   DACLs limited to the runtime principal and LocalSystem.
-- [ ] Use descriptor-relative path operations on every supported host and
+- [x] Use descriptor-relative path operations on every supported host and
   prove that symlink, mount, and Windows reparse-point replacement cannot move
   a validated runtime-owned path before mutation.
   - [x] Pin the canonical state root as a `cap_std::fs::Dir` and resolve every
@@ -496,9 +494,11 @@ enforce it. No property is silently ignored.
     `fstatfs` filesystem identities.
   - [x] Cross-compile the no-follow capability implementation and retained-
     parent Windows replacement path for `x86_64-pc-windows-msvc`.
-  - [ ] Run the real Windows matrix for root/layout/transaction reparse-point
-    substitution and file/directory replacement. Keep this parent open until
-    those tests prove no external target can be mutated.
+  - [x] Run the real Windows matrix for root/layout/transaction reparse-point
+    substitution and file/directory replacement. The August 15, 2026 Windows
+    CI gate covers real reparse points, already-open source-file commits,
+    racing destination replacement, retained root/lock handles, and
+    exact-handle directory moves without modifying an external target.
 - [x] Add atomic creating/created records with exact configuration snapshots
   and monotonically increasing generations.
 - [x] Add a global idempotent create journal keyed by `OperationId`.
