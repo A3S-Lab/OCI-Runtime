@@ -8,8 +8,10 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 - Runtime-lifecycle evidence that caller-side `config.json` changes after
   create cannot affect the container. A Host reopen test mutates the source
-  process, then proves start receives the original private snapshot and digest,
-  reducing the pending OCI 1.3.0 ledger from 612 to 611 entries.
+  process, then proves start receives the original private snapshot and digest.
+  The same boundary revalidates that a process exists before journaling or
+  dispatching start, reducing the pending OCI 1.3.0 ledger from 612 to 610
+  entries.
 - Exact normative evidence for the required `ociVersion` field and its SemVer
   syntax. Dedicated positive and negative SDK tests now bind both obligations
   to owner-checked bundle-validation rules, reducing the pending OCI 1.3.0

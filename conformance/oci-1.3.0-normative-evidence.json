@@ -64,6 +64,21 @@
     },
     {
       "requirementIds": [
+        "sha256:b0bb060732a422aa1bf5c6b9c1e3625408052f06b9f1fb8d083c852d76eabfed"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.common.process.required-for-start"
+      ],
+      "testIds": [
+        "run_composition::missing_start_process_fails_before_create_mutation",
+        "semantic::tests::start_requires_a_process_but_configuration_loading_does_not",
+        "state::tests::start_revalidates_durable_process_before_journaling"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:e3edff401547ac1dea717dc4be796cde5ac7aff43208ac9719e2de67c2145e6c"
       ],
       "disposition": "validated",
