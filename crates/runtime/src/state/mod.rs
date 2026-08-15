@@ -35,10 +35,7 @@ use crate::fault::NoFaultInjector;
 use crate::fault::{DurableMutation, FaultInjector};
 
 use create::{create_request_digest, validate_create_retry};
-use filesystem::{
-    create_private_directory, ensure_plain_directory, path_exists, read_json, read_utf8,
-    state_error, RootLock,
-};
+use filesystem::{state_error, RootLock, StateFilesystem};
 use model::{
     StoredContainer, StoredFilesystemMutationResponse, StoredGeneration, StoredOperation,
     StoredOperationKind, StoredOperationRequest, StoredOperationStatus, CONTAINER_SCHEMA_VERSION,
@@ -132,6 +129,7 @@ pub(crate) enum FilesystemMutationPreparation<Response> {
 #[derive(Debug, Clone)]
 pub(crate) struct DurableStateStore {
     root: Arc<PathBuf>,
+    filesystem: Arc<StateFilesystem>,
     gate: Arc<Mutex<()>>,
     event_notify: Arc<Notify>,
     _root_lock: Arc<RootLock>,
@@ -149,9 +147,10 @@ impl DurableStateStore {
         root: impl AsRef<Path>,
         faults: Arc<dyn FaultInjector>,
     ) -> Result<Self> {
-        let (root, root_lock) = filesystem::open_root(root.as_ref(), faults.as_ref()).await?;
+        let (filesystem, root_lock) = filesystem::open_root(root.as_ref(), faults.as_ref()).await?;
         Ok(Self {
-            root: Arc::new(root),
+            root: Arc::new(filesystem.root().to_path_buf()),
+            filesystem,
             gate: Arc::new(Mutex::new(())),
             event_notify: Arc::new(Notify::new()),
             _root_lock: root_lock,
@@ -236,7 +235,7 @@ impl DurableStateStore {
         validate_deadline(&request.context, "prepare-create")?;
 
         let container_directory = self.container_directory(&request.id);
-        if path_exists(&container_directory).await? {
+        if self.filesystem.path_exists(&container_directory).await? {
             return Err(state_error(
                 ErrorCode::AlreadyExists,
                 "prepare-create",
@@ -285,16 +284,22 @@ impl DurableStateStore {
     ) -> Result<StoredContainer> {
         let attachments_digest = request.attachments.digest()?;
         let container_directory = self.container_directory(&request.id);
-        if path_exists(&container_directory).await? {
-            ensure_plain_directory(&container_directory, "container state directory").await?;
-            filesystem::set_private_directory_permissions(&container_directory).await?;
+        if self.filesystem.path_exists(&container_directory).await? {
+            self.filesystem
+                .ensure_plain_directory(&container_directory, "container state directory")
+                .await?;
+            self.filesystem
+                .set_private_directory_permissions(&container_directory)
+                .await?;
         } else {
-            create_private_directory(&container_directory).await?;
+            self.filesystem
+                .create_private_directory(&container_directory)
+                .await?;
         }
 
         let config_path = container_directory.join(CONFIG_SNAPSHOT_FILE);
-        if path_exists(&config_path).await? {
-            let durable_config = read_utf8(&config_path).await?;
+        if self.filesystem.path_exists(&config_path).await? {
+            let durable_config = self.filesystem.read_utf8(&config_path).await?;
             if durable_config.as_bytes() != request.bundle.config_bytes() {
                 return Err(state_error(
                     ErrorCode::Conflict,
@@ -315,7 +320,7 @@ impl DurableStateStore {
         }
 
         let record_path = container_directory.join(CONTAINER_RECORD_FILE);
-        if path_exists(&record_path).await? {
+        if self.filesystem.path_exists(&record_path).await? {
             let stored = self.load_stored_exact(&request.id, generation).await?;
             if stored.record.driver != driver
                 || stored.record.isolation != request.isolation.class()
@@ -609,8 +614,8 @@ impl DurableStateStore {
 
     async fn next_generation(&self, id: &ContainerId) -> Result<Generation> {
         let path = self.generation_path(id);
-        let last = if path_exists(&path).await? {
-            let stored: StoredGeneration = read_json(&path).await?;
+        let last = if self.filesystem.path_exists(&path).await? {
+            let stored: StoredGeneration = self.filesystem.read_json(&path).await?;
             if stored.schema_version != GENERATION_SCHEMA_VERSION || stored.id != *id {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
@@ -648,7 +653,7 @@ impl DurableStateStore {
         operation_id: &OperationId,
     ) -> Result<Option<StoredOperation>> {
         let path = self.operation_path(operation_id);
-        if !path_exists(&path).await? {
+        if !self.filesystem.path_exists(&path).await? {
             return Ok(None);
         }
         self.load_operation(operation_id).await.map(Some)
@@ -656,14 +661,14 @@ impl DurableStateStore {
 
     async fn load_operation(&self, operation_id: &OperationId) -> Result<StoredOperation> {
         let path = self.operation_path(operation_id);
-        if !path_exists(&path).await? {
+        if !self.filesystem.path_exists(&path).await? {
             return Err(state_error(
                 ErrorCode::NotFound,
                 "load-operation",
                 format!("operation {operation_id} does not exist"),
             ));
         }
-        let operation: StoredOperation = read_json(&path).await?;
+        let operation: StoredOperation = self.filesystem.read_json(&path).await?;
         if !matches!(
             operation.schema_version.as_str(),
             OPERATION_SCHEMA_VERSION_V1 | OPERATION_SCHEMA_VERSION_V2 | OPERATION_SCHEMA_VERSION
@@ -712,17 +717,21 @@ impl DurableStateStore {
 
     async fn load_stored_container(&self, id: &ContainerId) -> Result<StoredContainer> {
         let directory = self.container_directory(id);
-        if !path_exists(&directory).await? {
+        if !self.filesystem.path_exists(&directory).await? {
             return Err(state_error(
                 ErrorCode::NotFound,
                 "load-container-state",
                 format!("container {id} does not exist"),
             ));
         }
-        ensure_plain_directory(&directory, "container state directory").await?;
-        filesystem::set_private_directory_permissions(&directory).await?;
+        self.filesystem
+            .ensure_plain_directory(&directory, "container state directory")
+            .await?;
+        self.filesystem
+            .set_private_directory_permissions(&directory)
+            .await?;
         let path = directory.join(CONTAINER_RECORD_FILE);
-        if !path_exists(&path).await? {
+        if !self.filesystem.path_exists(&path).await? {
             return Err(state_error(
                 ErrorCode::Unavailable,
                 "reconcile-container-state",
@@ -730,7 +739,7 @@ impl DurableStateStore {
             )
             .retryable(true));
         }
-        let stored: StoredContainer = read_json(&path).await?;
+        let stored: StoredContainer = self.filesystem.read_json(&path).await?;
         if stored.schema_version != CONTAINER_SCHEMA_VERSION
             || stored.id != *id
             || stored.record.generation.0 == 0
@@ -780,7 +789,7 @@ impl DurableStateStore {
         let config_path = self
             .container_directory(&stored.id)
             .join(CONFIG_SNAPSHOT_FILE);
-        if !path_exists(&config_path).await? {
+        if !self.filesystem.path_exists(&config_path).await? {
             return Err(state_error(
                 ErrorCode::Unavailable,
                 "load-durable-bundle",
@@ -788,7 +797,7 @@ impl DurableStateStore {
             )
             .retryable(true));
         }
-        let config_json = read_utf8(&config_path).await?;
+        let config_json = self.filesystem.read_utf8(&config_path).await?;
         OciBundle::from_json(stored.record.state.bundle().clone(), config_json)
     }
 
@@ -829,7 +838,9 @@ impl DurableStateStore {
         path: &Path,
         value: &impl serde::Serialize,
     ) -> Result<()> {
-        filesystem::atomic_write_json(self.faults.as_ref(), mutation, path, value).await
+        self.filesystem
+            .atomic_write_json(self.faults.as_ref(), mutation, path, value)
+            .await
     }
 
     async fn write_bytes(
@@ -838,7 +849,9 @@ impl DurableStateStore {
         path: &Path,
         bytes: &[u8],
     ) -> Result<()> {
-        filesystem::atomic_write(self.faults.as_ref(), mutation, path, bytes).await
+        self.filesystem
+            .atomic_write(self.faults.as_ref(), mutation, path, bytes)
+            .await
     }
 
     async fn move_directory(
@@ -847,7 +860,9 @@ impl DurableStateStore {
         source: &Path,
         destination: &Path,
     ) -> Result<()> {
-        filesystem::atomic_move_directory(self.faults.as_ref(), mutation, source, destination).await
+        self.filesystem
+            .atomic_move_directory(self.faults.as_ref(), mutation, source, destination)
+            .await
     }
 }
 

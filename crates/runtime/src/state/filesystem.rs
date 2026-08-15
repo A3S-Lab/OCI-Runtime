@@ -1,16 +1,32 @@
+use std::ffi::{OsStr, OsString};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use a3s_oci_sdk::{Error, ErrorCode, Result};
-use serde::{de::DeserializeOwned, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+mod platform;
+mod transaction;
 
-use crate::fault::{
-    DirectoryCommitStage, DurableMutation, FaultInjector, FaultPoint, FileCommitStage,
-};
+use a3s_oci_sdk::{Error, ErrorCode, Result};
+use cap_fs_ext::{DirExt, FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptions};
+use serde::de::DeserializeOwned;
+use tokio::io::AsyncReadExt;
+
+use crate::fault::{DurableMutation, FaultInjector};
+#[cfg(unix)]
+use cap_std::fs::{DirBuilder, DirBuilderExt, OpenOptionsExt, Permissions, PermissionsExt};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 
 use super::model::{RuntimeRootMarker, ROOT_SCHEMA_VERSION};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use platform::mount_identity;
+use platform::{
+    ambient_path_exists, create_ambient_private_directory, ensure_ambient_plain_directory,
+    is_lock_contended,
+};
 
 const ROOT_MARKER_FILE: &str = "root.json";
 const ROOT_MARKER_TRANSACTION_FILE: &str = ".root.json.next";
@@ -25,10 +41,30 @@ pub(super) struct RootLock {
     _file: std::fs::File,
 }
 
+/// Capability root for every durable-state filesystem operation.
+///
+/// The display path is retained only for diagnostics and Windows DACL APIs.
+/// All traversal, reads, enumeration, creation, replacement, and directory
+/// moves start from the pinned directory handle.
+#[derive(Debug, Clone)]
+pub(super) struct StateFilesystem {
+    display_root: Arc<PathBuf>,
+    root: Arc<Dir>,
+    root_device: u64,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    root_mount: MountIdentity,
+}
+
+#[cfg(target_os = "linux")]
+type MountIdentity = u64;
+
+#[cfg(target_os = "macos")]
+type MountIdentity = [i32; 2];
+
 pub(super) async fn open_root(
     path: &Path,
     faults: &dyn FaultInjector,
-) -> Result<(PathBuf, Arc<RootLock>)> {
+) -> Result<(Arc<StateFilesystem>, Arc<RootLock>)> {
     if !path.is_absolute() {
         return Err(state_error(
             ErrorCode::InvalidArgument,
@@ -44,8 +80,8 @@ pub(super) async fn open_root(
         ));
     }
 
-    let root = if path_exists(path).await? {
-        ensure_plain_directory(path, "runtime state root").await?;
+    let root = if ambient_path_exists(path).await? {
+        ensure_ambient_plain_directory(path, "runtime state root").await?;
         tokio::fs::canonicalize(path)
             .await
             .map_err(|error| io_error("canonicalize-state-root", path, error))?
@@ -70,30 +106,541 @@ pub(super) async fn open_root(
         let parent = tokio::fs::canonicalize(parent)
             .await
             .map_err(|error| io_error("canonicalize-state-root-parent", parent, error))?;
-        ensure_plain_directory(&parent, "runtime state root parent").await?;
+        ensure_ambient_plain_directory(&parent, "runtime state root parent").await?;
         let candidate = parent.join(name);
-        create_private_directory(&candidate).await?;
+        create_ambient_private_directory(&candidate).await?;
         tokio::fs::canonicalize(&candidate)
             .await
             .map_err(|error| io_error("canonicalize-state-root", &candidate, error))?
     };
-    set_private_directory_permissions(&root).await?;
 
-    let lock_path = root.join(LOCK_FILE);
-    if path_exists(&lock_path).await? {
-        ensure_plain_file(&lock_path, "runtime root lock").await?;
-    }
-    let root_lock = acquire_root_lock(lock_path.clone()).await?;
-    set_private_file_permissions(&lock_path).await?;
-    initialize_layout(&root, faults).await?;
-    Ok((root, Arc::new(root_lock)))
+    let filesystem = Arc::new(StateFilesystem::open(root).await?);
+    filesystem
+        .set_private_directory_permissions(filesystem.root())
+        .await?;
+    let root_lock = filesystem.acquire_root_lock().await?;
+    initialize_layout(filesystem.as_ref(), faults).await?;
+    Ok((filesystem, Arc::new(root_lock)))
 }
 
-async fn initialize_layout(root: &Path, faults: &dyn FaultInjector) -> Result<()> {
+impl StateFilesystem {
+    async fn open(root: PathBuf) -> Result<Self> {
+        let display = root.clone();
+        run_blocking("open-state-root-capability", move || {
+            let parent_path = root.parent().ok_or_else(|| {
+                state_error(
+                    ErrorCode::InvalidArgument,
+                    "open-state-root-capability",
+                    format!("runtime state root has no parent: {}", root.display()),
+                )
+            })?;
+            let name = root.file_name().ok_or_else(|| {
+                state_error(
+                    ErrorCode::InvalidArgument,
+                    "open-state-root-capability",
+                    format!(
+                        "runtime state root has no final component: {}",
+                        root.display()
+                    ),
+                )
+            })?;
+            let parent = Dir::open_ambient_dir(parent_path, ambient_authority())
+                .map_err(|error| io_error("open-state-root-parent", parent_path, error))?;
+            let directory = parent.open_dir_nofollow(name).map_err(|error| {
+                state_error(
+                    ErrorCode::FailedPrecondition,
+                    "open-state-root-capability",
+                    format!(
+                        "runtime state root is not a plain directory: {}: {error}",
+                        root.display()
+                    ),
+                )
+            })?;
+            let metadata = directory
+                .dir_metadata()
+                .map_err(|error| io_error("inspect-state-root-capability", &root, error))?;
+            if !metadata.is_dir() {
+                return Err(state_error(
+                    ErrorCode::FailedPrecondition,
+                    "open-state-root-capability",
+                    format!("runtime state root is not a directory: {}", root.display()),
+                ));
+            }
+            let root_device = metadata.dev();
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let root_mount = mount_identity(directory.as_raw_fd())
+                .map_err(|error| io_error("inspect-state-root-mount", &root, error))?;
+            Ok(Self {
+                display_root: Arc::new(root),
+                root: Arc::new(directory),
+                root_device,
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                root_mount,
+            })
+        })
+        .await
+        .map_err(|error| {
+            if error.operation.as_deref() == Some("open-state-root-capability") {
+                error
+            } else {
+                state_error(
+                    error.code,
+                    "open-state-root-capability",
+                    format!(
+                        "failed to pin runtime state root {}: {}",
+                        display.display(),
+                        error
+                    ),
+                )
+            }
+        })
+    }
+
+    pub(super) fn root(&self) -> &Path {
+        self.display_root.as_ref()
+    }
+
+    pub(super) async fn path_exists(&self, path: &Path) -> Result<bool> {
+        let filesystem = self.clone();
+        let path = path.to_path_buf();
+        run_blocking("inspect-state-path", move || {
+            let (parent, name) = filesystem.resolve_parent(&path, "durable state path")?;
+            match parent.symlink_metadata(&name) {
+                Ok(_) => Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(io_error("inspect-state-path", &path, error)),
+            }
+        })
+        .await
+    }
+
+    pub(super) async fn ensure_plain_directory(&self, path: &Path, label: &str) -> Result<()> {
+        let filesystem = self.clone();
+        let path = path.to_path_buf();
+        let label = label.to_string();
+        run_blocking("inspect-state-directory", move || {
+            filesystem.resolve_directory(&path, &label).map(|_| ())
+        })
+        .await
+    }
+
+    pub(super) async fn ensure_plain_file(&self, path: &Path, label: &str) -> Result<()> {
+        let filesystem = self.clone();
+        let path = path.to_path_buf();
+        let label = label.to_string();
+        run_blocking("inspect-state-file", move || {
+            let file = filesystem.open_plain_file(&path, &label)?;
+            filesystem.protect_file(&file, &path)
+        })
+        .await
+    }
+
+    pub(super) async fn create_private_directory(&self, path: &Path) -> Result<()> {
+        let filesystem = self.clone();
+        let path = path.to_path_buf();
+        run_blocking("create-state-directory", move || {
+            let (parent, name) = filesystem.resolve_parent(&path, "state directory parent")?;
+            #[cfg(unix)]
+            {
+                let mut builder = DirBuilder::new();
+                builder.mode(0o700);
+                parent
+                    .create_dir_with(&name, &builder)
+                    .map_err(|error| io_error("create-state-directory", &path, error))?;
+            }
+            #[cfg(windows)]
+            crate::windows_security::create_private_directory(&path)?;
+            #[cfg(all(not(unix), not(windows)))]
+            parent
+                .create_dir(&name)
+                .map_err(|error| io_error("create-state-directory", &path, error))?;
+
+            let directory = parent.open_dir_nofollow(&name).map_err(|error| {
+                state_error(
+                    ErrorCode::FailedPrecondition,
+                    "create-state-directory",
+                    format!(
+                        "new durable state directory is not plain: {}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            filesystem.verify_directory_location(&directory, &path)?;
+            filesystem.protect_directory(&directory, &path)
+        })
+        .await
+    }
+
+    pub(super) async fn set_private_directory_permissions(&self, path: &Path) -> Result<()> {
+        let filesystem = self.clone();
+        let path = path.to_path_buf();
+        run_blocking("protect-state-directory", move || {
+            let directory = filesystem.resolve_directory(&path, "durable state directory")?;
+            filesystem.protect_directory(&directory, &path)
+        })
+        .await
+    }
+
+    pub(super) async fn read_json<T>(&self, path: &Path) -> Result<T>
+    where
+        T: DeserializeOwned + Send + 'static,
+    {
+        let bytes = self.read_bytes(path).await?;
+        serde_json::from_slice(&bytes).map_err(|error| {
+            state_error(
+                ErrorCode::FailedPrecondition,
+                "decode-state-file",
+                format!("invalid durable state {}: {error}", path.display()),
+            )
+        })
+    }
+
+    pub(super) async fn read_utf8(&self, path: &Path) -> Result<String> {
+        let bytes = self.read_bytes(path).await?;
+        String::from_utf8(bytes).map_err(|error| {
+            state_error(
+                ErrorCode::FailedPrecondition,
+                "decode-state-file",
+                format!("durable state {} is not UTF-8: {error}", path.display()),
+            )
+        })
+    }
+
+    async fn read_bytes(&self, path: &Path) -> Result<Vec<u8>> {
+        let filesystem = self.clone();
+        let display = path.to_path_buf();
+        let open_path = display.clone();
+        let file = run_blocking("open-state-file", move || {
+            let file = filesystem.open_plain_file(&open_path, "durable state file")?;
+            filesystem.protect_file(&file, &open_path)?;
+            Ok(file.into_std())
+        })
+        .await?;
+        let file = tokio::fs::File::from_std(file);
+        let mut bytes = Vec::new();
+        file.take(MAX_STATE_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|error| io_error("read-state-file", &display, error))?;
+        if bytes.len() as u64 > MAX_STATE_FILE_BYTES {
+            return Err(state_error(
+                ErrorCode::ResourceExhausted,
+                "read-state-file",
+                format!(
+                    "durable state exceeds {MAX_STATE_FILE_BYTES} bytes: {}",
+                    display.display()
+                ),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    pub(super) async fn read_directory(&self, path: &Path, label: &str) -> Result<Vec<OsString>> {
+        let filesystem = self.clone();
+        let path = path.to_path_buf();
+        let label = label.to_string();
+        run_blocking("read-state-directory", move || {
+            let directory = filesystem.resolve_directory(&path, &label)?;
+            let entries = directory
+                .entries()
+                .map_err(|error| io_error("open-state-directory", &path, error))?;
+            entries
+                .map(|entry| {
+                    entry
+                        .map(|entry| entry.file_name())
+                        .map_err(|error| io_error("read-state-directory", &path, error))
+                })
+                .collect()
+        })
+        .await
+    }
+
+    fn open_plain_file(&self, path: &Path, label: &str) -> Result<cap_std::fs::File> {
+        let (parent, name) = self.resolve_parent(path, "durable state file parent")?;
+        self.open_plain_file_in_parent(&parent, &name, path, label)
+    }
+
+    fn open_plain_file_in_parent(
+        &self,
+        parent: &Dir,
+        name: &OsStr,
+        display: &Path,
+        label: &str,
+    ) -> Result<cap_std::fs::File> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        options.follow(FollowSymlinks::No);
+        let file = parent.open_with(name, &options).map_err(|error| {
+            state_error(
+                ErrorCode::FailedPrecondition,
+                "inspect-state-file",
+                format!(
+                    "{label} is not a plain file: {}: {error}",
+                    display.display()
+                ),
+            )
+        })?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| io_error("inspect-state-file", display, error))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "inspect-state-file",
+                format!("{label} is not a plain file: {}", display.display()),
+            ));
+        }
+        if metadata.len() > MAX_STATE_FILE_BYTES {
+            return Err(state_error(
+                ErrorCode::ResourceExhausted,
+                "inspect-state-file",
+                format!(
+                    "{label} exceeds {MAX_STATE_FILE_BYTES} bytes: {}",
+                    display.display()
+                ),
+            ));
+        }
+        self.verify_file_location(&file, display)?;
+        Ok(file)
+    }
+
+    fn resolve_parent(&self, path: &Path, label: &str) -> Result<(Dir, OsString)> {
+        let relative = self.relative_path(path)?;
+        let name = relative.file_name().ok_or_else(|| {
+            state_error(
+                ErrorCode::Internal,
+                "resolve-state-path",
+                format!("{label} has no final component: {}", path.display()),
+            )
+        })?;
+        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+        let parent_display = path.parent().unwrap_or_else(|| self.root());
+        let directory = self.resolve_relative_directory(parent, parent_display, label)?;
+        Ok((directory, name.to_os_string()))
+    }
+
+    fn resolve_directory(&self, path: &Path, label: &str) -> Result<Dir> {
+        let relative = self.relative_path(path)?;
+        self.resolve_relative_directory(&relative, path, label)
+    }
+
+    fn resolve_relative_directory(
+        &self,
+        relative: &Path,
+        display: &Path,
+        label: &str,
+    ) -> Result<Dir> {
+        let mut current = self
+            .root
+            .try_clone()
+            .map_err(|error| io_error("clone-state-root-capability", self.root(), error))?;
+        for component in relative.components() {
+            let Component::Normal(name) = component else {
+                return Err(state_error(
+                    ErrorCode::Internal,
+                    "resolve-state-directory",
+                    format!(
+                        "{label} contains a non-normal path component: {}",
+                        display.display()
+                    ),
+                ));
+            };
+            current = current.open_dir_nofollow(name).map_err(|error| {
+                state_error(
+                    ErrorCode::FailedPrecondition,
+                    "inspect-state-directory",
+                    format!(
+                        "{label} is not a plain directory: {}: {error}",
+                        display.display()
+                    ),
+                )
+            })?;
+            self.verify_directory_location(&current, display)?;
+        }
+        Ok(current)
+    }
+
+    fn relative_path(&self, path: &Path) -> Result<PathBuf> {
+        let relative = path.strip_prefix(self.root()).map_err(|_| {
+            state_error(
+                ErrorCode::Internal,
+                "resolve-state-path",
+                format!(
+                    "durable state path is outside the pinned runtime root {}: {}",
+                    self.root().display(),
+                    path.display()
+                ),
+            )
+        })?;
+        if relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(state_error(
+                ErrorCode::Internal,
+                "resolve-state-path",
+                format!(
+                    "durable state path is not normalized below the pinned runtime root: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(relative.to_path_buf())
+    }
+
+    fn verify_directory_location(&self, directory: &Dir, display: &Path) -> Result<()> {
+        let metadata = directory
+            .dir_metadata()
+            .map_err(|error| io_error("inspect-state-directory", display, error))?;
+        if !metadata.is_dir() || metadata.dev() != self.root_device {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "inspect-state-directory",
+                format!(
+                    "durable state directory crossed the pinned runtime filesystem: {}",
+                    display.display()
+                ),
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if mount_identity(directory.as_raw_fd())
+            .map_err(|error| io_error("inspect-state-directory-mount", display, error))?
+            != self.root_mount
+        {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "inspect-state-directory-mount",
+                format!(
+                    "durable state directory crossed a mount boundary below the pinned runtime root: {}",
+                    display.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_file_location(&self, file: &cap_std::fs::File, display: &Path) -> Result<()> {
+        let metadata = file
+            .metadata()
+            .map_err(|error| io_error("inspect-state-file", display, error))?;
+        if metadata.dev() != self.root_device {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "inspect-state-file",
+                format!(
+                    "durable state file crossed the pinned runtime filesystem: {}",
+                    display.display()
+                ),
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if mount_identity(file.as_raw_fd())
+            .map_err(|error| io_error("inspect-state-file-mount", display, error))?
+            != self.root_mount
+        {
+            return Err(state_error(
+                ErrorCode::FailedPrecondition,
+                "inspect-state-file-mount",
+                format!(
+                    "durable state file crossed a mount boundary below the pinned runtime root: {}",
+                    display.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn protect_directory(&self, directory: &Dir, display: &Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            directory
+                .set_permissions(".", Permissions::from_mode(0o700))
+                .map_err(|error| io_error("protect-state-directory", display, error))?;
+        }
+        #[cfg(windows)]
+        {
+            let _retained = directory;
+            crate::windows_security::protect_path(display)?;
+        }
+        Ok(())
+    }
+
+    fn protect_file(&self, file: &cap_std::fs::File, display: &Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            file.set_permissions(Permissions::from_mode(0o600))
+                .map_err(|error| io_error("protect-state-file", display, error))?;
+        }
+        #[cfg(windows)]
+        {
+            let _retained = file;
+            crate::windows_security::protect_path(display)?;
+        }
+        Ok(())
+    }
+
+    async fn acquire_root_lock(&self) -> Result<RootLock> {
+        let filesystem = self.clone();
+        run_blocking("lock-state-root", move || {
+            let path = filesystem.root().join(LOCK_FILE);
+            let (parent, name) = filesystem.resolve_parent(&path, "runtime root lock parent")?;
+            match parent.symlink_metadata(&name) {
+                Ok(metadata) => {
+                    if !metadata.is_file() || metadata.file_type().is_symlink() {
+                        return Err(state_error(
+                            ErrorCode::FailedPrecondition,
+                            "open-state-root-lock",
+                            format!("runtime root lock is not a plain file: {}", path.display()),
+                        ));
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(io_error("inspect-state-root-lock", &path, error));
+                }
+            }
+            let mut options = OpenOptions::new();
+            options.read(true).write(true).create(true);
+            options.follow(FollowSymlinks::No);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let file = parent
+                .open_with(&name, &options)
+                .map_err(|error| io_error("open-state-root-lock", &path, error))?;
+            filesystem.verify_file_location(&file, &path)?;
+            filesystem.protect_file(&file, &path)?;
+            let file = file.into_std();
+            fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+                let contended = is_lock_contended(&error);
+                let code = if contended {
+                    ErrorCode::Conflict
+                } else {
+                    ErrorCode::Internal
+                };
+                state_error(
+                    code,
+                    "lock-state-root",
+                    format!(
+                        "failed to acquire exclusive runtime root lock {}: {error}",
+                        path.display()
+                    ),
+                )
+                .retryable(contended)
+            })?;
+            Ok(RootLock { _file: file })
+        })
+        .await
+    }
+}
+
+async fn initialize_layout(filesystem: &StateFilesystem, faults: &dyn FaultInjector) -> Result<()> {
+    let root = filesystem.root();
     let marker_path = root.join(ROOT_MARKER_FILE);
-    if path_exists(&marker_path).await? {
-        ensure_plain_file(&marker_path, "runtime root marker").await?;
-        let marker: RuntimeRootMarker = read_json(&marker_path).await?;
+    if filesystem.path_exists(&marker_path).await? {
+        filesystem
+            .ensure_plain_file(&marker_path, "runtime root marker")
+            .await?;
+        let marker: RuntimeRootMarker = filesystem.read_json(&marker_path).await?;
         if marker.schema_version != ROOT_SCHEMA_VERSION {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
@@ -106,15 +653,11 @@ async fn initialize_layout(root: &Path, faults: &dyn FaultInjector) -> Result<()
             ));
         }
     } else {
-        let mut entries = tokio::fs::read_dir(root)
-            .await
-            .map_err(|error| io_error("inspect-state-root", root, error))?;
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| io_error("inspect-state-root", root, error))?
+        for entry in filesystem
+            .read_directory(root, "runtime state root")
+            .await?
         {
-            if entry.file_name() != LOCK_FILE && entry.file_name() != ROOT_MARKER_TRANSACTION_FILE {
+            if entry != LOCK_FILE && entry != ROOT_MARKER_TRANSACTION_FILE {
                 return Err(state_error(
                     ErrorCode::FailedPrecondition,
                     "open-state-root",
@@ -122,13 +665,14 @@ async fn initialize_layout(root: &Path, faults: &dyn FaultInjector) -> Result<()
                 ));
             }
         }
-        atomic_write_json(
-            faults,
-            DurableMutation::RuntimeRootMarker,
-            &marker_path,
-            &RuntimeRootMarker::default(),
-        )
-        .await?;
+        filesystem
+            .atomic_write_json(
+                faults,
+                DurableMutation::RuntimeRootMarker,
+                &marker_path,
+                &RuntimeRootMarker::default(),
+            )
+            .await?;
     }
 
     for directory in [
@@ -139,536 +683,39 @@ async fn initialize_layout(root: &Path, faults: &dyn FaultInjector) -> Result<()
         "events",
     ] {
         let path = root.join(directory);
-        if path_exists(&path).await? {
-            ensure_plain_directory(&path, directory).await?;
-            set_private_directory_permissions(&path).await?;
+        if filesystem.path_exists(&path).await? {
+            filesystem.ensure_plain_directory(&path, directory).await?;
+            filesystem.set_private_directory_permissions(&path).await?;
         } else {
-            create_private_directory(&path).await?;
+            filesystem.create_private_directory(&path).await?;
         }
     }
     for directory in ["records", "keys"] {
         let path = root.join("events").join(directory);
-        if path_exists(&path).await? {
-            ensure_plain_directory(&path, "runtime event directory").await?;
-            set_private_directory_permissions(&path).await?;
+        if filesystem.path_exists(&path).await? {
+            filesystem
+                .ensure_plain_directory(&path, "runtime event directory")
+                .await?;
+            filesystem.set_private_directory_permissions(&path).await?;
         } else {
-            create_private_directory(&path).await?;
+            filesystem.create_private_directory(&path).await?;
         }
     }
     Ok(())
 }
 
-async fn acquire_root_lock(path: PathBuf) -> Result<RootLock> {
-    tokio::task::spawn_blocking(move || {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(|error| io_error("open-state-root-lock", &path, error))?;
-        fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
-            let contended = is_lock_contended(&error);
-            let code = if contended {
-                ErrorCode::Conflict
-            } else {
-                ErrorCode::Internal
-            };
-            state_error(
-                code,
-                "lock-state-root",
-                format!(
-                    "failed to acquire exclusive runtime root lock {}: {error}",
-                    path.display()
-                ),
-            )
-            .retryable(contended)
-        })?;
-        Ok(RootLock { _file: file })
-    })
-    .await
-    .map_err(|error| {
+async fn run_blocking<T, F>(operation: &'static str, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.map_err(|error| {
         state_error(
             ErrorCode::Internal,
-            "lock-state-root",
-            format!("runtime root lock task failed: {error}"),
+            operation,
+            format!("durable state filesystem task failed: {error}"),
         )
     })?
-}
-
-#[cfg(windows)]
-fn is_lock_contended(error: &io::Error) -> bool {
-    use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION};
-
-    error.kind() == io::ErrorKind::WouldBlock
-        || error.raw_os_error().is_some_and(|code| {
-            u32::try_from(code)
-                .is_ok_and(|code| matches!(code, ERROR_LOCK_VIOLATION | ERROR_SHARING_VIOLATION))
-        })
-}
-
-#[cfg(not(windows))]
-fn is_lock_contended(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::WouldBlock
-}
-
-#[cfg(not(windows))]
-pub(super) async fn create_private_directory(path: &Path) -> Result<()> {
-    tokio::fs::create_dir(path)
-        .await
-        .map_err(|error| io_error("create-state-directory", path, error))?;
-    set_private_directory_permissions(path).await
-}
-
-#[cfg(unix)]
-pub(super) async fn set_private_directory_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .await
-        .map_err(|error| io_error("protect-state-directory", path, error))
-}
-
-#[cfg(windows)]
-pub(super) async fn create_private_directory(path: &Path) -> Result<()> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || crate::windows_security::create_private_directory(&path))
-        .await
-        .map_err(|error| {
-            state_error(
-                ErrorCode::Internal,
-                "create-state-directory",
-                format!("Windows state-directory task failed: {error}"),
-            )
-        })?
-}
-
-#[cfg(windows)]
-pub(super) async fn set_private_directory_permissions(path: &Path) -> Result<()> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || crate::windows_security::protect_path(&path))
-        .await
-        .map_err(|error| {
-            state_error(
-                ErrorCode::Internal,
-                "protect-state-directory",
-                format!("Windows state-directory protection task failed: {error}"),
-            )
-        })?
-}
-
-#[cfg(all(not(unix), not(windows)))]
-pub(super) async fn set_private_directory_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-pub(super) async fn ensure_plain_directory(path: &Path, label: &str) -> Result<()> {
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|error| io_error("inspect-state-directory", path, error))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
-        return Err(state_error(
-            ErrorCode::FailedPrecondition,
-            "inspect-state-directory",
-            format!("{label} is not a plain directory: {}", path.display()),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) async fn ensure_plain_file(path: &Path, label: &str) -> Result<()> {
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|error| io_error("inspect-state-file", path, error))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
-        return Err(state_error(
-            ErrorCode::FailedPrecondition,
-            "inspect-state-file",
-            format!("{label} is not a plain file: {}", path.display()),
-        ));
-    }
-    if metadata.len() > MAX_STATE_FILE_BYTES {
-        return Err(state_error(
-            ErrorCode::ResourceExhausted,
-            "inspect-state-file",
-            format!(
-                "{label} exceeds {MAX_STATE_FILE_BYTES} bytes: {}",
-                path.display()
-            ),
-        ));
-    }
-    set_private_file_permissions(path).await?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-const fn is_reparse_point(_metadata: &std::fs::Metadata) -> bool {
-    false
-}
-
-pub(super) async fn path_exists(path: &Path) -> Result<bool> {
-    match tokio::fs::symlink_metadata(path).await {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(io_error("inspect-state-path", path, error)),
-    }
-}
-
-pub(super) async fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
-    let bytes = read_bytes(path).await?;
-    serde_json::from_slice(&bytes).map_err(|error| {
-        state_error(
-            ErrorCode::FailedPrecondition,
-            "decode-state-file",
-            format!("invalid durable state {}: {error}", path.display()),
-        )
-    })
-}
-
-pub(super) async fn read_utf8(path: &Path) -> Result<String> {
-    let bytes = read_bytes(path).await?;
-    String::from_utf8(bytes).map_err(|error| {
-        state_error(
-            ErrorCode::FailedPrecondition,
-            "decode-state-file",
-            format!("durable state {} is not UTF-8: {error}", path.display()),
-        )
-    })
-}
-
-async fn read_bytes(path: &Path) -> Result<Vec<u8>> {
-    ensure_plain_file(path, "durable state file").await?;
-    let file = tokio::fs::File::open(path)
-        .await
-        .map_err(|error| io_error("open-state-file", path, error))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_STATE_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|error| io_error("read-state-file", path, error))?;
-    if bytes.len() as u64 > MAX_STATE_FILE_BYTES {
-        return Err(state_error(
-            ErrorCode::ResourceExhausted,
-            "read-state-file",
-            format!(
-                "durable state exceeds {MAX_STATE_FILE_BYTES} bytes: {}",
-                path.display()
-            ),
-        ));
-    }
-    Ok(bytes)
-}
-
-pub(super) async fn atomic_write_json(
-    faults: &dyn FaultInjector,
-    mutation: DurableMutation,
-    path: &Path,
-    value: &impl Serialize,
-) -> Result<()> {
-    let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| {
-        state_error(
-            ErrorCode::Internal,
-            "encode-state-file",
-            format!("failed to encode durable state {}: {error}", path.display()),
-        )
-    })?;
-    bytes.push(b'\n');
-    atomic_write(faults, mutation, path, &bytes).await
-}
-
-pub(super) async fn atomic_write(
-    faults: &dyn FaultInjector,
-    mutation: DurableMutation,
-    path: &Path,
-    bytes: &[u8],
-) -> Result<()> {
-    if mutation.is_directory_move() {
-        return Err(state_error(
-            ErrorCode::Internal,
-            "write-state-file",
-            format!("directory mutation {mutation:?} cannot replace a state file"),
-        ));
-    }
-    if bytes.len() as u64 > MAX_STATE_FILE_BYTES {
-        return Err(state_error(
-            ErrorCode::ResourceExhausted,
-            "write-state-file",
-            format!(
-                "durable state exceeds {MAX_STATE_FILE_BYTES} bytes: {}",
-                path.display()
-            ),
-        ));
-    }
-    let parent = path.parent().ok_or_else(|| {
-        state_error(
-            ErrorCode::Internal,
-            "write-state-file",
-            format!("durable state path has no parent: {}", path.display()),
-        )
-    })?;
-    ensure_plain_directory(parent, "durable state parent").await?;
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            state_error(
-                ErrorCode::Internal,
-                "write-state-file",
-                format!(
-                    "durable state filename is not valid UTF-8: {}",
-                    path.display()
-                ),
-            )
-        })?;
-    let temporary = parent.join(format!(".{file_name}.next"));
-    if path_exists(&temporary).await? {
-        ensure_plain_file(&temporary, "state transaction file").await?;
-        tokio::fs::remove_file(&temporary)
-            .await
-            .map_err(|error| io_error("remove-stale-state-transaction", &temporary, error))?;
-    }
-    let mut file = tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .await
-        .map_err(|error| io_error("create-state-file", &temporary, error))?;
-    faults.check(FaultPoint::DurableFile {
-        mutation,
-        stage: FileCommitStage::TemporaryFileCreated,
-    })?;
-    set_private_file_permissions(&temporary).await?;
-    faults.check(FaultPoint::DurableFile {
-        mutation,
-        stage: FileCommitStage::TemporaryFileProtected,
-    })?;
-    file.write_all(bytes)
-        .await
-        .map_err(|error| io_error("write-state-file", &temporary, error))?;
-    faults.check(FaultPoint::DurableFile {
-        mutation,
-        stage: FileCommitStage::DataWritten,
-    })?;
-    file.flush()
-        .await
-        .map_err(|error| io_error("flush-state-file", &temporary, error))?;
-    faults.check(FaultPoint::DurableFile {
-        mutation,
-        stage: FileCommitStage::DataFlushed,
-    })?;
-    file.sync_all()
-        .await
-        .map_err(|error| io_error("sync-state-file", &temporary, error))?;
-    faults.check(FaultPoint::DurableFile {
-        mutation,
-        stage: FileCommitStage::FileSynced,
-    })?;
-    drop(file);
-    atomic_replace(&temporary, path).await?;
-    faults.check(FaultPoint::DurableFile {
-        mutation,
-        stage: FileCommitStage::FileReplaced,
-    })?;
-    sync_parent(parent).await?;
-    faults.check(FaultPoint::DurableFile {
-        mutation,
-        stage: FileCommitStage::ParentDirectorySynced,
-    })
-}
-
-pub(super) async fn atomic_move_directory(
-    faults: &dyn FaultInjector,
-    mutation: DurableMutation,
-    source: &Path,
-    destination: &Path,
-) -> Result<()> {
-    if !mutation.is_directory_move() {
-        return Err(state_error(
-            ErrorCode::Internal,
-            "commit-state-directory",
-            format!("file mutation {mutation:?} cannot move a state directory"),
-        ));
-    }
-    ensure_plain_directory(source, "state transaction source").await?;
-    if path_exists(destination).await? {
-        return Err(state_error(
-            ErrorCode::Conflict,
-            "commit-state-directory",
-            format!(
-                "state transaction destination already exists: {}",
-                destination.display()
-            ),
-        ));
-    }
-    let source_parent = source.parent().ok_or_else(|| {
-        state_error(
-            ErrorCode::Internal,
-            "commit-state-directory",
-            format!("state source has no parent: {}", source.display()),
-        )
-    })?;
-    let destination_parent = destination.parent().ok_or_else(|| {
-        state_error(
-            ErrorCode::Internal,
-            "commit-state-directory",
-            format!("state destination has no parent: {}", destination.display()),
-        )
-    })?;
-    ensure_plain_directory(source_parent, "state transaction source parent").await?;
-    ensure_plain_directory(destination_parent, "state transaction destination parent").await?;
-    move_directory(source, destination).await?;
-    faults.check(FaultPoint::DurableDirectory {
-        mutation,
-        stage: DirectoryCommitStage::DirectoryMoved,
-    })?;
-    sync_parent(source_parent).await?;
-    faults.check(FaultPoint::DurableDirectory {
-        mutation,
-        stage: DirectoryCommitStage::SourceParentSynced,
-    })?;
-    if source_parent != destination_parent {
-        sync_parent(destination_parent).await?;
-    }
-    faults.check(FaultPoint::DurableDirectory {
-        mutation,
-        stage: DirectoryCommitStage::DestinationParentSynced,
-    })
-}
-
-#[cfg(unix)]
-async fn move_directory(source: &Path, destination: &Path) -> Result<()> {
-    tokio::fs::rename(source, destination)
-        .await
-        .map_err(|error| io_error("commit-state-directory", destination, error))
-}
-
-#[cfg(windows)]
-async fn move_directory(source: &Path, destination: &Path) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
-
-    let source_wide = source
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let destination_wide = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    // SAFETY: both path buffers are live, immutable, and NUL-terminated.
-    let result = unsafe {
-        MoveFileExW(
-            source_wide.as_ptr(),
-            destination_wide.as_ptr(),
-            MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        return Err(io_error(
-            "commit-state-directory",
-            destination,
-            io::Error::last_os_error(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-async fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
-    tokio::fs::rename(source, destination)
-        .await
-        .map_err(|error| io_error("commit-state-file", destination, error))
-}
-
-#[cfg(windows)]
-async fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-
-    let destination_display = destination.display().to_string();
-    let source = source
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let destination = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    // SAFETY: both slices are NUL-terminated, live for the duration of the
-    // call, and point to distinct immutable UTF-16 path buffers.
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        return Err(io_error(
-            "commit-state-file",
-            Path::new(&destination_display),
-            io::Error::last_os_error(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-async fn set_private_file_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .await
-        .map_err(|error| io_error("protect-state-file", path, error))
-}
-
-#[cfg(not(unix))]
-#[cfg(not(windows))]
-async fn set_private_file_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(windows)]
-async fn set_private_file_permissions(path: &Path) -> Result<()> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || crate::windows_security::protect_path(&path))
-        .await
-        .map_err(|error| {
-            state_error(
-                ErrorCode::Internal,
-                "protect-state-file",
-                format!("Windows state-file protection task failed: {error}"),
-            )
-        })?
-}
-
-#[cfg(unix)]
-async fn sync_parent(path: &Path) -> Result<()> {
-    tokio::fs::File::open(path)
-        .await
-        .map_err(|error| io_error("open-state-directory", path, error))?
-        .sync_all()
-        .await
-        .map_err(|error| io_error("sync-state-directory", path, error))
-}
-
-#[cfg(not(unix))]
-async fn sync_parent(_path: &Path) -> Result<()> {
-    Ok(())
 }
 
 pub(super) fn state_error(
@@ -685,4 +732,28 @@ fn io_error(operation: &'static str, path: &Path, error: io::Error) -> Error {
         operation,
         format!("{}: {error}", path.display()),
     )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::path::Path;
+
+    use super::StateFilesystem;
+    use cap_std::{ambient_authority, fs::Dir};
+
+    #[tokio::test]
+    async fn rejects_a_directory_handle_from_another_mount() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("state");
+        std::fs::create_dir(&root).expect("state root");
+        let filesystem = StateFilesystem::open(root).await.expect("pin state root");
+        let foreign = Dir::open_ambient_dir("/dev", ambient_authority())
+            .expect("open a different mounted filesystem");
+
+        let error = filesystem
+            .verify_directory_location(&foreign, Path::new("/dev"))
+            .expect_err("a foreign mount must fail the state-root identity check");
+
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::FailedPrecondition);
+    }
 }

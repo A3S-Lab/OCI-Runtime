@@ -10,9 +10,7 @@ use serde::Serialize;
 
 use crate::fault::DurableMutation;
 
-use super::filesystem::{
-    create_private_directory, ensure_plain_directory, path_exists, read_json, state_error,
-};
+use super::filesystem::state_error;
 use super::model::{
     StoredContainer, StoredOperation, StoredOperationKind, StoredOperationStatus, StoredProcess,
     OPERATION_SCHEMA_VERSION, PROCESS_SCHEMA_VERSION,
@@ -191,7 +189,11 @@ impl DurableStateStore {
         }
         let target = exact_process_target(&container, request.process_id.clone());
         self.ensure_process_directory(&container.id).await?;
-        if path_exists(&self.process_path(&target)).await? {
+        if self
+            .filesystem
+            .path_exists(&self.process_path(&target))
+            .await?
+        {
             return Err(state_error(
                 ErrorCode::AlreadyExists,
                 "prepare-exec",
@@ -237,7 +239,7 @@ impl DurableStateStore {
         self.ensure_process_directory(&container.id).await?;
         let path = self.process_path(&target);
         let terminal = request.process.terminal().unwrap_or(false);
-        if path_exists(&path).await? {
+        if self.filesystem.path_exists(&path).await? {
             let process = self.load_stored_process(&target).await?;
             if process.record.terminal != terminal {
                 return Err(state_error(
@@ -718,7 +720,7 @@ impl DurableStateStore {
             )
         })?;
         let directory = self.process_directory(&target.container.id);
-        if !path_exists(&directory).await? {
+        if !self.filesystem.path_exists(&directory).await? {
             return Err(state_error(
                 ErrorCode::NotFound,
                 "load-process-state",
@@ -728,9 +730,11 @@ impl DurableStateStore {
                 ),
             ));
         }
-        ensure_plain_directory(&directory, "process state directory").await?;
+        self.filesystem
+            .ensure_plain_directory(&directory, "process state directory")
+            .await?;
         let path = self.process_path(target);
-        if !path_exists(&path).await? {
+        if !self.filesystem.path_exists(&path).await? {
             return Err(state_error(
                 ErrorCode::NotFound,
                 "load-process-state",
@@ -740,7 +744,7 @@ impl DurableStateStore {
                 ),
             ));
         }
-        let process: StoredProcess = read_json(&path).await?;
+        let process: StoredProcess = self.filesystem.read_json(&path).await?;
         if process.schema_version != PROCESS_SCHEMA_VERSION
             || process.record.target != *target
             || process.record.target.container.generation != Some(generation)
@@ -860,31 +864,17 @@ impl DurableStateStore {
             }
         }
         let directory = self.process_directory(&container.id);
-        if !path_exists(&directory).await? {
+        if !self.filesystem.path_exists(&directory).await? {
             return Ok(());
         }
-        ensure_plain_directory(&directory, "process state directory").await?;
-        let mut entries = tokio::fs::read_dir(&directory).await.map_err(|error| {
-            state_error(
-                ErrorCode::Internal,
-                operation,
-                format!(
-                    "failed to inspect process records for container {}: {error}",
-                    container.id
-                ),
-            )
-        })?;
-        while let Some(entry) = entries.next_entry().await.map_err(|error| {
-            state_error(
-                ErrorCode::Internal,
-                operation,
-                format!(
-                    "failed to enumerate process records for container {}: {error}",
-                    container.id
-                ),
-            )
-        })? {
-            let file_name = entry.file_name();
+        self.filesystem
+            .ensure_plain_directory(&directory, "process state directory")
+            .await?;
+        for file_name in self
+            .filesystem
+            .read_directory(&directory, "process state directory")
+            .await?
+        {
             let file_name = file_name.to_str().ok_or_else(|| {
                 state_error(
                     ErrorCode::FailedPrecondition,
@@ -931,10 +921,12 @@ impl DurableStateStore {
 
     async fn ensure_process_directory(&self, id: &ContainerId) -> Result<()> {
         let directory = self.process_directory(id);
-        if path_exists(&directory).await? {
-            ensure_plain_directory(&directory, "process state directory").await
+        if self.filesystem.path_exists(&directory).await? {
+            self.filesystem
+                .ensure_plain_directory(&directory, "process state directory")
+                .await
         } else {
-            create_private_directory(&directory).await
+            self.filesystem.create_private_directory(&directory).await
         }
     }
 }

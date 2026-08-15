@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::fault::DurableMutation;
 
-use super::filesystem::{ensure_plain_directory, path_exists, read_json, state_error};
+use super::filesystem::state_error;
 use super::model::{
     StoredEventClaim, StoredEventCursor, StoredEventRecord, EVENT_CLAIM_SCHEMA_VERSION,
     EVENT_CURSOR_SCHEMA_VERSION, EVENT_RECORD_SCHEMA_VERSION,
@@ -109,7 +109,7 @@ impl DurableStateStore {
     ) -> Result<RuntimeEvent> {
         exact_target_key(target)?;
         let claim_path = self.event_claim_path(&identity);
-        if path_exists(&claim_path).await? {
+        if self.filesystem.path_exists(&claim_path).await? {
             let claim = self.load_event_claim(&claim_path, &identity).await?;
             validate_claimed_event(&claim.event, target, process_id.as_ref(), kind, &attributes)?;
             self.ensure_event_record(&claim.event).await?;
@@ -183,17 +183,16 @@ impl DurableStateStore {
         let claimed_sequences = self.repair_pending_event_records().await?;
         let cursor = self.load_event_cursor().await?;
         let directory = self.event_records_directory();
-        ensure_plain_directory(&directory, "runtime event records").await?;
-        let mut entries = tokio::fs::read_dir(&directory)
-            .await
-            .map_err(|error| event_io_error("open", &directory, error))?;
+        self.filesystem
+            .ensure_plain_directory(&directory, "runtime event records")
+            .await?;
         let mut records = Vec::new();
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| event_io_error("read", &directory, error))?
+        for entry in self
+            .filesystem
+            .read_directory(&directory, "runtime event records")
+            .await?
         {
-            let name = entry.file_name().into_string().map_err(|name| {
+            let name = entry.into_string().map_err(|name| {
                 state_error(
                     ErrorCode::FailedPrecondition,
                     "poll-runtime-events",
@@ -204,7 +203,8 @@ impl DurableStateStore {
                 continue;
             }
             let sequence = parse_event_record_name(&name)?;
-            let stored: StoredEventRecord = read_json(&entry.path()).await?;
+            let stored: StoredEventRecord =
+                self.filesystem.read_json(&directory.join(&name)).await?;
             validate_event_record(&stored, sequence, cursor.last_sequence)?;
             if !claimed_sequences.contains(&sequence) {
                 return Err(state_error(
@@ -253,17 +253,16 @@ impl DurableStateStore {
     async fn repair_pending_event_records(&self) -> Result<BTreeSet<u64>> {
         let cursor = self.load_event_cursor().await?;
         let directory = self.event_claims_directory();
-        ensure_plain_directory(&directory, "runtime event claims").await?;
-        let mut entries = tokio::fs::read_dir(&directory)
-            .await
-            .map_err(|error| event_io_error("open", &directory, error))?;
+        self.filesystem
+            .ensure_plain_directory(&directory, "runtime event claims")
+            .await?;
         let mut claimed_sequences = BTreeSet::new();
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| event_io_error("read", &directory, error))?
+        for entry in self
+            .filesystem
+            .read_directory(&directory, "runtime event claims")
+            .await?
         {
-            let name = entry.file_name().into_string().map_err(|name| {
+            let name = entry.into_string().map_err(|name| {
                 state_error(
                     ErrorCode::FailedPrecondition,
                     "repair-runtime-events",
@@ -274,7 +273,7 @@ impl DurableStateStore {
                 continue;
             }
             let expected_hash = parse_event_claim_name(&name)?;
-            let claim: StoredEventClaim = read_json(&entry.path()).await?;
+            let claim: StoredEventClaim = self.filesystem.read_json(&directory.join(&name)).await?;
             if claim.schema_version != EVENT_CLAIM_SCHEMA_VERSION
                 || event_identity_hash(&claim.identity) != expected_hash
                 || claim.event.sequence == 0
@@ -308,8 +307,8 @@ impl DurableStateStore {
             schema_version: EVENT_RECORD_SCHEMA_VERSION.to_string(),
             event: event.clone(),
         };
-        if path_exists(&path).await? {
-            let actual: StoredEventRecord = read_json(&path).await?;
+        if self.filesystem.path_exists(&path).await? {
+            let actual: StoredEventRecord = self.filesystem.read_json(&path).await?;
             if actual != expected {
                 return Err(state_error(
                     ErrorCode::Conflict,
@@ -327,7 +326,7 @@ impl DurableStateStore {
     }
 
     async fn load_event_claim(&self, path: &Path, identity: &str) -> Result<StoredEventClaim> {
-        let claim: StoredEventClaim = read_json(path).await?;
+        let claim: StoredEventClaim = self.filesystem.read_json(path).await?;
         if claim.schema_version != EVENT_CLAIM_SCHEMA_VERSION || claim.identity != identity {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
@@ -352,13 +351,13 @@ impl DurableStateStore {
 
     async fn load_event_cursor(&self) -> Result<StoredEventCursor> {
         let path = self.event_cursor_path();
-        if !path_exists(&path).await? {
+        if !self.filesystem.path_exists(&path).await? {
             return Ok(StoredEventCursor {
                 schema_version: EVENT_CURSOR_SCHEMA_VERSION.to_string(),
                 last_sequence: 0,
             });
         }
-        let cursor: StoredEventCursor = read_json(&path).await?;
+        let cursor: StoredEventCursor = self.filesystem.read_json(&path).await?;
         if cursor.schema_version != EVENT_CURSOR_SCHEMA_VERSION {
             return Err(state_error(
                 ErrorCode::FailedPrecondition,
@@ -544,16 +543,5 @@ fn invalid_event_entry(label: &str, name: &str) -> Error {
         ErrorCode::FailedPrecondition,
         "poll-runtime-events",
         format!("{label} directory contains invalid entry {name:?}"),
-    )
-}
-
-fn event_io_error(operation: &str, path: &Path, error: std::io::Error) -> Error {
-    state_error(
-        ErrorCode::Internal,
-        "poll-runtime-events",
-        format!(
-            "failed to {operation} durable runtime event directory {}: {error}",
-            path.display()
-        ),
     )
 }

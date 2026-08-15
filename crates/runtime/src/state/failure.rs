@@ -2,7 +2,7 @@ use a3s_oci_sdk::{Error, ErrorCode, OperationId, Result};
 
 use crate::fault::DurableMutation;
 
-use super::filesystem::{path_exists, state_error};
+use super::filesystem::state_error;
 use super::model::{StoredOperationKind, StoredOperationStatus};
 use super::{ensure_active_operation, DurableStateStore, CONTAINER_RECORD_FILE};
 
@@ -148,7 +148,10 @@ impl DurableStateStore {
 
         let source = self.container_directory(&operation.container_id);
         let tombstone = self.failed_create_tombstone(&operation.operation_id);
-        match (path_exists(&source).await?, path_exists(&tombstone).await?) {
+        match (
+            self.filesystem.path_exists(&source).await?,
+            self.filesystem.path_exists(&tombstone).await?,
+        ) {
             (true, false) => {
                 let stored = self
                     .load_stored_exact(&operation.container_id, operation.generation)

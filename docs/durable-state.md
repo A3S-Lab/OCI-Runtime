@@ -14,9 +14,15 @@ advertise only `features`; no production executor is available yet.
 The state root:
 
 - must be an absolute UTF-8 path whose parent already exists;
-- is canonicalized before use;
+- is canonicalized once, opened without following its final component, and
+  retained as a fixed directory capability;
+- resolves descendant traversal, reads, enumeration, directory creation, file
+  creation, replacement, and quarantine moves from retained directory handles;
 - rejects a root, layout directory, record, or transaction file that is a
   symbolic link or a Windows reparse point;
+- rejects a descendant directory or file on another device, rejects a changed
+  Linux mount ID even on the same device, and compares the macOS `fstatfs`
+  filesystem identity;
 - permits exactly one runtime writer through a cross-process exclusive lock;
 - bounds every state file to 64 MiB;
 - uses `0700` directories and `0600` transaction files on Unix;
@@ -26,17 +32,26 @@ The state root:
   type, mask, flag, and principal;
 - commits files by atomic rename plus directory sync on Unix;
 - commits files with `MoveFileExW`, replacement, and write-through semantics
-  on Windows.
+  on Windows while retaining the capability parent that guards the resolved
+  directory.
 
 A Windows state root therefore requires a filesystem with persistent ACL
 support. Opening the root fails closed when ownership or the protected DACL
 cannot be applied and read back exactly.
 
-Descriptor-relative traversal is still pending and remains a release gate
-before lifecycle operations can be enabled. The current metadata/reparse-point
-checks and protected parent directories prevent ordinary traversal and
-inheritance attacks, but they are not presented as a substitute for
-handle-relative resolution under adversarial races.
+After the root is pinned, replacing its ambient path does not redirect state
+mutations. macOS and Linux tests cover ambient-root renaming, layout-directory
+symlink replacement, transaction-file symlink replacement, and foreign mount
+handles. A privileged Linux gate additionally bind-mounts a same-device
+replacement over a live layout directory inside a private mount namespace;
+`statx` mount identities make the operation fail before external mutation.
+macOS uses `fstatfs` identity for the same boundary.
+
+The remaining platform gate is a real Windows reparse-point replacement
+matrix. The Windows capability path and retained-parent replacement code
+cross-compile for `x86_64-pc-windows-msvc`, but R1 remains open until a Windows
+host proves root, layout, transaction, file-replacement, and directory-move
+substitution all fail without touching an external target.
 
 The implementation uses the security descriptor supplied directly to
 [`CreateDirectoryW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createdirectoryw)
@@ -278,10 +293,10 @@ owner-death grace and returns a retryable error if it overruns. If neither a
 report nor marker exists, recovery still yields a stopped cleanup tombstone
 without fabricated exit evidence.
 
-The remaining persistence gates are startup-wide orphan scanning,
-descriptor-relative path operations, real-host qualification of restart-stable
-WHPX exit evidence (or qualified reattachment where another driver promises
-it), and equivalent real-driver replacement evidence outside HVF. The
+The remaining persistence gates are startup-wide orphan scanning, real Windows
+reparse-point replacement qualification, real-host qualification of restart-
+stable WHPX exit evidence (or qualified reattachment where another driver
+promises it), and equivalent real-driver replacement evidence outside HVF. The
 portable matrix already reopens the durable host around a new authenticated
 connection and driver at all nine request/response stages for create, state,
 start, kill, delete, wait, exec, signal-process, wait-process, pause, resume,

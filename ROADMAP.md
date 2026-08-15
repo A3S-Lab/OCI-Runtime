@@ -409,6 +409,11 @@ Completed:
 - typed, exhaustive recovery injection at all 741 registered durable commit
   stages and all 44 before/after `RuntimeDriver` boundaries, including startup
   recovery;
+- a pinned durable-state root capability used for descendant traversal, reads,
+  enumeration, directory creation, file creation, file replacement, and
+  quarantine moves. macOS and Linux reject symlink substitution and mount
+  replacement, including a real same-device Linux bind-mount gate; the same
+  no-follow capability implementation cross-compiles for Windows;
 - runtime-owned Windows state paths with protected DACLs limited to the
   runtime principal and LocalSystem, inheritance disabled, and every applied
   owner and ACL verified;
@@ -416,9 +421,10 @@ Completed:
 
 Not yet complete:
 
-- real utility-VM and host-service-reopen injection at every host/agent
-  transport transition;
-- descriptor-relative path resolution;
+- equivalent real-host utility-VM transport/reopen qualification for WHPX and
+  the future KVM driver; the complete 180-path HVF matrix is retained;
+- real Windows reparse-point replacement qualification for the capability-
+  rooted durable-state implementation;
 - complete shared guest OCI executor;
 - a production workload driver;
 - OCI hook rollback, crash recovery, security-negative, and soak
@@ -480,6 +486,19 @@ enforce it. No property is silently ignored.
 - [ ] Use descriptor-relative path operations on every supported host and
   prove that symlink, mount, and Windows reparse-point replacement cannot move
   a validated runtime-owned path before mutation.
+  - [x] Pin the canonical state root as a `cap_std::fs::Dir` and resolve every
+    descendant traversal, read, enumeration, directory creation, file open,
+    file replacement, and quarantine move from retained directory handles.
+  - [x] On macOS and Linux, reject root-path redirection, layout-directory and
+    transaction-file symlinks, foreign filesystem handles, and mount changes.
+    Linux additionally passes a root-only bind-mount replacement gate in a
+    private mount namespace using `statx` mount identities; macOS uses
+    `fstatfs` filesystem identities.
+  - [x] Cross-compile the no-follow capability implementation and retained-
+    parent Windows replacement path for `x86_64-pc-windows-msvc`.
+  - [ ] Run the real Windows matrix for root/layout/transaction reparse-point
+    substitution and file/directory replacement. Keep this parent open until
+    those tests prove no external target can be mutated.
 - [x] Add atomic creating/created records with exact configuration snapshots
   and monotonically increasing generations.
 - [x] Add a global idempotent create journal keyed by `OperationId`.
@@ -525,7 +544,7 @@ enforce it. No property is silently ignored.
 - [x] Verify the barrier against the real Linux guest bootstrap executor.
 - [x] Fault-inject every registered core-lifecycle durable commit stage and
   every `RuntimeDriver` method boundary, then reopen and replay.
-- [ ] Fault-inject every versioned utility-VM host/agent request, response,
+- [x] Fault-inject every versioned utility-VM host/agent request, response,
   disconnect, replay, and shutdown transition, then prove exact-generation
   recovery or complete cleanup after host-service reopen.
   - [x] Release the clone-shared host transport immediately after terminal
@@ -997,6 +1016,10 @@ enforce it. No property is silently ignored.
     durable, every replacement owner reconstructs any VM-local effect, Host
     replay avoids a second API-driven dispatch, and Guest evidence is released
     only after commit. The August 15, 2026 focused matrix passed 14/14 cases.
+- [ ] Repeat the retained real-host operation-stage and shutdown qualification
+  on WHPX and the future KVM backend before promoting either driver's
+  readiness. This is a per-driver release gate; it does not reopen the
+  protocol contract or the completed HVF matrix.
 - [x] Implement all OCI hook phases with typed create/start failure, bounded
   timeout/process-group cleanup, and warning-only poststop behavior.
 - [x] Implement `run` as a client composition, not a second lifecycle.

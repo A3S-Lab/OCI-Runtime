@@ -20,6 +20,8 @@ use crate::DriverState;
 
 mod events;
 mod fault_matrix;
+#[cfg(unix)]
+mod filesystem_security;
 mod recovery;
 
 const TEST_CONFIG: &str = concat!(

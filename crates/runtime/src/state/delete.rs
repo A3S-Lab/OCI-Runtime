@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::fault::DurableMutation;
 
-use super::filesystem::{path_exists, state_error};
+use super::filesystem::state_error;
 use super::model::{
     StoredOperation, StoredOperationKind, StoredOperationStatus, OPERATION_SCHEMA_VERSION,
 };
@@ -57,7 +57,10 @@ impl DurableStateStore {
                 StoredOperationStatus::Prepared => {
                     let source = self.container_directory(&operation.container_id);
                     let tombstone = self.delete_tombstone(&operation.operation_id);
-                    match (path_exists(&source).await?, path_exists(&tombstone).await?) {
+                    match (
+                        self.filesystem.path_exists(&source).await?,
+                        self.filesystem.path_exists(&tombstone).await?,
+                    ) {
                         (true, false) => {
                             let mut stored = self
                                 .load_stored_exact(&operation.container_id, operation.generation)
@@ -221,7 +224,10 @@ impl DurableStateStore {
 
         let source = self.container_directory(&operation.container_id);
         let tombstone = self.delete_tombstone(operation_id);
-        match (path_exists(&source).await?, path_exists(&tombstone).await?) {
+        match (
+            self.filesystem.path_exists(&source).await?,
+            self.filesystem.path_exists(&tombstone).await?,
+        ) {
             (true, false) => {
                 let stored = self
                     .load_stored_exact(&operation.container_id, operation.generation)

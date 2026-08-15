@@ -100,7 +100,7 @@ and `experimental` or `supported` readiness.
 | --- | --- |
 | Public SDK | Async `Send + Sync` Rust contract using official OCI `Spec`, `Process`, `LinuxResources`, `State`, and `Features` types; typed IDs, generations, operation contexts, versioned attachments, I/O, filesystem sessions, stats, events, and stable errors |
 | Validation and transport | Strict OCI 1.0.0–1.3.0 bundle loading, semantic validation, immutable configuration and attachment SHA-256 binding, and bounded protocol-4 local IPC over Unix sockets or protected Windows named pipes |
-| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals including File upload and Filesystem mkdir/move/remove, replay, generation fencing, startup recovery, quarantine, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
+| Durable host service | Exact create/state/start/kill/delete, driver-advertised optional operations, global idempotency journals including File upload and Filesystem mkdir/move/remove, replay, generation fencing, startup recovery, quarantine, capability-rooted state traversal with Unix mount-identity fencing, post-commit replay-record acknowledgement for local and utility-VM drivers, sorted list, ordered events, and same-UID multi-container owners for Native Linux and Apple Silicon HVF |
 | Shared Linux executor | Namespace create/join, `pivot_root`, OCI mounts and hooks, user mappings, cgroup v2, capabilities, rlimits, `oomScoreAdj`, scheduler policy, I/O priority, devices, seccomp, PID 1 supervision, pidfds, exec, process I/O, PTY, a bounded Host-acknowledged mutation replay journal, parent-bound launch/session helpers, PID-start-time-bound owner-death tombstones, descriptor-confined file/filesystem sessions, pause/resume, resource updates, normalized CPU/memory/PID/block-I/O stats, and scoped cleanup for the qualified profile |
 | Utility-VM boundary | Isolated libkrun shim, authenticated protocol v10 with v1-v9 compatibility, 20 public workload operations plus one bounded maintenance acknowledgement, clone-wide shutdown, exact-generation VM sessions, and the same Linux executor behind the static guest agent. Durable recovery records remain on the per-generation share, privileged OCI device sources are created only on Guest-local devtmpfs and removed at the Create barrier, and shutdown consumes every retained device-target manifest before deleting the Guest runtime root |
 | containerd runtime-v2 | SDK-only `containerd-shim-a3s-oci-v2` with durable namespace/task identity, lifecycle and exec recovery, and schema-v8 metadata. A retained per-task exec sequence gives every `Exec` incarnation fresh SDK process and operation identities, so `DeleteProcess` can be followed by reuse of the same containerd exec ID across daemon restart without replaying the deleted process. Init/exec input, signal, and terminal-resize journals retain Open/Closing/Closed stdin state, output cursors, independent per-process signal and resize sequences, and a per-task control sequence. The shim also provides process/task-scoped serialization, cross-process-stable request fingerprints, bounded FIFO/PTY I/O, live replacement with exact stdin continuation, committed pending-write, close, signal, and resize replay without duplicate effects, correct `SIGSTOP→SIGCONT→SIGSTOP→SIGCONT` transitions, same-size resize suppression, correct `A→B→A` terminal restoration, no output replay, repeated pause/resume and update, stats, PID inventory, in-flight Create and committed Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update/WriteStdin/CloseStdin/ResizePty recovery, post-commit Native Linux guest-journal reclamation, four-state forced shim-crash cleanup, and a four-task parallel restart gate; compatibility, packaging, and cross-driver release gates remain open |
@@ -125,6 +125,15 @@ replay record, so an acknowledgement disconnect returns a retryable error and
 the next owner replays the Host result without dispatching the mutation again.
 The Host journal remains the permanent changed-request fence after the Guest
 record has been released.
+
+Durable state now pins its canonical root as a directory capability. All
+descendant reads, enumeration, creation, replacement, and quarantine moves are
+resolved from retained directory handles. macOS and Linux gates prove that an
+ambient-root rename, layout or transaction symlink, foreign filesystem, and
+same-device Linux bind-mount replacement cannot redirect a mutation. The
+Windows implementation cross-compiles with the same no-follow traversal and
+retained-parent commit boundary; real reparse-point replacement qualification
+remains open before R1 can close.
 
 The exact containerd API, identity, installation, restart, cleanup, and
 qualification boundary is documented in
@@ -417,6 +426,7 @@ The repository turns release claims into checked inventories:
 | Typed semantic validation rules | 73 |
 | OCI normative dispositions | 14 enforced · 24 validated · 617 pending review |
 | Registered durable commit fault stages | 741 |
+| Durable-state replacement qualification | macOS/Linux complete, including a real Linux bind mount; Windows reparse-point matrix open |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
 | Authenticated agent operation-stage fault pairs | 180 |
 | Portable Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host-service reopen pairs | 180 |
@@ -457,6 +467,7 @@ qualification must all pass before a driver becomes `supported`.
 ### Still intentionally open
 
 - complete review and enforcement of pending OCI normative entries;
+- real Windows durable-state reparse-point replacement qualification;
 - real-host qualification of descriptor-confined filesystem sessions on each
   remaining utility-VM driver;
 - production-ready Native Linux and utility-VM drivers;

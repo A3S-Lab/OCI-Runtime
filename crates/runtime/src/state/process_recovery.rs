@@ -5,7 +5,7 @@ use a3s_oci_sdk::{ContainerTarget, ErrorCode, ProcessId, ProcessRecord, Result};
 
 use crate::fault::DurableMutation;
 
-use super::filesystem::{ensure_plain_directory, ensure_plain_file, path_exists, state_error};
+use super::filesystem::state_error;
 use super::model::{StoredOperation, StoredOperationStatus};
 use super::process::{
     exact_process_target, required_operation_process_id, validate_process_response,
@@ -142,29 +142,15 @@ impl DurableStateStore {
 
         let mut durable_by_id = BTreeMap::new();
         let directory = self.process_directory(&container.id);
-        if path_exists(&directory).await? {
-            ensure_plain_directory(&directory, "process state directory").await?;
-            let mut entries = tokio::fs::read_dir(&directory).await.map_err(|error| {
-                state_error(
-                    ErrorCode::Internal,
-                    "observe-recreated-exec-processes",
-                    format!(
-                        "failed to inspect process records for container {}: {error}",
-                        container.id
-                    ),
-                )
-            })?;
-            while let Some(entry) = entries.next_entry().await.map_err(|error| {
-                state_error(
-                    ErrorCode::Internal,
-                    "observe-recreated-exec-processes",
-                    format!(
-                        "failed to enumerate process records for container {}: {error}",
-                        container.id
-                    ),
-                )
-            })? {
-                let file_name = entry.file_name();
+        if self.filesystem.path_exists(&directory).await? {
+            self.filesystem
+                .ensure_plain_directory(&directory, "process state directory")
+                .await?;
+            for file_name in self
+                .filesystem
+                .read_directory(&directory, "process state directory")
+                .await?
+            {
                 let file_name = file_name.to_str().ok_or_else(|| {
                     state_error(
                         ErrorCode::FailedPrecondition,
@@ -183,7 +169,12 @@ impl DurableStateStore {
                             format!("invalid process transaction filename {file_name}: {error}"),
                         )
                     })?;
-                    ensure_plain_file(&entry.path(), "process state transaction file").await?;
+                    self.filesystem
+                        .ensure_plain_file(
+                            &directory.join(file_name),
+                            "process state transaction file",
+                        )
+                        .await?;
                     continue;
                 }
                 let process_id = file_name
