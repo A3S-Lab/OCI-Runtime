@@ -6,6 +6,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Exact OCI process rlimit enforcement and evidence. The Linux executor maps
+  all 16 OCI resource types, reads every successful `setrlimit` back through
+  `getrlimit`, and fails closed unless both soft and hard values match. Native
+  Linux smoke report v16 retains separate init and exec rlimit results for
+  configured `RLIMIT_NOFILE` values 64 and 48. Two owner-bound rules promote
+  eight pending requirements and the existing duplicate-type validation to
+  enforced, moving the ledger to 129 enforced, 25 validated, and 501 pending.
 - Complete owner-bound OCI Hook evidence. Native Linux multi-container report
   v18 now drives independent failing prestart, createRuntime, createContainer,
   startContainer, and poststart hooks, requires typed failure plus exact stopped

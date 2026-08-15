@@ -28,6 +28,8 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.bundle.config.root-file", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.required", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.semver", "runtime-bundle"),
+    OciNonSemanticRule::new("oci.common.rlimit.exact-values", "linux-executor"),
+    OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.command", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.container-namespace", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.failure-policy", "linux-executor"),

@@ -97,10 +97,7 @@ impl RlimitPlan {
 
     pub(super) fn apply(&self) -> Result<()> {
         for (index, limit) in self.limits.iter().enumerate() {
-            let native = libc::rlimit {
-                rlim_cur: limit.soft,
-                rlim_max: limit.hard,
-            };
+            let native = limit.as_libc();
             // SAFETY: `native` is a fully initialized Linux rlimit structure,
             // and the resource identifier is selected from libc constants.
             if unsafe { libc::setrlimit(limit.resource.as_libc(), &native) } != 0 {
@@ -121,6 +118,25 @@ impl RlimitPlan {
                     "apply-process-rlimits",
                 ));
             }
+
+            let mut actual = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: `actual` is writable and the resource identifier is
+            // selected from the same bounded libc constant table as setrlimit.
+            if unsafe { libc::getrlimit(limit.resource.as_libc(), &mut actual) } != 0 {
+                let source = io::Error::last_os_error();
+                return Err(rlimit_error(
+                    ErrorCode::Internal,
+                    format!(
+                        "failed to read back process.rlimits[{index}] {} after apply: {source}",
+                        limit.resource.oci_name()
+                    ),
+                    "verify-process-rlimits",
+                ));
+            }
+            limit.verify_readback(index, actual)?;
         }
         Ok(())
     }
@@ -128,6 +144,33 @@ impl RlimitPlan {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.limits.len()
+    }
+}
+
+impl RlimitEntry {
+    const fn as_libc(self) -> libc::rlimit {
+        libc::rlimit {
+            rlim_cur: self.soft,
+            rlim_max: self.hard,
+        }
+    }
+
+    fn verify_readback(self, index: usize, actual: libc::rlimit) -> Result<()> {
+        if actual.rlim_cur == self.soft && actual.rlim_max == self.hard {
+            return Ok(());
+        }
+        Err(rlimit_error(
+            ErrorCode::Internal,
+            format!(
+                "process.rlimits[{index}] {} read back soft={} hard={}, expected soft={} hard={}",
+                self.resource.oci_name(),
+                actual.rlim_cur,
+                actual.rlim_max,
+                self.soft,
+                self.hard
+            ),
+            "verify-process-rlimits",
+        ))
     }
 }
 
@@ -206,7 +249,7 @@ mod tests {
 
     use a3s_oci_sdk::oci_spec::runtime::{PosixRlimit, PosixRlimitType};
 
-    use super::{RlimitPlan, RlimitResource};
+    use super::{RlimitEntry, RlimitPlan, RlimitResource};
 
     const CHILD_PROBE: &str = "A3S_OCI_RLIMIT_CHILD_PROBE";
     const APPLY_TEST: &str = "executor::rlimit::tests::applies_nofile_in_an_isolated_process";
@@ -234,6 +277,27 @@ mod tests {
         for (oci, native) in cases {
             assert_eq!(RlimitResource::from_oci(oci).as_libc(), native);
         }
+    }
+
+    #[test]
+    fn rejects_mismatched_kernel_readback() {
+        let limit = RlimitEntry {
+            resource: RlimitResource::Nofile,
+            hard: 64,
+            soft: 63,
+        };
+        let error = limit
+            .verify_readback(
+                0,
+                libc::rlimit {
+                    rlim_cur: 62,
+                    rlim_max: 64,
+                },
+            )
+            .expect_err("mismatched kernel rlimit readback must fail closed");
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Internal);
+        assert!(error.message.contains("read back soft=62 hard=64"));
+        assert!(error.message.contains("expected soft=63 hard=64"));
     }
 
     #[test]

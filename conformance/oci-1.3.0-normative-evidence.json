@@ -519,16 +519,44 @@
     },
     {
       "requirementIds": [
+        "sha256:6048efda448a094dfb59ccfcc21241e1532e95fd0e5e9aa8ed691e7f23340892",
+        "sha256:607969e28107f57eae9f5fe9752ef9576dacb5c26920810c25c4183293fdedab",
+        "sha256:0e531101bcc7c22b2ee862b4c6265e6ab9df45125cdc1968cb1f071fcb01e916",
+        "sha256:c762e50a7dd09eb1fa75f217d016b75b854b0c556bec1829ad6976c8649d1a00",
         "sha256:5a2d519f228dca83fef9c028418d201b81590cdee323603ec687b4372c58775c"
       ],
-      "disposition": "validated",
-      "owner": "sdk-semantic-validation",
+      "disposition": "enforced",
+      "owner": "linux-executor",
       "ruleIds": [
+        "oci.common.rlimit.kernel-mapping",
         "oci.common.rlimit.type.unique"
       ],
       "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-rlimit-readback",
+        "executor::plan_tests::plans_and_serializes_every_oci_process_rlimit",
+        "executor::plan_tests::rejects_invalid_or_unbounded_process_rlimits",
+        "executor::rlimit::tests::applies_nofile_in_an_isolated_process",
+        "executor::rlimit::tests::maps_every_oci_resource_to_the_architecture_libc_constant",
         "semantic::tests::accepts_validated_normative_cross_field_boundaries",
         "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:f2aeb2a57e64e603fb62f6588e2b6410343316bb181e23cf9bdfe5f4cd8a044e",
+        "sha256:9b4b17bfdcd09ca4519a81c285460f7f607524be10f755c0e95e71e92ddbe9b7",
+        "sha256:65f5a3a50683b728b9ebe50b53769f4fc869faa5125a463ece6560009b14f75e",
+        "sha256:c90a5210339045b446b557d212971c0d5e22694239c4e5eb674114f262a6ef85"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.rlimit.exact-values"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-rlimit-readback",
+        "executor::rlimit::tests::applies_nofile_in_an_isolated_process",
+        "executor::rlimit::tests::rejects_mismatched_kernel_readback"
       ]
     },
     {

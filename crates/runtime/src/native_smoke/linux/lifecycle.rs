@@ -218,6 +218,7 @@ async fn exercise_client(
         return Err("native start did not leave the workload running".into());
     }
     wait_for_marker(client, &target, marker, report).await?;
+    report.init_rlimits_verified = true;
     report.init_oom_score_adj_verified = true;
     report.init_io_priority_verified = true;
     report.init_scheduler_verified = true;
@@ -227,6 +228,7 @@ async fn exercise_client(
     report.control_init_log_verified = true;
     process::exercise_process_io(client, &target, nonce).await?;
     report.process_io_verified = true;
+    report.exec_rlimits_verified = true;
     report.exec_oom_score_adj_verified = true;
     report.exec_io_priority_verified = true;
     report.exec_scheduler_verified = true;

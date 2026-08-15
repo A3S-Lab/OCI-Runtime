@@ -33,9 +33,9 @@ The v1.3.0 corpus currently contains 764 entries:
 | --- | ---: | --- |
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
-| `validated` | 26 | Exact semantic and bundle-validation rules with positive and negative SDK tests |
-| `enforced` | 120 | Root `config.json` placement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; and OCI `oomScoreAdj`, scheduler, and I/O-priority semantics enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
-| `pending-review` | 509 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `validated` | 25 | Exact semantic and bundle-validation rules with positive and negative SDK tests |
+| `enforced` | 129 | Root `config.json` placement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; and OCI `oomScoreAdj`, scheduler, and I/O-priority semantics enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
+| `pending-review` | 501 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain

@@ -460,7 +460,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 509-entry pending normative evidence backlog.
+- [ ] Close the 501-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1348,8 +1348,9 @@ leak. Only then may KVM become `experimental`.
   configured init bounding ceiling.
 - [x] Validate, retain, and apply every OCI `process.rlimits` type before
   credential reduction for both init and exec; reject duplicates, inverted
-  soft/hard values, and unbounded plans, and verify `RLIMIT_NOFILE` through
-  the native Linux workload.
+  soft/hard values, and unbounded plans; read every successful `setrlimit`
+  back through `getrlimit`, fail closed on either value changing, and retain
+  distinct init and exec `RLIMIT_NOFILE` evidence in the native Linux report.
 - [x] Validate and retain OCI `process.oomScoreAdj`, apply it to init and exec
   through procfs retained before namespace and root changes, leave the
   inherited value untouched when omitted, require exact kernel read-back
