@@ -274,22 +274,37 @@ pub(super) fn verify_moved_directory(
     destination_name: &OsStr,
     destination_display: &Path,
 ) -> Result<()> {
-    use cap_fs_ext::{DirExt as _, MetadataExt as _};
+    use cap_fs_ext::{
+        FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _, OsMetadataExt as _,
+    };
+    use cap_std::fs::{OpenOptions, OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
 
+    let mut options = OpenOptions::new();
+    options.access_mode(FILE_GENERIC_READ);
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    options.custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    options.follow(FollowSymlinks::No);
     let destination = destination_parent
-        .open_dir_nofollow(destination_name)
+        .open_with(destination_name, &options)
         .map_err(|error| io_error("verify-state-directory-move", destination_display, error))?;
     let source_metadata = source
         .metadata()
         .map_err(|error| io_error("verify-state-directory-source", destination_display, error))?;
-    let destination_metadata = destination.dir_metadata().map_err(|error| {
+    let destination_metadata = destination.metadata().map_err(|error| {
         io_error(
             "verify-state-directory-destination",
             destination_display,
             error,
         )
     })?;
-    if source_metadata.dev() != destination_metadata.dev()
+    if !destination_metadata.is_dir()
+        || destination_metadata.file_type().is_symlink()
+        || destination_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || source_metadata.dev() != destination_metadata.dev()
         || source_metadata.ino() != destination_metadata.ino()
     {
         return Err(state_error(
