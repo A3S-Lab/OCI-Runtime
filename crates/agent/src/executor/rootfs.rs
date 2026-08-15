@@ -111,7 +111,9 @@ pub(super) fn finalize(
     Ok(())
 }
 
-pub(super) use dev_symlink::create_required_dev_symlinks;
+pub(super) use dev_symlink::{
+    create_required_dev_symlinks, create_required_dev_symlinks_from_root,
+};
 
 pub(super) fn pivot_root(rootfs: &Path) -> Result<()> {
     let rootfs = path_cstring(rootfs)?;
