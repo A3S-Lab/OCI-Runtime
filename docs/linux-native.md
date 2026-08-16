@@ -470,6 +470,15 @@ requires:
 11. exact ordered evidence, a normal zero exit, deleted state, and removal of
    all host-side fixture paths.
 
+The planner also runs an exhaustive contract test over the pinned OCI 1.3
+mount-option table. All required and recommended names must be consumed as
+control data, `tmpcopyup` must fail with `Unsupported`, unknown names must
+remain filesystem-specific data, `rnorelatime` must select recursive strict
+atime, and explicit bind remounts must not schedule a second remount. The
+real-host workload above retains kernel evidence for the security-sensitive
+bind, propagation, recursive-attribute, and ID-mapped paths; it does not claim
+that every filesystem accepts every generic flag.
+
 The same real-driver invocation also retains two product-facing configuration
 matrices:
 
@@ -632,7 +641,8 @@ following pass:
   profile is advertised;
 - broader namespace-join security negatives, donor teardown races, and
   restart recovery beyond the retained wrong-type pre-state rejection;
-- remaining mount and credential controls, broader cgroup v2 policies,
+- mount security-negative and kernel-compatibility profiles, remaining
+  credential controls, broader cgroup v2 policies,
   multi-architecture/notification seccomp, and broader sysctl enforcement;
 - live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;

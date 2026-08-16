@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo};
+use a3s_oci_sdk::{ErrorCode, IoMode, OciBundle, ProcessIo, OCI_LINUX_MOUNT_OPTIONS};
 use tempfile::tempdir;
 
 use super::plan::InitPlan;
@@ -74,6 +74,11 @@ fn with_user_namespace(config: &str) -> String {
     )
 }
 
+fn with_second_mount_options(config: &str, options: &[&str]) -> String {
+    let options = serde_json::to_string(options).expect("serialize mount options");
+    config.replace(r#"["nosuid", "nodev", "mode=1777", "size=16m"]"#, &options)
+}
+
 #[test]
 fn preserves_mount_order_and_normalizes_relative_destinations() {
     let plan = InitPlan::from_bundle(&bundle(MOUNT_CONFIG), &null_io())
@@ -87,6 +92,49 @@ fn preserves_mount_order_and_normalizes_relative_destinations() {
     assert_eq!(plan.mounts[1].destination, Path::new("/tmp"));
     assert_eq!(plan.mounts[1].filesystem_type.as_deref(), Some("tmpfs"));
     assert_eq!(plan.mounts[1].data, ["mode=1777", "size=16m"]);
+}
+
+#[test]
+fn recognizes_every_supported_oci_linux_mount_option_as_control_data() {
+    for option in OCI_LINUX_MOUNT_OPTIONS
+        .iter()
+        .map(|option| option.name())
+        .filter(|option| *option != "tmpcopyup")
+    {
+        let config = with_second_mount_options(MOUNT_CONFIG, &[option]);
+        let config = if matches!(option, "bind" | "rbind") {
+            with_bind_source(&config)
+        } else {
+            config
+        };
+        let config = with_user_namespace(&config);
+        let plan = InitPlan::from_bundle(&bundle(&config), &null_io()).unwrap_or_else(|error| {
+            panic!("OCI mount option `{option}` must be recognized: {error}")
+        });
+        assert!(
+            plan.mounts[1].data.is_empty(),
+            "OCI control option `{option}` leaked into filesystem data"
+        );
+    }
+}
+
+#[test]
+fn rejects_unimplemented_optional_tmpcopyup_without_advertising_support() {
+    let config = with_second_mount_options(MOUNT_CONFIG, &["tmpcopyup"]);
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("tmpcopyup is an optional unsupported OCI mount option");
+
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("tmpfs copy-up is not implemented"));
+}
+
+#[test]
+fn passes_unknown_mount_options_to_filesystem_specific_data() {
+    let config = with_second_mount_options(MOUNT_CONFIG, &["x-a3s-test=enabled"]);
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("unknown mount options are filesystem-specific data");
+
+    assert_eq!(plan.mounts[1].data, ["x-a3s-test=enabled"]);
 }
 
 #[test]
@@ -182,6 +230,35 @@ fn parses_recursive_mount_attributes_in_listed_order() {
             | super::mount::MOUNT_ATTR_NOSUID
             | super::mount::MOUNT_ATTR_ATIME
     );
+}
+
+#[test]
+fn recursive_norelatime_selects_strict_atime() {
+    let config = with_second_mount_options(MOUNT_CONFIG, &["rnorelatime"]);
+    let plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("rnorelatime recursive mount attribute");
+    let attributes = plan.mounts[1]
+        .recursive_attributes
+        .expect("recursive attributes");
+
+    assert_eq!(attributes.attr_set, super::mount::MOUNT_ATTR_STRICTATIME);
+    assert_eq!(attributes.attr_clr, super::mount::MOUNT_ATTR_ATIME);
+}
+
+#[test]
+fn explicit_bind_remount_does_not_schedule_a_second_attribute_remount() {
+    let config = with_bind_source(&with_second_mount_options(
+        MOUNT_CONFIG,
+        &["bind", "remount", "ro"],
+    ));
+    let plan =
+        InitPlan::from_bundle(&bundle(&config), &null_io()).expect("explicit bind remount plan");
+    let mount = &plan.mounts[1];
+
+    assert_ne!(mount.flags & libc::MS_BIND, 0);
+    assert_ne!(mount.flags & libc::MS_REMOUNT, 0);
+    assert_ne!(mount.flags & libc::MS_RDONLY, 0);
+    assert!(!mount.remount_bind);
 }
 
 #[test]
