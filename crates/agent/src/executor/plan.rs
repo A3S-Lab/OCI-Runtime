@@ -341,23 +341,7 @@ fn validate_process_profile(process: &Process) -> Result<()> {
         .for_operation("plan-guest-init")
     })?;
     let process = object(&raw, "process")?;
-    reject_unimplemented_keys(
-        process,
-        "process",
-        &[
-            "terminal",
-            "user",
-            "args",
-            "env",
-            "cwd",
-            "capabilities",
-            "rlimits",
-            "oomScoreAdj",
-            "ioPriority",
-            "scheduler",
-            "noNewPrivileges",
-        ],
-    )?;
+    validate_supported_process_fields(process)?;
     let user = object(
         process
             .get("user")
@@ -401,23 +385,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             .ok_or_else(|| invalid("config.process is required"))?,
         "process",
     )?;
-    reject_unimplemented_keys(
-        process,
-        "process",
-        &[
-            "terminal",
-            "user",
-            "args",
-            "env",
-            "cwd",
-            "capabilities",
-            "rlimits",
-            "oomScoreAdj",
-            "ioPriority",
-            "scheduler",
-            "noNewPrivileges",
-        ],
-    )?;
+    validate_supported_process_fields(process)?;
 
     let user = object(
         process
@@ -487,6 +455,36 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "readonlyPaths",
         ],
     )
+}
+
+fn validate_supported_process_fields(process: &Map<String, Value>) -> Result<()> {
+    reject_unimplemented_keys(
+        process,
+        "process",
+        &[
+            "terminal",
+            "consoleSize",
+            "user",
+            "args",
+            "env",
+            "cwd",
+            "capabilities",
+            "rlimits",
+            "oomScoreAdj",
+            "ioPriority",
+            "scheduler",
+            "noNewPrivileges",
+        ],
+    )?;
+    if process.contains_key("consoleSize")
+        && process.get("terminal").and_then(Value::as_bool) == Some(true)
+    {
+        return Err(unsupported(
+            "process.consoleSize",
+            "configured terminal dimensions are not enforced by the bootstrap executor",
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_rootfs_path(bundle_directory: &Path, path: &Path) -> Result<PathBuf> {

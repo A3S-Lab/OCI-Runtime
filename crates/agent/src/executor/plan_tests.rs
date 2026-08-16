@@ -619,6 +619,82 @@ fn accepts_only_the_exact_terminal_process_io_contract() {
 }
 
 #[test]
+fn console_size_is_ignored_without_a_terminal() {
+    let base = serde_json::from_str::<serde_json::Value>(FIXED_CONFIG)
+        .expect("decode fixed configuration");
+
+    for terminal in [Some(false), None] {
+        let mut configured = base.clone();
+        let process = configured["process"]
+            .as_object_mut()
+            .expect("process object");
+        match terminal {
+            Some(enabled) => {
+                process.insert("terminal".to_string(), serde_json::json!(enabled));
+            }
+            None => {
+                process.remove("terminal");
+            }
+        }
+        process.insert(
+            "consoleSize".to_string(),
+            serde_json::json!({"width": 120, "height": 40}),
+        );
+
+        let mut baseline = configured.clone();
+        baseline["process"]
+            .as_object_mut()
+            .expect("baseline process object")
+            .remove("consoleSize");
+
+        let configured_json =
+            serde_json::to_string(&configured).expect("encode configured console size");
+        let baseline_json = serde_json::to_string(&baseline).expect("encode baseline process");
+        let configured_init = InitPlan::from_bundle(&bundle(&configured_json), &null_io())
+            .expect("non-terminal init must ignore consoleSize");
+        let baseline_init = InitPlan::from_bundle(&bundle(&baseline_json), &null_io())
+            .expect("baseline non-terminal init");
+        assert_eq!(configured_init, baseline_init);
+
+        let configured_process: Process = serde_json::from_value(configured["process"].clone())
+            .expect("decode configured process");
+        let baseline_process: Process =
+            serde_json::from_value(baseline["process"].clone()).expect("decode baseline process");
+        assert_eq!(
+            ProcessPlan::from_process(&configured_process, &null_io())
+                .expect("non-terminal exec must ignore consoleSize"),
+            ProcessPlan::from_process(&baseline_process, &null_io())
+                .expect("baseline non-terminal exec")
+        );
+    }
+
+    let mut terminal = base;
+    terminal["process"]["terminal"] = serde_json::json!(true);
+    terminal["process"]["consoleSize"] = serde_json::json!({"width": 120, "height": 40});
+    let terminal_json = serde_json::to_string(&terminal).expect("encode terminal console size");
+    let terminal_io = ProcessIo {
+        stdin: IoMode::Terminal,
+        stdout: IoMode::Terminal,
+        stderr: IoMode::Terminal,
+        terminal_size: Some(TerminalSize {
+            width: 120,
+            height: 40,
+        }),
+    };
+    let error = InitPlan::from_bundle(&bundle(&terminal_json), &terminal_io)
+        .expect_err("terminal consoleSize must not be silently ignored");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("process.consoleSize"));
+
+    let process: Process =
+        serde_json::from_value(terminal["process"].clone()).expect("decode terminal process");
+    let error = ProcessPlan::from_process(&process, &terminal_io)
+        .expect_err("exec terminal consoleSize must not be silently ignored");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("process.consoleSize"));
+}
+
+#[test]
 fn accepts_a_new_uts_namespace_and_bounded_uts_names() {
     let plan =
         InitPlan::from_bundle(&bundle(UTS_CONFIG), &null_io()).expect("UTS namespace profile");

@@ -1000,10 +1000,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "12. The container MUST be destroyed by undoing the steps performed during create phase (step 2).",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.delete.owned-resources"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::state_missing_after_delete-and-runtime-clean",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:357c7da9efabc539cdcd3ea44ccff45d8f098e6deebaf3266de04a39cd1506cd",
@@ -1810,10 +1815,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`readonly`** (bool, OPTIONAL) If true then the root filesystem MUST be read-only inside the container, defaults to false.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.root.readonly"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.readonly_rootfs_enforced",
+        "executor::rootfs_tests::accepts_complete_rootfs_enforcement_in_a_new_mount_namespace",
+        "executor::rootfs_tests::rejects_rootfs_mount_mutation_outside_a_new_mount_namespace"
+      ]
     },
     {
       "id": "sha256:41b4ee39f1fb91e9251b95a19aea15139ef4712cd341860545aee56f8c2789bf",
@@ -1824,10 +1835,16 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "* **`readonly`** (bool, OPTIONAL) If true then the root filesystem MUST be read-only inside the container, defaults to false.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.root.readonly"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.readonly_rootfs_enforced",
+        "executor::rootfs_tests::accepts_complete_rootfs_enforcement_in_a_new_mount_namespace",
+        "executor::rootfs_tests::rejects_rootfs_mount_mutation_outside_a_new_mount_namespace"
+      ]
     },
     {
       "id": "sha256:1b6d8da05459093cdc07afa2011c561b12e77a5ad308195ff667093d369a984c",
@@ -4030,10 +4047,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Runtimes MUST ignore `consoleSize` if `terminal` is `false` or unset.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.console-size.ignored-without-terminal"
+      ],
+      "testIds": [
+        "executor::plan_tests::console_size_is_ignored_without_a_terminal"
+      ]
     },
     {
       "id": "sha256:0c9c11aedc1bca3a99ce96e03d977c87194e0386087c6e095f6cbba72fafa531",
