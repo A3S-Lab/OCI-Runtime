@@ -291,6 +291,16 @@ selected domain before credentials and seccomp, immediately queries the
 personality syscall, and fails unless the complete value matches. Omission
 performs no personality syscall and preserves inherited state.
 
+Optional `linux.memoryPolicy` also applies only to configured init. A shared
+SDK registry defines all seven OCI modes and all three flags used by semantic
+validation, execution, and feature reporting. The bounded planner parses and
+normalizes the node mask, rejects invalid mode/flag relationships, and follows
+Linux by selecting the lowest requested node for `MPOL_PREFERRED` or observing
+`MPOL_LOCAL` when that mode has no nodes. The dedicated init calls
+`set_mempolicy` before credentials and seccomp, then requires `get_mempolicy`
+to return the exact effective mode, flags, and node mask. Omission performs no
+memory-policy syscall and preserves inherited state.
+
 For exec, the trusted helper applies and reads back
 `process.execCPUAffinity.initial` before joining the workload cgroup through
 its inherited `cgroup.procs` descriptor. It then applies and reads back

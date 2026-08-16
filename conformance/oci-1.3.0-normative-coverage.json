@@ -9937,10 +9937,25 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`memoryPolicy`** (object, OPTIONAL) sets the NUMA memory policy for the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory-policy.nodes.format",
+        "oci.linux.memory-policy.nodes-forbidden",
+        "oci.linux.memory-policy.nodes-required",
+        "oci.linux.memory-policy.flags-compatible",
+        "oci.linux.memory-policy.exact-policy"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_memory_policy_shape_and_flag_relationships",
+        "executor::memory_policy::tests::validates_node_masks_and_mode_flag_relationships",
+        "executor::memory_policy::tests::preferred_policy_canonicalizes_to_the_first_mask_node",
+        "executor::memory_policy::tests::omission_preserves_the_inherited_policy",
+        "executor::memory_policy::tests::applies_and_reads_back_bind_in_an_isolated_process",
+        ".github/scripts/native-linux-smoke.sh::init-memory-policy-readback",
+        "fixtures/utility-vm/config.json::init-memory-policy-readback",
+        "fixtures/utility-vm/config.windows.json::init-memory-policy-readback"
+      ]
     },
     {
       "id": "sha256:fae4270668a752ab0c9da22cdb77b09f2262070cd01f755f54137f1e775fc982",
@@ -9951,10 +9966,17 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`mode`** *(string, REQUIRED)* -",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory-policy.mode.required",
+        "oci.linux.memory-policy.exact-policy"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_memory_policy_shape_and_flag_relationships",
+        "executor::plan_tests::plans_linux_memory_policy_for_init_and_preserves_omission",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
     },
     {
       "id": "sha256:571121883cc2f0eee2c9f23b3676565584ec1de5ab337af53a85c2d3cf88c179",
@@ -9965,10 +9987,25 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`nodes`** *(string, OPTIONAL)* - list of memory nodes from which nodemask is constructed to set_mempolicy(2). This is a comma-separated list, with dashes to represent ranges. For example, `0-3,7` represents memory nodes 0,1,2,3, and 7. Some modes require that there are no nodes, e.g. `MPOL_DEFAULT` and `MPOL_LOCAL`. Others that there is at least one node, e.g. `MPOL_BIND` and `MPOL_INTERLEAVE`. See set_mempolicy(2) for details.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory-policy.nodes.format",
+        "oci.linux.memory-policy.nodes-forbidden",
+        "oci.linux.memory-policy.nodes-required",
+        "oci.linux.memory-policy.flags-compatible",
+        "oci.linux.memory-policy.exact-policy"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_memory_policy_shape_and_flag_relationships",
+        "executor::memory_policy::tests::validates_node_masks_and_mode_flag_relationships",
+        "executor::memory_policy::tests::preferred_policy_canonicalizes_to_the_first_mask_node",
+        "executor::memory_policy::tests::omission_preserves_the_inherited_policy",
+        "executor::memory_policy::tests::applies_and_reads_back_bind_in_an_isolated_process",
+        ".github/scripts/native-linux-smoke.sh::init-memory-policy-readback",
+        "fixtures/utility-vm/config.json::init-memory-policy-readback",
+        "fixtures/utility-vm/config.windows.json::init-memory-policy-readback"
+      ]
     },
     {
       "id": "sha256:78a55228ffd9496cf940cc91cef6e53bb807e0e7346a5522df2f7aa98f4d1a00",
@@ -9979,10 +10016,25 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`flags`** *(array of strings, OPTIONAL)* - list of flags to use with set_mempolicy(2).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory-policy.nodes.format",
+        "oci.linux.memory-policy.nodes-forbidden",
+        "oci.linux.memory-policy.nodes-required",
+        "oci.linux.memory-policy.flags-compatible",
+        "oci.linux.memory-policy.exact-policy"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_memory_policy_shape_and_flag_relationships",
+        "executor::memory_policy::tests::validates_node_masks_and_mode_flag_relationships",
+        "executor::memory_policy::tests::preferred_policy_canonicalizes_to_the_first_mask_node",
+        "executor::memory_policy::tests::omission_preserves_the_inherited_policy",
+        "executor::memory_policy::tests::applies_and_reads_back_bind_in_an_isolated_process",
+        ".github/scripts/native-linux-smoke.sh::init-memory-policy-readback",
+        "fixtures/utility-vm/config.json::init-memory-policy-readback",
+        "fixtures/utility-vm/config.windows.json::init-memory-policy-readback"
+      ]
     },
     {
       "id": "sha256:0e138e42317332d5378f354f6f8f8c408499fa4c84405f9b65a1b5a45be5b33a",
@@ -10624,7 +10676,7 @@
       ],
       "testIds": [
         "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
-        "executor::plan_tests::plans_linux_personality_for_init_and_rejects_every_flag",
+        "executor::plan_tests::plans_linux_personality_for_init_and_preserves_omission",
         "executor::personality::tests::plans_both_oci_domains_and_omission",
         "executor::personality::tests::rejects_every_nonempty_flag_set",
         "executor::personality::tests::omission_preserves_the_inherited_domain",
@@ -10652,7 +10704,7 @@
       ],
       "testIds": [
         "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
-        "executor::plan_tests::plans_linux_personality_for_init_and_rejects_every_flag",
+        "executor::plan_tests::plans_linux_personality_for_init_and_preserves_omission",
         "executor::personality::tests::plans_both_oci_domains_and_omission",
         "executor::personality::tests::rejects_every_nonempty_flag_set",
         "executor::personality::tests::omission_preserves_the_inherited_domain",
@@ -10680,7 +10732,7 @@
       ],
       "testIds": [
         "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
-        "executor::plan_tests::plans_linux_personality_for_init_and_rejects_every_flag",
+        "executor::plan_tests::plans_linux_personality_for_init_and_preserves_omission",
         "executor::personality::tests::plans_both_oci_domains_and_omission",
         "executor::personality::tests::rejects_every_nonempty_flag_set",
         "executor::personality::tests::omission_preserves_the_inherited_domain",
@@ -12782,10 +12834,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`memoryPolicy`** (object, OPTIONAL) represents the runtime's implementation status of memoryPolicy.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.memory-policy.recognized"
+      ],
+      "testIds": [
+        "linux_memory_policy::tests::registries_cover_every_oci_memory_policy_value_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
     },
     {
       "id": "sha256:99d6136265a56b15dbe18ce9a49014f35b2451910811f2ecfcaa7b8b218b394d",
@@ -12796,10 +12854,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`modes`** (array of strings, OPTIONAL). Recognized memory policies. Includes policies that may not be supported by the host operating system.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.memory-policy.recognized"
+      ],
+      "testIds": [
+        "linux_memory_policy::tests::registries_cover_every_oci_memory_policy_value_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
     },
     {
       "id": "sha256:18103086434ca32fbbd578641b5c856322b427d264dc1dc8c5574ec51a0e7e77",
@@ -12810,10 +12874,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array as the [`mode` of `linux.memoryPolicy` objects in `config.json`](config-linux.md#memory-policy).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.memory-policy.recognized"
+      ],
+      "testIds": [
+        "linux_memory_policy::tests::registries_cover_every_oci_memory_policy_value_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
     },
     {
       "id": "sha256:105937b988c5d7957034e7def7e9e8c5349e62fe55bea8138caa47155f5389eb",
@@ -12824,10 +12894,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`flags`** (array of strings, OPTIONAL). Recognized flags for memory policies. Includes flags that may not be supported by the host operating system.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.memory-policy.recognized"
+      ],
+      "testIds": [
+        "linux_memory_policy::tests::registries_cover_every_oci_memory_policy_value_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
     },
     {
       "id": "sha256:bc12890b426aa80b2f6b8284b8b06eee0c19a9917318138217636d3d333e2fce",
@@ -12838,10 +12914,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this in the [`flags` property of the `linux.memoryPolicy` object in `config.json`](config-linux.md#memory-policy)",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.memory-policy.recognized"
+      ],
+      "testIds": [
+        "linux_memory_policy::tests::registries_cover_every_oci_memory_policy_value_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
     },
     {
       "id": "sha256:736bdc6c9d532cf9126c259395852b413b8576e4214458269b8e710c804c8057",

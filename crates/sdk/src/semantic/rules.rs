@@ -78,6 +78,9 @@ define_rules! {
     INTEL_RDT_SCHEMATA_SINGLE_LINE => RuntimeConstraint, "oci.linux.intel-rdt.schemata.single-line";
     IO_PRIORITY_IDLE_CLASS_DATA_ZERO => RuntimeConstraint, "oci.linux.io-priority.idle-class-data-zero";
     IO_PRIORITY_RANGE => Normative, "oci.linux.io-priority.range";
+    MEMORY_POLICY_FLAGS_COMPATIBLE => RuntimeConstraint, "oci.linux.memory-policy.flags-compatible";
+    MEMORY_POLICY_MODE_REQUIRED => Normative, "oci.linux.memory-policy.mode.required";
+    MEMORY_POLICY_NODES_FORMAT => RuntimeConstraint, "oci.linux.memory-policy.nodes.format";
     MEMORY_POLICY_NODES_FORBIDDEN => RuntimeConstraint, "oci.linux.memory-policy.nodes-forbidden";
     MEMORY_POLICY_NODES_REQUIRED => RuntimeConstraint, "oci.linux.memory-policy.nodes-required";
     MOUNT_IDMAP_MAPPING_REQUIRED => RuntimeConstraint, "oci.linux.mount.idmap.mapping-required";

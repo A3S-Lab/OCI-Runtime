@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 390-entry pending normative evidence backlog.
+- [ ] Close the 381-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1400,6 +1400,12 @@ leak. Only then may KVM become `experimental`.
   Accept only the `LINUX` and `LINUX32` domains, reject every nonempty flag
   list before mutation, perform no syscall when the field is omitted, and
   require exact syscall and workload read-back on Native Linux, HVF, and WHPX.
+- [x] Validate and enforce OCI `linux.memoryPolicy` for configured init.
+  Recognize all seven OCI modes and all three flags from one SDK registry,
+  validate bounded node lists and Linux mode/flag relationships, apply the
+  policy before credential reduction and seccomp, and require exact syscall
+  plus workload read-back on Native Linux, HVF, and WHPX. Omission preserves
+  the inherited policy without issuing a syscall.
 - [x] Parse OCI Linux sysctls once in the SDK, accept only known IPC, network,
   UTS-domain, and user-namespace controls, reject aliases and host-global
   mutation, and apply bounded deterministic writes through retained procfs.

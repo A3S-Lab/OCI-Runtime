@@ -1276,6 +1276,67 @@
     },
     {
       "requirementIds": [
+        "sha256:fae4270668a752ab0c9da22cdb77b09f2262070cd01f755f54137f1e775fc982"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.memory-policy.mode.required",
+        "oci.linux.memory-policy.exact-policy"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_memory_policy_shape_and_flag_relationships",
+        "executor::plan_tests::plans_linux_memory_policy_for_init_and_preserves_omission",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:89bdc5c041769157f692e39045875579fd5373b9e379717f1354559208f831fb",
+        "sha256:571121883cc2f0eee2c9f23b3676565584ec1de5ab337af53a85c2d3cf88c179",
+        "sha256:78a55228ffd9496cf940cc91cef6e53bb807e0e7346a5522df2f7aa98f4d1a00"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.memory-policy.nodes.format",
+        "oci.linux.memory-policy.nodes-forbidden",
+        "oci.linux.memory-policy.nodes-required",
+        "oci.linux.memory-policy.flags-compatible",
+        "oci.linux.memory-policy.exact-policy"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_memory_policy_shape_and_flag_relationships",
+        "executor::memory_policy::tests::validates_node_masks_and_mode_flag_relationships",
+        "executor::memory_policy::tests::preferred_policy_canonicalizes_to_the_first_mask_node",
+        "executor::memory_policy::tests::omission_preserves_the_inherited_policy",
+        "executor::memory_policy::tests::applies_and_reads_back_bind_in_an_isolated_process",
+        ".github/scripts/native-linux-smoke.sh::init-memory-policy-readback",
+        "fixtures/utility-vm/config.json::init-memory-policy-readback",
+        "fixtures/utility-vm/config.windows.json::init-memory-policy-readback"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:c94b51ac2b45d8ba88af8a1a97fa4d8b06a7db387a74564e5d7b8ad98647687c",
+        "sha256:99d6136265a56b15dbe18ce9a49014f35b2451910811f2ecfcaa7b8b218b394d",
+        "sha256:18103086434ca32fbbd578641b5c856322b427d264dc1dc8c5574ec51a0e7e77",
+        "sha256:105937b988c5d7957034e7def7e9e8c5349e62fe55bea8138caa47155f5389eb",
+        "sha256:bc12890b426aa80b2f6b8284b8b06eee0c19a9917318138217636d3d333e2fce"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.memory-policy.recognized"
+      ],
+      "testIds": [
+        "linux_memory_policy::tests::registries_cover_every_oci_memory_policy_value_once",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::memory_policy::tests::plans_every_oci_mode_flag_and_omission"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:7f4af1486d6ea07dcdd434cb71554c745b759d4f724a77ff3f944142d26af716",
         "sha256:9b2bbf94809fae1a78c5ade105c8eef7cf89a46a003e87c1e59040efa6a931c9",
         "sha256:e85ebf14e5084490438400809407f723d7249193ac0be4ef4bb28d19e7847d9f"
@@ -1289,7 +1350,7 @@
       ],
       "testIds": [
         "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
-        "executor::plan_tests::plans_linux_personality_for_init_and_rejects_every_flag",
+        "executor::plan_tests::plans_linux_personality_for_init_and_preserves_omission",
         "executor::personality::tests::plans_both_oci_domains_and_omission",
         "executor::personality::tests::rejects_every_nonempty_flag_set",
         "executor::personality::tests::omission_preserves_the_inherited_domain",

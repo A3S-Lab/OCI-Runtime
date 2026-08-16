@@ -13,7 +13,7 @@
     "args": [
       "/bin/sh",
       "-c",
-      "set -eu; trap 'exit 0' TERM; test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke; while :; do /bin/busybox sleep 1; done"
+      "set -eu; trap 'exit 0' TERM; test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; /bin/busybox awk '$2 == \"bind:0\" { ok = 1 } END { exit !ok }' /proc/self/numa_maps; printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke; while :; do /bin/busybox sleep 1; done"
     ],
     "env": [
       "PATH=/bin:/usr/bin:/sbin:/usr/sbin"
@@ -40,6 +40,11 @@
     "personality": {
       "domain": "LINUX32",
       "flags": []
+    },
+    "memoryPolicy": {
+      "mode": "MPOL_BIND",
+      "nodes": "0",
+      "flags": ["MPOL_F_STATIC_NODES"]
     },
     "namespaces": [
       {

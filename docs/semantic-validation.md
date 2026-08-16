@@ -47,14 +47,15 @@ The initial rule set covers:
   host-global controls;
 - mount ID mappings, seccomp listener/errno relationships, selected CPU,
   block-I/O, and RDMA relationships;
-- Intel RDT names and schemata, memory-policy node relationships, required
-  Linux personality domain and empty flags, and Linux device/path safety;
+- Intel RDT names and schemata, required memory-policy mode, bounded node
+  lists and mode/flag relationships, required Linux personality domain and
+  empty flags, and Linux device/path safety;
 - absolute OCI VM runtime paths and NUL rejection;
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 75 rule identifiers come from one typed registry. Twenty-one are classified
-as direct OCI normative validators and are currently bound to 30 exact source
+All 78 rule identifiers come from one typed registry. Twenty-two are classified
+as direct OCI normative validators and are currently bound to 31 exact source
 entries in the normative evidence manifest. Linux `oomScoreAdj`, scheduler,
 and I/O-priority runtime constraints plus executor and real-host tests promote
 14 process requirements to `enforced`. Scheduler validation covers duplicate
@@ -72,6 +73,13 @@ source of truth. An accepted key is classified as IPC, network, UTS, or user
 namespace state. The Linux executor then checks the selected namespace
 identity, bounds the transaction, verifies procfs read-back, and rolls back any
 partial change before Create can be reported as ready.
+
+For Linux NUMA memory policy, validation, execution, and feature reporting
+share the same seven-mode and three-flag registries. A bounded parser rejects
+malformed or out-of-range node lists and incompatible mode/flag combinations
+before mutation. The executor then applies the normalized mask to configured
+init and requires immediate kernel read-back; omission preserves inherited
+policy.
 
 ## SDK Request Boundary
 

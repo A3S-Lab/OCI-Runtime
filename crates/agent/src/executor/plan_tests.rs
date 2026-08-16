@@ -541,6 +541,27 @@ fn plans_linux_personality_for_init_and_preserves_omission() {
 }
 
 #[test]
+fn plans_linux_memory_policy_for_init_and_preserves_omission() {
+    let mut config_value: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config_value["linux"] = serde_json::json!({
+        "memoryPolicy": {
+            "mode": "MPOL_BIND",
+            "nodes": "0",
+            "flags": ["MPOL_F_STATIC_NODES"]
+        }
+    });
+    let config_json = serde_json::to_string(&config_value).expect("encode Linux memory policy");
+    let init = InitPlan::from_bundle(&bundle(&config_json), &null_io())
+        .expect("plan MPOL_BIND memory policy");
+    assert!(init.memory_policy.is_some());
+
+    let omitted = InitPlan::from_bundle(&bundle(FIXED_CONFIG), &null_io())
+        .expect("plan omitted Linux memory policy");
+    assert!(omitted.memory_policy.is_none());
+}
+
+#[test]
 fn plans_exec_cpu_affinity_and_ignores_it_for_init() {
     let mut config_value: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");

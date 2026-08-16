@@ -59,9 +59,14 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "runtime-feature-report",
     ),
     OciNonSemanticRule::new(
+        "oci.linux.features.memory-policy.recognized",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
         "oci.linux.features.mount-options.recognized",
         "runtime-feature-report",
     ),
+    OciNonSemanticRule::new("oci.linux.memory-policy.exact-policy", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.mount-options.control", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.linux.mount-options.filesystem-specific-pass-through",

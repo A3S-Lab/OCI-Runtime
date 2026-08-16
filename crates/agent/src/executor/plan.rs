@@ -15,6 +15,7 @@ use super::cpu_affinity::CpuAffinityPlan;
 use super::device::DevicePlan;
 use super::hook::HookSet;
 use super::io_priority::IoPriorityPlan;
+use super::memory_policy::MemoryPolicyPlan;
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
 use super::personality::PersonalityPlan;
@@ -155,6 +156,7 @@ pub(super) struct InitPlan {
     pub(super) io_priority: Option<IoPriorityPlan>,
     pub(super) scheduler: Option<SchedulerPlan>,
     pub(super) personality: Option<PersonalityPlan>,
+    pub(super) memory_policy: Option<MemoryPolicyPlan>,
     pub(super) no_new_privileges: bool,
     pub(super) terminal: bool,
     pub(super) rlimits: RlimitPlan,
@@ -244,6 +246,11 @@ impl InitPlan {
                 .as_ref()
                 .and_then(|linux| linux.personality().as_ref()),
         )?;
+        let memory_policy = MemoryPolicyPlan::from_oci(
+            spec.linux()
+                .as_ref()
+                .and_then(|linux| linux.memory_policy().as_ref()),
+        )?;
         let rootfs_propagation = spec
             .linux()
             .as_ref()
@@ -317,6 +324,7 @@ impl InitPlan {
             io_priority: process_plan.io_priority,
             scheduler: process_plan.scheduler,
             personality,
+            memory_policy,
             no_new_privileges: process_plan.no_new_privileges,
             terminal: process_plan.terminal,
             rlimits: process_plan.rlimits,
@@ -480,6 +488,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "maskedPaths",
             "readonlyPaths",
             "personality",
+            "memoryPolicy",
         ],
     )
 }

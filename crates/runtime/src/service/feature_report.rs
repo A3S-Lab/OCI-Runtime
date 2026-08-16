@@ -3,12 +3,13 @@ use std::fmt;
 
 use a3s_oci_sdk::oci_spec::runtime::{
     ApparmorBuilder, Arch, CgroupBuilder, Features, FeaturesBuilder, IDMapBuilder, IntelRdtBuilder,
-    LinuxFeature, LinuxFeatureBuilder, LinuxNamespaceType, LinuxSeccompAction,
+    LinuxFeature, LinuxFeatureBuilder, LinuxNamespaceType, LinuxSeccompAction, MemoryPolicyBuilder,
     MountExtensionsBuilder, NetDevicesBuilder, SeccompBuilder, SelinuxBuilder,
 };
 use a3s_oci_sdk::{
-    Error, ErrorCode, Result, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MOUNT_OPTIONS,
-    OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
+    Error, ErrorCode, Result, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS,
+    OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS, OCI_RUNTIME_SPEC_VERSION_MAX,
+    OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 
 use crate::driver::OciHookPhase;
@@ -127,6 +128,21 @@ fn compiled_linux_features() -> Result<LinuxFeature> {
         .enabled(false)
         .build()
         .map_err(feature_build_error)?;
+    let memory_policy = MemoryPolicyBuilder::default()
+        .modes(
+            OCI_LINUX_MEMORY_POLICY_MODES
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .flags(
+            OCI_LINUX_MEMORY_POLICY_FLAGS
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .build()
+        .map_err(feature_build_error)?;
     let idmap = IDMapBuilder::default()
         .enabled(true)
         .build()
@@ -157,6 +173,7 @@ fn compiled_linux_features() -> Result<LinuxFeature> {
         .apparmor(apparmor)
         .selinux(selinux)
         .intel_rdt(intel_rdt)
+        .memory_policy(memory_policy)
         .mount_extensions(mount_extensions)
         .net_devices(net_devices)
         .build()

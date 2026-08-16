@@ -27,7 +27,8 @@ use a3s_oci_sdk::{
     ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
     Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
     TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    ATTACHMENT_SCHEMA_V1, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MOUNT_OPTIONS,
+    ATTACHMENT_SCHEMA_V1, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS,
+    OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -1521,6 +1522,30 @@ async fn reports_only_operations_that_are_currently_implemented() {
         .expect("seccomp actions")
         .contains(&LinuxSeccompAction::ScmpActNotify));
     assert_eq!(seccomp.supported_flags().as_deref(), Some([].as_slice()));
+    let memory_policy = linux
+        .memory_policy()
+        .as_ref()
+        .expect("memory-policy feature report");
+    assert_eq!(
+        memory_policy.modes().as_deref(),
+        Some(
+            OCI_LINUX_MEMORY_POLICY_MODES
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .as_slice()
+        )
+    );
+    assert_eq!(
+        memory_policy.flags().as_deref(),
+        Some(
+            OCI_LINUX_MEMORY_POLICY_FLAGS
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .as_slice()
+        )
+    );
     assert_eq!(
         *linux
             .mount_extensions()
