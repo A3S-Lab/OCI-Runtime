@@ -284,6 +284,13 @@ The SDK's process adapter also preserves the exact OCI spellings for
 `SCHED_FLAG_RESET_ON_FORK` and `SCHED_FLAG_DL_OVERRUN` across bundle and Guest
 protocol serialization.
 
+Optional `linux.personality` applies only to configured init. The planner
+accepts the OCI `LINUX` and `LINUX32` domains and rejects every nonempty flags
+list before the executor mutates process state. The dedicated init applies the
+selected domain before credentials and seccomp, immediately queries the
+personality syscall, and fails unless the complete value matches. Omission
+performs no personality syscall and preserves inherited state.
+
 For exec, the trusted helper applies and reads back
 `process.execCPUAffinity.initial` before joining the workload cgroup through
 its inherited `cgroup.procs` descriptor. It then applies and reads back

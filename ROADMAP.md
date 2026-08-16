@@ -194,7 +194,8 @@ Completed:
   cgroup-v2 pause/resume and exact live process inventory, replay-safe resource
   update, and normalized stats with real workload-progress evidence, plus
   controlling PTY allocation, OCI `consoleSize` initial and resized dimensions,
-  exec CPU affinity before and after workload cgroup membership, interactive
+  exact init `LINUX32` personality, exec CPU affinity before and after workload
+  cgroup membership, interactive
   I/O,
   merged output, and VEOF close, repeated with `/dev/kvm` absent and present
   but unusable;
@@ -465,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 393-entry pending normative evidence backlog.
+- [ ] Close the 390-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1395,6 +1396,10 @@ leak. Only then may KVM become `experimental`.
   descriptor, then apply and read back `final`. Omitted or empty phases make
   no affinity syscall, init ignores the field, and Native Linux, HVF, and WHPX
   lifecycle probes verify the final kernel mask.
+- [x] Validate and enforce OCI `linux.personality` for configured init.
+  Accept only the `LINUX` and `LINUX32` domains, reject every nonempty flag
+  list before mutation, perform no syscall when the field is omitted, and
+  require exact syscall and workload read-back on Native Linux, HVF, and WHPX.
 - [x] Parse OCI Linux sysctls once in the SDK, accept only known IPC, network,
   UTS-domain, and user-namespace controls, reject aliases and host-global
   mutation, and apply bounded deterministic writes through retained procfs.

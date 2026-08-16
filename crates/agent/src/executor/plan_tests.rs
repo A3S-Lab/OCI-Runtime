@@ -524,6 +524,31 @@ fn plans_and_serializes_process_scheduler_for_init_and_exec() {
 }
 
 #[test]
+fn plans_linux_personality_for_init_and_rejects_every_flag() {
+    let mut config_value: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config_value["linux"] = serde_json::json!({
+        "personality": {"domain": "LINUX32", "flags": []}
+    });
+    let config_json = serde_json::to_string(&config_value).expect("encode Linux personality");
+    let init =
+        InitPlan::from_bundle(&bundle(&config_json), &null_io()).expect("plan LINUX32 personality");
+    assert!(init.personality.is_some());
+
+    config_value["linux"]["personality"]["flags"] = serde_json::json!(["ADDR_NO_RANDOMIZE"]);
+    let config_json =
+        serde_json::to_string(&config_value).expect("encode unsupported personality flag");
+    let error = InitPlan::from_bundle(&bundle(&config_json), &null_io())
+        .expect_err("OCI 1.3 defines no supported personality flags");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("linux.personality.flags"));
+
+    let omitted = InitPlan::from_bundle(&bundle(FIXED_CONFIG), &null_io())
+        .expect("plan omitted Linux personality");
+    assert!(omitted.personality.is_none());
+}
+
+#[test]
 fn plans_exec_cpu_affinity_and_ignores_it_for_init() {
     let mut config_value: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");

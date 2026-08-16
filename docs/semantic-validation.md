@@ -47,14 +47,14 @@ The initial rule set covers:
   host-global controls;
 - mount ID mappings, seccomp listener/errno relationships, selected CPU,
   block-I/O, and RDMA relationships;
-- Intel RDT names and schemata, memory-policy node relationships, and Linux
-  device/path safety;
+- Intel RDT names and schemata, memory-policy node relationships, required
+  Linux personality domain and empty flags, and Linux device/path safety;
 - absolute OCI VM runtime paths and NUL rejection;
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 73 rule identifiers come from one typed registry. Twenty are classified
-as direct OCI normative validators and are currently bound to 27 exact source
+All 75 rule identifiers come from one typed registry. Twenty-one are classified
+as direct OCI normative validators and are currently bound to 30 exact source
 entries in the normative evidence manifest. Linux `oomScoreAdj`, scheduler,
 and I/O-priority runtime constraints plus executor and real-host tests promote
 14 process requirements to `enforced`. Scheduler validation covers duplicate
