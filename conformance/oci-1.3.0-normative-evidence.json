@@ -402,6 +402,26 @@
     },
     {
       "requirementIds": [
+        "sha256:dcc520511dd6743f0f3ada5165bcfd573347bc0ed87aa8057fca88f744d2af05",
+        "sha256:0c9c11aedc1bca3a99ce96e03d977c87194e0386087c6e095f6cbba72fafa531",
+        "sha256:2c014772ffab344c1a4e4dc2ca1f460a77785c6e709d7bbbd677e0bf6fca48f0"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.console-size.applied-with-terminal"
+      ],
+      "testIds": [
+        "attachment::tests::terminal_attachment_binds_the_oci_console_size",
+        "process_io::tests::terminal_console_size_supplies_and_fences_initial_dimensions",
+        "executor::plan_tests::console_size_is_applied_with_a_terminal",
+        "executor::terminal::tests::terminal_setup_applies_initial_and_resized_dimensions",
+        "runtime_client_process_smoke::tests::terminal_smoke_sources_initial_dimensions_from_oci",
+        "oci_smoke::utility_vm::lifecycle::tests::terminal_smoke_sources_initial_dimensions_from_oci"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:b0bb060732a422aa1bf5c6b9c1e3625408052f06b9f1fb8d083c852d76eabfed"
       ],
       "disposition": "enforced",

@@ -648,8 +648,12 @@ impl LinuxExecutor {
         }
 
         let bundle = request.bundle.to_guest_bundle()?;
+        let process_io = match bundle.spec().process().as_ref() {
+            Some(process) => request.io.resolve_for_process(process)?,
+            None => request.io.clone(),
+        };
         let rootless = self.user_mapping_runtime.is_rootless();
-        let plan = InitPlan::from_bundle(&bundle, &request.io)?;
+        let plan = InitPlan::from_bundle(&bundle, &process_io)?;
         if rootless {
             if !plan.namespaces.new_user() {
                 return Err(executor_error(
@@ -755,7 +759,7 @@ impl LinuxExecutor {
             &config_snapshot,
             &self.init_executable,
             state.cgroup_manager.as_ref(),
-            &request.io,
+            &process_io,
             &hook_state,
             ProcessSpawnContext {
                 inherited_descriptors,

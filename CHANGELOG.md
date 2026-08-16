@@ -6,12 +6,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI terminal `consoleSize` enforcement for init and exec. The SDK now
+  resolves one effective initial PTY size from the immutable OCI process and
+  the optional transport copy, accepts an omitted copy, and rejects conflicts
+  before runtime mutation. The Linux executor passes that resolved size to
+  the existing PTY setup, while the shared Native Linux, HVF, and WHPX
+  terminal lifecycle gate now omits the transport size and verifies the OCI
+  dimensions inside the workload before and after resize. One new owner-bound
+  rule promotes the `consoleSize`, `height`, and `width` requirements, moving
+  the ledger to 231 enforced, 25 validated, two conformant, and 397 pending
+  entries.
 - Exact OCI lifecycle, rootfs, and non-terminal console-size evidence. The
   Linux executor's existing read-only-root enforcement is now bound to both
   normative occurrences and its real Native Linux read-only write rejection.
   Init and exec planning now accept and discard `consoleSize` when `terminal`
-  is false or absent, while a terminal configuration still fails closed until
-  its configured dimensions are wired to the PTY contract. The lifecycle
+  is false or absent. This established the non-terminal half of the contract;
+  the terminal PTY binding is completed by the entry above. The lifecycle
   destroy step shares the already retained owned-resource cleanup evidence
   from Delete. Two new owner-bound rules plus the existing Delete rule promote
   four requirements, moving the ledger to 228 enforced, 25 validated, two

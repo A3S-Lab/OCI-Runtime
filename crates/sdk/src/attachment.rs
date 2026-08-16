@@ -348,9 +348,12 @@ impl CreateAttachments {
 
         let configuration = decode_configuration(bundle)?;
         let baseline = Self::from_bundle_unchecked(bundle, self.process_io.clone())?;
-        if self.rootfs != baseline.rootfs || self.mounts != baseline.mounts {
+        if self.rootfs != baseline.rootfs
+            || self.mounts != baseline.mounts
+            || self.process_io != baseline.process_io
+        {
             return Err(invalid_attachment(
-                "rootfs or mount attachment inventory differs from config.json",
+                "rootfs, mount, or process I/O attachment inventory differs from config.json",
             ));
         }
 
@@ -409,6 +412,10 @@ impl CreateAttachments {
     }
 
     fn from_bundle_unchecked(bundle: &OciBundle, process_io: ProcessIo) -> Result<Self> {
+        let process_io = match bundle.spec().process().as_ref() {
+            Some(process) => process_io.resolve_for_process(process)?,
+            None => process_io,
+        };
         let configuration = decode_configuration(bundle)?;
         let rootfs = configuration
             .get("root")
@@ -680,7 +687,7 @@ mod tests {
         RUNTIME_BUNDLE_HANDOFF_EXTENSION, RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
         RUNTIME_BUNDLE_HANDOFF_MOVE_V1,
     };
-    use crate::{ErrorCode, OciBundle, ProcessIo};
+    use crate::{ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize};
 
     fn bundle() -> OciBundle {
         OciBundle::from_json(
@@ -723,6 +730,18 @@ mod tests {
         .expect("handoff bundle")
     }
 
+    fn terminal_bundle() -> OciBundle {
+        let mut configuration: serde_json::Value =
+            serde_json::from_str(bundle().config_json()).expect("fixture configuration");
+        configuration["process"]["terminal"] = json!(true);
+        configuration["process"]["consoleSize"] = json!({"width": 120, "height": 40});
+        OciBundle::from_json(
+            std::env::temp_dir().join("a3s-terminal-attachment-bundle"),
+            serde_json::to_string(&configuration).expect("terminal configuration"),
+        )
+        .expect("terminal attachment fixture bundle")
+    }
+
     #[test]
     fn derives_and_digest_binds_every_standard_attachment_category() {
         let bundle = bundle();
@@ -749,6 +768,39 @@ mod tests {
         assert_eq!(attachments.network.len(), 3);
         assert_eq!(attachments.secrets.len(), 2);
         assert_eq!(attachments.extensions.len(), 2);
+    }
+
+    #[test]
+    fn terminal_attachment_binds_the_oci_console_size() {
+        let bundle = terminal_bundle();
+        let io = ProcessIo {
+            stdin: IoMode::Terminal,
+            stdout: IoMode::Terminal,
+            stderr: IoMode::Terminal,
+            terminal_size: None,
+        };
+        let attachments = CreateAttachments::from_bundle(&bundle, io)
+            .expect("derive console-sized terminal attachments");
+        assert_eq!(
+            attachments.process_io().terminal_size,
+            Some(TerminalSize {
+                width: 120,
+                height: 40,
+            })
+        );
+
+        let mut encoded = serde_json::to_value(&attachments).expect("encode attachments");
+        encoded["processIo"]
+            .as_object_mut()
+            .expect("process I/O object")
+            .remove("terminal_size");
+        let unbound: CreateAttachments =
+            serde_json::from_value(encoded).expect("decode unbound attachment");
+        let error = unbound
+            .validate(&bundle)
+            .expect_err("wire input must retain the derived OCI console size");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains("process I/O"));
     }
 
     #[test]
