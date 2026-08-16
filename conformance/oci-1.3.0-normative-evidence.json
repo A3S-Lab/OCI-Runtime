@@ -332,6 +332,7 @@
     },
     {
       "requirementIds": [
+        "sha256:5700536290b4aed2b497dee63d584234cbf412c190654052b81c9d45bc9fecbc",
         "sha256:1fc847889a3172f36fa379c59245ecca0138e9970c4d9d19d8d8df24015cddda"
       ],
       "disposition": "enforced",
@@ -368,6 +369,35 @@
       ],
       "testIds": [
         "state::tests::core_lifecycle_is_idempotent_and_generation_safe"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:0e05d484f01666644321b81be3498e5d737bb35173a84e5873f0a9a636a4437c",
+        "sha256:41b4ee39f1fb91e9251b95a19aea15139ef4712cd341860545aee56f8c2789bf"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.root.readonly"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.readonly_rootfs_enforced",
+        "executor::rootfs_tests::accepts_complete_rootfs_enforcement_in_a_new_mount_namespace",
+        "executor::rootfs_tests::rejects_rootfs_mount_mutation_outside_a_new_mount_namespace"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:9c10fa9595f6ce8c1a39c79dddaceef0a080f0b8a7c1aad8225f9ebb59b2c78d"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.console-size.ignored-without-terminal"
+      ],
+      "testIds": [
+        "executor::plan_tests::console_size_is_ignored_without_a_terminal"
       ]
     },
     {
