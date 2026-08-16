@@ -667,8 +667,12 @@ fn console_size_is_ignored_without_a_terminal() {
                 .expect("baseline non-terminal exec")
         );
     }
+}
 
-    let mut terminal = base;
+#[test]
+fn console_size_is_applied_with_a_terminal() {
+    let mut terminal = serde_json::from_str::<serde_json::Value>(FIXED_CONFIG)
+        .expect("decode fixed configuration");
     terminal["process"]["terminal"] = serde_json::json!(true);
     terminal["process"]["consoleSize"] = serde_json::json!({"width": 120, "height": 40});
     let terminal_json = serde_json::to_string(&terminal).expect("encode terminal console size");
@@ -676,21 +680,42 @@ fn console_size_is_ignored_without_a_terminal() {
         stdin: IoMode::Terminal,
         stdout: IoMode::Terminal,
         stderr: IoMode::Terminal,
-        terminal_size: Some(TerminalSize {
-            width: 120,
-            height: 40,
-        }),
+        terminal_size: None,
     };
-    let error = InitPlan::from_bundle(&bundle(&terminal_json), &terminal_io)
-        .expect_err("terminal consoleSize must not be silently ignored");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("process.consoleSize"));
+    let init = InitPlan::from_bundle(&bundle(&terminal_json), &terminal_io)
+        .expect("init must accept OCI terminal dimensions");
+    assert!(init.terminal);
 
     let process: Process =
         serde_json::from_value(terminal["process"].clone()).expect("decode terminal process");
-    let error = ProcessPlan::from_process(&process, &terminal_io)
-        .expect_err("exec terminal consoleSize must not be silently ignored");
-    assert_eq!(error.code, ErrorCode::Unsupported);
+    let exec = ProcessPlan::from_process(&process, &terminal_io)
+        .expect("exec must accept OCI terminal dimensions");
+    assert!(exec.terminal);
+    assert_eq!(
+        terminal_io
+            .resolve_for_process(&process)
+            .expect("resolve OCI terminal dimensions")
+            .terminal_size,
+        Some(TerminalSize {
+            width: 120,
+            height: 40,
+        })
+    );
+
+    let conflicting_io = ProcessIo {
+        terminal_size: Some(TerminalSize {
+            width: 80,
+            height: 24,
+        }),
+        ..terminal_io
+    };
+    let error = InitPlan::from_bundle(&bundle(&terminal_json), &conflicting_io)
+        .expect_err("init must reject conflicting terminal dimensions");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("process.consoleSize"));
+    let error = ProcessPlan::from_process(&process, &conflicting_io)
+        .expect_err("exec must reject conflicting terminal dimensions");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("process.consoleSize"));
 }
 

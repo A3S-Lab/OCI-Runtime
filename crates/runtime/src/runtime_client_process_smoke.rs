@@ -604,6 +604,7 @@ fn terminal_exec_request(
     let mut request = exec_request(target, nonce, process_suffix, operation_suffix, command)?;
     request.process = serde_json::from_value(serde_json::json!({
         "terminal": true,
+        "consoleSize": {"width": size.width, "height": size.height},
         "user": {"uid": 0, "gid": 0, "umask": 18},
         "args": ["/bin/sh", "-c", command],
         "env": ["PATH=/bin:/usr/bin"],
@@ -616,7 +617,7 @@ fn terminal_exec_request(
         stdin: IoMode::Terminal,
         stdout: IoMode::Terminal,
         stderr: IoMode::Terminal,
-        terminal_size: Some(size),
+        terminal_size: None,
     };
     Ok(request)
 }
@@ -640,4 +641,48 @@ async fn call<T>(
 
 fn call_error(operation: &str, error: &Error) -> String {
     format!("{operation} failed: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use a3s_oci_sdk::{ContainerId, Generation};
+
+    use super::{terminal_exec_request, ContainerTarget, TerminalSize};
+
+    #[test]
+    fn terminal_smoke_sources_initial_dimensions_from_oci() {
+        let target = ContainerTarget::exact(
+            ContainerId::new("runtime-client-console-size").expect("container ID"),
+            Generation(1),
+        );
+        let size = TerminalSize {
+            width: 120,
+            height: 40,
+        };
+        let request = terminal_exec_request(
+            &target,
+            "console-size",
+            "terminal",
+            "terminal",
+            "/bin/true",
+            size,
+        )
+        .expect("terminal smoke request");
+
+        assert_eq!(request.io.terminal_size, None);
+        assert_eq!(
+            request
+                .io
+                .resolve_for_process(&request.process)
+                .expect("resolve terminal smoke dimensions")
+                .terminal_size,
+            Some(size)
+        );
+        let configured = request
+            .process
+            .console_size()
+            .expect("OCI console size must be present");
+        assert_eq!(configured.width(), u64::from(size.width));
+        assert_eq!(configured.height(), u64::from(size.height));
+    }
 }

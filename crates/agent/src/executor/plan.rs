@@ -56,7 +56,8 @@ pub(super) struct ProcessPlan {
 impl ProcessPlan {
     pub(super) fn from_process(process: &Process, io: &ProcessIo) -> Result<Self> {
         let terminal = process.terminal().unwrap_or(false);
-        validate_process_io(io, terminal)?;
+        let resolved_io = io.resolve_for_process(process)?;
+        validate_process_io(&resolved_io, terminal)?;
         validate_process_profile(process)?;
         if process.no_new_privileges() != Some(true) {
             return Err(unsupported(
@@ -476,14 +477,6 @@ fn validate_supported_process_fields(process: &Map<String, Value>) -> Result<()>
             "noNewPrivileges",
         ],
     )?;
-    if process.contains_key("consoleSize")
-        && process.get("terminal").and_then(Value::as_bool) == Some(true)
-    {
-        return Err(unsupported(
-            "process.consoleSize",
-            "configured terminal dimensions are not enforced by the bootstrap executor",
-        ));
-    }
     Ok(())
 }
 

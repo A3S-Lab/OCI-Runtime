@@ -15,6 +15,7 @@ mod linux_capability;
 mod linux_mount_option;
 mod linux_sysctl;
 mod model;
+mod process_io;
 pub mod process_serde;
 mod rootfs_metadata;
 mod schema;

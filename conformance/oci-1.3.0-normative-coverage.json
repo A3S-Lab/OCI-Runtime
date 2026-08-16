@@ -4033,10 +4033,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`consoleSize`** (object, OPTIONAL) specifies the console size in characters of the terminal.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.console-size.applied-with-terminal"
+      ],
+      "testIds": [
+        "attachment::tests::terminal_attachment_binds_the_oci_console_size",
+        "process_io::tests::terminal_console_size_supplies_and_fences_initial_dimensions",
+        "executor::plan_tests::console_size_is_applied_with_a_terminal",
+        "executor::terminal::tests::terminal_setup_applies_initial_and_resized_dimensions",
+        "runtime_client_process_smoke::tests::terminal_smoke_sources_initial_dimensions_from_oci",
+        "oci_smoke::utility_vm::lifecycle::tests::terminal_smoke_sources_initial_dimensions_from_oci"
+      ]
     },
     {
       "id": "sha256:9c10fa9595f6ce8c1a39c79dddaceef0a080f0b8a7c1aad8225f9ebb59b2c78d",
@@ -4065,10 +4074,19 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`height`** (uint, REQUIRED)",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.console-size.applied-with-terminal"
+      ],
+      "testIds": [
+        "attachment::tests::terminal_attachment_binds_the_oci_console_size",
+        "process_io::tests::terminal_console_size_supplies_and_fences_initial_dimensions",
+        "executor::plan_tests::console_size_is_applied_with_a_terminal",
+        "executor::terminal::tests::terminal_setup_applies_initial_and_resized_dimensions",
+        "runtime_client_process_smoke::tests::terminal_smoke_sources_initial_dimensions_from_oci",
+        "oci_smoke::utility_vm::lifecycle::tests::terminal_smoke_sources_initial_dimensions_from_oci"
+      ]
     },
     {
       "id": "sha256:2c014772ffab344c1a4e4dc2ca1f460a77785c6e709d7bbbd677e0bf6fca48f0",
@@ -4079,10 +4097,19 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`width`** (uint, REQUIRED)",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.console-size.applied-with-terminal"
+      ],
+      "testIds": [
+        "attachment::tests::terminal_attachment_binds_the_oci_console_size",
+        "process_io::tests::terminal_console_size_supplies_and_fences_initial_dimensions",
+        "executor::plan_tests::console_size_is_applied_with_a_terminal",
+        "executor::terminal::tests::terminal_setup_applies_initial_and_resized_dimensions",
+        "runtime_client_process_smoke::tests::terminal_smoke_sources_initial_dimensions_from_oci",
+        "oci_smoke::utility_vm::lifecycle::tests::terminal_smoke_sources_initial_dimensions_from_oci"
+      ]
     },
     {
       "id": "sha256:ffa69ba4f1ce4634c91a23fdae42cfcb1393c6e5243025688d902e31343d5fe8",

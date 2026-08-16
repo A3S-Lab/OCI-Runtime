@@ -37,6 +37,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "linux-executor",
     ),
     OciNonSemanticRule::new(
+        "oci.common.process.console-size.applied-with-terminal",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new(
         "oci.common.process.console-size.ignored-without-terminal",
         "linux-executor",
     ),

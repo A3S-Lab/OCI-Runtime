@@ -5,10 +5,9 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use crate::{
     CheckpointRequest, CloseStdinRequest, ContainerOperationRequest, CreateRequest, DeleteRequest,
     Error, ErrorCode, EventsRequest, ExecRequest, FileOp, FileRequest, FilesystemOp,
-    FilesystemRequest, IoMode, KillRequest, ListRequest, ProcessIo, ProcessesRequest,
-    ReadOutputRequest, ResizeRequest, RestoreRequest, Result, RunRequest, SignalProcessRequest,
-    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest,
-    WriteStdinRequest,
+    FilesystemRequest, KillRequest, ListRequest, ProcessesRequest, ReadOutputRequest,
+    ResizeRequest, RestoreRequest, Result, RunRequest, SignalProcessRequest, StartRequest,
+    StateRequest, StatsRequest, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 use crate::{OciSemanticPhase, OciSemanticValidator};
 
@@ -36,10 +35,14 @@ impl ValidateRequest for CreateRequest {
     fn validate(&self) -> Result<()> {
         self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
         self.attachments.validate(&self.bundle)?;
-        validate_process_io(
-            self.attachments.process_io(),
-            initial_process_uses_terminal(self),
-        )
+        match self.bundle.spec().process().as_ref() {
+            Some(process) => self
+                .attachments
+                .process_io()
+                .resolve_for_process(process)
+                .map(|_| ()),
+            None => crate::process_io::validate_without_process(self.attachments.process_io()),
+        }
     }
 }
 
@@ -69,7 +72,7 @@ impl ValidateRequest for ExecRequest {
             ));
         }
         OciSemanticValidator::new()?.validate_process(&self.process)?;
-        validate_process_io(&self.io, self.process.terminal().unwrap_or(false))
+        self.io.resolve_for_process(&self.process).map(|_| ())
     }
 }
 
@@ -109,7 +112,7 @@ impl ValidateRequest for WriteStdinRequest {
 
 impl ValidateRequest for ResizeRequest {
     fn validate(&self) -> Result<()> {
-        validate_terminal_size(self.size.width, self.size.height, "resize.size")
+        crate::process_io::validate_terminal_size(self.size.width, self.size.height, "resize.size")
     }
 }
 
@@ -215,15 +218,14 @@ impl ValidateRequest for RestoreRequest {
         self.bundle.validate_for_phase(OciSemanticPhase::Create)?;
         self.attachments.validate(&self.bundle)?;
         validate_absolute_path(&self.checkpoint_directory, "restore.checkpoint_directory")?;
-        validate_process_io(
-            self.attachments.process_io(),
-            self.bundle
-                .spec()
-                .process()
-                .as_ref()
-                .and_then(|process| process.terminal())
-                .unwrap_or(false),
-        )
+        match self.bundle.spec().process().as_ref() {
+            Some(process) => self
+                .attachments
+                .process_io()
+                .resolve_for_process(process)
+                .map(|_| ()),
+            None => crate::process_io::validate_without_process(self.attachments.process_io()),
+        }
     }
 }
 
@@ -253,60 +255,6 @@ valid_by_construction!(
     SignalProcessRequest,
     WaitProcessRequest,
 );
-
-fn initial_process_uses_terminal(request: &CreateRequest) -> bool {
-    request
-        .bundle
-        .spec()
-        .process()
-        .as_ref()
-        .and_then(|process| process.terminal())
-        .unwrap_or(false)
-}
-
-fn validate_process_io(io: &ProcessIo, process_uses_terminal: bool) -> Result<()> {
-    let terminal_modes = [
-        matches!(io.stdin, IoMode::Terminal),
-        matches!(io.stdout, IoMode::Terminal),
-        matches!(io.stderr, IoMode::Terminal),
-    ];
-    if process_uses_terminal && terminal_modes != [true, true, true] {
-        return Err(invalid_request(
-            "process.terminal requires terminal stdin, stdout, and stderr",
-        ));
-    }
-    if !process_uses_terminal && terminal_modes.iter().any(|terminal| *terminal) {
-        return Err(invalid_request(
-            "terminal I/O requires process.terminal to be true",
-        ));
-    }
-    match (process_uses_terminal, io.terminal_size) {
-        (true, Some(size)) => {
-            validate_terminal_size(size.width, size.height, "process_io.terminal_size")?
-        }
-        (true, None) => {
-            return Err(invalid_request(
-                "process.terminal requires an initial terminal_size",
-            ));
-        }
-        (false, Some(_)) => {
-            return Err(invalid_request(
-                "terminal_size requires process.terminal to be true",
-            ));
-        }
-        (false, None) => {}
-    }
-    Ok(())
-}
-
-fn validate_terminal_size(width: u16, height: u16, field: &str) -> Result<()> {
-    if width == 0 || height == 0 {
-        return Err(invalid_request(format!(
-            "{field} width and height must both be positive"
-        )));
-    }
-    Ok(())
-}
 
 fn validate_positive_bounded(value: u32, maximum: u32, field: &str) -> Result<()> {
     if value == 0 || value > maximum {

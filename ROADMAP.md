@@ -193,7 +193,8 @@ Completed:
   exec cleanup, exact init/exec `oom_score_adj` read-back, plus durable
   cgroup-v2 pause/resume and exact live process inventory, replay-safe resource
   update, and normalized stats with real workload-progress evidence, plus
-  controlling PTY allocation, initial and resized dimensions, interactive I/O,
+  controlling PTY allocation, OCI `consoleSize` initial and resized dimensions,
+  interactive I/O,
   merged output, and VEOF close, repeated with `/dev/kvm` absent and present
   but unusable;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
@@ -463,7 +464,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 400-entry pending normative evidence backlog.
+- [ ] Close the 397-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1481,8 +1482,8 @@ leak. Only then may KVM become `experimental`.
   utility-VM lifecycle harness.
 - [x] Ordered hooks with OCI state on stdin.
 - [x] Backpressured piped stdin, bounded captured stdout/stderr, controlling
-  PTYs, initial terminal dimensions, resize, merged terminal output, VEOF
-  close, signals, and byte-accurate output cursors.
+  PTYs, OCI `consoleSize` initial terminal dimensions, resize, merged terminal
+  output, VEOF close, signals, and byte-accurate output cursors.
 - [x] Native inherited descriptor handoff for the A3S Box exec listener on FD
   3, PTY listener on FD 4, and dedicated init log on FD 5, with type/role/count
   validation, collision-safe child `dup2`, stable host/agent replay schemas,

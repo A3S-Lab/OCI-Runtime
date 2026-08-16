@@ -906,6 +906,7 @@ fn terminal_exec_request(
     let mut request = exec_request(target, nonce, process_suffix, operation_suffix, command)?;
     request.process = serde_json::from_value(serde_json::json!({
         "terminal": true,
+        "consoleSize": {"width": size.width, "height": size.height},
         "user": {"uid": 0, "gid": 0, "umask": 18},
         "args": ["/bin/sh", "-c", command],
         "env": ["PATH=/bin:/usr/bin"],
@@ -917,7 +918,7 @@ fn terminal_exec_request(
         stdin: IoMode::Terminal,
         stdout: IoMode::Terminal,
         stderr: IoMode::Terminal,
-        terminal_size: Some(size),
+        terminal_size: None,
     };
     Ok(request)
 }
@@ -1187,8 +1188,9 @@ fn null_io() -> ProcessIo {
 #[cfg(test)]
 mod tests {
     use a3s_oci_core::HostPlatform;
+    use a3s_oci_sdk::{ContainerId, ContainerTarget, Generation, TerminalSize};
 
-    use super::{resource_profile, UPDATED_MEMORY_LIMIT};
+    use super::{resource_profile, terminal_exec_request, UPDATED_MEMORY_LIMIT};
 
     #[test]
     fn windows_resource_profile_omits_only_the_unavailable_swap_controller() {
@@ -1206,5 +1208,41 @@ mod tests {
         )
         .expect("serialize macOS resource profile");
         assert_eq!(macos["memory"]["swap"], 1024 * 1024 * 1024_u64);
+    }
+
+    #[test]
+    fn terminal_smoke_sources_initial_dimensions_from_oci() {
+        let target = ContainerTarget::exact(
+            ContainerId::new("console-size-smoke").expect("container ID"),
+            Generation(1),
+        );
+        let size = TerminalSize {
+            width: 120,
+            height: 40,
+        };
+        let request = terminal_exec_request(
+            &target,
+            "console-size",
+            "terminal",
+            "terminal",
+            "/bin/true",
+            size,
+        )
+        .expect("terminal smoke request");
+        assert_eq!(request.io.terminal_size, None);
+        assert_eq!(
+            request
+                .io
+                .resolve_for_process(&request.process)
+                .expect("resolve terminal smoke dimensions")
+                .terminal_size,
+            Some(size)
+        );
+        let configured = request
+            .process
+            .console_size()
+            .expect("OCI console size must be present");
+        assert_eq!(configured.width(), u64::from(size.width));
+        assert_eq!(configured.height(), u64::from(size.height));
     }
 }
