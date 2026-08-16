@@ -13,6 +13,7 @@ mod handoff;
 mod id;
 mod linux_capability;
 mod linux_mount_option;
+mod linux_sysctl;
 mod model;
 pub mod process_serde;
 mod rootfs_metadata;
@@ -51,6 +52,9 @@ pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
 pub use linux_capability::{oci_linux_capability_number, OCI_LINUX_CAPABILITY_NAMES};
 pub use linux_mount_option::{
     OciLinuxMountOption, OciLinuxMountOptionRequirement, OCI_LINUX_MOUNT_OPTIONS,
+};
+pub use linux_sysctl::{
+    OciLinuxSysctlKey, OciLinuxSysctlKeyError, OciLinuxSysctlKeyErrorKind, OciLinuxSysctlNamespace,
 };
 pub use model::*;
 pub use oci_spec;

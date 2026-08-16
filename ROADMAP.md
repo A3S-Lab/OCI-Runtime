@@ -299,7 +299,8 @@ Completed:
   bounding ceilings, exact `no_new_privileges` read-back, private
   controller-enabled cgroup-v2 management,
   memory/CPU/cpuset/PID settings and live updates with read-back and rollback,
-  normalized cgroup stats, exact static device nodes within a bounded
+  normalized cgroup stats, transactional namespaced sysctls with exact
+  read-back and pre-Create rollback, exact static device nodes within a bounded
   default-deny profile, and pure-Rust x86_64/AArch64 seccomp BPF retained
   across init and exec;
 - versioned control/workload cgroup topology for trusted A3S Box init: exact
@@ -1386,6 +1387,11 @@ leak. Only then may KVM become `experimental`.
   invalid nice/realtime/deadline relationships, and unavailable `SCHED_ISO`
   with stable typed errors; preserve the exact OCI flag spellings across SDK
   transport; and require real Native Linux kernel read-back.
+- [x] Parse OCI Linux sysctls once in the SDK, accept only known IPC, network,
+  UTS-domain, and user-namespace controls, reject aliases and host-global
+  mutation, and apply bounded deterministic writes through retained procfs.
+  Verify every value, reverse all prior writes when Create fails before ready,
+  and retain native x86_64/aarch64 IPC and network read-back evidence.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

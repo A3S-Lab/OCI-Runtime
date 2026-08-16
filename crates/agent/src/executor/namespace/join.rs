@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
-use super::NamespacePlan;
+use super::{NamespaceIsolation, NamespacePlan};
 
 struct OpenNamespace {
     name: &'static str,
@@ -17,7 +17,7 @@ struct OpenNamespace {
     joined: bool,
 }
 
-pub(super) fn enter(plan: &NamespacePlan) -> Result<()> {
+pub(super) fn enter(plan: &NamespacePlan, isolation: &NamespaceIsolation) -> Result<()> {
     let mut namespaces = open_all(plan)?;
     if namespaces.is_empty() {
         return Ok(());
@@ -29,9 +29,9 @@ pub(super) fn enter(plan: &NamespacePlan) -> Result<()> {
         )
     })?;
 
-    join_pass(&mut namespaces, &current_namespaces, false)?;
-    join_pass(&mut namespaces, &current_namespaces, true)?;
-    join_pass(&mut namespaces, &current_namespaces, false)?;
+    join_pass(&mut namespaces, &current_namespaces, isolation, false)?;
+    join_pass(&mut namespaces, &current_namespaces, isolation, true)?;
+    join_pass(&mut namespaces, &current_namespaces, isolation, false)?;
 
     let missing = namespaces
         .iter()
@@ -103,6 +103,7 @@ fn open_all(plan: &NamespacePlan) -> Result<Vec<OpenNamespace>> {
 fn join_pass(
     namespaces: &mut [OpenNamespace],
     current_namespaces: &File,
+    isolation: &NamespaceIsolation,
     user_namespace: bool,
 ) -> Result<()> {
     for namespace in namespaces {
@@ -110,6 +111,16 @@ fn join_pass(
             continue;
         }
         if same_namespace(&namespace.file, current_namespaces, namespace.current_name)? {
+            if isolation.requires_joined_name(namespace.name) {
+                return Err(join_error(
+                    ErrorCode::PermissionDenied,
+                    format!(
+                        "refusing namespace-scoped mutation through current {} namespace {}",
+                        namespace.name,
+                        namespace.path.display()
+                    ),
+                ));
+            }
             namespace.joined = true;
             continue;
         }
@@ -256,9 +267,11 @@ mod tests {
     use std::fs::File;
     use std::path::Path;
 
-    use a3s_oci_sdk::ErrorCode;
+    use a3s_oci_sdk::oci_spec::runtime::Linux;
+    use a3s_oci_sdk::{ErrorCode, OciLinuxSysctlNamespace};
 
-    use super::{same_namespace, validate_namespace_type};
+    use super::{enter, same_namespace, validate_namespace_type};
+    use crate::executor::namespace::{NamespaceIsolation, NamespacePlan};
 
     #[test]
     fn namespace_descriptors_are_type_checked_before_setns() {
@@ -298,5 +311,25 @@ mod tests {
         let uts = File::open("/proc/self/ns/uts").expect("open current UTS namespace");
         assert!(same_namespace(&uts, &current, "uts").expect("compare namespace identities"));
         assert!(!same_namespace(&uts, &current, "net").expect("compare different namespaces"));
+    }
+
+    #[test]
+    fn current_namespace_join_is_rejected_for_namespace_scoped_mutation() {
+        let linux: Linux = serde_json::from_value(serde_json::json!({
+            "namespaces": [{"type": "network", "path": "/proc/self/ns/net"}]
+        }))
+        .expect("Linux namespace fixture");
+        let plan = NamespacePlan::from_linux(Some(&linux), 0, 0, &[])
+            .expect("joined network namespace plan");
+        let mut isolation = NamespaceIsolation::default();
+        isolation.require(OciLinuxSysctlNamespace::Network);
+
+        let error =
+            enter(&plan, &isolation).expect_err("host network namespace mutation must fail closed");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("current network namespace"));
+
+        enter(&plan, &NamespaceIsolation::default())
+            .expect("read-only same-namespace join remains a no-op");
     }
 }

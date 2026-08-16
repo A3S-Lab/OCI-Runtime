@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxIdMapping, LinuxNamespaceType};
-use a3s_oci_sdk::{Error, ErrorCode, Result};
+use a3s_oci_sdk::{Error, ErrorCode, OciLinuxSysctlNamespace, Result};
 
 use super::control;
 
@@ -91,6 +91,37 @@ pub(super) struct NamespacePlan {
     joined_user_authority: Option<joined_user::JoinedUserNamespaceAuthority>,
     monotonic_offset: Option<TimeOffset>,
     boottime_offset: Option<TimeOffset>,
+}
+
+/// Namespace identities that must differ from the agent's current identity
+/// before the runtime may apply namespace-scoped mutations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct NamespaceIsolation {
+    ipc: bool,
+    network: bool,
+    uts: bool,
+    user: bool,
+}
+
+impl NamespaceIsolation {
+    pub(super) fn require(&mut self, namespace: OciLinuxSysctlNamespace) {
+        match namespace {
+            OciLinuxSysctlNamespace::Ipc => self.ipc = true,
+            OciLinuxSysctlNamespace::Network => self.network = true,
+            OciLinuxSysctlNamespace::Uts => self.uts = true,
+            OciLinuxSysctlNamespace::User => self.user = true,
+        }
+    }
+
+    pub(super) const fn requires_joined_name(&self, name: &str) -> bool {
+        match name.as_bytes() {
+            b"ipc" => self.ipc,
+            b"network" => self.network,
+            b"uts" => self.uts,
+            b"user" => self.user,
+            _ => false,
+        }
+    }
 }
 
 impl NamespacePlan {
@@ -216,6 +247,14 @@ impl NamespacePlan {
         self.uts.is_configured()
     }
 
+    pub(super) const fn has_ipc(&self) -> bool {
+        self.ipc.is_configured()
+    }
+
+    pub(super) const fn has_network(&self) -> bool {
+        self.network.is_configured()
+    }
+
     pub(super) const fn has_user(&self) -> bool {
         self.user.is_configured()
     }
@@ -325,8 +364,12 @@ impl NamespacePlan {
     }
 }
 
-pub(super) fn enter_new_namespaces(plan: &NamespacePlan, control: &mut UnixStream) -> Result<()> {
-    join::enter(plan)?;
+pub(super) fn enter_new_namespaces(
+    plan: &NamespacePlan,
+    isolation: &NamespaceIsolation,
+    control: &mut UnixStream,
+) -> Result<()> {
+    join::enter(plan, isolation)?;
 
     if plan.new_user() {
         unshare(libc::CLONE_NEWUSER, "create Linux OCI user namespace")?;

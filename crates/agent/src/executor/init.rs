@@ -258,7 +258,10 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         plan.bundle_directory.clone(),
         plan.annotations.clone(),
     )?;
-    if let Err(error) = namespace::enter_new_namespaces(&plan.namespaces, &mut control) {
+    let namespace_isolation = plan.sysctls.namespace_isolation();
+    if let Err(error) =
+        namespace::enter_new_namespaces(&plan.namespaces, &namespace_isolation, &mut control)
+    {
         return reject_before_ready(&mut control, error);
     }
     // Entering a mapped user namespace changes the launcher's effective
@@ -356,15 +359,20 @@ pub(super) fn complete_create_and_wait_for_start(
     {
         return reject_before_ready(&mut control, error);
     }
-    if let Err(error) = finish_create_environment(
+    let applied_sysctls = match finish_create_environment(
         create.plan,
         create.rootfs,
         create.rootfs_file,
         create.prepared_devices,
+        host_proc,
     ) {
-        return reject_before_ready(&mut control, error);
+        Ok(applied) => applied,
+        Err(error) => return reject_before_ready(&mut control, error),
+    };
+    if let Err(error) = write_ready(&mut control, runtime_pid, namespace_init_pid) {
+        return reject_before_ready(&mut control, applied_sysctls.rollback_after(error));
     }
-    write_ready(&mut control, runtime_pid, namespace_init_pid)?;
+    applied_sysctls.commit();
     wait_for_start_and_exec(
         create.plan,
         host_proc,
@@ -600,12 +608,13 @@ fn prepare_create_environment_before_pivot(
     Ok(())
 }
 
-fn finish_create_environment(
+fn finish_create_environment<'a>(
     plan: &InitPlan,
     rootfs: &Path,
     rootfs_file: &File,
     prepared_devices: &PreparedDeviceSources,
-) -> Result<()> {
+    host_proc: &'a File,
+) -> Result<super::sysctl::AppliedSysctls<'a>> {
     if plan.namespaces.new_mount() {
         rootfs::pivot_root(rootfs)?;
         if !DevicePlan::uses_prepared_sources(prepared_devices) {
@@ -624,7 +633,7 @@ fn finish_create_environment(
         // will also be used by the eventual chroot.
         rootfs::create_required_dev_symlinks_from_root(rootfs_file)?;
     }
-    Ok(())
+    plan.sysctls.apply(host_proc)
 }
 
 fn verify_uts_names(plan: &InitPlan) -> Result<()> {

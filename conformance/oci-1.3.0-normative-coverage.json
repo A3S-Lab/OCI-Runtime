@@ -9915,10 +9915,20 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`sysctl`** (object, OPTIONAL) allows kernel parameters to be modified at runtime for the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.sysctl.namespaced-apply"
+      ],
+      "testIds": [
+        "linux_sysctl::tests::normalizes_dot_and_slash_notation_without_losing_literal_dots",
+        "executor::plan_tests::plans_namespaced_sysctls_and_rejects_alias_collisions",
+        "executor::sysctl::tests::applies_reads_back_and_commits_exact_values",
+        "executor::sysctl::tests::an_uncommitted_transaction_restores_original_values",
+        "executor::sysctl::tests::partial_application_rolls_back_instead_of_leaving_the_first_write",
+        "executor::namespace::join::tests::current_namespace_join_is_rejected_for_namespace_scoped_mutation",
+        ".github/scripts/native-linux-smoke.sh::init-sysctl-readback"
+      ]
     },
     {
       "id": "sha256:43bc36d0ec1bccc440d3add246f084730a8f109a9577b967fa5552a11c33f4a2",

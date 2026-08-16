@@ -64,6 +64,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "linux-executor",
     ),
     OciNonSemanticRule::new("oci.linux.runtime.dev-symlinks.required", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.sysctl.namespaced-apply", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.runtime.config.immutable-after-create",
         "runtime-lifecycle",

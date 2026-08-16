@@ -77,6 +77,33 @@ fn accepts_the_exact_bootstrap_profile() {
 }
 
 #[test]
+fn plans_namespaced_sysctls_and_rejects_alias_collisions() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(UTS_CONFIG).expect("decode UTS config");
+    config["linux"]["namespaces"] = serde_json::json!([
+        {"type": "uts"},
+        {"type": "ipc"},
+        {"type": "network"}
+    ]);
+    config["linux"]["sysctl"] = serde_json::json!({
+        "kernel.domainname": "runtime.test",
+        "kernel.shm_rmid_forced": "1",
+        "net.ipv4.ip_forward": "1"
+    });
+    let encoded = serde_json::to_string(&config).expect("encode sysctl config");
+    let plan =
+        InitPlan::from_bundle(&bundle(&encoded), &null_io()).expect("namespaced sysctl plan");
+    assert_eq!(plan.sysctls.len(), 3);
+
+    config["linux"]["sysctl"]["net/ipv4/ip_forward"] = serde_json::json!("1");
+    let encoded = serde_json::to_string(&config).expect("encode aliased sysctl config");
+    let error = InitPlan::from_bundle(&bundle(&encoded), &null_io())
+        .expect_err("two spellings for one procfs path must fail");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("more than one spelling"));
+}
+
+#[test]
 fn plans_all_oci_hook_phases_instead_of_rejecting_the_configuration() {
     let mut config: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");

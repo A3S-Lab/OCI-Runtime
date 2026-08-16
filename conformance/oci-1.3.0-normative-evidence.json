@@ -1170,6 +1170,25 @@
         "linux_mount_option::tests::registry_covers_the_pinned_oci_linux_mount_option_table_once",
         "service::tests::reports_only_operations_that_are_currently_implemented"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:0e138e42317332d5378f354f6f8f8c408499fa4c84405f9b65a1b5a45be5b33a"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.sysctl.namespaced-apply"
+      ],
+      "testIds": [
+        "linux_sysctl::tests::normalizes_dot_and_slash_notation_without_losing_literal_dots",
+        "executor::plan_tests::plans_namespaced_sysctls_and_rejects_alias_collisions",
+        "executor::sysctl::tests::applies_reads_back_and_commits_exact_values",
+        "executor::sysctl::tests::an_uncommitted_transaction_restores_original_values",
+        "executor::sysctl::tests::partial_application_rolls_back_instead_of_leaving_the_first_write",
+        "executor::namespace::join::tests::current_namespace_join_is_rejected_for_namespace_scoped_mutation",
+        ".github/scripts/native-linux-smoke.sh::init-sysctl-readback"
+      ]
     }
   ]
 }

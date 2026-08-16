@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
+use crate::{OciLinuxSysctlKey, OciLinuxSysctlKeyErrorKind, OciLinuxSysctlNamespace};
+
 use super::{contains_nul, is_posix_absolute, rules, OciSemanticRule, ViolationCollector};
 
 #[derive(Default)]
@@ -436,24 +438,12 @@ fn validate_sysctls(
     namespaces: &NamespaceFacts,
     collector: &mut ViolationCollector,
 ) {
-    const IPC_SYSCTLS: &[&str] = &[
-        "kernel.msgmax",
-        "kernel.msgmnb",
-        "kernel.msgmni",
-        "kernel.sem",
-        "kernel.shmall",
-        "kernel.shmmax",
-        "kernel.shmmni",
-        "kernel.shm_rmid_forced",
-    ];
-
     let Some(sysctls) = linux.get("sysctl").and_then(Value::as_object) else {
         return;
     };
     for (raw_key, value) in sysctls {
-        let key = normalize_sysctl_key(raw_key);
         let path = format!("/linux/sysctl/{}", escape_pointer(raw_key));
-        if contains_nul(raw_key) || value.as_str().is_some_and(contains_nul) {
+        if value.as_str().is_some_and(contains_nul) {
             collector.invalid(
                 &path,
                 rules::SYSCTL_NO_NUL,
@@ -461,77 +451,50 @@ fn validate_sysctls(
             );
             continue;
         }
-        if IPC_SYSCTLS.contains(&key.as_str()) || key.starts_with("fs.mqueue.") {
-            if !namespaces.contains("ipc") {
-                collector.invalid(
-                    path,
-                    rules::SYSCTL_REQUIRES_IPC_NAMESPACE,
-                    format!("sysctl {key} requires an explicit IPC namespace"),
-                );
+        let key = match OciLinuxSysctlKey::parse(raw_key) {
+            Ok(key) => key,
+            Err(error) => {
+                let (rule, message) = match error.kind() {
+                    OciLinuxSysctlKeyErrorKind::Nul => (
+                        rules::SYSCTL_NO_NUL,
+                        "sysctl keys and values must not contain a NUL byte".to_string(),
+                    ),
+                    OciLinuxSysctlKeyErrorKind::HostnameConflict => (
+                        rules::SYSCTL_HOSTNAME_CONFLICT,
+                        "kernel.hostname conflicts with the dedicated OCI hostname field"
+                            .to_string(),
+                    ),
+                    OciLinuxSysctlKeyErrorKind::Empty
+                    | OciLinuxSysctlKeyErrorKind::TooLong
+                    | OciLinuxSysctlKeyErrorKind::UnsafePath
+                    | OciLinuxSysctlKeyErrorKind::NotNamespaced => (
+                        rules::SYSCTL_NOT_NAMESPACED,
+                        format!("sysctl {raw_key} is not a safe namespaced kernel control"),
+                    ),
+                };
+                collector.invalid(path, rule, message);
+                continue;
             }
-            continue;
-        }
-        if key.starts_with("net.") {
-            if !namespaces.contains("network") {
-                collector.invalid(
-                    path,
-                    rules::SYSCTL_REQUIRES_NETWORK_NAMESPACE,
-                    format!("sysctl {key} requires an explicit network namespace"),
-                );
+        };
+        let (namespace, rule) = match key.namespace() {
+            OciLinuxSysctlNamespace::Ipc => ("ipc", rules::SYSCTL_REQUIRES_IPC_NAMESPACE),
+            OciLinuxSysctlNamespace::Network => {
+                ("network", rules::SYSCTL_REQUIRES_NETWORK_NAMESPACE)
             }
-            continue;
-        }
-        if key == "kernel.domainname" {
-            if !namespaces.contains("uts") {
-                collector.invalid(
-                    path,
-                    rules::SYSCTL_REQUIRES_UTS_NAMESPACE,
-                    "kernel.domainname requires an explicit UTS namespace",
-                );
-            }
-            continue;
-        }
-        if key == "kernel.hostname" {
+            OciLinuxSysctlNamespace::Uts => ("uts", rules::SYSCTL_REQUIRES_UTS_NAMESPACE),
+            OciLinuxSysctlNamespace::User => ("user", rules::SYSCTL_REQUIRES_USER_NAMESPACE),
+        };
+        if !namespaces.contains(namespace) {
             collector.invalid(
                 path,
-                rules::SYSCTL_HOSTNAME_CONFLICT,
-                "kernel.hostname conflicts with the dedicated OCI hostname field",
+                rule,
+                format!(
+                    "sysctl {} requires an explicit {namespace} namespace",
+                    key.canonical()
+                ),
             );
-            continue;
         }
-        if key.starts_with("user.") {
-            if !namespaces.contains("user") {
-                collector.invalid(
-                    path,
-                    rules::SYSCTL_REQUIRES_USER_NAMESPACE,
-                    format!("sysctl {key} requires an explicit user namespace"),
-                );
-            }
-            continue;
-        }
-        collector.invalid(
-            path,
-            rules::SYSCTL_NOT_NAMESPACED,
-            format!("sysctl {key} is not known to be isolated by a configured namespace"),
-        );
     }
-}
-
-fn normalize_sysctl_key(value: &str) -> String {
-    let Some(first_separator) = value.find(['.', '/']) else {
-        return value.to_string();
-    };
-    if value.as_bytes()[first_separator] == b'.' {
-        return value.to_string();
-    }
-    value
-        .chars()
-        .map(|character| match character {
-            '.' => '/',
-            '/' => '.',
-            other => other,
-        })
-        .collect()
 }
 
 fn validate_seccomp(linux: &Map<String, Value>, collector: &mut ViolationCollector) {
