@@ -367,7 +367,7 @@ jq \
   --argjson uid "$rootless_uid" \
   --argjson gid "$rootless_gid" \
   '
-    del(.linux.timeOffsets, .hooks)
+    del(.linux.timeOffsets, .linux.sysctl, .hooks)
     | .linux.cgroupsPath = "a3s-oci-rootless-smoke"
     | .linux.resources = {
         memory: {limit: 268435456, reservation: 33554432, swap: 536870912},
@@ -392,6 +392,8 @@ jq \
   ' \
   "$rootless_bundle/config.json" >"$rootless_bundle/config.json.tmp"
 mv "$rootless_bundle/config.json.tmp" "$rootless_bundle/config.json"
+jq --exit-status '(.linux | has("sysctl")) | not' \
+  "$rootless_bundle/config.json" >/dev/null
 for controller in cpu cpuset memory pids; do
   grep -qw "$controller" /sys/fs/cgroup/cgroup.controllers
 done

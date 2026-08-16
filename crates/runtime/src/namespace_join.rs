@@ -10,7 +10,8 @@ pub(crate) struct NamespaceJoinBundles {
 }
 
 /// Derive a profile that inherits the host network namespace while retaining
-/// every other namespace and mapping from the qualified base bundle.
+/// every other namespace and mapping from the qualified base bundle. Sysctls
+/// are removed because the profile deliberately enters a host identity.
 #[cfg(any(test, target_os = "linux"))]
 pub(crate) fn build_host_network_bundle(
     base: &OciBundle,
@@ -28,6 +29,10 @@ pub(crate) fn build_host_network_bundle(
         .and_then(Value::as_array_mut)
         .ok_or_else(|| "host-network profile requires linux.namespaces".to_string())?;
     namespaces.retain(|namespace| namespace.get("type").and_then(Value::as_str) != Some("network"));
+    // Host-network qualification intentionally inherits the runtime's current
+    // network namespace. It must not carry namespace-scoped mutations from a
+    // broader base fixture into that host identity.
+    linux.remove("sysctl");
     linux.insert(
         "cgroupsPath".to_string(),
         Value::String(cgroup_path.to_string()),
@@ -185,7 +190,7 @@ fn bundle_from_value(directory: &Path, config: Value) -> Result<OciBundle, Strin
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::OciBundle;
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     use super::{build_bundles, build_host_network_bundle};
 
@@ -250,11 +255,17 @@ mod tests {
     }
 
     #[test]
-    fn host_network_profile_removes_only_network_and_changes_cgroup_identity() {
+    fn host_network_profile_removes_network_sysctls_and_changes_cgroup_identity() {
         let bundle_directory = std::env::current_dir()
             .expect("current test directory")
             .join("host-network-bundle");
-        let base = OciBundle::from_json(bundle_directory, CONFIG).expect("qualified base bundle");
+        let mut base_config: Value = serde_json::from_str(CONFIG).expect("base config JSON");
+        base_config["linux"]["sysctl"] = json!({"net.ipv4.ip_forward": "1"});
+        let base = OciBundle::from_json(
+            bundle_directory,
+            serde_json::to_string(&base_config).expect("encoded base config"),
+        )
+        .expect("qualified base bundle");
         let bundle = build_host_network_bundle(&base, "a3s-oci-host-network-test")
             .expect("host-network bundle");
         let config: Value = serde_json::from_str(bundle.config_json()).expect("host-network JSON");
@@ -268,6 +279,7 @@ mod tests {
         assert!(namespaces
             .iter()
             .any(|namespace| namespace["type"] == "mount"));
+        assert!(config["linux"].get("sysctl").is_none());
         assert_eq!(config["linux"]["cgroupsPath"], "a3s-oci-host-network-test");
         assert!(config["process"]["args"][2]
             .as_str()
