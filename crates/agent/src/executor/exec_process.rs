@@ -8,7 +8,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
-use super::cgroup;
 use super::control::{read_outcome, read_start_result, InitOutcome, START_BYTE};
 use super::io::ProcessIoHandle;
 use super::namespace::RetainedNamespaceArgument;
@@ -45,7 +44,7 @@ impl ExecProcess {
         let process_group = ProcessGroupLease::open_for_snapshot(snapshot).await?;
         let init_pidfd = init_process.pidfd_descriptor();
         let cgroup_procs = init_process.workload_cgroup_procs_descriptor();
-        let inherited = context.inherited_descriptors(init_pidfd)?;
+        let inherited = context.inherited_descriptors(init_pidfd, cgroup_procs)?;
         let namespace_arguments = context.namespace_arguments();
         let (listener, control_name) = bind_control_listener()?;
 
@@ -56,19 +55,22 @@ impl ExecProcess {
             .arg(&control_name)
             .arg(context.root_descriptor().to_string())
             .arg(init_pidfd.to_string())
-            .arg(std::process::id().to_string());
+            .arg(std::process::id().to_string())
+            .arg(
+                cgroup_procs
+                    .map(|descriptor| descriptor.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+            );
         append_namespace_arguments(&mut command, &namespace_arguments);
         command.env_clear().kill_on_drop(true);
         let io_setup = ProcessIoHandle::configure(&mut command, io)?;
         let terminal_io = io_setup.uses_terminal();
         // SAFETY: the callback runs in the freshly forked command child and
-        // moves the helper into the container cgroup and changes descriptor
-        // flags only in the child-side descriptor table.
+        // changes descriptor flags only in the child-side descriptor table.
+        // The authenticated helper applies initial affinity, enters the
+        // workload cgroup, and applies final affinity before forking payload.
         unsafe {
             command.pre_exec(move || {
-                if let Some(descriptor) = cgroup_procs {
-                    cgroup::join_current_process(descriptor)?;
-                }
                 make_descriptors_inheritable(&inherited)?;
                 super::terminal::prepare_child_terminal(terminal_io)
             });

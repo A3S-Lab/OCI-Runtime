@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use a3s_oci_sdk::oci_spec::runtime::Process;
+use a3s_oci_sdk::oci_spec::runtime::{ExecCPUAffinity, Process};
 use a3s_oci_sdk::{
     CloseStdinRequest, ContainerTarget, Error, ErrorCode, ExecRequest, ExitStatus, IoMode,
     OperationContext, OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget,
@@ -38,6 +38,8 @@ pub(crate) async fn exercise_process_io(
            END { exit !(inh && prm && eff && bnd && amb) }' /proc/self/status; \
          /bin/busybox awk '$1 == \"NoNewPrivs:\" && $2 == 1 { ok = 1 } \
            END { exit !ok }' /proc/self/status; \
+         /bin/busybox awk '$1 == \"Cpus_allowed_list:\" && $2 == \"0\" { ok = 1 } \
+           END { exit !ok }' /proc/self/status; \
          IFS= read -r first; IFS= read -r second; \
          printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
          printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
@@ -55,6 +57,14 @@ pub(crate) async fn exercise_process_io(
     }))
     .map_err(|error| format!("failed to construct exec scheduler: {error}"))?;
     request.process.set_scheduler(Some(scheduler));
+    let exec_cpu_affinity: ExecCPUAffinity = serde_json::from_value(serde_json::json!({
+        "initial": "0",
+        "final": "0"
+    }))
+    .map_err(|error| format!("failed to construct exec CPU affinity: {error}"))?;
+    request
+        .process
+        .set_exec_cpu_affinity(Some(exec_cpu_affinity));
     request.io = ProcessIo {
         stdin: IoMode::Pipe,
         stdout: IoMode::Capture,

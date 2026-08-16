@@ -120,7 +120,7 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v17` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v18` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
@@ -163,9 +163,11 @@ following:
    `oom_score_adj` value of 200, best-effort I/O priority
    5, and `SCHED_BATCH` with nice 7; reads `0x400` for all five capability
    masks as `exec_capabilities_verified` and `NoNewPrivs=1` as
-   `exec_no_new_privileges_verified`; exec and its retry return the same positive
-   authenticated PID, a duplicate process ID is rejected, and a
-   50-millisecond process wait returns `DeadlineExceeded`;
+   `exec_no_new_privileges_verified`, then reads the exact final CPU set `0`
+   as `exec_cpu_affinity_verified` after applying OCI `execCPUAffinity`
+   before and after the workload cgroup transition; exec and its retry return
+   the same positive authenticated PID, a duplicate process ID is rejected,
+   and a 50-millisecond process wait returns `DeadlineExceeded`;
 9. per-process `SIGKILL` and its exact retry succeed through the retained
    pidfd, process wait returns signal 9, and repeated process wait is stable;
 10. process inventory returns exactly the live init and second exec process;
@@ -262,7 +264,7 @@ configured with one container ID and duplicates the inherited Box FD 3/4/5
 roles before it opens any workload.
 
 The `native-linux-service-smoke` command reuses the complete
-`a3s.oci.native-linux-smoke.v17` lifecycle assertions over a real `0600` Unix
+`a3s.oci.native-linux-smoke.v18` lifecycle assertions over a real `0600` Unix
 socket. In addition to the 26 lifecycle requirements above, success requires:
 
 1. the service root, state root, and executor parent are real, owner-owned

@@ -1053,6 +1053,40 @@
     },
     {
       "requirementIds": [
+        "sha256:6256f5f4161b174897726d79430c3cecf37414270cfdcf6e56ae7b4a7eb9ce9c",
+        "sha256:11b31491cceca7ee488c59d55131c6454132d45e8fca4cebb814b126b6c4c262",
+        "sha256:4a81cb4c34bb53e0fcca10f720fbcdf4ef7b6f4ba44adcd35449ec2882ab7def"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.process.exec-cpu-affinity.applied-around-cgroup"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::exec-cpu-affinity-readback",
+        "executor::cpu_affinity::tests::applies_exact_affinity_in_an_isolated_process",
+        "executor::cpu_affinity::tests::plans_canonical_initial_and_final_cpu_sets",
+        "executor::cpu_affinity::tests::rejects_descending_and_unrepresentable_cpu_sets_before_mutation",
+        "executor::plan_tests::plans_exec_cpu_affinity_and_ignores_it_for_init"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:b7c9525439e18bc9c0279401933c6132793fe3989739892953112d6e74a04a32"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.process.exec-cpu-affinity.final-omitted-preserved"
+      ],
+      "testIds": [
+        "executor::cpu_affinity::tests::applies_exact_affinity_in_an_isolated_process",
+        "executor::cpu_affinity::tests::plans_canonical_initial_and_final_cpu_sets",
+        "process_serde::tests::empty_exec_cpu_affinity_is_canonicalized_to_omission"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:0a9e00992c10f315d11815ce40df8ae0f497372c77fb6cdc4814169c7af9fa34",
         "sha256:5fe7ee0272fc2a9bbb596d6117f235d5708b2b9c739907e75295a6e446151ea2"
       ],

@@ -177,8 +177,13 @@ impl RetainedExecutionContext {
             .collect()
     }
 
-    pub(crate) fn inherited_descriptors(&self, init_pidfd: RawFd) -> Result<Vec<RawFd>> {
+    pub(crate) fn inherited_descriptors(
+        &self,
+        init_pidfd: RawFd,
+        workload_cgroup_procs: Option<RawFd>,
+    ) -> Result<Vec<RawFd>> {
         let mut descriptors = vec![self.root_descriptor(), init_pidfd];
+        descriptors.extend(workload_cgroup_procs);
         descriptors.extend(
             self.namespaces
                 .iter()
@@ -402,7 +407,7 @@ mod tests {
         }
 
         let error = context
-            .inherited_descriptors(context.rootfs.as_raw_fd())
+            .inherited_descriptors(context.rootfs.as_raw_fd(), None)
             .expect_err("root and init descriptors must be distinct");
         assert_eq!(error.code, ErrorCode::Internal);
     }

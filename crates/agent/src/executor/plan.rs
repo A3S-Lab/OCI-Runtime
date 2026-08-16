@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use super::capability::CapabilityPlan;
 use super::cgroup::CgroupPlan;
+use super::cpu_affinity::CpuAffinityPlan;
 use super::device::DevicePlan;
 use super::hook::HookSet;
 use super::io_priority::IoPriorityPlan;
@@ -46,6 +47,8 @@ pub(super) struct ProcessPlan {
     pub(super) io_priority: Option<IoPriorityPlan>,
     #[serde(default)]
     pub(super) scheduler: Option<SchedulerPlan>,
+    #[serde(default)]
+    pub(super) exec_cpu_affinity: Option<CpuAffinityPlan>,
     pub(super) no_new_privileges: bool,
     pub(super) terminal: bool,
     pub(super) rlimits: RlimitPlan,
@@ -54,7 +57,15 @@ pub(super) struct ProcessPlan {
 }
 
 impl ProcessPlan {
-    pub(super) fn from_process(process: &Process, io: &ProcessIo) -> Result<Self> {
+    pub(super) fn from_init_process(process: &Process, io: &ProcessIo) -> Result<Self> {
+        Self::build(process, io, false)
+    }
+
+    pub(super) fn from_exec_process(process: &Process, io: &ProcessIo) -> Result<Self> {
+        Self::build(process, io, true)
+    }
+
+    fn build(process: &Process, io: &ProcessIo, include_exec_affinity: bool) -> Result<Self> {
         let terminal = process.terminal().unwrap_or(false);
         let resolved_io = io.resolve_for_process(process)?;
         validate_process_io(&resolved_io, terminal)?;
@@ -96,6 +107,11 @@ impl ProcessPlan {
         let rlimits = RlimitPlan::from_oci(process.rlimits().as_deref())?;
         let io_priority = IoPriorityPlan::from_oci(process.io_priority().as_ref())?;
         let scheduler = SchedulerPlan::from_oci(process.scheduler().as_ref())?;
+        let exec_cpu_affinity = if include_exec_affinity {
+            CpuAffinityPlan::from_oci(process.exec_cpu_affinity().as_ref())?
+        } else {
+            None
+        };
 
         Ok(Self {
             args,
@@ -108,6 +124,7 @@ impl ProcessPlan {
             oom_score_adj: process.oom_score_adj(),
             io_priority,
             scheduler,
+            exec_cpu_affinity,
             no_new_privileges: true,
             terminal,
             rlimits,
@@ -178,7 +195,7 @@ impl InitPlan {
             .process()
             .as_ref()
             .ok_or_else(|| invalid("OCI bootstrap executor requires process for create/start"))?;
-        let mut process_plan = ProcessPlan::from_process(process, io)?;
+        let mut process_plan = ProcessPlan::from_init_process(process, io)?;
         let annotations = plan_annotations(spec.annotations().as_ref())?;
         let namespaces = NamespacePlan::from_linux(
             spec.linux().as_ref(),
@@ -474,6 +491,7 @@ fn validate_supported_process_fields(process: &Map<String, Value>) -> Result<()>
             "oomScoreAdj",
             "ioPriority",
             "scheduler",
+            "execCPUAffinity",
             "noNewPrivileges",
         ],
     )?;

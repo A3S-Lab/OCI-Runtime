@@ -20,6 +20,7 @@ use crate::executor::pid_supervisor;
 use crate::executor::plan::ProcessPlan;
 use crate::executor::process_group::ProcessGroupLease;
 use crate::executor::rootfs;
+use crate::executor::{cgroup, cpu_affinity};
 
 pub(super) fn run_container_exec_if_requested() -> Option<Result<()>> {
     let mut arguments = std::env::args_os().skip(1);
@@ -36,6 +37,7 @@ struct HelperArguments {
     rootfs: File,
     init_pidfd: File,
     expected_parent: libc::pid_t,
+    workload_cgroup_procs: Option<File>,
     namespaces: Vec<HelperNamespace>,
 }
 
@@ -55,10 +57,11 @@ struct RawHelperNamespace {
 
 fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<HelperArguments> {
     let arguments = arguments.collect::<Vec<_>>();
-    if arguments.len() < 5 {
+    if arguments.len() < 6 {
         return Err(exec_error(
             ErrorCode::InvalidArgument,
-            "container-exec requires SNAPSHOT CONTROL ROOTFD INITPIDFD PARENTPID [NAMESPACE...]",
+            "container-exec requires SNAPSHOT CONTROL ROOTFD INITPIDFD PARENTPID \
+             CGROUPFD [NAMESPACE...]",
         ));
     }
     let snapshot = PathBuf::from(&arguments[0]);
@@ -66,6 +69,14 @@ fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<H
     let rootfs = parse_descriptor(&arguments[2], "rootfs descriptor")?;
     let init_pidfd = parse_descriptor(&arguments[3], "init pidfd")?;
     let expected_parent = parse_positive_pid(&arguments[4], "expected parent PID")?;
+    let workload_cgroup_procs = if arguments[5] == OsStr::new("none") {
+        None
+    } else {
+        Some(parse_descriptor(
+            &arguments[5],
+            "workload cgroup.procs descriptor",
+        )?)
+    };
 
     let mut descriptors = BTreeSet::new();
     if !descriptors.insert(rootfs) || !descriptors.insert(init_pidfd) {
@@ -74,9 +85,15 @@ fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<H
             "container-exec rootfs and init pidfd descriptors must be distinct",
         ));
     }
+    if workload_cgroup_procs.is_some_and(|descriptor| !descriptors.insert(descriptor)) {
+        return Err(exec_error(
+            ErrorCode::InvalidArgument,
+            "container-exec workload cgroup.procs descriptor must be distinct",
+        ));
+    }
     let mut last_order = None;
     let mut namespaces = Vec::new();
-    for encoded in &arguments[5..] {
+    for encoded in &arguments[6..] {
         let encoded = encoded.to_str().ok_or_else(|| {
             exec_error(
                 ErrorCode::InvalidArgument,
@@ -135,12 +152,18 @@ fn parse_helper_arguments(arguments: impl Iterator<Item = OsString>) -> Result<H
     // helper and are each transferred to exactly one owner.
     let rootfs = unsafe { File::from_raw_fd(rootfs) };
     let init_pidfd = unsafe { File::from_raw_fd(init_pidfd) };
+    let workload_cgroup_procs = workload_cgroup_procs.map(|descriptor| {
+        // SAFETY: this distinct descriptor was inherited exclusively into the
+        // helper and is transferred to exactly one owner.
+        unsafe { File::from_raw_fd(descriptor) }
+    });
     Ok(HelperArguments {
         snapshot,
         control_name,
         rootfs,
         init_pidfd,
         expected_parent,
+        workload_cgroup_procs,
         namespaces,
     })
 }
@@ -152,6 +175,7 @@ fn run_container_exec(arguments: HelperArguments) -> Result<()> {
         rootfs,
         init_pidfd,
         expected_parent,
+        workload_cgroup_procs,
         namespaces,
     } = arguments;
     verify_and_arm_parent(expected_parent)?;
@@ -178,6 +202,24 @@ fn run_container_exec(arguments: HelperArguments) -> Result<()> {
         Ok(prepared) => prepared,
         Err(error) => return reject_exec(&mut control, error),
     };
+    if let Err(error) = cpu_affinity::apply_initial(plan.exec_cpu_affinity.as_ref()) {
+        return reject_exec(&mut control, error);
+    }
+    if let Some(descriptor) = workload_cgroup_procs.as_ref() {
+        if let Err(source) = cgroup::join_current_process(descriptor.as_raw_fd()) {
+            return reject_exec(
+                &mut control,
+                exec_error(
+                    cgroup_join_error_code(&source),
+                    format!("failed to join exec workload cgroup before final affinity: {source}"),
+                ),
+            );
+        }
+    }
+    if let Err(error) = cpu_affinity::apply_final(plan.exec_cpu_affinity.as_ref()) {
+        return reject_exec(&mut control, error);
+    }
+    drop(workload_cgroup_procs);
     if let Err(error) = enter_namespaces(&namespaces) {
         return reject_exec(&mut control, error);
     }
@@ -573,6 +615,16 @@ fn last_exec_os_error(operation: &str) -> Error {
     )
 }
 
+fn cgroup_join_error_code(source: &io::Error) -> ErrorCode {
+    match source.raw_os_error() {
+        Some(libc::EACCES | libc::EPERM) => ErrorCode::PermissionDenied,
+        Some(libc::EBUSY | libc::EINVAL | libc::ENOENT | libc::ESRCH) => {
+            ErrorCode::FailedPrecondition
+        }
+        _ => ErrorCode::Internal,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -587,18 +639,28 @@ mod tests {
 
     #[test]
     fn helper_requires_its_complete_authenticated_argument_prefix() {
-        let error = parse(&["snapshot", "control", "3", "4"])
-            .expect_err("missing parent PID must fail closed");
+        let error = parse(&["snapshot", "control", "3", "4", "42"])
+            .expect_err("missing cgroup descriptor must fail closed");
         assert_eq!(error.code, ErrorCode::InvalidArgument);
         assert!(error.message.contains("requires SNAPSHOT"));
     }
 
     #[test]
     fn helper_rejects_duplicate_root_and_init_descriptors() {
-        let error = parse(&["snapshot", "control", "3", "3", "42"])
+        let error = parse(&["snapshot", "control", "3", "3", "42", "none"])
             .expect_err("duplicate retained descriptors must fail closed");
         assert_eq!(error.code, ErrorCode::InvalidArgument);
         assert!(error.message.contains("must be distinct"));
+    }
+
+    #[test]
+    fn helper_rejects_a_cgroup_descriptor_that_aliases_an_authenticated_prefix() {
+        let error = parse(&["snapshot", "control", "3", "4", "42", "3"])
+            .expect_err("duplicate cgroup descriptor must fail closed");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error
+            .message
+            .contains("cgroup.procs descriptor must be distinct"));
     }
 
     #[test]
@@ -610,6 +672,7 @@ mod tests {
                 "3",
                 "4",
                 "42",
+                "none",
                 "mnt:131072:5",
                 "user:268435456:6",
             ],
@@ -619,10 +682,11 @@ mod tests {
                 "3",
                 "4",
                 "42",
+                "none",
                 "user:268435456:5",
                 "user:268435456:6",
             ],
-            vec!["snapshot", "control", "3", "4", "42", "unknown:1:5"],
+            vec!["snapshot", "control", "3", "4", "42", "none", "unknown:1:5"],
         ] {
             let error = parse(&arguments).expect_err("invalid namespace layout must fail closed");
             assert_eq!(error.code, ErrorCode::InvalidArgument);

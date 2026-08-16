@@ -236,6 +236,7 @@ async fn exercise_client(
     report.exec_scheduler_verified = true;
     report.exec_capabilities_verified = true;
     report.exec_no_new_privileges_verified = true;
+    report.exec_cpu_affinity_verified = true;
     process::exercise_terminal_io(client, &target, nonce).await?;
     report.terminal_io_verified = true;
     crate::filesystem_smoke::exercise_runtime(client, &target, nonce).await?;

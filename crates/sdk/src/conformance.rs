@@ -72,6 +72,14 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.mount-options.optional-tmpcopyup",
         "linux-executor",
     ),
+    OciNonSemanticRule::new(
+        "oci.linux.process.exec-cpu-affinity.applied-around-cgroup",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new(
+        "oci.linux.process.exec-cpu-affinity.final-omitted-preserved",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new("oci.linux.runtime.dev-symlinks.required", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.sysctl.namespaced-apply", "linux-executor"),
     OciNonSemanticRule::new(

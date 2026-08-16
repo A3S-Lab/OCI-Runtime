@@ -10,7 +10,7 @@ use a3s_oci_agent_protocol::{
     AgentWaitProcessRequest, AgentWaitRequest, AgentWriteStdinRequest, GuestPath,
 };
 use a3s_oci_core::HostPlatform;
-use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
+use a3s_oci_sdk::oci_spec::runtime::{ContainerState, ExecCPUAffinity, LinuxResources, Process};
 use a3s_oci_sdk::{
     ContainerTarget, DeleteMode, Error, ErrorCode, ExitStatus, IoMode, OciBundle, OperationContext,
     OperationId, OutputStream, ProcessId, ProcessIo, ProcessTarget, Signal, TerminalSize,
@@ -211,10 +211,20 @@ async fn exercise_process_io<T: AgentStream>(
         nonce,
         "io",
         "exec-io",
-        "IFS= read -r first; IFS= read -r second; \
+        "/bin/busybox awk '$1 == \"Cpus_allowed_list:\" && $2 == \"0\" { ok = 1 } \
+           END { exit !ok }' /proc/self/status; \
+         IFS= read -r first; IFS= read -r second; \
          printf 'stdout:%s:%s\\n' \"$first\" \"$second\"; \
          printf 'stderr:%s:%s\\n' \"$first\" \"$second\" >&2",
     )?;
+    let exec_cpu_affinity: ExecCPUAffinity = serde_json::from_value(serde_json::json!({
+        "initial": "0",
+        "final": "0"
+    }))
+    .map_err(|error| format!("failed to construct guest exec CPU affinity: {error}"))?;
+    request
+        .process
+        .set_exec_cpu_affinity(Some(exec_cpu_affinity));
     request.io = ProcessIo {
         stdin: IoMode::Pipe,
         stdout: IoMode::Capture,

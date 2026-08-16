@@ -242,7 +242,8 @@ result. Init and exec share the same fail-closed OCI process planner and I/O
 owner. The current process-I/O slice accepts null, piped, or inherited stdin,
 null, captured, or inherited stdout/stderr, or the exact all-terminal PTY
 contract. It accepts the enforced `oomScoreAdj`, `scheduler`, and `ioPriority`
-fields while rejecting CPU affinity and other unenforced process settings.
+fields plus exec-only `execCPUAffinity`, while rejecting other unenforced
+process settings.
 Inherited descriptors remain owned by the runtime launcher and are
 deliberately absent from SDK read/write operations. A separate Linux-only
 native create attachment implements the fixed
@@ -282,6 +283,14 @@ falling back to inherited scheduling. Omission performs no scheduler syscall.
 The SDK's process adapter also preserves the exact OCI spellings for
 `SCHED_FLAG_RESET_ON_FORK` and `SCHED_FLAG_DL_OVERRUN` across bundle and Guest
 protocol serialization.
+
+For exec, the trusted helper applies and reads back
+`process.execCPUAffinity.initial` before joining the workload cgroup through
+its inherited `cgroup.procs` descriptor. It then applies and reads back
+`final` before entering retained namespaces and forking the payload. CPU lists
+are normalized, deduplicated, sorted, and bounded by `CPU_SETSIZE`; descending
+ranges and unrepresentable CPU IDs fail before mutation. Omitted or empty
+phases perform no affinity syscall, and init ignores this exec-only field.
 
 Piped stdin is written asynchronously with backpressure and can be closed
 idempotently. Dedicated tasks continuously drain captured stdout and stderr so

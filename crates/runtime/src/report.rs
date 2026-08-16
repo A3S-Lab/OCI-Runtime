@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v17";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v18";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-rootless-smoke.v4";
@@ -406,6 +406,8 @@ pub struct NativeLinuxSmokeReport {
     pub exec_capabilities_verified: bool,
     /// Whether an exec process read back `NoNewPrivs: 1` after enforcement.
     pub exec_no_new_privileges_verified: bool,
+    /// Whether an exec process read back the exact final OCI CPU affinity.
+    pub exec_cpu_affinity_verified: bool,
     /// Whether PTY allocation, resize, interactive I/O, and EOF passed end-to-end.
     pub terminal_io_verified: bool,
     /// Whether binary upload/download and mutation replay passed end-to-end.
@@ -496,6 +498,7 @@ impl NativeLinuxSmokeReport {
             exec_scheduler_verified: false,
             exec_capabilities_verified: false,
             exec_no_new_privileges_verified: false,
+            exec_cpu_affinity_verified: false,
             terminal_io_verified: false,
             file_transfer_verified: false,
             filesystem_operations_verified: false,
@@ -601,6 +604,7 @@ impl NativeLinuxSmokeReport {
             && self.exec_scheduler_verified
             && self.exec_capabilities_verified
             && self.exec_no_new_privileges_verified
+            && self.exec_cpu_affinity_verified
             && self.terminal_io_verified
             && self.file_transfer_verified
             && self.filesystem_operations_verified

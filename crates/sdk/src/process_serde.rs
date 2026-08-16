@@ -63,6 +63,7 @@ pub(crate) fn normalize_for_typed_model(process: &mut Value) {
         OCI_DEADLINE_OVERRUN => TYPED_DEADLINE_OVERRUN,
         flag => flag,
     });
+    normalize_empty_exec_cpu_affinity(process);
 }
 
 fn normalize_flags(process: &mut Value, rename: impl Fn(&str) -> &str) {
@@ -80,6 +81,20 @@ fn normalize_flags(process: &mut Value, rename: impl Fn(&str) -> &str) {
         let normalized = rename(name);
         if normalized != name {
             *flag = Value::String(normalized.to_string());
+        }
+    }
+}
+
+fn normalize_empty_exec_cpu_affinity(process: &mut Value) {
+    let Some(affinity) = process
+        .get_mut("execCPUAffinity")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for field in ["initial", "final"] {
+        if affinity.get(field).and_then(Value::as_str) == Some("") {
+            affinity.remove(field);
         }
     }
 }
@@ -145,5 +160,18 @@ mod tests {
             encoded["process"]["scheduler"]["flags"],
             serde_json::json!(["SCHED_FLAG_RESET_ON_FORK", "SCHED_FLAG_DL_OVERRUN"])
         );
+    }
+
+    #[test]
+    fn empty_exec_cpu_affinity_is_canonicalized_to_omission() {
+        let mut value = standard_process();
+        value["execCPUAffinity"] = serde_json::json!({"initial": "", "final": ""});
+        let process = decode(value).expect("decode empty exec CPU affinity");
+        let affinity = process
+            .exec_cpu_affinity()
+            .as_ref()
+            .expect("retain the optional affinity object");
+        assert_eq!(affinity.initial(), &None);
+        assert_eq!(affinity.cpu_affinity_final(), &None);
     }
 }

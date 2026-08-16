@@ -82,7 +82,7 @@ impl LinuxExecutor {
         }
 
         let process_io = request.io.resolve_for_process(&request.process)?;
-        let mut plan = ProcessPlan::from_process(&request.process, &process_io)?;
+        let mut plan = ProcessPlan::from_exec_process(&request.process, &process_io)?;
         let seccomp = state
             .containers
             .get(&key)
