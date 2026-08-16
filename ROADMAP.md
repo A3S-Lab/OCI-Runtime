@@ -462,7 +462,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 407-entry pending normative evidence backlog.
+- [ ] Close the 405-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1359,10 +1359,13 @@ leak. Only then may KVM become `experimental`.
 - [x] Apply OCI `process.noNewPrivileges` through one shared init/exec path,
   require exact `PR_GET_NO_NEW_PRIVS` read-back, and retain workload-level
   `/proc/self/status` evidence for init and exec.
-- [ ] Implement and retain the OCI warning-only policy for requested
-  capabilities that the kernel cannot map or grant. The exact-set executor is
-  intentionally fail-closed today, so the two warning-policy requirements
-  remain pending.
+- [x] Implement and retain the OCI warning-only policy for requested
+  capabilities that the kernel cannot map or grant. Init and exec resolve each
+  requested set against the kernel ceiling, bounding set, and current grant
+  authority, enforce the remaining set exactly, and send one bounded,
+  validated warning per unavailable capability over the authenticated internal
+  control socket. The agent logs each warning before accepting exec success;
+  malformed, duplicate, or unbounded warning frames fail closed.
 - [x] Validate, retain, and apply every OCI `process.rlimits` type before
   credential reduction for both init and exec; reject duplicates, inverted
   soft/hard values, and unbounded plans; read every successful `setrlimit`

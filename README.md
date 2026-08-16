@@ -166,10 +166,12 @@ The complete release target is every applicable OCI Runtime Specification
 reduced A3S-only profile. [ROADMAP.md](ROADMAP.md) keeps completed evidence and
 open release gates separate.
 
-Capability set enforcement is exact and fail-closed. Two OCI warning-policy
-requirements remain open because the current executor rejects a requested
-capability that the kernel cannot grant instead of logging a warning and
-continuing.
+Capability set enforcement remains exact and fail-closed for every value the
+runtime can grant. When the running kernel or the executor's inherited
+authority cannot grant a recognized requested capability, init and exec remove
+only that unavailable set membership and send a bounded structured warning to
+the supervising agent before crossing exec. Malformed or duplicate warning
+frames fail closed instead of becoming untrusted log text.
 
 ## The runtime contract
 
@@ -442,8 +444,8 @@ The repository turns release claims into checked inventories:
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 73 |
-| Owner-bound non-semantic rules | 46 |
-| OCI normative dispositions | 221 enforced · 25 validated · 2 conformant · 407 pending review |
+| Owner-bound non-semantic rules | 47 |
+| OCI normative dispositions | 223 enforced · 25 validated · 2 conformant · 405 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |

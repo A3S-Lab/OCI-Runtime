@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI 1.3 warning-and-continue handling for requested Linux capabilities that
+  the running kernel or inherited executor authority cannot grant. Init and
+  exec now resolve every requested set against the live kernel ceiling,
+  bounding set, permitted set, and inheritable authority; apply the remaining
+  set exactly; and send one bounded structured warning per unavailable
+  capability over the authenticated internal control socket. The supervising
+  agent logs validated warnings before accepting exec success, while malformed,
+  duplicate, or unbounded frames fail closed. One owner-bound rule promotes the
+  two capability warning-policy requirements to enforced, moving the ledger to
+  223 enforced, 25 validated, two conformant, and 405 pending entries.
 - Complete OCI 1.3 Linux mount-option control coverage. A new SDK registry is
   the source of truth for all 61 standard option names and their requirement
   levels. The Linux executor recognizes every required and recommended

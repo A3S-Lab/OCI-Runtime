@@ -4,8 +4,15 @@ use a3s_oci_sdk::oci_spec::runtime::{Capabilities, Capability, LinuxCapabilities
 use a3s_oci_sdk::{oci_linux_capability_number, Error, ErrorCode, Result};
 use serde::{Deserialize, Serialize};
 
+mod warning;
+
+use warning::capability_warnings;
+#[cfg(test)]
+pub(super) use warning::CapabilitySet;
+pub(super) use warning::CapabilityWarning;
+
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
-const LAST_KNOWN_CAPABILITY: u32 = oci_linux_capability_number(Capability::CheckpointRestore);
+const CAP_SETPCAP_NUMBER: u32 = oci_linux_capability_number(Capability::Setpcap);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -15,6 +22,22 @@ pub(super) struct CapabilityPlan {
     inheritable: u64,
     permitted: u64,
     ambient: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PreparedCapabilities {
+    applied: CapabilityPlan,
+    warnings: Vec<CapabilityWarning>,
+}
+
+impl PreparedCapabilities {
+    pub(super) fn warnings(&self) -> &[CapabilityWarning] {
+        &self.warnings
+    }
+
+    pub(super) fn apply_after_credentials(&self, target_uid: u32) -> Result<()> {
+        self.applied.apply_after_credentials(target_uid)
+    }
 }
 
 impl CapabilityPlan {
@@ -67,7 +90,47 @@ impl CapabilityPlan {
         }
     }
 
-    pub(super) fn prepare_for_credentials(self, target_uid: u32) -> Result<()> {
+    pub(super) fn prepare_for_credentials(self, target_uid: u32) -> Result<PreparedCapabilities> {
+        let resolved = self.resolve_for_kernel(probe_kernel_capabilities()?);
+        resolved.applied.prepare_bounding_set(target_uid)?;
+        Ok(resolved)
+    }
+
+    fn resolve_for_kernel(self, kernel: KernelCapabilityState) -> PreparedCapabilities {
+        // The live bounding set is the hard ceiling for both retained and
+        // inheritable capability values. A future recognized OCI name may be
+        // above an older kernel's last capability, so mask the probe result by
+        // the kernel ceiling before resolving individual process sets.
+        let kernel_bounding = kernel.bounding & kernel.supported_mask();
+        // Linux permits a process with effective CAP_SETPCAP to add any value
+        // from its bounding set to inheritable. Without it, inheritable may
+        // only retain values already present in inheritable or permitted.
+        let inheritable_authority = if kernel.effective & (1_u64 << CAP_SETPCAP_NUMBER) != 0 {
+            kernel_bounding
+        } else {
+            (kernel.inheritable | kernel.permitted) & kernel_bounding
+        };
+        let bounding = self.bounding & kernel_bounding;
+        // capset cannot raise permitted beyond the caller's current permitted
+        // set. Effective and ambient are then constrained by their normative
+        // subset relationships, preserving a coherent applied profile after
+        // unavailable values are removed.
+        let permitted = self.permitted & kernel.permitted & bounding;
+        let inheritable = self.inheritable & inheritable_authority & bounding;
+        let applied = Self {
+            bounding,
+            effective: self.effective & permitted,
+            inheritable,
+            permitted,
+            ambient: self.ambient & permitted & inheritable,
+        };
+        PreparedCapabilities {
+            applied,
+            warnings: capability_warnings(self, applied),
+        }
+    }
+
+    fn prepare_bounding_set(self, target_uid: u32) -> Result<()> {
         let last_capability = probe_kernel_capabilities()?.last_capability;
         for capability in 0..=last_capability {
             if self.bounding & (1_u64 << capability) == 0 {
@@ -196,6 +259,19 @@ fn capability_mask(capabilities: Option<&Capabilities>) -> u64 {
 struct KernelCapabilityState {
     last_capability: u32,
     bounding: u64,
+    effective: u64,
+    permitted: u64,
+    inheritable: u64,
+}
+
+impl KernelCapabilityState {
+    const fn supported_mask(self) -> u64 {
+        if self.last_capability == 63 {
+            u64::MAX
+        } else {
+            (1_u64 << (self.last_capability + 1)) - 1
+        }
+    }
 }
 
 fn probe_kernel_capabilities() -> Result<KernelCapabilityState> {
@@ -249,29 +325,24 @@ fn probe_kernel_capabilities() -> Result<KernelCapabilityState> {
             "kernel did not expose a supported capability range",
         )
     })?;
-    if value < LAST_KNOWN_CAPABILITY {
-        return Err(security_error(
-            ErrorCode::Unsupported,
-            format!(
-                "kernel capability ceiling {value} is below the required capability \
-                 {LAST_KNOWN_CAPABILITY}"
-            ),
-        ));
-    }
+    let current = read_thread_capability_sets("inspect current process capability sets")?;
     Ok(KernelCapabilityState {
         last_capability: value,
         bounding,
+        effective: current.effective,
+        permitted: current.permitted,
+        inheritable: current.inheritable,
     })
 }
 
-fn verify_sets(expected: CapabilityPlan) -> Result<()> {
+fn read_thread_capability_sets(operation: &str) -> Result<CapabilityPlan> {
     let mut header = CapabilityHeader {
         version: LINUX_CAPABILITY_VERSION_3,
         pid: 0,
     };
     let mut data = [CapabilityData::default(), CapabilityData::default()];
-    // SAFETY: the writable header and data array implement the stable Linux
-    // capability ABI v3 for the calling thread.
+    // SAFETY: the writable header and two-element data array implement the
+    // stable Linux capability ABI v3 for the calling thread.
     if unsafe {
         libc::syscall(
             libc::SYS_capget,
@@ -280,14 +351,25 @@ fn verify_sets(expected: CapabilityPlan) -> Result<()> {
         )
     } != 0
     {
-        return Err(last_os_error("verify final process capability sets"));
+        return Err(last_os_error(operation));
     }
-    let kernel = probe_kernel_capabilities()?;
-    let actual = CapabilityPlan {
-        bounding: kernel.bounding,
+    Ok(CapabilityPlan {
+        bounding: 0,
         effective: u64::from(data[0].effective) | (u64::from(data[1].effective) << 32),
         permitted: u64::from(data[0].permitted) | (u64::from(data[1].permitted) << 32),
         inheritable: u64::from(data[0].inheritable) | (u64::from(data[1].inheritable) << 32),
+        ambient: 0,
+    })
+}
+
+fn verify_sets(expected: CapabilityPlan) -> Result<()> {
+    let current = read_thread_capability_sets("verify final process capability sets")?;
+    let kernel = probe_kernel_capabilities()?;
+    let actual = CapabilityPlan {
+        bounding: kernel.bounding,
+        effective: current.effective,
+        permitted: current.permitted,
+        inheritable: current.inheritable,
         ambient: ambient_mask(kernel.last_capability)?,
     };
     ensure_exact_sets(expected, actual)
@@ -352,106 +434,4 @@ fn security_error(code: ErrorCode, message: impl Into<String>) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use a3s_oci_sdk::oci_spec::runtime::LinuxCapabilities;
-
-    use super::{
-        ensure_exact_sets, probe_kernel_capabilities, CapabilityPlan, LAST_KNOWN_CAPABILITY,
-    };
-
-    #[test]
-    fn probes_the_kernel_capability_ceiling_without_procfs() {
-        assert!(
-            probe_kernel_capabilities()
-                .expect("probe capability state")
-                .last_capability
-                >= LAST_KNOWN_CAPABILITY
-        );
-    }
-
-    #[test]
-    fn bounding_set_mismatch_fails_closed() {
-        let expected = CapabilityPlan {
-            bounding: 1,
-            ..CapabilityPlan::default()
-        };
-        let error = ensure_exact_sets(expected, CapabilityPlan::default())
-            .expect_err("bounding mismatch must fail closed");
-
-        assert!(error.message.contains("differ after enforcement"));
-        assert!(error.message.contains("bounding: 1"));
-    }
-
-    #[test]
-    fn plans_the_exact_a3s_box_capability_profile() {
-        let config: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../fixtures/a3s-box/config.json"))
-                .expect("decode fixture");
-        let capabilities: LinuxCapabilities =
-            serde_json::from_value(config["process"]["capabilities"].clone())
-                .expect("decode capabilities");
-        let plan = CapabilityPlan::from_oci(Some(&capabilities)).expect("capability plan");
-        assert_eq!(plan.bounding_count(), 11);
-        assert_eq!(plan.ambient, 0);
-        assert_eq!(plan.inheritable, 0);
-        assert_eq!(plan.effective, plan.permitted);
-        assert_eq!(plan.permitted, plan.bounding);
-    }
-
-    #[test]
-    fn rejects_incoherent_capability_sets() {
-        let capabilities: LinuxCapabilities = serde_json::from_value(serde_json::json!({
-            "bounding": ["CAP_CHOWN"],
-            "permitted": [],
-            "effective": ["CAP_CHOWN"],
-            "inheritable": [],
-            "ambient": []
-        }))
-        .expect("decode capabilities");
-        assert!(CapabilityPlan::from_oci(Some(&capabilities)).is_err());
-    }
-
-    #[test]
-    fn absent_capabilities_are_an_explicit_empty_profile() {
-        assert_eq!(
-            CapabilityPlan::from_oci(None).expect("empty profile"),
-            CapabilityPlan::default()
-        );
-    }
-
-    #[test]
-    fn exec_capabilities_cannot_exceed_the_configured_bounding_set() {
-        let container: LinuxCapabilities = serde_json::from_value(serde_json::json!({
-            "bounding": ["CAP_CHOWN"],
-            "permitted": ["CAP_CHOWN"],
-            "effective": ["CAP_CHOWN"],
-            "inheritable": [],
-            "ambient": []
-        }))
-        .expect("decode container capabilities");
-        let expanded: LinuxCapabilities = serde_json::from_value(serde_json::json!({
-            "bounding": ["CAP_CHOWN", "CAP_SYS_ADMIN"],
-            "permitted": ["CAP_CHOWN", "CAP_SYS_ADMIN"],
-            "effective": ["CAP_CHOWN", "CAP_SYS_ADMIN"],
-            "inheritable": [],
-            "ambient": []
-        }))
-        .expect("decode expanded capabilities");
-        let reduced: LinuxCapabilities = serde_json::from_value(serde_json::json!({
-            "bounding": [],
-            "permitted": [],
-            "effective": [],
-            "inheritable": [],
-            "ambient": []
-        }))
-        .expect("decode reduced capabilities");
-        let container = CapabilityPlan::from_oci(Some(&container)).expect("container plan");
-        let expanded = CapabilityPlan::from_oci(Some(&expanded)).expect("expanded plan");
-        let reduced = CapabilityPlan::from_oci(Some(&reduced)).expect("reduced plan");
-
-        assert!(expanded.validate_exec_ceiling(container).is_err());
-        reduced
-            .validate_exec_ceiling(container)
-            .expect("reduced exec capabilities");
-    }
-}
+mod tests;

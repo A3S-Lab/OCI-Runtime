@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{Error, ErrorCode, Result, MAX_CONFIG_BYTES};
 
 use super::{exec_error, EXEC_MODE};
-use crate::executor::control::{write_ready, write_rejection, START_BYTE};
+use crate::executor::control::{
+    write_capability_warnings, write_ready, write_rejection, START_BYTE,
+};
 use crate::executor::namespace::{apply_supplementary_groups, become_user_namespace_root};
 use crate::executor::pid;
 use crate::executor::pid_supervisor;
@@ -308,7 +310,7 @@ fn run_exec_payload(
     match crate::executor::scheduler::apply(plan.scheduler.as_ref())
         .and_then(|()| crate::executor::io_priority::apply(plan.io_priority.as_ref()))
         .and_then(|()| crate::executor::oom::apply(host_proc, plan.oom_score_adj))
-        .and_then(|()| apply_exec_credentials(plan))
+        .and_then(|()| apply_exec_credentials(plan, control))
         .and_then(|()| execute_process(plan))
     {
         Ok(()) => Ok(()),
@@ -334,9 +336,10 @@ fn prepare_exec_root(plan: &ProcessPlan, rootfs: &File) -> Result<()> {
     Ok(())
 }
 
-fn apply_exec_credentials(plan: &ProcessPlan) -> Result<()> {
+fn apply_exec_credentials(plan: &ProcessPlan, control: &mut StdUnixStream) -> Result<()> {
     plan.rlimits.apply()?;
-    plan.capabilities.prepare_for_credentials(plan.uid)?;
+    let capabilities = plan.capabilities.prepare_for_credentials(plan.uid)?;
+    write_capability_warnings(control, capabilities.warnings())?;
     apply_supplementary_groups(&plan.additional_gids, "apply exec supplementary groups")?;
     // SAFETY: the plan was validated and this is a dedicated single-threaded
     // payload before untrusted code runs.
@@ -351,7 +354,7 @@ fn apply_exec_credentials(plan: &ProcessPlan) -> Result<()> {
             libc::umask(umask);
         }
     }
-    plan.capabilities.apply_after_credentials(plan.uid)?;
+    capabilities.apply_after_credentials(plan.uid)?;
     crate::executor::no_new_privileges::apply(plan.no_new_privileges)?;
     plan.seccomp.install()?;
     Ok(())

@@ -970,6 +970,24 @@
     },
     {
       "requirementIds": [
+        "sha256:d304906b5b6aef9f80ef97c3e2c8f074f23fa8c62965d29d2fb36eb4cb575ba6",
+        "sha256:573851086b8bab36b934e7bd558bf2622e47b3902ec8308eb54e0761ad6ba65b"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.ungrantable-warning"
+      ],
+      "testIds": [
+        "executor::capability::tests::fully_grantable_capabilities_remain_exact_without_warnings",
+        "executor::capability::tests::kernel_unsupported_capabilities_become_structured_warnings",
+        "executor::capability::tests::restricted_runtime_authority_drops_only_ungrantable_sets",
+        "executor::control::tests::start_result_rejects_duplicate_capability_warnings",
+        "executor::control::tests::start_result_retains_capability_warnings_before_exec_close"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:50808ff63fa7076a8d4415076e89b328cf67b01298ef15997f0af19c77a8fe53"
       ],
       "disposition": "enforced",
