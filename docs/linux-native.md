@@ -151,8 +151,8 @@ following:
    value of 100, IPC `kernel.shm_rmid_forced=1`, network
    `net.ipv4.ip_forward=1`, best-effort I/O priority 4, `SCHED_BATCH` with nice
    6, the exact `LINUX32` execution domain as `init_personality_verified`,
-   and an exact `MPOL_BIND` node-0 NUMA policy as
-   `init_memory_policy_verified`,
+   and an exact `MPOL_BIND` node-0 NUMA policy with
+   `MPOL_F_STATIC_NODES` as `init_memory_policy_verified`,
    reads capability masks `CapInh=0x400`, `CapPrm=0x401`, `CapEff=0x401`,
    `CapBnd=0x401`, and `CapAmb=0x400` as
    `init_capabilities_verified`, and reads `NoNewPrivs=1` as

@@ -61,7 +61,8 @@ defines the seven recognized modes and three flags used by the planner and
 feature document. The executor applies the bounded normalized node mask before
 credential reduction and seccomp, immediately reads the complete policy back,
 and performs no syscall when the field is omitted. Native Linux, HVF, and WHPX
-fixtures verify `MPOL_BIND` on node 0 from inside the workload.
+fixtures verify `MPOL_BIND` with `MPOL_F_STATIC_NODES` on node 0 from inside
+the workload.
 
 Read-only rootfs handling is bound to planning, namespace-safety rejection,
 and real workload write rejection. The same planning boundary proves that OCI
