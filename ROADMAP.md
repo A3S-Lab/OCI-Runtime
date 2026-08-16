@@ -194,7 +194,8 @@ Completed:
   cgroup-v2 pause/resume and exact live process inventory, replay-safe resource
   update, and normalized stats with real workload-progress evidence, plus
   controlling PTY allocation, OCI `consoleSize` initial and resized dimensions,
-  interactive I/O,
+  exec CPU affinity before and after workload cgroup membership, interactive
+  I/O,
   merged output, and VEOF close, repeated with `/dev/kvm` absent and present
   but unusable;
 - type-checked joins for existing UTS, mount, IPC, network, cgroup, PID, user,
@@ -464,7 +465,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 397-entry pending normative evidence backlog.
+- [ ] Close the 393-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1357,7 +1358,7 @@ leak. Only then may KVM become `experimental`.
 - [x] Apply and verify OCI capability bounding, effective, permitted,
   inheritable, and ambient sets; read all five sets back from the kernel,
   prevent exec from exceeding the configured init bounding ceiling, and
-  retain distinct init and exec profiles in Native Linux smoke v17.
+  retain distinct init and exec profiles in Native Linux smoke v18.
 - [x] Apply OCI `process.noNewPrivileges` through one shared init/exec path,
   require exact `PR_GET_NO_NEW_PRIVS` read-back, and retain workload-level
   `/proc/self/status` evidence for init and exec.
@@ -1388,6 +1389,12 @@ leak. Only then may KVM become `experimental`.
   invalid nice/realtime/deadline relationships, and unavailable `SCHED_ISO`
   with stable typed errors; preserve the exact OCI flag spellings across SDK
   transport; and require real Native Linux kernel read-back.
+- [x] Validate and enforce OCI `process.execCPUAffinity` only for exec.
+  Normalize CPU lists before launch, apply and read back `initial` before the
+  workload cgroup transition, join through the inherited `cgroup.procs`
+  descriptor, then apply and read back `final`. Omitted or empty phases make
+  no affinity syscall, init ignores the field, and Native Linux, HVF, and WHPX
+  lifecycle probes verify the final kernel mask.
 - [x] Parse OCI Linux sysctls once in the SDK, accept only known IPC, network,
   UTS-domain, and user-namespace controls, reject aliases and host-global
   mutation, and apply bounded deterministic writes through retained procfs.
@@ -1414,9 +1421,9 @@ leak. Only then may KVM become `experimental`.
   default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
   cgroup-controlled `mknod`, and verified device-node creation.
 - [x] Complete the remaining process and rootless configuration boundary.
-  - [x] Enforce or explicitly reject supplementary credentials, I/O priority,
-    CPU affinity, and unsupported rootless ID-mapping shapes before executor
-    mutation.
+  - [x] Enforce supplementary credentials, I/O priority, exec CPU affinity,
+    and supported rootless ID-mapping shapes before executor mutation; reject
+    every unsupported shape.
   - [x] Advertise and enforce the exact supported LSM set, with fail-closed
     behavior and positive and negative evidence for every reported module.
   - [x] Extend seccomp classification and enforcement to every advertised

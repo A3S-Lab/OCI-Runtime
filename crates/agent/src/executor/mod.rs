@@ -1,6 +1,7 @@
 mod capability;
 mod cgroup;
 mod control;
+mod cpu_affinity;
 mod device;
 mod device_mount_transport;
 mod device_policy;

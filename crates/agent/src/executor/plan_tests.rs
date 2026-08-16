@@ -232,7 +232,8 @@ fn builds_the_same_fail_closed_plan_for_an_exec_process() {
             .clone(),
     )
     .expect("decode fixed process");
-    let plan = ProcessPlan::from_process(&process, &null_io()).expect("supported exec process");
+    let plan =
+        ProcessPlan::from_exec_process(&process, &null_io()).expect("supported exec process");
     assert_eq!(plan.args, ["/bin/sh", "-c", "printf ready"]);
     assert_eq!(plan.cwd, "/");
     assert_eq!(plan.umask, Some(0o22));
@@ -258,7 +259,7 @@ fn plans_and_serializes_process_oom_score_adj_for_init_and_exec() {
 
     let process: Process =
         serde_json::from_value(config["process"].clone()).expect("decode OOM process");
-    let exec = ProcessPlan::from_process(&process, &null_io()).expect("plan exec oomScoreAdj");
+    let exec = ProcessPlan::from_exec_process(&process, &null_io()).expect("plan exec oomScoreAdj");
     assert_eq!(exec.oom_score_adj, Some(250));
     let encoded = serde_json::to_vec(&exec).expect("encode exec process plan");
     assert_eq!(
@@ -298,7 +299,7 @@ fn plans_and_serializes_process_io_priority_for_init_and_exec() {
 
     let process: Process =
         serde_json::from_value(config["process"].clone()).expect("decode I/O priority process");
-    let exec = ProcessPlan::from_process(&process, &null_io()).expect("plan exec ioPriority");
+    let exec = ProcessPlan::from_exec_process(&process, &null_io()).expect("plan exec ioPriority");
     assert_eq!(
         exec.io_priority
             .map(super::io_priority::IoPriorityPlan::encoded),
@@ -353,8 +354,8 @@ fn plans_and_serializes_every_oci_process_rlimit() {
 
     let process: Process =
         serde_json::from_value(config["process"].clone()).expect("decode rlimit process");
-    let exec =
-        ProcessPlan::from_process(&process, &null_io()).expect("plan every OCI rlimit for exec");
+    let exec = ProcessPlan::from_exec_process(&process, &null_io())
+        .expect("plan every OCI rlimit for exec");
     assert_eq!(exec.rlimits.len(), 16);
     let encoded = serde_json::to_vec(&exec).expect("encode exec process plan");
     assert_eq!(
@@ -373,7 +374,7 @@ fn rejects_invalid_or_unbounded_process_rlimits() {
     ]);
     let duplicate: Process = serde_json::from_value(config["process"].clone())
         .expect("decode duplicate process rlimits");
-    let error = ProcessPlan::from_process(&duplicate, &null_io())
+    let error = ProcessPlan::from_exec_process(&duplicate, &null_io())
         .expect_err("duplicate rlimit types must fail");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("duplicate RLIMIT_NOFILE"));
@@ -382,7 +383,7 @@ fn rejects_invalid_or_unbounded_process_rlimits() {
         serde_json::json!([{"type": "RLIMIT_NOFILE", "hard": 31, "soft": 32}]);
     let inverted: Process =
         serde_json::from_value(config["process"].clone()).expect("decode inverted process rlimit");
-    let error = ProcessPlan::from_process(&inverted, &null_io())
+    let error = ProcessPlan::from_exec_process(&inverted, &null_io())
         .expect_err("rlimit soft above hard must fail");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("soft must not exceed hard"));
@@ -394,7 +395,7 @@ fn rejects_invalid_or_unbounded_process_rlimits() {
     );
     let excessive: Process = serde_json::from_value(config["process"].clone())
         .expect("decode excessive process rlimits");
-    let error = ProcessPlan::from_process(&excessive, &null_io())
+    let error = ProcessPlan::from_exec_process(&excessive, &null_io())
         .expect_err("rlimit count must remain bounded");
     assert_eq!(error.code, ErrorCode::ResourceExhausted);
     assert!(error.message.contains("maximum is 16"));
@@ -413,7 +414,8 @@ fn exec_process_planning_enforces_capabilities_and_rejects_unsupported_io() {
         "ambient": []
     });
     let process: Process = serde_json::from_value(value).expect("decode process");
-    let plan = ProcessPlan::from_process(&process, &null_io()).expect("empty capability profile");
+    let plan =
+        ProcessPlan::from_exec_process(&process, &null_io()).expect("empty capability profile");
     assert_eq!(plan.capabilities.bounding_count(), 0);
 
     let process: Process = serde_json::from_value(
@@ -424,12 +426,12 @@ fn exec_process_planning_enforces_capabilities_and_rejects_unsupported_io() {
     .expect("decode fixed process");
     let mut io = null_io();
     io.stdout = IoMode::Capture;
-    let plan = ProcessPlan::from_process(&process, &io).expect("captured stdout");
+    let plan = ProcessPlan::from_exec_process(&process, &io).expect("captured stdout");
     assert_eq!(plan.args[0], "/bin/sh");
 
     io.stdout = IoMode::Pipe;
-    let error =
-        ProcessPlan::from_process(&process, &io).expect_err("streaming stdout remains unsupported");
+    let error = ProcessPlan::from_exec_process(&process, &io)
+        .expect_err("streaming stdout remains unsupported");
     assert_eq!(error.code, ErrorCode::Unsupported);
 }
 
@@ -505,7 +507,7 @@ fn plans_and_serializes_process_scheduler_for_init_and_exec() {
     let process: Process =
         serde_json::from_value(config_value["process"].clone()).expect("decode process");
     let exec =
-        ProcessPlan::from_process(&process, &null_io()).expect("plan exec process scheduler");
+        ProcessPlan::from_exec_process(&process, &null_io()).expect("plan exec process scheduler");
     let snapshot = serde_json::to_value(&exec).expect("serialize exec process plan");
     assert_eq!(snapshot["scheduler"]["policy"], "batch");
     assert_eq!(snapshot["scheduler"]["nice"], 7);
@@ -516,30 +518,35 @@ fn plans_and_serializes_process_scheduler_for_init_and_exec() {
         .remove("scheduler");
     let process: Process =
         serde_json::from_value(config_value["process"].clone()).expect("decode process");
-    let omitted =
-        ProcessPlan::from_process(&process, &null_io()).expect("plan omitted process scheduler");
+    let omitted = ProcessPlan::from_exec_process(&process, &null_io())
+        .expect("plan omitted process scheduler");
     assert!(omitted.scheduler.is_none());
 }
 
 #[test]
-fn rejects_process_cpu_affinity() {
+fn plans_exec_cpu_affinity_and_ignores_it_for_init() {
     let mut config_value: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
     config_value["process"]["execCPUAffinity"] =
-        serde_json::json!({"initial": "0-3", "final": "0-3"});
-    let config_json =
-        serde_json::to_string(&config_value).expect("encode unsupported process field");
-    let error = InitPlan::from_bundle(&bundle(&config_json), &null_io())
-        .expect_err("unsupported process affinity must fail closed");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("process.execCPUAffinity"));
+        serde_json::json!({"initial": "0-3", "final": "1-2"});
+    let config_json = serde_json::to_string(&config_value).expect("encode process affinity");
+    let init = InitPlan::from_bundle(&bundle(&config_json), &null_io())
+        .expect("init must ignore exec-only CPU affinity");
+    assert_eq!(init.args, ["/bin/sh", "-c", "printf ready"]);
 
     let process: Process =
         serde_json::from_value(config_value["process"].clone()).expect("decode process");
-    let error = ProcessPlan::from_process(&process, &null_io())
-        .expect_err("unsupported exec affinity must fail closed");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("process.execCPUAffinity"));
+    let exec =
+        ProcessPlan::from_exec_process(&process, &null_io()).expect("plan exec CPU affinity");
+    let encoded = serde_json::to_value(exec).expect("encode exec process plan");
+    assert_eq!(
+        encoded["execCpuAffinity"]["initial"]["cpus"],
+        serde_json::json!([0, 1, 2, 3])
+    );
+    assert_eq!(
+        encoded["execCpuAffinity"]["final"]["cpus"],
+        serde_json::json!([1, 2])
+    );
 }
 
 #[test]
@@ -602,18 +609,18 @@ fn accepts_only_the_exact_terminal_process_io_contract() {
     let process: Process =
         serde_json::from_value(value["process"].clone()).expect("decode terminal process");
     let plan =
-        ProcessPlan::from_process(&process, &terminal_io).expect("terminal exec process plan");
+        ProcessPlan::from_exec_process(&process, &terminal_io).expect("terminal exec process plan");
     assert!(plan.terminal);
 
     let mut partial = terminal_io.clone();
     partial.stderr = IoMode::Capture;
-    let error = ProcessPlan::from_process(&process, &partial)
+    let error = ProcessPlan::from_exec_process(&process, &partial)
         .expect_err("partial terminal descriptors must fail");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
 
     let mut missing_size = terminal_io;
     missing_size.terminal_size = None;
-    let error = ProcessPlan::from_process(&process, &missing_size)
+    let error = ProcessPlan::from_exec_process(&process, &missing_size)
         .expect_err("terminal dimensions are required");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
 }
@@ -661,9 +668,9 @@ fn console_size_is_ignored_without_a_terminal() {
         let baseline_process: Process =
             serde_json::from_value(baseline["process"].clone()).expect("decode baseline process");
         assert_eq!(
-            ProcessPlan::from_process(&configured_process, &null_io())
+            ProcessPlan::from_exec_process(&configured_process, &null_io())
                 .expect("non-terminal exec must ignore consoleSize"),
-            ProcessPlan::from_process(&baseline_process, &null_io())
+            ProcessPlan::from_exec_process(&baseline_process, &null_io())
                 .expect("baseline non-terminal exec")
         );
     }
@@ -688,7 +695,7 @@ fn console_size_is_applied_with_a_terminal() {
 
     let process: Process =
         serde_json::from_value(terminal["process"].clone()).expect("decode terminal process");
-    let exec = ProcessPlan::from_process(&process, &terminal_io)
+    let exec = ProcessPlan::from_exec_process(&process, &terminal_io)
         .expect("exec must accept OCI terminal dimensions");
     assert!(exec.terminal);
     assert_eq!(
@@ -713,7 +720,7 @@ fn console_size_is_applied_with_a_terminal() {
         .expect_err("init must reject conflicting terminal dimensions");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("process.consoleSize"));
-    let error = ProcessPlan::from_process(&process, &conflicting_io)
+    let error = ProcessPlan::from_exec_process(&process, &conflicting_io)
         .expect_err("exec must reject conflicting terminal dimensions");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("process.consoleSize"));

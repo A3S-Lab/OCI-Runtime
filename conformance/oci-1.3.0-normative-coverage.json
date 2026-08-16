@@ -5078,10 +5078,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`execCPUAffinity`** (object, OPTIONAL) specifies CPU affinity used to execute the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.process.exec-cpu-affinity.applied-around-cgroup"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::exec-cpu-affinity-readback",
+        "executor::cpu_affinity::tests::applies_exact_affinity_in_an_isolated_process",
+        "executor::cpu_affinity::tests::plans_canonical_initial_and_final_cpu_sets",
+        "executor::cpu_affinity::tests::rejects_descending_and_unrepresentable_cpu_sets_before_mutation",
+        "executor::plan_tests::plans_exec_cpu_affinity_and_ignores_it_for_init"
+      ]
     },
     {
       "id": "sha256:11b31491cceca7ee488c59d55131c6454132d45e8fca4cebb814b126b6c4c262",
@@ -5092,10 +5100,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`initial`** (string, OPTIONAL) is a list of CPUs a runtime parent",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.process.exec-cpu-affinity.applied-around-cgroup"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::exec-cpu-affinity-readback",
+        "executor::cpu_affinity::tests::applies_exact_affinity_in_an_isolated_process",
+        "executor::cpu_affinity::tests::plans_canonical_initial_and_final_cpu_sets",
+        "executor::cpu_affinity::tests::rejects_descending_and_unrepresentable_cpu_sets_before_mutation",
+        "executor::plan_tests::plans_exec_cpu_affinity_and_ignores_it_for_init"
+      ]
     },
     {
       "id": "sha256:4a81cb4c34bb53e0fcca10f720fbcdf4ef7b6f4ba44adcd35449ec2882ab7def",
@@ -5106,10 +5122,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`final`** (string, OPTIONAL) is a list of CPUs the process will be run",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.process.exec-cpu-affinity.applied-around-cgroup"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::exec-cpu-affinity-readback",
+        "executor::cpu_affinity::tests::applies_exact_affinity_in_an_isolated_process",
+        "executor::cpu_affinity::tests::plans_canonical_initial_and_final_cpu_sets",
+        "executor::cpu_affinity::tests::rejects_descending_and_unrepresentable_cpu_sets_before_mutation",
+        "executor::plan_tests::plans_exec_cpu_affinity_and_ignores_it_for_init"
+      ]
     },
     {
       "id": "sha256:b7c9525439e18bc9c0279401933c6132793fe3989739892953112d6e74a04a32",
@@ -5120,10 +5144,16 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "for `initial`. If omitted or empty, runtime SHOULD NOT change process'",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.process.exec-cpu-affinity.final-omitted-preserved"
+      ],
+      "testIds": [
+        "executor::cpu_affinity::tests::applies_exact_affinity_in_an_isolated_process",
+        "executor::cpu_affinity::tests::plans_canonical_initial_and_final_cpu_sets",
+        "process_serde::tests::empty_exec_cpu_affinity_is_canonicalized_to_omission"
+      ]
     },
     {
       "id": "sha256:81804b28905ab7266917912319a2f2127304a1df132653793086a9cd5fa98862",

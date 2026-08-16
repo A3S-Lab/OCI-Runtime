@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI exec CPU affinity enforcement around the workload cgroup transition.
+  The SDK canonicalizes empty `initial` and `final` values to omission, while
+  the Linux executor validates, normalizes, applies, and reads back `initial`
+  before cgroup membership and `final` afterward. Init ignores the exec-only
+  field, and omitted phases perform no affinity syscall. Native Linux, HVF,
+  and WHPX lifecycle probes now request CPU 0 and verify the final kernel mask
+  inside the workload. Two owner-bound rules promote all four
+  `execCPUAffinity` requirements, moving the ledger to 235 enforced, 25
+  validated, two conformant, and 393 pending entries.
 - OCI terminal `consoleSize` enforcement for init and exec. The SDK now
   resolves one effective initial PTY size from the immutable OCI process and
   the optional transport copy, accepts an omitted copy, and rejects conflicts
