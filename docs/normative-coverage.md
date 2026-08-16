@@ -34,20 +34,22 @@ The v1.3.0 corpus currently contains 764 entries:
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
 | `validated` | 25 | Exact semantic and bundle-validation rules with positive and negative SDK tests |
-| `enforced` | 221 | Root `config.json` placement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, ID-mapped mounts, unknown filesystem-option pass-through, and accurate mount-option feature reporting; all five process capability sets and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; and OCI `oomScoreAdj`, scheduler, and I/O-priority semantics enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
+| `enforced` | 223 | Root `config.json` placement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, ID-mapped mounts, unknown filesystem-option pass-through, and accurate mount-option feature reporting; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; and OCI `oomScoreAdj`, scheduler, and I/O-priority semantics enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
 | `conformant` | 2 | The optional `tmpcopyup` entries are satisfied by typed rejection and exclusion from feature reporting; this is an explicit optional omission, not an implementation claim |
-| `pending-review` | 407 | Common, Linux, or VM entries awaiting exact evidence binding, including the two capability warning-policy requirements |
+| `pending-review` | 405 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
 platform-specific clauses; each pending entry still requires human
 applicability review.
 
-The exact capability-set requirements are enforced, but the adjacent warning
-policy is not promoted. The current executor rejects a capability that cannot
-be mapped or granted; OCI requires a warning and recommends continuing. Those
-two occurrences stay `pending-review` until that behavior and its retained
-warning evidence exist.
+The exact capability-set requirements and the adjacent warning policy are both
+enforced. Init and exec retain exact read-back for grantable values, remove only
+set memberships outside the kernel or executor authority, and send one bounded
+structured warning per unavailable capability to the supervising agent before
+exec. The control reader rejects malformed, duplicate, or unbounded warning
+frames, so the logged message is validated runtime evidence rather than
+container-controlled output.
 
 ## Promotion
 

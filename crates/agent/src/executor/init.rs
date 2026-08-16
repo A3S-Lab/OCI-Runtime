@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::{Error, ErrorCode, OciBundle, ProcessIo, Result, MAX_CONFIG_BYTES};
 
 use super::control::{
-    receive_device_mounts, write_create_hooks_ready, write_ready, write_rejection,
-    CREATE_CONTINUE_BYTE, START_BYTE,
+    receive_device_mounts, write_capability_warnings, write_create_hooks_ready, write_ready,
+    write_rejection, CREATE_CONTINUE_BYTE, START_BYTE,
 };
 use super::device::{DevicePlan, PreparedDeviceSources};
 use super::hook::{HookPhase, HookStateTemplate};
@@ -424,8 +424,14 @@ fn wait_for_start_and_exec(
             "prepared init received an invalid start byte",
         ));
     }
-    let result =
-        enter_rootfs_run_start_hooks_and_exec(plan, host_proc, rootfs, runtime_pid, hook_state);
+    let result = enter_rootfs_run_start_hooks_and_exec(
+        plan,
+        host_proc,
+        rootfs,
+        runtime_pid,
+        hook_state,
+        &mut control,
+    );
     match result {
         Ok(()) => Ok(()),
         Err(error) => reject_before_ready(&mut control, error),
@@ -717,6 +723,7 @@ fn enter_rootfs_run_start_hooks_and_exec(
     rootfs: &File,
     runtime_pid: i32,
     hook_state: &HookStateTemplate,
+    control: &mut UnixStream,
 ) -> Result<()> {
     if !plan.namespaces.new_mount() {
         rootfs::chroot(rootfs)?;
@@ -726,10 +733,14 @@ fn enter_rootfs_run_start_hooks_and_exec(
         Some(runtime_pid),
     )?;
     plan.hooks.run_sync(HookPhase::StartContainer, &created)?;
-    exec_configured_process(plan, host_proc)
+    exec_configured_process(plan, host_proc, control)
 }
 
-fn exec_configured_process(plan: &InitPlan, host_proc: &File) -> Result<()> {
+fn exec_configured_process(
+    plan: &InitPlan,
+    host_proc: &File,
+    control: &mut UnixStream,
+) -> Result<()> {
     let cwd = CString::new(plan.cwd.as_bytes()).map_err(|error| {
         init_error(
             ErrorCode::InvalidArgument,
@@ -756,7 +767,8 @@ fn exec_configured_process(plan: &InitPlan, host_proc: &File) -> Result<()> {
     super::io_priority::apply(plan.io_priority.as_ref())?;
     super::oom::apply(host_proc, plan.oom_score_adj)?;
     plan.rlimits.apply()?;
-    plan.capabilities.prepare_for_credentials(plan.uid)?;
+    let capabilities = plan.capabilities.prepare_for_credentials(plan.uid)?;
+    write_capability_warnings(control, capabilities.warnings())?;
     namespace::apply_supplementary_groups(
         &plan.additional_gids,
         "apply init supplementary groups",
@@ -778,7 +790,7 @@ fn exec_configured_process(plan: &InitPlan, host_proc: &File) -> Result<()> {
             libc::umask(umask);
         }
     }
-    plan.capabilities.apply_after_credentials(plan.uid)?;
+    capabilities.apply_after_credentials(plan.uid)?;
     super::no_new_privileges::apply(plan.no_new_privileges)?;
     plan.seccomp.install()?;
     // SAFETY: every pointer below references a live, NUL-terminated buffer.

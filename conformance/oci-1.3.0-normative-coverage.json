@@ -4437,10 +4437,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "be granted otherwise MUST be [logged as a warning](runtime.md#warnings) by",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.ungrantable-warning"
+      ],
+      "testIds": [
+        "executor::capability::tests::fully_grantable_capabilities_remain_exact_without_warnings",
+        "executor::capability::tests::kernel_unsupported_capabilities_become_structured_warnings",
+        "executor::capability::tests::restricted_runtime_authority_drops_only_ungrantable_sets",
+        "executor::control::tests::start_result_rejects_duplicate_capability_warnings",
+        "executor::control::tests::start_result_retains_capability_warnings_before_exec_close"
+      ]
     },
     {
       "id": "sha256:573851086b8bab36b934e7bd558bf2622e47b3902ec8308eb54e0761ad6ba65b",
@@ -4451,10 +4459,18 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "the runtime. Runtimes SHOULD NOT fail if the container configuration requests",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.capabilities.ungrantable-warning"
+      ],
+      "testIds": [
+        "executor::capability::tests::fully_grantable_capabilities_remain_exact_without_warnings",
+        "executor::capability::tests::kernel_unsupported_capabilities_become_structured_warnings",
+        "executor::capability::tests::restricted_runtime_authority_drops_only_ungrantable_sets",
+        "executor::control::tests::start_result_rejects_duplicate_capability_warnings",
+        "executor::control::tests::start_result_retains_capability_warnings_before_exec_close"
+      ]
     },
     {
       "id": "sha256:61b98cb3bc63d38352792a9e7bda11bb764d987f20027fe72670aa82a6c674ff",

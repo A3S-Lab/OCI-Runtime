@@ -32,6 +32,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.common.process.capabilities.exact-sets",
         "linux-executor",
     ),
+    OciNonSemanticRule::new(
+        "oci.common.process.capabilities.ungrantable-warning",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new("oci.common.process.no-new-privileges", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.exact-values", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
