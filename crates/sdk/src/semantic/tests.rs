@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 73);
+    assert_eq!(registry.len(), 75);
     assert_eq!(
         registry
             .iter()
@@ -358,7 +358,10 @@ fn reports_linux_namespace_security_and_resource_relationships() {
                 "l3CacheSchema": "invalid",
                 "schemata": ["L3:0=ff\nMB:0=20"]
             },
-            "memoryPolicy": {"mode": "MPOL_BIND"}
+            "memoryPolicy": {"mode": "MPOL_BIND"},
+            "personality": {
+                "flags": ["ADDR_NO_RANDOMIZE"]
+            }
         }
     });
     let rules = rules(&value, OciSemanticPhase::Configuration);
@@ -387,6 +390,8 @@ fn reports_linux_namespace_security_and_resource_relationships() {
         "oci.linux.intel-rdt.schemata.single-line",
         "oci.linux.intel-rdt.l3-schema",
         "oci.linux.memory-policy.nodes-required",
+        "oci.linux.personality.domain.required",
+        "oci.linux.personality.flags-empty",
     ] {
         assert!(rules.contains(expected), "missing rule {expected}");
     }

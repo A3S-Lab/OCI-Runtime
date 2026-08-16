@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI Linux execution personality for configured init. The SDK requires a
+  domain whenever `linux.personality` is present and rejects every nonempty
+  flags list because OCI 1.3 defines no supported flag values. The shared
+  Linux executor applies `LINUX` or `LINUX32` before credential reduction and
+  seccomp, immediately reads the syscall state back, and leaves inherited
+  state untouched when the field is omitted. Native Linux smoke report v19
+  plus HVF and WHPX fixtures verify `LINUX32` from inside the workload. Three
+  requirements move to enforced, leaving 238 enforced, 25 validated, two
+  conformant, and 390 pending entries.
 - OCI exec CPU affinity enforcement around the workload cgroup transition.
   The SDK canonicalizes empty `initial` and `final` values to omission, while
   the Linux executor validates, normalizes, applies, and reads back `initial`

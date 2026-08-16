@@ -775,6 +775,7 @@ fn exec_configured_process(
     super::scheduler::apply(plan.scheduler.as_ref())?;
     super::io_priority::apply(plan.io_priority.as_ref())?;
     super::oom::apply(host_proc, plan.oom_score_adj)?;
+    super::personality::apply(plan.personality.as_ref())?;
     plan.rlimits.apply()?;
     let capabilities = plan.capabilities.prepare_for_credentials(plan.uid)?;
     write_capability_warnings(control, capabilities.warnings())?;

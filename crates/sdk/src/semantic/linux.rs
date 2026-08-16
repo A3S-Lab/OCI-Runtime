@@ -65,6 +65,7 @@ pub(super) fn inspect(value: &Value, collector: &mut ViolationCollector) {
     validate_resources(linux, collector);
     validate_intel_rdt(linux, collector);
     validate_memory_policy(linux, collector);
+    validate_personality(linux, collector);
 }
 
 fn validate_namespaces(
@@ -694,6 +695,30 @@ fn validate_memory_policy(linux: &Map<String, Value>, collector: &mut ViolationC
             "/linux/memoryPolicy/nodes",
             rules::MEMORY_POLICY_NODES_REQUIRED,
             format!("{mode} requires at least one memory node"),
+        );
+    }
+}
+
+fn validate_personality(linux: &Map<String, Value>, collector: &mut ViolationCollector) {
+    let Some(personality) = linux.get("personality").and_then(Value::as_object) else {
+        return;
+    };
+    if !personality.contains_key("domain") {
+        collector.invalid(
+            "/linux/personality/domain",
+            rules::PERSONALITY_DOMAIN_REQUIRED,
+            "linux.personality.domain is required when personality is configured",
+        );
+    }
+    if personality
+        .get("flags")
+        .and_then(Value::as_array)
+        .is_some_and(|flags| !flags.is_empty())
+    {
+        collector.unsupported(
+            "/linux/personality/flags",
+            rules::PERSONALITY_FLAGS_EMPTY,
+            "linux.personality.flags must be empty because OCI 1.3 defines no supported flag values",
         );
     }
 }

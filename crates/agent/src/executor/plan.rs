@@ -17,6 +17,7 @@ use super::hook::HookSet;
 use super::io_priority::IoPriorityPlan;
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
+use super::personality::PersonalityPlan;
 use super::rlimit::RlimitPlan;
 use super::rootfs::RootfsPropagation;
 use super::scheduler::SchedulerPlan;
@@ -153,6 +154,7 @@ pub(super) struct InitPlan {
     pub(super) oom_score_adj: Option<i32>,
     pub(super) io_priority: Option<IoPriorityPlan>,
     pub(super) scheduler: Option<SchedulerPlan>,
+    pub(super) personality: Option<PersonalityPlan>,
     pub(super) no_new_privileges: bool,
     pub(super) terminal: bool,
     pub(super) rlimits: RlimitPlan,
@@ -237,6 +239,11 @@ impl InitPlan {
             inject_control_workload_environment(&mut process_plan.environment)?;
         }
         let seccomp = SeccompPlan::from_linux(spec.linux().as_ref())?;
+        let personality = PersonalityPlan::from_oci(
+            spec.linux()
+                .as_ref()
+                .and_then(|linux| linux.personality().as_ref()),
+        )?;
         let rootfs_propagation = spec
             .linux()
             .as_ref()
@@ -309,6 +316,7 @@ impl InitPlan {
             oom_score_adj: process_plan.oom_score_adj,
             io_priority: process_plan.io_priority,
             scheduler: process_plan.scheduler,
+            personality,
             no_new_privileges: process_plan.no_new_privileges,
             terminal: process_plan.terminal,
             rlimits: process_plan.rlimits,
@@ -471,6 +479,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "rootfsPropagation",
             "maskedPaths",
             "readonlyPaths",
+            "personality",
         ],
     )
 }

@@ -80,6 +80,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.process.exec-cpu-affinity.final-omitted-preserved",
         "linux-executor",
     ),
+    OciNonSemanticRule::new("oci.linux.personality.exact-domain", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.runtime.dev-symlinks.required", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.sysctl.namespaced-apply", "linux-executor"),
     OciNonSemanticRule::new(

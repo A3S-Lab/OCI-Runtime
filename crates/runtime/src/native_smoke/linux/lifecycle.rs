@@ -222,6 +222,7 @@ async fn exercise_client(
     report.init_oom_score_adj_verified = true;
     report.init_io_priority_verified = true;
     report.init_scheduler_verified = true;
+    report.init_personality_verified = true;
     report.init_capabilities_verified = true;
     report.init_no_new_privileges_verified = true;
     control_descriptors.verify_listeners().await?;

@@ -10615,10 +10615,24 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`personality`** (object, OPTIONAL) sets the Linux execution personality. For more information",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.personality.domain.required",
+        "oci.linux.personality.flags-empty",
+        "oci.linux.personality.exact-domain"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::plan_tests::plans_linux_personality_for_init_and_rejects_every_flag",
+        "executor::personality::tests::plans_both_oci_domains_and_omission",
+        "executor::personality::tests::rejects_every_nonempty_flag_set",
+        "executor::personality::tests::omission_preserves_the_inherited_domain",
+        "executor::personality::tests::applies_and_reads_back_linux32_in_an_isolated_process",
+        ".github/scripts/native-linux-smoke.sh::init-personality-readback",
+        "fixtures/utility-vm/config.json::init-personality-readback",
+        "fixtures/utility-vm/config.windows.json::init-personality-readback"
+      ]
     },
     {
       "id": "sha256:9b2bbf94809fae1a78c5ade105c8eef7cf89a46a003e87c1e59040efa6a931c9",
@@ -10629,10 +10643,24 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`domain`** *(string, REQUIRED)* - the execution domain.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.personality.domain.required",
+        "oci.linux.personality.flags-empty",
+        "oci.linux.personality.exact-domain"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::plan_tests::plans_linux_personality_for_init_and_rejects_every_flag",
+        "executor::personality::tests::plans_both_oci_domains_and_omission",
+        "executor::personality::tests::rejects_every_nonempty_flag_set",
+        "executor::personality::tests::omission_preserves_the_inherited_domain",
+        "executor::personality::tests::applies_and_reads_back_linux32_in_an_isolated_process",
+        ".github/scripts/native-linux-smoke.sh::init-personality-readback",
+        "fixtures/utility-vm/config.json::init-personality-readback",
+        "fixtures/utility-vm/config.windows.json::init-personality-readback"
+      ]
     },
     {
       "id": "sha256:e85ebf14e5084490438400809407f723d7249193ac0be4ef4bb28d19e7847d9f",
@@ -10643,10 +10671,24 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`flags`** *(array of strings, OPTIONAL)* - the additional flags to apply.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.personality.domain.required",
+        "oci.linux.personality.flags-empty",
+        "oci.linux.personality.exact-domain"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::plan_tests::plans_linux_personality_for_init_and_rejects_every_flag",
+        "executor::personality::tests::plans_both_oci_domains_and_omission",
+        "executor::personality::tests::rejects_every_nonempty_flag_set",
+        "executor::personality::tests::omission_preserves_the_inherited_domain",
+        "executor::personality::tests::applies_and_reads_back_linux32_in_an_isolated_process",
+        ".github/scripts/native-linux-smoke.sh::init-personality-readback",
+        "fixtures/utility-vm/config.json::init-personality-readback",
+        "fixtures/utility-vm/config.windows.json::init-personality-readback"
+      ]
     },
     {
       "id": "sha256:4d96ed51f49f25955b55afc583e7a4f376fc30a154c7f08591a6fcb4210ff485",

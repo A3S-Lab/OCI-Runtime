@@ -19,6 +19,7 @@ mod mount_tests;
 mod namespace;
 mod no_new_privileges;
 mod oom;
+mod personality;
 mod pid;
 mod pid_supervisor;
 #[cfg(test)]
