@@ -20,6 +20,7 @@ use super::rlimit::RlimitPlan;
 use super::rootfs::RootfsPropagation;
 use super::scheduler::SchedulerPlan;
 use super::seccomp::SeccompPlan;
+use super::sysctl::SysctlPlan;
 
 const MAX_ARGUMENTS: usize = 4_096;
 const MAX_ENVIRONMENT_ENTRIES: usize = 4_096;
@@ -142,6 +143,7 @@ pub(super) struct InitPlan {
     pub(super) cgroup: CgroupPlan,
     pub(super) devices: DevicePlan,
     pub(super) namespaces: NamespacePlan,
+    pub(super) sysctls: SysctlPlan,
     pub(super) mounts: Vec<MountPlan>,
     pub(super) root_readonly: bool,
     pub(super) rootfs_propagation: Option<RootfsPropagation>,
@@ -183,6 +185,24 @@ impl InitPlan {
             process_plan.gid,
             &process_plan.additional_gids,
         )?;
+        let hostname = spec
+            .hostname()
+            .as_deref()
+            .map(|value| validate_uts_name("hostname", value))
+            .transpose()?;
+        let domainname = spec
+            .domainname()
+            .as_deref()
+            .map(|value| validate_uts_name("domainname", value))
+            .transpose()?;
+        if (hostname.is_some() || domainname.is_some()) && !namespaces.has_uts() {
+            return Err(unsupported(
+                "hostname/domainname",
+                "the bootstrap executor changes UTS names only in a configured UTS namespace",
+            ));
+        }
+        let sysctls =
+            SysctlPlan::from_linux(spec.linux().as_ref(), &namespaces, domainname.as_deref())?;
         super::portable_rootfs_metadata::validate_plan(
             &annotations,
             root.path().is_absolute(),
@@ -255,22 +275,6 @@ impl InitPlan {
                 "rootfs propagation, path restrictions, and read-only enforcement require a newly created mount namespace",
             ));
         }
-        let hostname = spec
-            .hostname()
-            .as_deref()
-            .map(|value| validate_uts_name("hostname", value))
-            .transpose()?;
-        let domainname = spec
-            .domainname()
-            .as_deref()
-            .map(|value| validate_uts_name("domainname", value))
-            .transpose()?;
-        if (hostname.is_some() || domainname.is_some()) && !namespaces.has_uts() {
-            return Err(unsupported(
-                "hostname/domainname",
-                "the bootstrap executor changes UTS names only in a configured UTS namespace",
-            ));
-        }
         let hooks = HookSet::from_oci(spec.hooks().as_ref())?;
 
         Ok(Self {
@@ -295,6 +299,7 @@ impl InitPlan {
             cgroup,
             devices,
             namespaces,
+            sysctls,
             mounts,
             root_readonly,
             rootfs_propagation,
@@ -472,6 +477,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "uidMappings",
             "gidMappings",
             "timeOffsets",
+            "sysctl",
             "cgroupsPath",
             "resources",
             "devices",

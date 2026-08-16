@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Transactional OCI Linux sysctl enforcement for known namespaced controls.
+  One SDK parser preserves OCI dot/slash notation without losing literal dots,
+  rejects host-global controls, traversal, aliases, and `kernel.hostname`, and
+  binds every accepted key to its IPC, network, UTS, or user namespace. The
+  executor refuses mutation through the agent's current namespace, applies a
+  bounded deterministic procfs transaction, verifies kernel read-back, and
+  rolls back in reverse order if Create fails before its ready barrier. The
+  native x86_64/aarch64 fixture now reads back IPC and network values. One
+  owner-bound rule promotes the OCI sysctl requirement, moving the ledger to
+  224 enforced, 25 validated, two conformant, and 404 pending entries.
 - OCI 1.3 warning-and-continue handling for requested Linux capabilities that
   the running kernel or inherited executor authority cannot grant. Init and
   exec now resolve every requested set against the live kernel ceiling,

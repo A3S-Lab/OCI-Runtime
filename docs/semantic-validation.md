@@ -42,7 +42,9 @@ The initial rule set covers:
 - mount destinations, ID-mapping pairs, hooks, and annotations;
 - namespace uniqueness, namespace paths, UID/GID mapping ranges, and
   namespace-dependent hostname, paths, sysctls, time offsets, and network
-  devices;
+  devices; sysctl parsing also preserves OCI dot/slash notation while rejecting
+  traversal, aliases at execution planning, hostname conflicts, and
+  host-global controls;
 - mount ID mappings, seccomp listener/errno relationships, selected CPU,
   block-I/O, and RDMA relationships;
 - Intel RDT names and schemata, memory-policy node relationships, and Linux
@@ -64,6 +66,12 @@ normative coverage.
 The validator does not invent hardware minima or silently convert unsupported
 controls. Host capabilities, path allowlists, and whether the selected driver
 can enforce a valid request belong to driver policy and enforcement.
+
+For Linux sysctls, validation and execution share `OciLinuxSysctlKey` as the
+source of truth. An accepted key is classified as IPC, network, UTS, or user
+namespace state. The Linux executor then checks the selected namespace
+identity, bounds the transaction, verifies procfs read-back, and rolls back any
+partial change before Create can be reported as ready.
 
 ## SDK Request Boundary
 

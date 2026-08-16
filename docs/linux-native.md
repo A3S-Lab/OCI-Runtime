@@ -148,7 +148,8 @@ following:
    UID/GID maps, monotonic and boottime namespace offsets, and an applied
    `RLIMIT_NOFILE` soft/hard value of 64, retained separately as
    `init_rlimits_verified`, exact configured `oom_score_adj`
-   value of 100, best-effort I/O priority 4, and `SCHED_BATCH` with nice 6,
+   value of 100, IPC `kernel.shm_rmid_forced=1`, network
+   `net.ipv4.ip_forward=1`, best-effort I/O priority 4, and `SCHED_BATCH` with nice 6,
    reads capability masks `CapInh=0x400`, `CapPrm=0x401`, `CapEff=0x401`,
    `CapBnd=0x401`, and `CapAmb=0x400` as
    `init_capabilities_verified`, and reads `NoNewPrivs=1` as
@@ -643,7 +644,8 @@ following pass:
   restart recovery beyond the retained wrong-type pre-state rejection;
 - mount security-negative and kernel-compatibility profiles, remaining
   credential controls, broader cgroup v2 policies,
-  multi-architecture/notification seccomp, and broader sysctl enforcement;
+  multi-architecture/notification seccomp, and wider sysctl kernel-compatibility
+  and security-negative profiles;
 - live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
 - Hook crash-recovery, security-negative, and adversarial soak beyond the

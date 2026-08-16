@@ -44,6 +44,7 @@ mod seccomp;
 #[cfg(test)]
 mod seccomp_tests;
 mod state;
+mod sysctl;
 mod terminal;
 
 use std::collections::BTreeMap;
