@@ -41,6 +41,9 @@ macro_rules! define_rules {
 
 define_rules! {
     ANNOTATION_KEY_NON_EMPTY => Normative, "oci.common.annotation.key.non-empty";
+    ANNOTATION_IMAGE_CONFIG_CREATED => Normative, "oci.common.annotation.image-config.created";
+    ANNOTATION_IMAGE_CONFIG_STOP_SIGNAL => Normative, "oci.common.annotation.image-config.stop-signal";
+    ANNOTATION_IMAGE_CONFIG_STRING_VALUE => Normative, "oci.common.annotation.image-config.string-value";
     ENVIRONMENT_ASSIGNMENT => RuntimeConstraint, "oci.common.environment.assignment";
     ENVIRONMENT_NAME_NON_EMPTY => RuntimeConstraint, "oci.common.environment.name.non-empty";
     ENVIRONMENT_NO_NUL => RuntimeConstraint, "oci.common.environment.no-nul";

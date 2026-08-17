@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 81);
+    assert_eq!(registry.len(), 84);
     assert_eq!(
         registry
             .iter()
@@ -225,6 +225,39 @@ fn reports_common_cross_field_violations_with_stable_rules() {
     ] {
         assert!(rules.contains(expected), "missing rule {expected}");
     }
+}
+
+#[test]
+fn validates_pinned_oci_image_annotation_values() {
+    let valid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "annotations": {
+            "org.opencontainers.image.os": "linux",
+            "org.opencontainers.image.os.version": "6.8.0",
+            "org.opencontainers.image.architecture": "arm64",
+            "org.opencontainers.image.variant": "v8",
+            "org.opencontainers.image.author": "A3S Lab <dev@a3s.dev>",
+            "org.opencontainers.image.created": "2026-08-17T10:11:12.123456789+08:00",
+            "org.opencontainers.image.stopSignal": "SIGRTMIN+3"
+        }
+    });
+    OciSemanticValidator::new()
+        .expect("construct semantic validator")
+        .validate(OciSemanticPhase::Configuration, &valid)
+        .expect("pinned OCI Image Specification values must be accepted");
+
+    let invalid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "annotations": {
+            "org.opencontainers.image.created": "2026-02-30 10:11:12",
+            "org.opencontainers.image.stopSignal": "SIGUNKNOWN"
+        }
+    });
+    let reported = rules(&invalid, OciSemanticPhase::Configuration);
+    assert!(reported.contains("oci.common.annotation.image-config.created"));
+    assert!(reported.contains("oci.common.annotation.image-config.stop-signal"));
 }
 
 #[test]

@@ -6635,10 +6635,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "The following keys in the `org.opencontainers` namespaces MAY be used:",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::accepts_runtime_spec_image_annotation_keys"
+      ]
     },
     {
       "id": "sha256:cd5675c64378a45862caf7c835f8f6cba34f27ecab7520f799c99a103321f100",
@@ -6649,10 +6653,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.os` | Indicates the operating system the container image was built to run on. The annotation value MUST have a valid value for the `os` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.string-value"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:291bd1c0b0a8c9bf61f94903186a7a1ed1080b58eb75bf787e77536988ce13b0",
@@ -6677,10 +6687,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.os.version` | Indicates the operating system version targeted by the container image. The annotation value MUST have a valid value for the `os.version` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.string-value"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:929c9e9bac12b3f52bdac25701066305af951324a9370505ed97f7c88f94e46f",
@@ -6733,10 +6749,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.architecture` | Indicates the architecture that binaries in the container image are built to run on. The annotation value MUST have a valid value for the `architecture` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.string-value"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:e141e022e29de4b179f36ad7b4212a53fc5d97c289bbc8be30bf66d388053c16",
@@ -6761,10 +6783,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.variant` | Indicates the variant of the architecture that binaries in the container image are built to run on. The annotation value MUST have a valid value for the `variant` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.string-value"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:1f9ffbaec4f5e47d1e9960591b672b7d5d3496fa6ab4eb7856b2cb929ab46f7c",
@@ -6789,10 +6817,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.author` | Indicates the author of the container image. The annotation value MUST have a valid value for the `author` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.string-value"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:27b43b6c04a83b25ca95b6bb32eeced9b7c38da5506f2bd21de273c55101c3db",
@@ -6817,10 +6851,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.created` | Indicates the date and time when the container image was created. The annotation value MUST have a valid value for the `created` property as defined in [the OCIimage specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.created"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:60726ec6e2e9079b30ad20e530a93b17e7ac418851c1527858288ef0c2737497",
@@ -6859,10 +6898,17 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.stopSignal` | Indicates signal that SHOULD be sent by the container runtimes to [kill the container](runtime.md#kill). The annotation value MUST have a valid value for the `config.StopSignal` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.stop-signal"
+      ],
+      "testIds": [
+        "bundle::tests::resolves_validated_image_stop_signal",
+        "image_annotation::tests::parses_portable_linux_stop_signal_forms",
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:9094cf3c981b0240935d6afb4bc8f49310eaa2e900a97d6ddf4ca899b9a9fd9a",

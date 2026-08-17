@@ -11,6 +11,7 @@ mod error;
 mod fingerprint;
 mod handoff;
 mod id;
+mod image_annotation;
 mod linux_capability;
 mod linux_intel_rdt;
 mod linux_memory_policy;
@@ -52,6 +53,9 @@ pub use handoff::{
     RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY, RUNTIME_BUNDLE_HANDOFF_ROOT_DIRECTORY,
 };
 pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
+pub use image_annotation::{
+    OCI_IMAGE_SPEC_COMMIT, OCI_IMAGE_SPEC_VERSION, OCI_IMAGE_STOP_SIGNAL_ANNOTATION,
+};
 pub use linux_capability::{oci_linux_capability_number, OCI_LINUX_CAPABILITY_NAMES};
 pub use linux_intel_rdt::{
     OCI_LINUX_INTEL_RDT_MAX_CLOS_ID_BYTES, OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES,
