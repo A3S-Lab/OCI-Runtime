@@ -33,15 +33,25 @@ The v1.3.0 corpus currently contains 764 entries:
 | --- | ---: | --- |
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
-| `validated` | 25 | Exact semantic and bundle-validation rules with positive and negative SDK tests |
-| `enforced` | 283 | Root `config.json` placement and read-only-root enforcement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; non-terminal `consoleSize` ignore semantics and terminal `consoleSize` PTY initialization; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, ID-mapped mounts, unknown filesystem-option pass-through, and accurate mount-option feature reporting; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; OCI `oomScoreAdj`, scheduler, I/O-priority, init personality, init NUMA memory-policy, Intel RDT, and exec CPU-affinity semantics; accurate memory-policy and Intel RDT feature reporting; and bounded transactional application of namespaced Linux sysctls enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
+| `validated` | 35 | Exact semantic, bundle, and annotation-map schema rules with positive and negative SDK tests |
+| `enforced` | 284 | Root `config.json` placement and read-only-root enforcement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; non-terminal `consoleSize` ignore semantics and terminal `consoleSize` PTY initialization; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; unknown configuration annotation preservation; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, ID-mapped mounts, unknown filesystem-option pass-through, and accurate mount-option feature reporting; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; OCI `oomScoreAdj`, scheduler, I/O-priority, init personality, init NUMA memory-policy, Intel RDT, and exec CPU-affinity semantics; accurate memory-policy and Intel RDT feature reporting; and bounded transactional application of namespaced Linux sysctls enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
 | `conformant` | 2 | The optional `tmpcopyup` entries are satisfied by typed rejection and exclusion from feature reporting; this is an explicit optional omission, not an implementation claim |
-| `pending-review` | 345 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `pending-review` | 334 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
 platform-specific clauses; each pending entry still requires human
 applicability review.
+
+The common configuration and runtime-feature annotation maps now have pinned
+positive and negative schema evidence for omission, empty maps, string keys,
+empty and non-empty string values, and structured or unstructured metadata.
+Bundle round-trip evidence separately proves that unknown annotation keys and
+their exact values are preserved. The remaining 21 annotation entries cover
+reverse-domain guidance, the reserved `org.opencontainers` namespace, linked
+OCI Image Specification value semantics, conversion provenance, and default
+stop-signal behavior; they remain pending until those distinct contracts have
+their own enforcement evidence.
 
 The exact capability-set requirements and the adjacent warning policy are both
 enforced. Init and exec retain exact read-back for grantable values, remove only

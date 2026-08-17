@@ -6498,10 +6498,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`annotations`** (object, OPTIONAL) contains arbitrary metadata for the container.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:032d6378d53ff10f26774547610517d52f9e9516ef9941ae5bf56ff678c490f9",
@@ -6512,10 +6516,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This information MAY be structured or unstructured.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:8b0a3ce38e32d2c651396ce844e37032a103cd8c508961c2eb3555ea6ae985c8",
@@ -6526,10 +6534,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Annotations MUST be a key-value map.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:2ccaeba5c2c2edbafdf6bda3925e91279ba2681054ad85b7dcb7a0e8a6ace918",
@@ -6540,10 +6552,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "If there are no annotations then this property MAY either be absent or an empty map.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:50a8e731c746614bcf0f4907c7aa477804ddc4ebe0536ee00d1cf8200025888c",
@@ -6554,10 +6570,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Keys MUST be strings.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:964cdbc18ba751489db3a08921658519eb9ca3bfd14988b93ed1680acac0b294",
@@ -6881,10 +6901,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Runtimes MUST handle unknown annotation keys like any other [unknown property](#extensibility).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.common.annotations.unknown-preserved"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ]
     },
     {
       "id": "sha256:4d87c4a740ab6f059578e654b3f52e62248602588d6f040c0b9a9a9b11d83671",
@@ -6895,10 +6919,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Values MUST be strings.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:bbc0e19a3f2ba56cae934a929e7615f3da5f68908f7829e4b5a71cb452306566",
@@ -6909,10 +6937,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Values MAY be an empty string.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:58641a4ea713199b4047649135fe743a7cfa176ade8ed0269216b21f7ca33d00",
@@ -12621,10 +12653,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`annotations`** (object, OPTIONAL) contains arbitrary metadata of the runtime.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:70261e2943d94219c3c700659fc9131971bb0fe6404d5d43c68443f652a1d872",
@@ -12635,10 +12671,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This information MAY be structured or unstructured.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:50e6f41553fcef929ecdb6456fc7db90f6b634809c070d59346932007f95e48a",
@@ -12649,10 +12689,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Annotations MUST be a key-value map that follows the same convention as the Key and Values of the [`annotations` property of `config.json`](config.md#annotations).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
     },
     {
       "id": "sha256:a920a560bf8395af4cfe4d0774b6668a106ad50542b7d28d37181adf478bed67",

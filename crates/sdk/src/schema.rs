@@ -586,6 +586,73 @@ mod tests {
     }
 
     #[test]
+    fn validates_annotation_contracts_for_configuration_and_features() {
+        let validator = OciSchemaValidator::new().expect("compile pinned schemas");
+
+        for annotations in [
+            json!({}),
+            json!({
+                "com.example.empty": "",
+                "com.example.structured": r#"{"nested":true}"#,
+                "com.example.unstructured": "plain text"
+            }),
+        ] {
+            validator
+                .validate(
+                    OciSchemaDocument::Configuration,
+                    &json!({"ociVersion": "1.3.0", "annotations": annotations}),
+                )
+                .expect("configuration annotations must accept string metadata");
+        }
+        validator
+            .validate(
+                OciSchemaDocument::Configuration,
+                &json!({"ociVersion": "1.3.0"}),
+            )
+            .expect("configuration annotations may be absent");
+
+        for invalid in [
+            json!({"ociVersion": "1.3.0", "annotations": []}),
+            json!({"ociVersion": "1.3.0", "annotations": {"com.example.count": 2}}),
+        ] {
+            validator
+                .validate(OciSchemaDocument::Configuration, &invalid)
+                .expect_err("configuration annotations must be a string map");
+        }
+
+        let feature_base = || {
+            json!({
+                "ociVersionMin": "1.0.0",
+                "ociVersionMax": "1.3.0"
+            })
+        };
+        validator
+            .validate(OciSchemaDocument::Features, &feature_base())
+            .expect("feature annotations may be absent");
+        for annotations in [
+            json!({}),
+            json!({
+                "dev.a3s.runtime.empty": "",
+                "dev.a3s.runtime.structured": r#"{"lifecycle":"durable"}"#,
+                "dev.a3s.runtime.unstructured": "probe-only"
+            }),
+        ] {
+            let mut features = feature_base();
+            features["annotations"] = annotations;
+            validator
+                .validate(OciSchemaDocument::Features, &features)
+                .expect("feature annotations must accept string metadata");
+        }
+        for annotations in [json!([]), json!({"dev.a3s.runtime.level": 2})] {
+            let mut features = feature_base();
+            features["annotations"] = annotations;
+            validator
+                .validate(OciSchemaDocument::Features, &features)
+                .expect_err("feature annotations must be a string map");
+        }
+    }
+
+    #[test]
     fn reports_schema_paths_without_network_resolution() {
         let report = OciSchemaValidator::new()
             .expect("compile pinned schemas")

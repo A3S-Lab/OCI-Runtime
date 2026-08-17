@@ -25,6 +25,7 @@ impl OciNonSemanticRule {
 }
 
 const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
+    OciNonSemanticRule::new("oci.annotations.schema", "sdk-schema-validation"),
     OciNonSemanticRule::new("oci.bundle.config.root-file", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.required", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.semver", "runtime-bundle"),
@@ -44,6 +45,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.common.process.console-size.ignored-without-terminal",
         "linux-executor",
     ),
+    OciNonSemanticRule::new("oci.common.annotations.unknown-preserved", "runtime-bundle"),
     OciNonSemanticRule::new("oci.common.process.no-new-privileges", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.exact-values", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
