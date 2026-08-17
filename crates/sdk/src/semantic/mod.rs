@@ -80,6 +80,7 @@ impl OciSemanticValidator {
     /// Construct a validator and verify the pinned schema set.
     pub fn new() -> Result<Self> {
         OciSchemaValidator::new()?;
+        crate::image_annotation::initialize()?;
         Ok(Self)
     }
 
@@ -96,19 +97,19 @@ impl OciSemanticValidator {
         value: &Value,
     ) -> Result<OciSemanticValidationReport> {
         OciSchemaValidator::new()?.validate(OciSchemaDocument::Configuration, value)?;
-        Ok(self.inspect_schema_valid(phase, value))
+        self.inspect_schema_valid(phase, value)
     }
 
     fn inspect_schema_valid(
         self,
         phase: OciSemanticPhase,
         value: &Value,
-    ) -> OciSemanticValidationReport {
+    ) -> Result<OciSemanticValidationReport> {
         let mut collector = ViolationCollector::default();
-        common::inspect(value, phase, &mut collector);
+        common::inspect(value, phase, &mut collector)?;
         linux::inspect(value, &mut collector);
         vm::inspect(value, &mut collector);
-        collector.finish(phase)
+        Ok(collector.finish(phase))
     }
 
     /// Validate a raw OCI configuration or return a stable SDK error.
@@ -122,7 +123,7 @@ impl OciSemanticValidator {
         phase: OciSemanticPhase,
         value: &Value,
     ) -> Result<()> {
-        let report = self.inspect_schema_valid(phase, value);
+        let report = self.inspect_schema_valid(phase, value)?;
         if report.valid {
             return Ok(());
         }

@@ -13,7 +13,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::{
     Error, ErrorCode, OciSchemaDocument, OciSchemaValidator, OciSemanticPhase,
-    OciSemanticValidator, Result,
+    OciSemanticValidator, Result, Signal, OCI_IMAGE_STOP_SIGNAL_ANNOTATION,
 };
 
 /// File containing the OCI runtime configuration in a bundle.
@@ -190,6 +190,29 @@ impl OciBundle {
     #[must_use]
     pub const fn spec(&self) -> &Spec {
         &self.spec
+    }
+
+    /// Resolve the validated OCI image stop-signal annotation for this bundle.
+    ///
+    /// The result is a Linux signal number on every host platform because A3S
+    /// utility VMs and the native driver execute Linux OCI workloads.
+    pub fn configured_stop_signal(&self) -> Result<Option<Signal>> {
+        let Some(value) = self
+            .spec
+            .annotations()
+            .as_ref()
+            .and_then(|annotations| annotations.get(OCI_IMAGE_STOP_SIGNAL_ANNOTATION))
+        else {
+            return Ok(None);
+        };
+        let number = crate::image_annotation::parse_stop_signal(value).ok_or_else(|| {
+            Error::new(
+                ErrorCode::Internal,
+                "validated OCI image stop signal could not be resolved",
+            )
+            .for_operation("resolve-oci-image-stop-signal")
+        })?;
+        Signal::new(number).map(Some)
     }
 
     /// Revalidate this immutable bundle for one OCI lifecycle phase.
@@ -777,6 +800,43 @@ mod tests {
         assert_eq!(
             rebuilt["process"]["scheduler"]["flags"],
             json!(["SCHED_FLAG_RESET_ON_FORK", "SCHED_FLAG_DL_OVERRUN"])
+        );
+    }
+
+    #[test]
+    fn resolves_validated_image_stop_signal() {
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("image-stop-signal-bundle");
+
+        for (source, expected) in [("SIGTERM", 15), ("15", 15), ("SIGRTMIN+3", 37)] {
+            let bundle = OciBundle::from_json(
+                &absolute,
+                format!(
+                    r#"{{"ociVersion":"1.3.0","root":{{"path":"rootfs"}},"annotations":{{"org.opencontainers.image.stopSignal":"{source}"}}}}"#
+                ),
+            )
+            .expect("valid OCI image stop signal");
+            assert_eq!(
+                bundle
+                    .configured_stop_signal()
+                    .expect("resolve validated stop signal")
+                    .expect("configured stop signal")
+                    .get(),
+                expected
+            );
+        }
+
+        let unconfigured = OciBundle::from_json(
+            absolute,
+            r#"{"ociVersion":"1.3.0","root":{"path":"rootfs"}}"#,
+        )
+        .expect("bundle without image stop signal");
+        assert_eq!(
+            unconfigured
+                .configured_stop_signal()
+                .expect("resolve absent stop signal"),
+            None
         );
     }
 

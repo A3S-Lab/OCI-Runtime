@@ -696,6 +696,68 @@
     },
     {
       "requirementIds": [
+        "sha256:8742bebdcd90656f6f2a59d33c971ea8cb4f00ebe0d846d7804e3c6aa5a98b79"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::accepts_runtime_spec_image_annotation_keys"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:cd5675c64378a45862caf7c835f8f6cba34f27ecab7520f799c99a103321f100",
+        "sha256:66b9c972fa9d2c2fb75a8da57120ead817537f96f5a0ea14c70a6da2c9225667",
+        "sha256:61a80d2cfd5ff5001b24e562e31b047ad4831ed66e8872d5767120bbf5b4f41e",
+        "sha256:3831d0fdd3b307b28ab15455e192ece07b32e1d2055ff9501647e23cb801061c",
+        "sha256:111c5c8db778cd23bec493c088795ec00b10f92e5ad017d0de576f28efd0c611"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.string-value"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:a121e703e714fe25368922f3ec18e237facd0ccfc54a1c7d3fac09e5db7dca39"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.created"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:939f0fef055221250893b28bb48c0f6e568cfb7818b4373345fce1ac3b149bd8"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.stop-signal"
+      ],
+      "testIds": [
+        "bundle::tests::resolves_validated_image_stop_signal",
+        "image_annotation::tests::parses_portable_linux_stop_signal_forms",
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:964cdbc18ba751489db3a08921658519eb9ca3bfd14988b93ed1680acac0b294"
       ],
       "disposition": "validated",

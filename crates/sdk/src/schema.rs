@@ -653,6 +653,29 @@ mod tests {
     }
 
     #[test]
+    fn accepts_runtime_spec_image_annotation_keys() {
+        OciSchemaValidator::new()
+            .expect("compile pinned schemas")
+            .validate(
+                OciSchemaDocument::Configuration,
+                &json!({
+                    "ociVersion": "1.3.0",
+                    "annotations": {
+                        "org.opencontainers.image.os": "linux",
+                        "org.opencontainers.image.os.version": "6.8.0",
+                        "org.opencontainers.image.os.features": "win32k",
+                        "org.opencontainers.image.architecture": "arm64",
+                        "org.opencontainers.image.variant": "v8",
+                        "org.opencontainers.image.author": "A3S Lab <dev@a3s.dev>",
+                        "org.opencontainers.image.created": "2026-08-17T10:11:12Z",
+                        "org.opencontainers.image.stopSignal": "SIGTERM"
+                    }
+                }),
+            )
+            .expect("Runtime Specification image annotation keys may be used");
+    }
+
+    #[test]
     fn reports_schema_paths_without_network_resolution() {
         let report = OciSchemaValidator::new()
             .expect("compile pinned schemas")

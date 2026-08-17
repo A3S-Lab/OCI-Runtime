@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use super::{contains_nul, is_posix_absolute, rules, OciSemanticPhase, ViolationCollector};
+use crate::image_annotation::{self, OciImageAnnotationValueKind, OciImageAnnotationViolation};
+use crate::Result;
 
 const UNSUPPORTED_PLATFORM_FIELDS: &[&str] = &["freebsd", "solaris", "windows", "zos"];
 const HOOK_PHASES: &[&str] = &[
@@ -14,9 +16,13 @@ const HOOK_PHASES: &[&str] = &[
     "poststop",
 ];
 
-pub(super) fn inspect(value: &Value, phase: OciSemanticPhase, collector: &mut ViolationCollector) {
+pub(super) fn inspect(
+    value: &Value,
+    phase: OciSemanticPhase,
+    collector: &mut ViolationCollector,
+) -> Result<()> {
     let Some(configuration) = value.as_object() else {
-        return;
+        return Ok(());
     };
 
     reject_unsupported_platforms(configuration, collector);
@@ -24,7 +30,8 @@ pub(super) fn inspect(value: &Value, phase: OciSemanticPhase, collector: &mut Vi
     validate_process(configuration, phase, collector);
     validate_mounts(configuration, collector);
     validate_hooks(configuration, collector);
-    validate_annotations(configuration, collector);
+    validate_annotations(configuration, collector)?;
+    Ok(())
 }
 
 fn reject_unsupported_platforms(
@@ -460,9 +467,12 @@ fn validate_hooks(configuration: &Map<String, Value>, collector: &mut ViolationC
     }
 }
 
-fn validate_annotations(configuration: &Map<String, Value>, collector: &mut ViolationCollector) {
+fn validate_annotations(
+    configuration: &Map<String, Value>,
+    collector: &mut ViolationCollector,
+) -> Result<()> {
     let Some(annotations) = configuration.get("annotations").and_then(Value::as_object) else {
-        return;
+        return Ok(());
     };
     if annotations.contains_key("") {
         collector.invalid(
@@ -471,4 +481,34 @@ fn validate_annotations(configuration: &Map<String, Value>, collector: &mut Viol
             "annotation keys must not be empty",
         );
     }
+    for (key, value) in annotations {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if let Some(violation) = image_annotation::validate_value(key, value)? {
+            report_image_annotation_violation(key, violation, collector);
+        }
+    }
+    Ok(())
+}
+
+fn report_image_annotation_violation(
+    key: &str,
+    violation: OciImageAnnotationViolation,
+    collector: &mut ViolationCollector,
+) {
+    let rule = match violation.kind {
+        OciImageAnnotationValueKind::String => rules::ANNOTATION_IMAGE_CONFIG_STRING_VALUE,
+        OciImageAnnotationValueKind::Created => rules::ANNOTATION_IMAGE_CONFIG_CREATED,
+        OciImageAnnotationValueKind::StopSignal => rules::ANNOTATION_IMAGE_CONFIG_STOP_SIGNAL,
+    };
+    collector.invalid(
+        format!("/annotations/{}", escape_json_pointer(key)),
+        rule,
+        violation.message,
+    );
+}
+
+fn escape_json_pointer(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
 }
