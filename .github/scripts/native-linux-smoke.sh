@@ -529,9 +529,7 @@ cp -a --no-preserve=ownership \
 jq \
   --arg source "$network_device_rootless_source" \
   '
-    .mounts = []
-    | .linux.namespaces |= map(select(.type != "mount"))
-    | .linux.namespaces += [{"type": "network"}]
+    .linux.namespaces += [{"type": "network"}]
     | .linux.netDevices = {($source): {name: "a3sroot%d"}}
     | .annotations["dev.a3s.oci.net-devices"] = "rootless-rejection-v1"
   ' \
