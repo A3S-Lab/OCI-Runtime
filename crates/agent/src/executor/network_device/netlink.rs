@@ -283,12 +283,22 @@ fn apply_sync(plan: &NetworkDevicePlan, target_namespace: File) -> Result<Networ
     enter_network_namespace(&source_namespace, "runtime source")?;
     let mut moved = Vec::with_capacity(prepared.len());
     for (entry, before) in prepared {
-        if let Err(error) = source_socket.move_link(
+        let outcome = source_socket.move_link(
             before.index,
             target_namespace.as_raw_fd(),
             entry.container_name(),
             true,
-        ) {
+        );
+        let moved_device = MovedDevice {
+            before,
+            requested_name: entry.container_name().to_string(),
+            template: entry.uses_template(),
+        };
+        if let Err(error) = outcome {
+            // RTM_NEWLINK can move the interface before a requested rename
+            // fails. Treat the current request as an indeterminate move and
+            // let rollback reconcile its actual namespace.
+            moved.push(moved_device);
             let state = RollbackState {
                 source_namespace,
                 target_namespace,
@@ -296,11 +306,7 @@ fn apply_sync(plan: &NetworkDevicePlan, target_namespace: File) -> Result<Networ
             };
             return Err(rollback_after(error, &state));
         }
-        moved.push(MovedDevice {
-            before,
-            requested_name: entry.container_name().to_string(),
-            template: entry.uses_template(),
-        });
+        moved.push(moved_device);
     }
     let state = RollbackState {
         source_namespace,
@@ -416,15 +422,8 @@ fn rollback_sync(state: &RollbackState) -> Result<()> {
             .values()
             .find(|link| link.index == moved.before.index)
         else {
-            first_error.get_or_insert_with(|| {
-                netlink_error(
-                    ErrorCode::FailedPrecondition,
-                    format!(
-                        "cannot roll back missing network interface index {}",
-                        moved.before.index
-                    ),
-                )
-            });
+            // A failed move request may have remained entirely in the source
+            // namespace. Its presence and original state are checked below.
             continue;
         };
         if let Err(error) = target_socket.move_link(
