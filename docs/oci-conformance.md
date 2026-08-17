@@ -170,7 +170,7 @@ Remaining evidence includes:
 
 1. positive decode/round-trip fixtures for every applicable property;
 2. negative cross-field and semantic fixtures;
-3. promotion of all 326 pending common, Linux, and VM normative entries to
+3. promotion of all 325 pending common, Linux, and VM normative entries to
    exact rule IDs, enforcement owners, and test IDs;
 4. hook crash-recovery, security-negative, and adversarial hook-soak traces
    beyond the retained native six-phase failure matrix and bounded

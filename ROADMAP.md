@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 326-entry pending normative evidence backlog.
+- [ ] Close the 325-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -475,6 +475,9 @@ driver implements.
     values, including RFC 3339 creation times and portable Linux stop signals.
     Keep `os.features`, conversion provenance, and default stop behavior open
     until their distinct contracts have direct evidence.
+  - [x] Report the exact built-in behavior-changing configuration annotations
+    and merge annotation-backed extensions from the active driver capability
+    inventory, while keeping probe-only discovery empty.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,

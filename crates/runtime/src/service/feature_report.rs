@@ -7,9 +7,10 @@ use a3s_oci_sdk::oci_spec::runtime::{
     MountExtensionsBuilder, NetDevicesBuilder, SeccompBuilder, SelinuxBuilder,
 };
 use a3s_oci_sdk::{
-    Error, ErrorCode, Result, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS,
-    OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS, OCI_RUNTIME_SPEC_VERSION_MAX,
-    OCI_RUNTIME_SPEC_VERSION_MIN,
+    AttachmentCapabilities, Error, ErrorCode, Result,
+    BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
+    OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
+    OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 
 use crate::driver::OciHookPhase;
@@ -29,7 +30,11 @@ pub(super) fn recognized_linux_mount_options() -> Vec<String> {
     options
 }
 
-pub(super) fn build(has_lifecycle: bool, hooks: &[OciHookPhase]) -> Result<Features> {
+pub(super) fn build(
+    has_lifecycle: bool,
+    hooks: &[OciHookPhase],
+    attachments: &AttachmentCapabilities,
+) -> Result<Features> {
     let annotations = HashMap::from([
         (
             "dev.a3s.oci.runtime.version".to_string(),
@@ -57,9 +62,31 @@ pub(super) fn build(has_lifecycle: bool, hooks: &[OciHookPhase]) -> Result<Featu
         .mount_options(recognized_linux_mount_options())
         .linux(compiled_linux_features()?)
         .annotations(annotations)
-        .potentially_unsafe_config_annotations(Vec::<String>::new())
+        .potentially_unsafe_config_annotations(potentially_unsafe_config_annotations(
+            has_lifecycle,
+            attachments,
+        ))
         .build()
         .map_err(feature_build_error)
+}
+
+fn potentially_unsafe_config_annotations(
+    has_lifecycle: bool,
+    attachments: &AttachmentCapabilities,
+) -> Vec<String> {
+    if !has_lifecycle {
+        return Vec::new();
+    }
+
+    let mut annotations = BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS
+        .iter()
+        .copied()
+        .chain(attachments.extension_names())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    annotations.sort_unstable();
+    annotations.dedup();
+    annotations
 }
 
 fn compiled_linux_features() -> Result<LinuxFeature> {

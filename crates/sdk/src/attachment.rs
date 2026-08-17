@@ -563,6 +563,11 @@ impl AttachmentCapabilities {
             .is_some_and(|versions| versions.binary_search(&version).is_ok())
     }
 
+    /// Supported extension names in canonical byte order.
+    pub fn extension_names(&self) -> impl Iterator<Item = &str> {
+        self.extensions.keys().map(String::as_str)
+    }
+
     /// Reject unsupported schemas and required extensions before runtime mutation.
     pub fn require(&self, attachments: &CreateAttachments) -> Result<()> {
         if !self.supports_schema(attachments.schema_version()) {
@@ -865,6 +870,20 @@ mod tests {
         AttachmentCapabilities::base_v1()
             .require(&advisory)
             .expect("unsupported advisory extension remains explicit and non-enforcing");
+    }
+
+    #[test]
+    fn extension_names_follow_the_canonical_capability_order() {
+        let capabilities = AttachmentCapabilities::base_v1()
+            .with_extension("dev.a3s.network.zeta", vec![1])
+            .expect("zeta extension capability")
+            .with_extension("dev.a3s.network.alpha", vec![2, 1])
+            .expect("alpha extension capability");
+
+        assert_eq!(
+            capabilities.extension_names().collect::<Vec<_>>(),
+            vec!["dev.a3s.network.alpha", "dev.a3s.network.zeta"]
+        );
     }
 
     #[test]

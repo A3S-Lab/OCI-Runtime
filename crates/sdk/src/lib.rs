@@ -6,6 +6,7 @@
 mod attachment;
 mod bundle;
 mod client;
+mod config_annotation;
 mod conformance;
 mod error;
 mod fingerprint;
@@ -41,6 +42,7 @@ pub use bundle::{
     OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 pub use client::RuntimeClient;
+pub use config_annotation::BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS;
 pub use conformance::{
     OciNormativeCoverageItem, OciNormativeCoverageManifest, OciNormativeDisposition,
     OciNormativeDocument, OciNormativeEvidenceBinding, OciNormativeEvidenceManifest,
