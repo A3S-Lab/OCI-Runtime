@@ -47,14 +47,14 @@ The initial rule set covers:
   host-global controls;
 - mount ID mappings, seccomp listener/errno relationships, selected CPU,
   block-I/O, and RDMA relationships;
-- Intel RDT names and schemata, required memory-policy mode, bounded node
+- bounded Intel RDT names and schemata, required memory-policy mode, bounded node
   lists and mode/flag relationships, required Linux personality domain and
   empty flags, and Linux device/path safety;
 - absolute OCI VM runtime paths and NUL rejection;
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 78 rule identifiers come from one typed registry. Twenty-two are classified
+All 81 rule identifiers come from one typed registry. Twenty-two are classified
 as direct OCI normative validators and are currently bound to 31 exact source
 entries in the normative evidence manifest. Linux `oomScoreAdj`, scheduler,
 and I/O-priority runtime constraints plus executor and real-host tests promote
@@ -73,6 +73,14 @@ source of truth. An accepted key is classified as IPC, network, UTS, or user
 namespace state. The Linux executor then checks the selected namespace
 identity, bounds the transaction, verifies procfs read-back, and rolls back any
 partial change before Create can be reported as ready.
+
+Intel RDT validation and execution share public SDK bounds: a CLOS name is at
+most 255 bytes, complete `schemata` contains at most 256 entries, each line is
+at most 4 KiB, and all ordered writes together are at most 64 KiB. Generic
+single-line resctrl resource names remain extensible; the validator does not
+freeze the kernel's resource registry. The executor separately enforces `L3:`
+and `MB:` prefixes for their dedicated fields, verifies read-back, and fails if
+the selected runtime namespace has no mounted resctrl filesystem.
 
 For Linux NUMA memory policy, validation, execution, and feature reporting
 share the same seven-mode and three-flag registries. A bounded parser rejects

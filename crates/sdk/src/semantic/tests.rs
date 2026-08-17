@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 78);
+    assert_eq!(registry.len(), 81);
     assert_eq!(
         registry
             .iter()
@@ -356,6 +356,7 @@ fn reports_linux_namespace_security_and_resource_relationships() {
             "intelRdt": {
                 "closID": "../escape",
                 "l3CacheSchema": "invalid",
+                "memBwSchema": "MB:0=20\u{0}",
                 "schemata": ["L3:0=ff\nMB:0=20"]
             },
             "memoryPolicy": {"mode": "MPOL_BIND"},
@@ -389,12 +390,55 @@ fn reports_linux_namespace_security_and_resource_relationships() {
         "oci.linux.intel-rdt.clos-id.safe-name",
         "oci.linux.intel-rdt.schemata.single-line",
         "oci.linux.intel-rdt.l3-schema",
+        "oci.linux.intel-rdt.memory-bandwidth-schema",
         "oci.linux.memory-policy.nodes-required",
         "oci.linux.personality.domain.required",
         "oci.linux.personality.flags-empty",
     ] {
         assert!(rules.contains(expected), "missing rule {expected}");
     }
+}
+
+#[test]
+fn bounds_intel_rdt_names_and_schemata_without_rejecting_new_resource_lines() {
+    let mut lines = vec!["L2:0=fff".repeat(34); 257];
+    lines[0] = format!("L3:0={}", "f".repeat(5_000));
+    lines[1] = String::new();
+    let bounded = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "intelRdt": {
+                "closID": "",
+                "schemata": lines
+            }
+        }
+    });
+    let reported = rules(&bounded, OciSemanticPhase::Configuration);
+    for expected in [
+        "oci.linux.intel-rdt.clos-id.safe-name",
+        "oci.linux.intel-rdt.schemata.count-bounded",
+        "oci.linux.intel-rdt.schemata.line-bounded",
+        "oci.linux.intel-rdt.schemata.single-line",
+        "oci.linux.intel-rdt.schemata.total-bounded",
+    ] {
+        assert!(reported.contains(expected), "missing rule {expected}");
+    }
+
+    let extensible = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "intelRdt": {
+                "closID": "/",
+                "schemata": ["L2:0=f", "MBps:0=1024", "SMBA:0=10"]
+            }
+        }
+    });
+    OciSemanticValidator::new()
+        .expect("construct semantic validator")
+        .validate(OciSemanticPhase::Configuration, &extensible)
+        .expect("unknown single-line resctrl resources remain extensible");
 }
 
 #[test]

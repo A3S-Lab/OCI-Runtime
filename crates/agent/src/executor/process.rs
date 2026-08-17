@@ -27,6 +27,7 @@ use super::control::{
 };
 use super::hook::{HookPhase, HookSet, HookStateTemplate};
 use super::inherited_descriptor::InheritedDescriptorPlan;
+use super::intel_rdt::{IntelRdtHandle, IntelRdtRecovery};
 use super::io::ProcessIoHandle;
 use super::namespace::{self, RetainedExecutionContext, UserMappingRuntime};
 use super::pid;
@@ -50,6 +51,7 @@ pub(super) struct PreparedProcess {
     capabilities: CapabilityPlan,
     seccomp: SeccompPlan,
     cgroup: Option<CgroupHandle>,
+    intel_rdt: Option<IntelRdtHandle>,
     io: ProcessIoHandle,
     exit_status: Option<ExitStatus>,
     hooks: HookSet,
@@ -94,6 +96,7 @@ impl PreparedProcess {
             plan.devices.has_node_setup(),
         )?;
         let mut cgroup = CgroupHandle::create(&plan.cgroup, &plan.devices, cgroup_manager)?;
+        let mut intel_rdt = IntelRdtHandle::create(plan.intel_rdt.as_ref(), hook_state.id())?;
         let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
         let control_workload_descriptors = cgroup
             .as_ref()
@@ -324,6 +327,13 @@ impl PreparedProcess {
                             .await;
                         return Err(error);
                     }
+                    if let Some(handle) = intel_rdt.as_mut() {
+                        if let Err(error) = handle.assign(runtime_pid) {
+                            cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state)
+                                .await;
+                            return Err(error);
+                        }
+                    }
                     if plan.cgroup.uses_control_workload_layout() {
                         let finalized = match (cgroup.as_mut(), cgroup_manager) {
                             (Some(cgroup), Some(manager)) => {
@@ -456,6 +466,7 @@ impl PreparedProcess {
             capabilities: plan.capabilities,
             seccomp: plan.seccomp.clone(),
             cgroup,
+            intel_rdt,
             io: process_io,
             exit_status: None,
             hooks: plan.hooks.clone(),
@@ -486,6 +497,18 @@ impl PreparedProcess {
         self.cgroup
             .as_ref()
             .map(super::cgroup::CgroupHandle::recovery_paths)
+    }
+
+    pub(super) fn recovery_intel_rdt(&self) -> Option<IntelRdtRecovery> {
+        self.intel_rdt.as_ref().and_then(IntelRdtHandle::recovery)
+    }
+
+    pub(super) fn cleanup_intel_rdt(&mut self) -> Result<()> {
+        if let Some(handle) = self.intel_rdt.as_mut() {
+            handle.cleanup()?;
+        }
+        self.intel_rdt.take();
+        Ok(())
     }
 
     pub(super) async fn release(&mut self) -> Result<()> {

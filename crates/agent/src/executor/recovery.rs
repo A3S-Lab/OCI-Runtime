@@ -11,6 +11,7 @@ use tokio::time::{sleep, Instant};
 
 use super::cgroup::CgroupManager;
 use super::device::{cleanup_device_target_manifest, load_device_target_manifest};
+use super::intel_rdt::{is_resctrl_mountpoint, IntelRdtRecovery};
 use super::process::PreparedProcess;
 
 const RUNTIME_ROOT_PREFIX: &str = "a3s-oci-agent-";
@@ -18,7 +19,8 @@ const OWNER_RECORD_NAME: &str = "owner.json";
 const CONTAINER_RECORD_NAME: &str = "recovery.json";
 const CONFIG_SNAPSHOT_NAME: &str = "config.json";
 const OWNER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-executor-owner.v1";
-const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v2";
+const CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.native-linux-recovery.v3";
+const CONTAINER_SCHEMA_VERSION_V2: &str = "a3s.oci.native-linux-recovery.v2";
 const CONTAINER_SCHEMA_VERSION_V1: &str = "a3s.oci.native-linux-recovery.v1";
 const MAX_RECORD_BYTES: u64 = 64 * 1024;
 const TERMINATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -104,7 +106,40 @@ struct LegacyRecoveryCgroupRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecoveryIntelRdtRecord {
+    mountpoint: PathBuf,
+    control_group: PathBuf,
+    remove_control_group: bool,
+    monitoring_group: Option<PathBuf>,
+}
+
+impl From<IntelRdtRecovery> for RecoveryIntelRdtRecord {
+    fn from(recovery: IntelRdtRecovery) -> Self {
+        Self {
+            mountpoint: recovery.mountpoint,
+            control_group: recovery.control_group,
+            remove_control_group: recovery.remove_control_group,
+            monitoring_group: recovery.monitoring_group,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ContainerRecoveryRecord {
+    schema_version: String,
+    target: ContainerTarget,
+    config_digest: String,
+    owner: ProcessIdentity,
+    launcher: ProcessIdentity,
+    init: ProcessIdentity,
+    cgroup: Option<RecoveryCgroupRecord>,
+    intel_rdt: Option<RecoveryIntelRdtRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreviousContainerRecoveryRecord {
     schema_version: String,
     target: ContainerTarget,
     config_digest: String,
@@ -209,6 +244,12 @@ pub(super) async fn write_container_record(
     if let Some(cgroup) = &cgroup {
         validate_cgroup_record(cgroup)?;
     }
+    let intel_rdt = process
+        .recovery_intel_rdt()
+        .map(RecoveryIntelRdtRecord::from);
+    if let Some(intel_rdt) = &intel_rdt {
+        validate_intel_rdt_record(intel_rdt, target.id.as_str())?;
+    }
     let record = ContainerRecoveryRecord {
         schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
         target: target.clone(),
@@ -217,6 +258,7 @@ pub(super) async fn write_container_record(
         launcher,
         init,
         cgroup,
+        intel_rdt,
     };
     write_atomic_record(&runtime_directory.join(CONTAINER_RECORD_NAME), &record)
 }
@@ -351,6 +393,9 @@ pub(super) async fn delete_stale_generation(tombstone: &LinuxExecutorTombstone) 
             ),
         ));
     }
+    if let Some(intel_rdt) = &record.intel_rdt {
+        cleanup_intel_rdt(intel_rdt, record.target.id.as_str())?;
+    }
     if let Some(cgroup) = &record.cgroup {
         cleanup_cgroup(cgroup)?;
     }
@@ -400,6 +445,9 @@ fn validate_container_record(
     }
     if let Some(cgroup) = &record.cgroup {
         validate_cgroup_record(cgroup)?;
+    }
+    if let Some(intel_rdt) = &record.intel_rdt {
+        validate_intel_rdt_record(intel_rdt, record.target.id.as_str())?;
     }
     let snapshot = read_bounded_plain_file(
         &runtime_directory.join(CONFIG_SNAPSHOT_NAME),
@@ -463,6 +511,19 @@ fn read_container_record(path: &Path) -> Result<ContainerRecoveryRecord> {
                 ),
             )
         }),
+        CONTAINER_SCHEMA_VERSION_V2 => {
+            let previous: PreviousContainerRecoveryRecord =
+                serde_json::from_value(value).map_err(|error| {
+                    recovery_error(
+                        ErrorCode::FailedPrecondition,
+                        format!(
+                            "v2 native container recovery record {} is invalid: {error}",
+                            path.display()
+                        ),
+                    )
+                })?;
+            Ok(normalize_v2_container_record(previous))
+        }
         CONTAINER_SCHEMA_VERSION_V1 => {
             let legacy: LegacyContainerRecoveryRecord =
                 serde_json::from_value(value).map_err(|error| {
@@ -525,7 +586,157 @@ fn normalize_legacy_container_record(
         launcher: legacy.launcher,
         init: legacy.init,
         cgroup,
+        intel_rdt: None,
     })
+}
+
+fn normalize_v2_container_record(
+    previous: PreviousContainerRecoveryRecord,
+) -> ContainerRecoveryRecord {
+    ContainerRecoveryRecord {
+        schema_version: CONTAINER_SCHEMA_VERSION.to_string(),
+        target: previous.target,
+        config_digest: previous.config_digest,
+        owner: previous.owner,
+        launcher: previous.launcher,
+        init: previous.init,
+        cgroup: previous.cgroup,
+        intel_rdt: None,
+    }
+}
+
+fn validate_intel_rdt_record(intel_rdt: &RecoveryIntelRdtRecord, container_id: &str) -> Result<()> {
+    validate_absolute_normalized(&intel_rdt.mountpoint, "resctrl mountpoint")?;
+    validate_absolute_normalized(&intel_rdt.control_group, "resctrl control group")?;
+    if intel_rdt.mountpoint == Path::new("/") {
+        return Err(recovery_error(
+            ErrorCode::PermissionDenied,
+            "native recovery resctrl mountpoint must not be the filesystem root",
+        ));
+    }
+
+    let root_control = intel_rdt.control_group == intel_rdt.mountpoint;
+    let direct_child = intel_rdt.control_group.parent() == Some(intel_rdt.mountpoint.as_path())
+        && intel_rdt.control_group.file_name().is_some();
+    if !root_control && !direct_child {
+        return Err(recovery_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "native recovery resctrl control group is outside the direct mount layout: {}",
+                intel_rdt.control_group.display()
+            ),
+        ));
+    }
+    if intel_rdt.remove_control_group
+        && (!direct_child
+            || intel_rdt
+                .control_group
+                .file_name()
+                .and_then(|name| name.to_str())
+                != Some(container_id))
+    {
+        return Err(recovery_error(
+            ErrorCode::PermissionDenied,
+            format!(
+                "native recovery may remove only the container-owned resctrl CLOS for {container_id}: {}",
+                intel_rdt.control_group.display()
+            ),
+        ));
+    }
+    if let Some(monitoring_group) = &intel_rdt.monitoring_group {
+        validate_absolute_normalized(monitoring_group, "resctrl monitoring group")?;
+        let expected = intel_rdt
+            .control_group
+            .join("mon_groups")
+            .join(container_id);
+        if monitoring_group != &expected {
+            return Err(recovery_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "native recovery resctrl monitoring group does not match the container-owned path: {}",
+                    monitoring_group.display()
+                ),
+            ));
+        }
+    }
+    if !intel_rdt.remove_control_group && intel_rdt.monitoring_group.is_none() {
+        return Err(recovery_error(
+            ErrorCode::PermissionDenied,
+            "native recovery resctrl record does not own any cleanup path",
+        ));
+    }
+    Ok(())
+}
+
+fn cleanup_intel_rdt(intel_rdt: &RecoveryIntelRdtRecord, container_id: &str) -> Result<()> {
+    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").map_err(|error| {
+        recovery_io_error(
+            format!("failed to read resctrl mount topology during native recovery: {error}"),
+            error,
+        )
+    })?;
+    cleanup_intel_rdt_with_mountinfo(intel_rdt, container_id, &mountinfo)
+}
+
+fn cleanup_intel_rdt_with_mountinfo(
+    intel_rdt: &RecoveryIntelRdtRecord,
+    container_id: &str,
+    mountinfo: &str,
+) -> Result<()> {
+    validate_intel_rdt_record(intel_rdt, container_id)?;
+    if !is_resctrl_mountpoint(mountinfo, &intel_rdt.mountpoint) {
+        return Err(recovery_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "native recovery resctrl mountpoint is no longer mounted as resctrl: {}",
+                intel_rdt.mountpoint.display()
+            ),
+        )
+        .retryable(true));
+    }
+    if let Some(monitoring_group) = &intel_rdt.monitoring_group {
+        remove_recovered_resctrl_directory(monitoring_group, "monitoring group")?;
+    }
+    if intel_rdt.remove_control_group {
+        remove_recovered_resctrl_directory(&intel_rdt.control_group, "control group")?;
+    }
+    Ok(())
+}
+
+fn remove_recovered_resctrl_directory(path: &Path, role: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(recovery_error(
+                ErrorCode::PermissionDenied,
+                format!(
+                    "recovered resctrl {role} is not a real directory: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(recovery_io_error(
+                format!(
+                    "failed to inspect recovered resctrl {role} {}: {error}",
+                    path.display()
+                ),
+                error,
+            ));
+        }
+    }
+    match std::fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(recovery_io_error(
+            format!(
+                "failed to remove recovered resctrl {role} {}: {error}",
+                path.display()
+            ),
+            error,
+        )),
+    }
 }
 
 async fn wait_for_identity_exit(
@@ -1187,7 +1398,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_rootful_recovery_cgroup_normalizes_to_the_v2_model() {
+    fn legacy_rootful_recovery_cgroup_normalizes_to_the_v3_model() {
         let legacy = LegacyContainerRecoveryRecord {
             schema_version: CONTAINER_SCHEMA_VERSION_V1.to_string(),
             target: ContainerTarget::exact(
@@ -1221,6 +1432,104 @@ mod tests {
             normalized.cgroup.expect("normalized cgroup").authority_root,
             PathBuf::from("/sys/fs/cgroup")
         );
+    }
+
+    #[test]
+    fn v2_recovery_record_normalizes_without_inventing_resctrl_ownership() {
+        let previous = PreviousContainerRecoveryRecord {
+            schema_version: CONTAINER_SCHEMA_VERSION_V2.to_string(),
+            target: ContainerTarget::exact(
+                a3s_oci_sdk::ContainerId::new("v2-record").expect("container ID"),
+                a3s_oci_sdk::Generation(1),
+            ),
+            config_digest: "sha256:test".to_string(),
+            owner: ProcessIdentity {
+                pid: 100,
+                start_time_ticks: 1,
+            },
+            launcher: ProcessIdentity {
+                pid: 101,
+                start_time_ticks: 2,
+            },
+            init: ProcessIdentity {
+                pid: 102,
+                start_time_ticks: 3,
+            },
+            cgroup: None,
+        };
+
+        let normalized = normalize_v2_container_record(previous);
+        assert_eq!(normalized.schema_version, CONTAINER_SCHEMA_VERSION);
+        assert!(normalized.intel_rdt.is_none());
+    }
+
+    #[test]
+    fn intel_rdt_recovery_rejects_broad_or_tampered_paths() {
+        let valid = RecoveryIntelRdtRecord {
+            mountpoint: PathBuf::from("/sys/fs/resctrl"),
+            control_group: PathBuf::from("/sys/fs/resctrl/container-rdt"),
+            remove_control_group: true,
+            monitoring_group: Some(PathBuf::from(
+                "/sys/fs/resctrl/container-rdt/mon_groups/container-rdt",
+            )),
+        };
+        validate_intel_rdt_record(&valid, "container-rdt").expect("valid resctrl ownership");
+        let error = cleanup_intel_rdt_with_mountinfo(
+            &valid,
+            "container-rdt",
+            "29 23 0:26 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n",
+        )
+        .expect_err("recovery must not remove paths outside a current resctrl mount");
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+
+        let mut tampered = valid.clone();
+        tampered.mountpoint = PathBuf::from("/");
+        assert!(validate_intel_rdt_record(&tampered, "container-rdt").is_err());
+
+        let mut tampered = valid.clone();
+        tampered.control_group = PathBuf::from("/sys/fs/resctrl/shared/container-rdt");
+        assert!(validate_intel_rdt_record(&tampered, "container-rdt").is_err());
+
+        let mut tampered = valid.clone();
+        tampered.control_group = PathBuf::from("/sys/fs/resctrl/unrelated");
+        assert!(validate_intel_rdt_record(&tampered, "container-rdt").is_err());
+
+        let mut tampered = valid;
+        tampered.monitoring_group = Some(PathBuf::from(
+            "/sys/fs/resctrl/container-rdt/mon_groups/another-container",
+        ));
+        assert!(validate_intel_rdt_record(&tampered, "container-rdt").is_err());
+    }
+
+    #[test]
+    fn intel_rdt_recovery_removes_monitoring_before_owned_control_and_retries() {
+        let temporary = tempfile::tempdir().expect("temporary resctrl fixture");
+        let mountpoint = temporary.path().join("resctrl");
+        let control_group = mountpoint.join("container-rdt");
+        let monitoring_parent = control_group.join("mon_groups");
+        let monitoring_group = monitoring_parent.join("container-rdt");
+        std::fs::create_dir_all(&monitoring_group).expect("monitoring group");
+        let record = RecoveryIntelRdtRecord {
+            mountpoint,
+            control_group: control_group.clone(),
+            remove_control_group: true,
+            monitoring_group: Some(monitoring_group.clone()),
+        };
+        let mountinfo = format!(
+            "30 23 0:27 / {} rw - resctrl resctrl rw\n",
+            record.mountpoint.display()
+        );
+
+        let error = cleanup_intel_rdt_with_mountinfo(&record, "container-rdt", &mountinfo)
+            .expect_err("ordinary fixture still contains the virtual mon_groups parent");
+        assert_eq!(error.code, ErrorCode::Internal);
+        assert!(!monitoring_group.exists());
+        assert!(control_group.exists());
+
+        std::fs::remove_dir(&monitoring_parent).expect("remove fixture monitoring parent");
+        cleanup_intel_rdt_with_mountinfo(&record, "container-rdt", &mountinfo)
+            .expect("retry resctrl cleanup");
+        assert!(!control_group.exists());
     }
 
     #[test]
@@ -1370,6 +1679,7 @@ mod tests {
                     },
                     init,
                     cgroup: None,
+                    intel_rdt: None,
                 },
             )
             .expect("container recovery record");

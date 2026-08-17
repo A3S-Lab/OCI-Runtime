@@ -1522,6 +1522,13 @@ async fn reports_only_operations_that_are_currently_implemented() {
         .expect("seccomp actions")
         .contains(&LinuxSeccompAction::ScmpActNotify));
     assert_eq!(seccomp.supported_flags().as_deref(), Some([].as_slice()));
+    let intel_rdt = linux
+        .intel_rdt()
+        .as_ref()
+        .expect("Intel RDT feature report");
+    assert_eq!(*intel_rdt.enabled(), Some(true));
+    assert_eq!(*intel_rdt.schemata(), Some(true));
+    assert_eq!(*intel_rdt.monitoring(), Some(true));
     let memory_policy = linux
         .memory_policy()
         .as_ref()

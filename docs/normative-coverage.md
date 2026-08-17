@@ -34,9 +34,9 @@ The v1.3.0 corpus currently contains 764 entries:
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
 | `validated` | 25 | Exact semantic and bundle-validation rules with positive and negative SDK tests |
-| `enforced` | 247 | Root `config.json` placement and read-only-root enforcement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; non-terminal `consoleSize` ignore semantics and terminal `consoleSize` PTY initialization; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, ID-mapped mounts, unknown filesystem-option pass-through, and accurate mount-option feature reporting; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; OCI `oomScoreAdj`, scheduler, I/O-priority, init personality, init NUMA memory-policy, and exec CPU-affinity semantics; accurate seven-mode and three-flag memory-policy feature reporting; and bounded transactional application of namespaced Linux sysctls enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
+| `enforced` | 283 | Root `config.json` placement and read-only-root enforcement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; non-terminal `consoleSize` ignore semantics and terminal `consoleSize` PTY initialization; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, ID-mapped mounts, unknown filesystem-option pass-through, and accurate mount-option feature reporting; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; OCI `oomScoreAdj`, scheduler, I/O-priority, init personality, init NUMA memory-policy, Intel RDT, and exec CPU-affinity semantics; accurate memory-policy and Intel RDT feature reporting; and bounded transactional application of namespaced Linux sysctls enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
 | `conformant` | 2 | The optional `tmpcopyup` entries are satisfied by typed rejection and exclusion from feature reporting; this is an explicit optional omission, not an implementation claim |
-| `pending-review` | 381 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `pending-review` | 345 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
@@ -63,6 +63,15 @@ credential reduction and seccomp, immediately reads the complete policy back,
 and performs no syscall when the field is omitted. Native Linux, HVF, and WHPX
 fixtures verify `MPOL_BIND` with `MPOL_F_STATIC_NODES` on node 0 from inside
 the workload.
+
+All 32 OCI Linux Intel RDT configuration entries and four feature-report
+entries are owner-bound. The SDK bounds safe CLOS names and schemata input;
+the runtime parent applies ordered schemata with read-back, assigns the exact
+init PID to control and monitoring tasks, preserves explicit CLOS ownership,
+and removes runtime-owned CLOS and monitoring paths during normal and
+owner-death cleanup. Feature discovery reports the implemented Intel RDT,
+schemata, and monitoring boundary. Real CAT/MBA hardware qualification remains
+a release gate rather than a prerequisite for the enforcement classification.
 
 Read-only rootfs handling is bound to planning, namespace-safety rejection,
 and real workload write rejection. The same planning boundary proves that OCI
