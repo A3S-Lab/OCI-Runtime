@@ -592,10 +592,15 @@ fn rejects_deprecated_intel_rdt_monitoring_fields() {
         config["linux"] = serde_json::json!({"intelRdt": {}});
         config["linux"]["intelRdt"][field] = serde_json::json!(true);
         let config = serde_json::to_string(&config).expect("encode legacy Intel RDT config");
-        let error = InitPlan::from_bundle(&bundle(&config), &null_io())
-            .expect_err("deprecated Intel RDT fields must fail closed");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains(&format!("linux.intelRdt.{field}")));
+        let error = OciBundle::from_json(
+            std::env::current_dir()
+                .expect("current directory")
+                .join("bootstrap-test-bundle"),
+            &config,
+        )
+        .expect_err("deprecated Intel RDT fields must fail closed");
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error.message.contains(field));
     }
 }
 
