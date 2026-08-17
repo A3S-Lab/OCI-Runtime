@@ -9,11 +9,13 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 use super::{network_error, NetworkDevicePlan};
 
 mod protocol;
+mod snapshot;
 
 use protocol::{
-    dump_request, move_request, parse_acknowledgement, parse_address, parse_link,
+    address_request, dump_request, move_request, parse_acknowledgement, parse_address, parse_link,
     parse_netlink_messages,
 };
+use snapshot::{verify_snapshot, AddressSnapshot, LinkSnapshot};
 
 const NETLINK_ROUTE: libc::c_int = 0;
 const NETLINK_HEADER_BYTES: usize = 16;
@@ -31,6 +33,8 @@ const NLM_F_ACK: u16 = 0x0004;
 const NLM_F_DUMP_INTR: u16 = 0x0010;
 const NLM_F_ROOT: u16 = 0x0100;
 const NLM_F_MATCH: u16 = 0x0200;
+const NLM_F_EXCL: u16 = 0x0200;
+const NLM_F_CREATE: u16 = 0x0400;
 const NLM_F_DUMP: u16 = NLM_F_ROOT | NLM_F_MATCH;
 const NLMSG_ERROR: u16 = 0x0002;
 const NLMSG_DONE: u16 = 0x0003;
@@ -69,10 +73,6 @@ const VOLATILE_ADDRESS_FLAGS: u32 =
     IFA_F_OPTIMISTIC | IFA_F_DADFAILED | IFA_F_DEPRECATED | IFA_F_TENTATIVE;
 const RT_SCOPE_UNIVERSE: u8 = 0;
 
-const IFF_LOWER_UP: u32 = 1 << 16;
-const IFF_DORMANT: u32 = 1 << 17;
-const VOLATILE_LINK_FLAGS: u32 = libc::IFF_RUNNING as u32 | IFF_LOWER_UP | IFF_DORMANT;
-
 // IFLA_QDISC is kernel-managed status state: bringing a device up can replace
 // `noop` with `noqueue` even when no qdisc configuration was requested.
 const STABLE_LINK_ATTRIBUTES: [u16; 12] = [
@@ -103,38 +103,6 @@ struct NetlinkAddress {
     padding: u16,
     port_id: u32,
     groups: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LinkSnapshot {
-    index: i32,
-    name: String,
-    link_type: u16,
-    flags: u32,
-    attributes: BTreeMap<u16, Vec<u8>>,
-    addresses: Vec<AddressSnapshot>,
-}
-
-impl LinkSnapshot {
-    fn is_up(&self) -> bool {
-        self.flags & libc::IFF_UP as u32 != 0
-    }
-
-    fn master(&self) -> Option<u32> {
-        self.attributes
-            .get(&IFLA_MASTER)
-            .and_then(|value| value.get(..4))
-            .map(|value| u32::from_ne_bytes(value.try_into().expect("four-byte slice")))
-            .filter(|master| *master != 0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AddressSnapshot {
-    family: u8,
-    prefix_length: u8,
-    flags: u32,
-    attributes: BTreeMap<u16, Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -365,6 +333,27 @@ fn verify_applied(state: &RollbackState) -> Result<()> {
                 )
             })?;
         verify_target_name(moved, actual)?;
+        restore_permanent_global_addresses(
+            &mut socket,
+            actual.index,
+            &actual.addresses,
+            &moved.before.addresses,
+        )?;
+    }
+    let links = socket.snapshots()?;
+    for moved in &state.devices {
+        let actual = links
+            .values()
+            .find(|link| link.index == moved.before.index)
+            .ok_or_else(|| {
+                netlink_error(
+                    ErrorCode::FailedPrecondition,
+                    format!(
+                        "moved network interface index {} disappeared after restoring its addresses",
+                        moved.before.index
+                    ),
+                )
+            })?;
         verify_snapshot(
             &moved.before,
             actual,
@@ -453,6 +442,19 @@ fn rollback_sync(state: &RollbackState) -> Result<()> {
     let mut source_socket = RouteSocket::open()?;
     let restored = source_socket.snapshots()?;
     for moved in &state.devices {
+        if let Some(actual) = restored.get(&moved.before.name) {
+            if let Err(error) = restore_permanent_global_addresses(
+                &mut source_socket,
+                actual.index,
+                &actual.addresses,
+                &moved.before.addresses,
+            ) {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    let restored = source_socket.snapshots()?;
+    for moved in &state.devices {
         match restored.get(&moved.before.name) {
             Some(actual) => {
                 if let Err(error) = verify_snapshot(
@@ -483,62 +485,16 @@ fn rollback_sync(state: &RollbackState) -> Result<()> {
     }
 }
 
-fn verify_snapshot(
-    before: &LinkSnapshot,
-    actual: &LinkSnapshot,
-    expected_up: bool,
-    phase: &str,
+fn restore_permanent_global_addresses(
+    socket: &mut RouteSocket,
+    index: i32,
+    actual: &[AddressSnapshot],
+    expected: &[AddressSnapshot],
 ) -> Result<()> {
-    let stable_mask = !(VOLATILE_LINK_FLAGS | libc::IFF_UP as u32);
-    let before_flags = before.flags & stable_mask;
-    let actual_flags = actual.flags & stable_mask;
-    let changed_attributes = before
-        .attributes
-        .keys()
-        .chain(actual.attributes.keys())
-        .copied()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter(|kind| before.attributes.get(kind) != actual.attributes.get(kind))
-        .collect::<Vec<_>>();
-    let address_mismatch = before
-        .addresses
-        .iter()
-        .zip(&actual.addresses)
-        .position(|(expected, observed)| expected != observed)
-        .or_else(|| {
-            (before.addresses.len() != actual.addresses.len())
-                .then_some(before.addresses.len().min(actual.addresses.len()))
-        });
-    let address_difference = address_mismatch.map(|index| {
-        format!(
-            "{:?}->{:?}",
-            before.addresses.get(index),
-            actual.addresses.get(index)
-        )
-    });
-    if before.index != actual.index
-        || before.link_type != actual.link_type
-        || before_flags != actual_flags
-        || actual.is_up() != expected_up
-        || !changed_attributes.is_empty()
-        || address_mismatch.is_some()
-    {
-        return Err(netlink_error(
-            ErrorCode::FailedPrecondition,
-            format!(
-                "network interface `{}` did not preserve its identity, link attributes, and permanent global addresses {phase}: index {}->{}, type {}->{}, stable flags {before_flags:#x}->{actual_flags:#x}, up {}->{}, changed attributes {changed_attributes:?}, permanent global address counts {}->{} with first mismatch {address_difference:?}",
-                before.name,
-                before.index,
-                actual.index,
-                before.link_type,
-                actual.link_type,
-                before.is_up(),
-                actual.is_up(),
-                before.addresses.len(),
-                actual.addresses.len(),
-            ),
-        ));
+    for address in expected {
+        if !actual.contains(address) {
+            socket.add_address(index, address)?;
+        }
     }
     Ok(())
 }
@@ -680,6 +636,13 @@ impl RouteSocket {
         let sequence = self.next_sequence()?;
         let request = move_request(index, target_namespace, target_name, up, sequence)?;
         self.send(&request, "move Linux network interface")?;
+        self.receive_acknowledgement(sequence)
+    }
+
+    fn add_address(&mut self, index: i32, address: &AddressSnapshot) -> Result<()> {
+        let sequence = self.next_sequence()?;
+        let request = address_request(index, address, sequence)?;
+        self.send(&request, "restore Linux network-interface address")?;
         self.receive_acknowledgement(sequence)
     }
 

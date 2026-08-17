@@ -152,6 +152,43 @@ pub(super) fn move_request(
     Ok(request)
 }
 
+pub(super) fn address_request(
+    index: i32,
+    address: &AddressSnapshot,
+    sequence: u32,
+) -> Result<Vec<u8>> {
+    let index = u32::try_from(index).map_err(|error| {
+        netlink_error(
+            ErrorCode::InvalidArgument,
+            format!("network-address interface index is invalid: {error}"),
+        )
+    })?;
+    if index == 0 {
+        return Err(netlink_error(
+            ErrorCode::InvalidArgument,
+            "network-address interface index must be positive",
+        ));
+    }
+    let mut request = vec![0_u8; NETLINK_HEADER_BYTES + INTERFACE_ADDRESS_BYTES];
+    request[NETLINK_HEADER_BYTES] = address.family;
+    request[NETLINK_HEADER_BYTES + 1] = address.prefix_length;
+    request[NETLINK_HEADER_BYTES + 2] = address.flags as u8;
+    request[NETLINK_HEADER_BYTES + 3] = RT_SCOPE_UNIVERSE;
+    request[NETLINK_HEADER_BYTES + 4..NETLINK_HEADER_BYTES + 8]
+        .copy_from_slice(&index.to_ne_bytes());
+    for (kind, value) in &address.attributes {
+        append_attribute(&mut request, *kind, value)?;
+    }
+    append_attribute(&mut request, IFA_FLAGS, &address.flags.to_ne_bytes())?;
+    write_header(
+        &mut request,
+        libc::RTM_NEWADDR,
+        NLM_F_REQUEST | NLM_F_ACK | NLM_F_EXCL | NLM_F_CREATE,
+        sequence,
+    )?;
+    Ok(request)
+}
+
 fn write_header(request: &mut [u8], message_type: u16, flags: u16, sequence: u32) -> Result<()> {
     if request.len() < NETLINK_HEADER_BYTES {
         return Err(netlink_error(
@@ -372,6 +409,35 @@ mod tests {
             23
         );
         assert_eq!(attributes[&IFLA_IFNAME], b"eth%d\0");
+    }
+
+    #[test]
+    fn address_request_recreates_the_complete_permanent_global_address() {
+        let address = AddressSnapshot {
+            family: libc::AF_INET as u8,
+            prefix_length: 24,
+            flags: IFA_F_PERMANENT,
+            attributes: BTreeMap::from([
+                (IFA_ADDRESS, vec![192, 0, 2, 10]),
+                (IFA_LOCAL, vec![192, 0, 2, 10]),
+            ]),
+        };
+        let request = address_request(17, &address, 11).expect("address request");
+        assert_eq!(
+            u16::from_ne_bytes(request[4..6].try_into().unwrap()),
+            libc::RTM_NEWADDR
+        );
+        assert_eq!(request[NETLINK_HEADER_BYTES], libc::AF_INET as u8);
+        assert_eq!(request[NETLINK_HEADER_BYTES + 1], 24);
+        assert_eq!(request[NETLINK_HEADER_BYTES + 2], IFA_F_PERMANENT as u8);
+        assert_eq!(u32::from_ne_bytes(request[20..24].try_into().unwrap()), 17);
+        let attributes = parse_attributes(&request[24..]).expect("parse address attributes");
+        assert_eq!(attributes[&IFA_ADDRESS], [192, 0, 2, 10]);
+        assert_eq!(attributes[&IFA_LOCAL], [192, 0, 2, 10]);
+        assert_eq!(
+            u32::from_ne_bytes(attributes[&IFA_FLAGS][..4].try_into().unwrap()),
+            IFA_F_PERMANENT
+        );
     }
 
     #[test]
