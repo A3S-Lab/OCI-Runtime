@@ -234,12 +234,11 @@ impl Retrieve for EmbeddedImageSchemaRetriever {
 
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
-
     use super::{
         initialize, parse_stop_signal, IMAGE_CONFIG_SCHEMA, IMAGE_DEFINITIONS_SCHEMA,
         OCI_IMAGE_SPEC_COMMIT, OCI_IMAGE_SPEC_VERSION,
     };
+    use crate::conformance::canonical_text_sha256;
 
     const CONFIG_SOURCE: &str = include_str!("../../../vendor/image-spec/v1.1.0-rc2/config.md");
     const CONVERSION_SOURCE: &str =
@@ -255,20 +254,20 @@ mod tests {
             "19a74bcb54ba211005a68d85c6b359c2947721ce"
         );
         assert_eq!(
-            sha256(CONFIG_SOURCE),
-            "fac2d89de4130d18d393d4539c4db4827f16cba6d1f893fb743351b4595bc740"
+            canonical_text_sha256(CONFIG_SOURCE),
+            "sha256:fac2d89de4130d18d393d4539c4db4827f16cba6d1f893fb743351b4595bc740"
         );
         assert_eq!(
-            sha256(CONVERSION_SOURCE),
-            "e3dc948043dc9ec16d4ca818d3af954377e48c9eb353ac554200480a953148ed"
+            canonical_text_sha256(CONVERSION_SOURCE),
+            "sha256:e3dc948043dc9ec16d4ca818d3af954377e48c9eb353ac554200480a953148ed"
         );
         assert_eq!(
-            sha256(IMAGE_CONFIG_SCHEMA),
-            "ddf035e2512daed6d501add9e69caeb187a2203a4595e994b03ff7cc203ee7bd"
+            canonical_text_sha256(IMAGE_CONFIG_SCHEMA),
+            "sha256:ddf035e2512daed6d501add9e69caeb187a2203a4595e994b03ff7cc203ee7bd"
         );
         assert_eq!(
-            sha256(IMAGE_DEFINITIONS_SCHEMA),
-            "35246f51344bcb4e2cf30f968e234a4ae8dbd916ff1a3c490fe53c0b2518b82c"
+            canonical_text_sha256(IMAGE_DEFINITIONS_SCHEMA),
+            "sha256:35246f51344bcb4e2cf30f968e234a4ae8dbd916ff1a3c490fe53c0b2518b82c"
         );
         assert!(RUNTIME_CONFIG_SOURCE.contains(
             "https://github.com/opencontainers/image-spec/blob/v1.1.0-rc2/config.md#properties"
@@ -303,9 +302,5 @@ mod tests {
         ] {
             assert_eq!(parse_stop_signal(invalid), None, "{invalid}");
         }
-    }
-
-    fn sha256(source: &str) -> String {
-        format!("{:x}", Sha256::digest(source.as_bytes()))
     }
 }
