@@ -107,6 +107,18 @@ and `experimental` or `supported` readiness.
 | A3S Box consumer | Public-SDK-only lifecycle and attachments; pause/resume; process and filesystem sessions; exact live inventory, normalized stats, bounded ordered events, and replay-safe complete resource updates; explicit Native Linux Sandbox production routing and real-host SDK composition pass, while default and cross-platform cutover remain open |
 | Retained evidence | Schema and normative locks, 189-pair authenticated protocol fault coverage, portable nine-stage Create/State/Start/Kill/Delete/Wait/Exec/SignalProcess/WaitProcess/Pause/Resume/Processes/Update/Stats/ReadOutput/WriteStdin/CloseStdin/Resize/File/Filesystem host reopen with exact post-commit acknowledgement, real-HVF nine-stage Host/Guest Create plus two-stage Host shutdown interruption and cleanup, all nine real-HVF Create, State, Start, Kill, Delete, Wait, Exec, SignalProcess, WaitProcess, Pause, Resume, Processes, Update, Stats, ReadOutput, WriteStdin, CloseStdin, Resize, File, and Filesystem transitions through durable service reopen and VM/session-owner replacement, a real protocol-v10 Apple Silicon Guest boot, native Linux real-container with distinct exact init/exec capability, `NoNewPrivs`, rlimit, OOM-score, I/O-priority, scheduler, init personality, init NUMA memory policy, exec CPU-affinity, and namespaced-sysctl read-back, rootless default-device and device-policy gates, soak, owner-death safe-termination, and three consecutive same-Host live containerd 2.2 lifecycle/restart/I/O matrices with deleted exec-ID reuse, post-commit guest-journal reclamation, and committed WriteStdin/CloseStdin/SignalProcess/ResizePty shim-replacement gates, fresh-VM HVF soak, and WHPX nominal plus owner-death/service-restart qualification |
 
+OCI 1.3 `linux.netDevices` is implemented by the shared Linux executor. The
+runtime validates a bounded deterministic move plan, requires a separate
+network namespace, rejects exact target-name collisions, supports appended
+`%d` templates, preserves stable link attributes and permanent global
+addresses, and brings each moved interface up. A failed Create rolls earlier
+moves back in reverse order; the rollback lease is released only after the
+created state is durably committed. Rootless execution rejects the request
+before mutation because the current helper contract does not grant host
+network-device authority. The Native Linux gate uses real dummy interfaces to
+exercise move, rename, address/MTU/MAC preservation, target conflict, partial
+rollback, rootless rejection, and cleanup.
+
 The current Box adapter at `A3S-Lab/Box@a16772c3` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
 stat/mkdir/move/list/remove now use the same cross-platform session facade;
@@ -464,9 +476,9 @@ The repository turns release claims into checked inventories:
 | --- | ---: |
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
-| Typed semantic validation rules | 86 |
-| Owner-bound non-semantic rules | 70 |
-| OCI normative dispositions | 302 enforced · 45 validated · 2 conformant · 306 pending review |
+| Typed semantic validation rules | 88 |
+| Owner-bound non-semantic rules | 74 |
+| OCI normative dispositions | 312 enforced · 45 validated · 2 conformant · 296 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |

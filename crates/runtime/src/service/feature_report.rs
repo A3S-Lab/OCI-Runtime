@@ -152,7 +152,7 @@ fn compiled_linux_features() -> Result<LinuxFeature> {
         .build()
         .map_err(feature_build_error)?;
     let net_devices = NetDevicesBuilder::default()
-        .enabled(false)
+        .enabled(true)
         .build()
         .map_err(feature_build_error)?;
     let memory_policy = MemoryPolicyBuilder::default()

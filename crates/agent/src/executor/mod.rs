@@ -19,6 +19,7 @@ mod mount;
 #[cfg(test)]
 mod mount_tests;
 mod namespace;
+mod network_device;
 mod no_new_privileges;
 mod oom;
 mod personality;
@@ -701,6 +702,12 @@ impl LinuxExecutor {
             {
                 plan.devices.validate_rootless_device_support()?;
             }
+            if !plan.network_devices.is_empty() {
+                return Err(executor_error(
+                    ErrorCode::Unsupported,
+                    "rootless linux.netDevices requires network-device authority in the runtime user namespace",
+                ));
+            }
         }
         let hook_state = HookStateTemplate::new(
             plan.oci_version.clone(),
@@ -804,6 +811,7 @@ impl LinuxExecutor {
             if let Err(error) =
                 remove_container_directory(&self.device_source_root, &device_source_directory).await
             {
+                let _ = process.rollback_network_devices().await;
                 let _ = process.force_stop().await;
                 let _ = process.cleanup_intel_rdt();
                 if cleanup_device_targets(&runtime_directory).is_ok() {
@@ -825,6 +833,7 @@ impl LinuxExecutor {
             )
             .await
             {
+                let _ = process.rollback_network_devices().await;
                 let _ = process.force_stop().await;
                 let _ = process.cleanup_intel_rdt();
                 if cleanup_device_targets(&runtime_directory).is_ok() {
@@ -834,12 +843,25 @@ impl LinuxExecutor {
                 return Err(error);
             }
         }
-        let response = AgentState::new(
+        let response = match AgentState::new(
             request.target.clone(),
             ContainerState::Created,
             Some(process.pid()),
             request.bundle.config_digest(),
-        )?;
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                let _ = process.rollback_network_devices().await;
+                let _ = process.force_stop().await;
+                let _ = process.cleanup_intel_rdt();
+                if cleanup_device_targets(&runtime_directory).is_ok() {
+                    let _ =
+                        remove_container_directory(&self.runtime_root, &runtime_directory).await;
+                }
+                return Err(error);
+            }
+        };
+        process.commit_network_devices();
         state
             .highest_generations
             .insert(key.id.clone(), key.generation);

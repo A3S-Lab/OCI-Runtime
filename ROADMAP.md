@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 306-entry pending normative evidence backlog.
+- [ ] Close the 296-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -1431,6 +1431,19 @@ leak. Only then may KVM become `experimental`.
   mutation, and apply bounded deterministic writes through retained procfs.
   Verify every value, reverse all prior writes when Create fails before ready,
   and retain native x86_64/aarch64 IPC and network read-back evidence.
+- [x] Implement OCI 1.3 `linux.netDevices` in the runtime-namespace parent.
+  Validate a bounded source-sorted plan and an independent network namespace;
+  reject missing sources, exact target collisions, loopback devices, and
+  master-attached interfaces; support appended `%d` name templates; move
+  interfaces through retained namespace descriptors; preserve stable link
+  attributes and permanent global addresses; and bring every moved interface
+  up. Retain reverse-order failed-Create rollback until the created state is
+  durably committed, reject rootless requests before mutation without explicit
+  network-device authority, and advertise `linux.netDevices.enabled=true` from
+  the same implementation. Native Linux qualification covers real dummy-device
+  move/rename, MTU/MAC/address/state read-back, conflict, partial rollback,
+  rootless rejection, and cleanup. Ten OCI requirements are owner-bound,
+  leaving 312 enforced and 296 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

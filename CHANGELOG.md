@@ -6,6 +6,25 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI 1.3 `linux.netDevices` support in the shared Linux executor. The SDK and
+  executor validate bounded interface names, appended `%d` templates, exact
+  target uniqueness, deterministic source order, and a distinct network
+  namespace before mutation. The runtime-namespace parent authenticates the
+  prepared init PID, duplicates its retained network namespace, and uses a
+  disposable OS thread plus bounded route-netlink messages to preflight and
+  move each source. Exact target collisions fail, template names are assigned
+  by the kernel, stable link attributes and permanent global addresses are
+  checked after the move, and every interface is brought up. Earlier moves are
+  rolled back in reverse order if Create fails before the created state is
+  durably committed; normal delete leaves post-commit interface lifecycle to
+  the network-namespace owner. Rootless requests fail before mutation without
+  explicit host network-device authority. OCI Features now reports
+  `linux.netDevices.enabled=true`. The Native Linux gate installs `iproute2`
+  and exercises real dummy-interface move/rename with MTU, MAC, address, and
+  state read-back, exact target conflict, partial-failure rollback, rootless
+  rejection, and exit-path cleanup. Four owner-bound enforcement rules promote
+  ten requirements, leaving 312 enforced, 45 validated, two conformant, and
+  296 pending entries.
 - Complete OCI cgroup v2 CPU-control mapping in the shared Linux executor.
   Create and live Update now apply `shares`, `quota`, `burst`, `period`,
   `cpus`, `mems`, and `idle`; quota and period may be supplied independently,

@@ -104,6 +104,37 @@ fn plans_namespaced_sysctls_and_rejects_alias_collisions() {
 }
 
 #[test]
+fn plans_linux_network_devices_in_deterministic_source_order() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["linux"] = serde_json::json!({
+        "namespaces": [{"type": "network"}],
+        "netDevices": {
+            "veth-z": {},
+            "veth-a": {"name": "eth%d"},
+            "veth-m": {"name": "lan0"}
+        }
+    });
+    let encoded = serde_json::to_string(&config).expect("encode network-device config");
+    let plan =
+        InitPlan::from_bundle(&bundle(&encoded), &null_io()).expect("plan OCI network devices");
+
+    assert_eq!(plan.network_devices.len(), 3);
+    assert_eq!(
+        plan.network_devices
+            .entries()
+            .iter()
+            .map(|entry| (entry.host_name(), entry.container_name()))
+            .collect::<Vec<_>>(),
+        [
+            ("veth-a", "eth%d"),
+            ("veth-m", "lan0"),
+            ("veth-z", "veth-z"),
+        ]
+    );
+}
+
+#[test]
 fn plans_all_oci_hook_phases_instead_of_rejecting_the_configuration() {
     let mut config: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");

@@ -76,6 +76,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.features.mount-options.recognized",
         "runtime-feature-report",
     ),
+    OciNonSemanticRule::new(
+        "oci.linux.features.net-devices.accurate",
+        "runtime-feature-report",
+    ),
     OciNonSemanticRule::new("oci.linux.intel-rdt.clos-lifecycle", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.intel-rdt.monitoring-lifecycle", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.intel-rdt.omission-no-op", "linux-executor"),
@@ -103,6 +107,12 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.mount-options.optional-tmpcopyup",
         "linux-executor",
     ),
+    OciNonSemanticRule::new(
+        "oci.linux.net-device.attributes-preserved-and-up",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new("oci.linux.net-device.move-and-rename", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.net-device.target-conflict", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.linux.process.exec-cpu-affinity.applied-around-cgroup",
         "linux-executor",

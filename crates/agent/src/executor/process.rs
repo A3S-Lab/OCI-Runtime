@@ -30,6 +30,7 @@ use super::inherited_descriptor::InheritedDescriptorPlan;
 use super::intel_rdt::{IntelRdtHandle, IntelRdtRecovery};
 use super::io::ProcessIoHandle;
 use super::namespace::{self, RetainedExecutionContext, UserMappingRuntime};
+use super::network_device::NetworkDeviceLease;
 use super::pid;
 use super::pid_supervisor;
 use super::pidfd::{PidFd, SignalOutcome};
@@ -52,6 +53,7 @@ pub(super) struct PreparedProcess {
     seccomp: SeccompPlan,
     cgroup: Option<CgroupHandle>,
     intel_rdt: Option<IntelRdtHandle>,
+    network_devices: Option<NetworkDeviceLease>,
     io: ProcessIoHandle,
     exit_status: Option<ExitStatus>,
     hooks: HookSet,
@@ -454,6 +456,24 @@ impl PreparedProcess {
                     return Err(error);
                 }
             };
+        let network_devices = if plan.network_devices.is_empty() {
+            None
+        } else {
+            let target_namespace = match execution_context.duplicate_network_namespace() {
+                Ok(namespace) => namespace,
+                Err(error) => {
+                    cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
+                    return Err(error);
+                }
+            };
+            match NetworkDeviceLease::apply(&plan.network_devices, target_namespace).await {
+                Ok(lease) => lease,
+                Err(error) => {
+                    cleanup_failed_create(&mut child, &mut cgroup, &plan.hooks, hook_state).await;
+                    return Err(error);
+                }
+            }
+        };
         drop(listener);
 
         Ok(Self {
@@ -467,6 +487,7 @@ impl PreparedProcess {
             seccomp: plan.seccomp.clone(),
             cgroup,
             intel_rdt,
+            network_devices,
             io: process_io,
             exit_status: None,
             hooks: plan.hooks.clone(),
@@ -509,6 +530,19 @@ impl PreparedProcess {
         }
         self.intel_rdt.take();
         Ok(())
+    }
+
+    pub(super) async fn rollback_network_devices(&mut self) -> Result<()> {
+        match self.network_devices.take() {
+            Some(lease) => lease.rollback().await,
+            None => Ok(()),
+        }
+    }
+
+    pub(super) fn commit_network_devices(&mut self) {
+        if let Some(lease) = self.network_devices.take() {
+            lease.commit();
+        }
     }
 
     pub(super) async fn release(&mut self) -> Result<()> {

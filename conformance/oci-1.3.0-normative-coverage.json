@@ -8119,10 +8119,23 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`netDevices`** (object, OPTIONAL) - A set of network devices that MUST be made",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.container-name.valid",
+        "oci.linux.net-device.host-name.valid",
+        "oci.linux.net-device.move-and-rename",
+        "oci.linux.net-device.name.no-nul",
+        "oci.linux.net-device.requires-network-namespace",
+        "oci.linux.net-device.target.unique"
+      ],
+      "testIds": [
+        "semantic::tests::schema_good_net_device_fixture_still_requires_runtime_namespace_semantics",
+        "semantic::tests::validates_linux_network_device_names_templates_and_exact_targets",
+        "executor::network_device::tests::rejects_duplicate_exact_targets_and_unbounded_names",
+        "executor::plan_tests::plans_linux_network_devices_in_deterministic_source_order",
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup"
+      ]
     },
     {
       "id": "sha256:bba7de1f6b9b82d67d2f113c1b8302092ff88fd0da1e4e4fcb2c830e4acf02eb",
@@ -8133,10 +8146,23 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "**`netDevices`** (object, OPTIONAL) - A set of network devices that MUST be made",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.container-name.valid",
+        "oci.linux.net-device.host-name.valid",
+        "oci.linux.net-device.move-and-rename",
+        "oci.linux.net-device.name.no-nul",
+        "oci.linux.net-device.requires-network-namespace",
+        "oci.linux.net-device.target.unique"
+      ],
+      "testIds": [
+        "semantic::tests::schema_good_net_device_fixture_still_requires_runtime_namespace_semantics",
+        "semantic::tests::validates_linux_network_device_names_templates_and_exact_targets",
+        "executor::network_device::tests::rejects_duplicate_exact_targets_and_unbounded_names",
+        "executor::plan_tests::plans_linux_network_devices_in_deterministic_source_order",
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup"
+      ]
     },
     {
       "id": "sha256:97181949066c2ea865d9a139156d67f2558694026e6f3536cf7363aacadf5176",
@@ -8147,10 +8173,23 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`name`** *(string, OPTIONAL)* - the name of the network device inside the",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.container-name.valid",
+        "oci.linux.net-device.host-name.valid",
+        "oci.linux.net-device.move-and-rename",
+        "oci.linux.net-device.name.no-nul",
+        "oci.linux.net-device.requires-network-namespace",
+        "oci.linux.net-device.target.unique"
+      ],
+      "testIds": [
+        "semantic::tests::schema_good_net_device_fixture_still_requires_runtime_namespace_semantics",
+        "semantic::tests::validates_linux_network_device_names_templates_and_exact_targets",
+        "executor::network_device::tests::rejects_duplicate_exact_targets_and_unbounded_names",
+        "executor::plan_tests::plans_linux_network_devices_in_deterministic_source_order",
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup"
+      ]
     },
     {
       "id": "sha256:d6deb66ec841082a5fc8f7d052b199a6a77b18bf365c1ccdaad51f2f919373cb",
@@ -8161,10 +8200,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST check if moving the network interface to the container",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.target-conflict"
+      ],
+      "testIds": [
+        "executor::network_device::netlink::protocol::tests::netlink_frames_reject_truncation_and_preserve_kernel_errno",
+        ".github/scripts/native-linux-smoke.sh::net-devices-target-conflict"
+      ]
     },
     {
       "id": "sha256:81192a687af265614504b4acac8ed4d8702fdac95ac9b643651a59a04d9689e0",
@@ -8175,10 +8219,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "exists in the container namespace, the runtime MUST [generate an error](runtime.md#errors),",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.target-conflict"
+      ],
+      "testIds": [
+        "executor::network_device::netlink::protocol::tests::netlink_frames_reject_truncation_and_preserve_kernel_errno",
+        ".github/scripts/native-linux-smoke.sh::net-devices-target-conflict"
+      ]
     },
     {
       "id": "sha256:8c9acc27d58a60a93fb86fffd690c4d532b824949551b57a0e643652617476c8",
@@ -8189,10 +8238,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "`%d` to the new name. In that case, the runtime MUST allow the move, and the",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.move-and-rename",
+        "oci.linux.net-device.target-template"
+      ],
+      "testIds": [
+        "executor::network_device::tests::normalizes_empty_names_and_accepts_only_appended_templates",
+        "executor::network_device::netlink::protocol::tests::move_request_sets_namespace_name_and_only_the_up_flag",
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup"
+      ]
     },
     {
       "id": "sha256:3c1a0e5d6496af6c4d1d70c082bbeb21792f68fd290545af467b219bb006cdc8",
@@ -8203,10 +8259,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST preserve existing network interface attributes, including all",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.attributes-preserved-and-up"
+      ],
+      "testIds": [
+        "executor::network_device::netlink::protocol::tests::parses_link_identity_and_only_permanent_global_addresses",
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup",
+        ".github/scripts/native-linux-smoke.sh::net-devices-partial-failure-rollback"
+      ]
     },
     {
       "id": "sha256:8ec7a78b4e850e4147025bf6fb83260f34989d1698699999d4b397350e1aca9d",
@@ -8217,10 +8279,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST set the network device state to \"up\" after moving it to the",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.attributes-preserved-and-up"
+      ],
+      "testIds": [
+        "executor::network_device::netlink::protocol::tests::parses_link_identity_and_only_permanent_global_addresses",
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup",
+        ".github/scripts/native-linux-smoke.sh::net-devices-partial-failure-rollback"
+      ]
     },
     {
       "id": "sha256:b1119cffcca4882c513efab2d3bc7356b8ca3093b651fb785ddaa7063d84817b",
@@ -13519,10 +13587,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`netDevices`** (object, OPTIONAL) represents the runtime's implementation status of Linux network devices.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.net-devices.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:7c9f19cf67a42ce68a9a3ec9ee28b531ff9cf661262511232c61ce3830691341",
@@ -13533,10 +13605,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`enabled`** (bool, OPTIONAL) represents whether the runtime supports the capability to move Linux network devices into the container's network namespace.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.net-devices.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:3e8c5dc22624f346ceb6d082f275174eade02a53637a1b1d256a835901881c34",

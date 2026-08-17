@@ -1550,6 +1550,11 @@ async fn reports_only_operations_that_are_currently_implemented() {
     assert_eq!(*intel_rdt.enabled(), Some(true));
     assert_eq!(*intel_rdt.schemata(), Some(true));
     assert_eq!(*intel_rdt.monitoring(), Some(true));
+    let net_devices = linux
+        .net_devices()
+        .as_ref()
+        .expect("network-device feature report");
+    assert_eq!(*net_devices.enabled(), Some(true));
     let memory_policy = linux
         .memory_policy()
         .as_ref()
