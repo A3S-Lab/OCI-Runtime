@@ -675,6 +675,12 @@ impl LinuxExecutor {
                     "rootless native execution cannot apply process.user.additionalGids after setgroups=deny",
                 ));
             }
+            if !plan.network_devices.is_empty() {
+                return Err(executor_error(
+                    ErrorCode::Unsupported,
+                    "rootless linux.netDevices requires network-device authority in the runtime user namespace",
+                ));
+            }
             if plan.cgroup.has_cgroup() && self.rootless_cgroup_delegation.is_none() {
                 return Err(executor_error(
                     ErrorCode::Unsupported,
@@ -701,12 +707,6 @@ impl LinuxExecutor {
                     .is_some_and(RootlessCgroupDelegation::has_device_policy_authority)
             {
                 plan.devices.validate_rootless_device_support()?;
-            }
-            if !plan.network_devices.is_empty() {
-                return Err(executor_error(
-                    ErrorCode::Unsupported,
-                    "rootless linux.netDevices requires network-device authority in the runtime user namespace",
-                ));
             }
         }
         let hook_state = HookStateTemplate::new(
