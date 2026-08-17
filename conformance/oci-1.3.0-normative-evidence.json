@@ -1832,6 +1832,185 @@
       "testIds": [
         "service::tests::reports_only_operations_that_are_currently_implemented"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:47cb829045cfd30809e16ae28ad9c5eb6a4d59d18236ebffde8052f88c1bb7ad",
+        "sha256:0c785b79390e3bf067ac3c05f527b7f9ad2e32d7ba3df9c719edfb0ff519a4e1",
+        "sha256:5c901337fd8a39e48f55ca42c9dda60e11246b3bdc0e5e997fc782cfa2b0951e",
+        "sha256:db3060aa33c8dcd6480048a15bd4c0bf6411f34d98994d713d07ebe82fc01765"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.document.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_official_minimal_documents",
+        "schema::tests::matches_upstream_v1_3_fixture_expectations",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:9601375155c3dce78c2f0b50cda44117eb5215e0db8b312a7ac8cf0b0646e665",
+        "sha256:f71e28302daad6b4d4e1329380e5ac28e60e2e952b4d4e005886af7c53177d8e",
+        "sha256:ceba5cdf5a7920b74158d375fd9d83d0f7c0ec6ae44d5877f2e5a4ef101d49e0",
+        "sha256:01647d16cbedeb66fed3d5eaf8c449c82a48334023c3926a12f10456aaacc8cf",
+        "sha256:73a5ec0c1f4dbfee015ce938327f661a628283acdcc2058a9ed4aaf9bd407f5f"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.version-range"
+      ],
+      "testIds": [
+        "bundle::tests::accepts_both_advertised_specification_version_boundaries",
+        "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:ef5bcec07deb7beb4916eada00eb00af069a27c5c2f705ac68571e8813057196",
+        "sha256:2fac1db60c505a4ea17a8d9e60d3d94e8ae6a8892af55bccf8542aff1763e8d6"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.hooks.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:f23a0af9cbf337f46d1845ddc42002b7026daa65aff1b25a06cf57aea9c244f8",
+        "sha256:ac104071bcd61449d2fb1952fdadc4c377a4467fc395345d7f680ca7cd603aa5"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.linux.available"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:65cdcced5ba736f283b715671a5bada388444c5d3f0d30277f7d4e26bfafd447",
+        "sha256:8e4167ee2344be8bb93aac20967c0e150c975d81bed0e54ea9d13dc16ffa1507"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.namespaces.recognized"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:948a4163a92c95496fb31c53a3c7d3e1f582c9f1cc426a71dd24b108a0938a7d",
+        "sha256:91dc5fec856015b1b5a5df7840c93cfcce0523310aa33b957dba9b9a7f01a3ac",
+        "sha256:afff8f105d3d2868a95de63053124fdf6c940b560efdc5075e438d40b350c52b",
+        "sha256:d2a207e39c7ff6fa0d6edfec0cd475b86f14d461864c2c8ba627cebc10b4bd5b",
+        "sha256:7f0088d831ee51a2b8c88a20b7f3fd48264a3fa271325ee7720b9d174999dfbf",
+        "sha256:e8bd5060dbfb2d5e6b1269db1dd0f7e6ac145374666185010b2c65145757d045"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.cgroup.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::plan_tests::rejects_unimplemented_cgroup_v2_resource_families"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:e08f82706d3f2729d83cbe414cb53be962e89e93dad3d32188eedf3e2f15bd95",
+        "sha256:3ccc4ae21099c558703f8eac9a281576e43e47d947188e6da79c250538463cf0",
+        "sha256:b77b78ab6d58abd53146af16ac9e20c5b554c35e352d07ba9f9d16e3c7387ea7",
+        "sha256:07d273375ed58caa6209a986de60af86d3c2ef6a6fcc97bc62e18647f0b7103c",
+        "sha256:cfe61033d2ad5228703f57991eebad4dc19f3d7be59ba8f2ec41a500e679bf34",
+        "sha256:2eea82bc6074da6aa563545149c2542926b30a1b966776de87f005ae47f534dc",
+        "sha256:3e3d19fc3d2e125aa8f1d1999ab2f9a7535e93a00d5d0ea741c712d05ffb1a5e",
+        "sha256:d1f87a7c0a172959b0b33f13acc5abbfee4049767d84e85c410992fd6d3c3365",
+        "sha256:b6ea3e33c9a1ced4f09019f645d3ef3ddc30e990929403f90a2fc3c816aa1bbb",
+        "sha256:00b957741da38ada629df2fa11973b1f63386dd9a266886c0ad091c38971a73c",
+        "sha256:43915837b2755211f916749d1db1a2afcf7b305d51bb61e028991f827f731acb",
+        "sha256:ab4836b8fa003886f4c2d5f6b33f154d0fedad17c56f6441d83c0bd4fe17eca5"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:6725b5aeca238f7e402e633d8aceaf2b29e2c8868bf5072768c79129f13fef22",
+        "sha256:02bdae507fd0fc01fe06a7dc68a4a8b37f38887d197c4485cb4ecab9b3d65d04"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.apparmor.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:8bddae79e0e696495264af3d3d5017018c105cba83e18ee2cd4217921a5b3a0c",
+        "sha256:7409a47e3d497e2fe76fd038443fa36764b3a28bf6f888fe351d53940d40509f"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.selinux.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:ebb34045315ea27e178cce95e2606032ef8a3cbaa826de097bfad62f6670a2c9",
+        "sha256:49da25a48ce852ec89d6593e23b8a6609551dffa55046dff8e99f4b47a40ca36",
+        "sha256:c8a0d8d860a5fd68ea5e99e27b9ca212496e93451931b44151b31b64fe9e2df2",
+        "sha256:08388ed749c9e44478749189ff840cde53d1b05ccc27b3e152b60e46335f1914"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-extensions.idmap"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement"
+      ]
     }
   ]
 }

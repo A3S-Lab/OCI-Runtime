@@ -14,7 +14,7 @@ use a3s_oci_core::{
     CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
 };
 use a3s_oci_sdk::oci_spec::runtime::{
-    Arch, ContainerState, LinuxNamespaceType, LinuxResources, LinuxSeccompAction, Process,
+    ContainerState, LinuxNamespaceType, LinuxResources, LinuxSeccompAction, Process,
 };
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, CloseStdinRequest, ContainerId, ContainerOperationRequest,
@@ -29,7 +29,8 @@ use a3s_oci_sdk::{
     TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
     ATTACHMENT_SCHEMA_V1, BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS,
     OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES,
-    OCI_LINUX_MOUNT_OPTIONS,
+    OCI_LINUX_MOUNT_OPTIONS, OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES,
+    OCI_LINUX_SECCOMP_KNOWN_FLAGS, OCI_LINUX_SECCOMP_OPERATORS,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -1522,6 +1523,9 @@ async fn reports_only_operations_that_are_currently_implemented() {
     let cgroup = linux.cgroup().as_ref().expect("cgroup feature report");
     assert_eq!(*cgroup.v1(), Some(false));
     assert_eq!(*cgroup.v2(), Some(true));
+    assert_eq!(*cgroup.systemd(), Some(false));
+    assert_eq!(*cgroup.systemd_user(), Some(false));
+    assert_eq!(*cgroup.rdma(), Some(false));
     let apparmor = linux.apparmor().as_ref().expect("apparmor feature report");
     assert_eq!(*apparmor.enabled(), Some(false));
     let selinux = linux.selinux().as_ref().expect("selinux feature report");
@@ -1529,20 +1533,39 @@ async fn reports_only_operations_that_are_currently_implemented() {
     let seccomp = linux.seccomp().as_ref().expect("seccomp feature report");
     assert_eq!(*seccomp.enabled(), Some(true));
     assert_eq!(
-        seccomp.archs().as_deref(),
-        Some([Arch::ScmpArchAarch64, Arch::ScmpArchX86_64].as_slice())
+        seccomp.actions().as_deref(),
+        Some(OCI_LINUX_SECCOMP_ACTIONS)
     );
-    assert!(seccomp
-        .actions()
-        .as_deref()
-        .expect("seccomp actions")
-        .contains(&LinuxSeccompAction::ScmpActKillProcess));
     assert!(!seccomp
         .actions()
         .as_deref()
         .expect("seccomp actions")
         .contains(&LinuxSeccompAction::ScmpActNotify));
+    assert_eq!(
+        seccomp.operators().as_deref(),
+        Some(
+            OCI_LINUX_SECCOMP_OPERATORS
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .as_slice()
+        )
+    );
     assert_eq!(seccomp.supported_flags().as_deref(), Some([].as_slice()));
+    assert_eq!(
+        seccomp.known_flags().as_deref(),
+        Some(
+            OCI_LINUX_SECCOMP_KNOWN_FLAGS
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .as_slice()
+        )
+    );
+    assert_eq!(
+        seccomp.archs().as_deref(),
+        Some(OCI_LINUX_SECCOMP_ARCHITECTURES)
+    );
     let intel_rdt = linux
         .intel_rdt()
         .as_ref()
@@ -1594,6 +1617,27 @@ async fn reports_only_operations_that_are_currently_implemented() {
         .expect("compile pinned schemas")
         .validate_features(&info.oci)
         .expect("runtime feature report must match the pinned OCI schema");
+}
+
+#[tokio::test]
+async fn advertised_oci_version_boundaries_are_accepted_as_bundle_versions() {
+    let info = HostRuntimeService::new()
+        .features()
+        .await
+        .expect("feature discovery must succeed");
+    let absolute = std::env::current_dir()
+        .expect("current directory")
+        .join("advertised-version-bundle");
+
+    for version in [info.oci.oci_version_min(), info.oci.oci_version_max()] {
+        OciBundle::from_json(
+            &absolute,
+            format!(r#"{{"ociVersion":"{version}","root":{{"path":"rootfs"}}}}"#),
+        )
+        .unwrap_or_else(|error| {
+            panic!("advertised OCI specification version {version} must be accepted: {error}")
+        });
+    }
 }
 
 #[tokio::test]
