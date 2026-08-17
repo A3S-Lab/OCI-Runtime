@@ -10,6 +10,8 @@ use a3s_oci_sdk::{
 
 use super::cgroup_error;
 
+pub(super) const DEFAULT_CPU_PERIOD_MICROS: u64 = 100_000;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 enum CgroupLayout {
     #[default]
@@ -33,7 +35,9 @@ pub(in crate::executor) struct CgroupPlan {
     memory_swap: Option<i64>,
     cpu_shares: Option<u64>,
     cpu_quota: Option<i64>,
+    cpu_burst: Option<u64>,
     cpu_period: Option<u64>,
+    cpu_idle: Option<i64>,
     cpuset_cpus: Option<String>,
     cpuset_mems: Option<String>,
     pids_limit: Option<i64>,
@@ -83,7 +87,9 @@ impl CgroupPlan {
             memory_swap: memory.and_then(|memory| memory.swap()),
             cpu_shares: cpu.and_then(|cpu| cpu.shares()),
             cpu_quota: cpu.and_then(|cpu| cpu.quota()),
+            cpu_burst: cpu.and_then(|cpu| cpu.burst()),
             cpu_period: cpu.and_then(|cpu| cpu.period()),
+            cpu_idle: cpu.and_then(|cpu| cpu.idle()),
             cpuset_cpus: cpu.and_then(|cpu| cpu.cpus().clone()),
             cpuset_mems: cpu.and_then(|cpu| cpu.mems().clone()),
             pids_limit: pids.map(|pids| pids.limit()),
@@ -145,10 +151,16 @@ impl CgroupPlan {
         if self.cpu_period.is_some_and(|value| value == 0) {
             return Err(invalid("linux.resources.cpu.period must be positive"));
         }
-        if self.cpu_quota.is_some() != self.cpu_period.is_some() {
+        if self.cpu_burst.is_some_and(|burst| {
+            self.cpu_quota
+                .is_some_and(|quota| quota > 0 && burst > quota as u64)
+        }) {
             return Err(invalid(
-                "linux.resources.cpu.quota and period must be specified together",
+                "linux.resources.cpu.burst must not exceed a positive CPU quota",
             ));
+        }
+        if self.cpu_idle.is_some_and(|value| !matches!(value, 0 | 1)) {
+            return Err(invalid("linux.resources.cpu.idle must be 0 or 1"));
         }
         for (field, value) in [
             ("linux.resources.cpu.cpus", self.cpuset_cpus.as_deref()),
@@ -204,7 +216,9 @@ impl CgroupPlan {
             };
             settings.push(("memory.swap.max", value));
         }
-        if let (Some(quota), Some(period)) = (self.cpu_quota, self.cpu_period) {
+        if self.cpu_quota.is_some() || self.cpu_period.is_some() {
+            let quota = self.cpu_quota.unwrap_or(-1);
+            let period = self.cpu_period.unwrap_or(DEFAULT_CPU_PERIOD_MICROS);
             let quota = if quota == -1 {
                 "max".to_string()
             } else {
@@ -212,8 +226,14 @@ impl CgroupPlan {
             };
             settings.push(("cpu.max", format!("{quota} {period}")));
         }
+        if let Some(burst) = self.cpu_burst {
+            settings.push(("cpu.max.burst", burst.to_string()));
+        }
         if let Some(shares) = self.cpu_shares {
             settings.push(("cpu.weight", shares_to_weight(shares).to_string()));
+        }
+        if let Some(idle) = self.cpu_idle {
+            settings.push(("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
             settings.push(("pids.max", value.to_string()));
@@ -247,6 +267,8 @@ impl CgroupPlan {
             .and_then(|value| value.checked_add(headroom.cpu_quota_micros))
             .ok_or_else(|| invalid("control-plane CPU envelope overflows i64"))
             .map(Some)?;
+        management.cpu_burst = None;
+        management.cpu_idle = None;
         management.pids_limit = self
             .pids_limit
             .and_then(|value| value.checked_add(headroom.pids))
@@ -270,7 +292,12 @@ impl CgroupPlan {
         {
             controllers.insert("memory");
         }
-        if self.cpu_shares.is_some() || self.cpu_quota.is_some() {
+        if self.cpu_shares.is_some()
+            || self.cpu_quota.is_some()
+            || self.cpu_burst.is_some()
+            || self.cpu_period.is_some()
+            || self.cpu_idle.is_some()
+        {
             controllers.insert("cpu");
         }
         if self.cpuset_cpus.is_some() || self.cpuset_mems.is_some() {
@@ -375,7 +402,10 @@ pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> 
     }
     for (name, allowed) in [
         ("memory", &["limit", "reservation", "swap"][..]),
-        ("cpu", &["shares", "quota", "period", "cpus", "mems"][..]),
+        (
+            "cpu",
+            &["shares", "quota", "burst", "period", "cpus", "mems", "idle"][..],
+        ),
         ("pids", &["limit"][..]),
     ] {
         if let Some(object) = object.get(name).and_then(serde_json::Value::as_object) {
@@ -450,6 +480,14 @@ mod tests {
             .expect("decode Linux cgroup path")
     }
 
+    fn linux_with_cpu(cpu: serde_json::Value) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "cpu/controls",
+            "resources": {"cpu": cpu}
+        }))
+        .expect("decode Linux CPU controls")
+    }
+
     #[test]
     fn preserves_absolute_and_relative_cgroup_path_identity() {
         let absolute = CgroupPlan::from_linux(
@@ -511,6 +549,75 @@ mod tests {
     }
 
     #[test]
+    fn plans_complete_cgroup_v2_cpu_controls() {
+        let plan = CgroupPlan::from_linux(
+            Some(&linux_with_cpu(serde_json::json!({
+                "shares": 1024,
+                "quota": 50000,
+                "burst": 10000,
+                "period": 100000,
+                "cpus": "0-1",
+                "mems": "0",
+                "idle": 1
+            }))),
+            &BTreeMap::new(),
+        )
+        .expect("complete cgroup v2 CPU plan");
+
+        assert_eq!(
+            plan.settings(),
+            [
+                ("cpuset.mems", "0".to_string()),
+                ("cpuset.cpus", "0-1".to_string()),
+                ("cpu.max", "50000 100000".to_string()),
+                ("cpu.max.burst", "10000".to_string()),
+                ("cpu.weight", "39".to_string()),
+                ("cpu.idle", "1".to_string()),
+            ]
+        );
+        assert_eq!(plan.required_controllers(), ["cpu", "cpuset"].into());
+    }
+
+    #[test]
+    fn preserves_independent_cpu_quota_and_period_requests() {
+        let quota = CgroupPlan::from_linux(
+            Some(&linux_with_cpu(serde_json::json!({"quota": 50000}))),
+            &BTreeMap::new(),
+        )
+        .expect("quota-only CPU plan");
+        assert_eq!(quota.settings(), [("cpu.max", "50000 100000".to_string())]);
+
+        let period = CgroupPlan::from_linux(
+            Some(&linux_with_cpu(serde_json::json!({"period": 200000}))),
+            &BTreeMap::new(),
+        )
+        .expect("period-only CPU plan");
+        assert_eq!(period.settings(), [("cpu.max", "max 200000".to_string())]);
+    }
+
+    #[test]
+    fn rejects_invalid_cpu_burst_idle_and_realtime_controls() {
+        for cpu in [
+            serde_json::json!({"quota": 10000, "burst": 10001}),
+            serde_json::json!({"idle": -1}),
+            serde_json::json!({"idle": 2}),
+        ] {
+            let error = CgroupPlan::from_linux(Some(&linux_with_cpu(cpu)), &BTreeMap::new())
+                .expect_err("invalid CPU control must fail planning");
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        }
+
+        for cpu in [
+            serde_json::json!({"realtimeRuntime": 1000}),
+            serde_json::json!({"realtimePeriod": 10000}),
+        ] {
+            let error = CgroupPlan::from_linux(Some(&linux_with_cpu(cpu)), &BTreeMap::new())
+                .expect_err("cgroup v1 realtime CPU control must fail planning");
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Unsupported);
+        }
+    }
+
+    #[test]
     fn derives_management_headroom_while_preserving_exact_workload_limits() {
         let annotations = BTreeMap::from([
             (
@@ -530,7 +637,11 @@ mod tests {
                 "16".to_string(),
             ),
         ]);
-        let plan = CgroupPlan::from_linux(Some(&fixture_linux()), &annotations)
+        let mut linux = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        linux["resources"]["cpu"]["burst"] = serde_json::json!(10_000);
+        linux["resources"]["cpu"]["idle"] = serde_json::json!(1);
+        let linux = serde_json::from_value(linux).expect("decode extended Linux fixture");
+        let plan = CgroupPlan::from_linux(Some(&linux), &annotations)
             .expect("control/workload cgroup plan");
         assert!(plan.uses_control_workload_layout());
         assert_eq!(
@@ -542,7 +653,9 @@ mod tests {
                 ("memory.low", "268435456".to_string()),
                 ("memory.swap.max", "536870912".to_string()),
                 ("cpu.max", "200000 100000".to_string()),
+                ("cpu.max.burst", "10000".to_string()),
                 ("cpu.weight", "39".to_string()),
+                ("cpu.idle", "1".to_string()),
                 ("pids.max", "512".to_string()),
             ]
         );

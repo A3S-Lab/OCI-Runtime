@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete OCI cgroup v2 CPU-control mapping in the shared Linux executor.
+  Create and live Update now apply `shares`, `quota`, `burst`, `period`,
+  `cpus`, `mems`, and `idle`; quota and period may be supplied independently,
+  with cgroup v2 defaults used at Create and current values preserved during
+  Update. Live quota/burst changes are ordered to avoid a transient invalid
+  kernel state, retain exact read-back and reverse rollback, and fail as
+  `Unsupported` when a requested control file is unavailable. The cgroup
+  v1-only realtime fields are rejected before mutation. In the opt-in
+  `control-workload-v1` layout, burst and idle remain exact workload-leaf
+  controls rather than being copied into the derived management envelope.
+  Rootful and rootless Native Linux gates now request both controls. Two
+  owner-bound executor rules and one idle semantic rule promote ten entries to
+  enforced and two to validated, leaving 302 enforced, 45 validated, two
+  conformant, and 306 pending entries.
 - Exact OCI Linux `cgroupsPath` semantics. One host-independent SDK parser
   rejects empty, traversing, ambiguous, overlong, control-character, and
   systemd-form paths before runtime mutation while preserving the absolute or

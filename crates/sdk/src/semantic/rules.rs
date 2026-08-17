@@ -66,6 +66,7 @@ define_rules! {
     CGROUP_PATH_SAFE => RuntimeConstraint, "oci.linux.cgroups-path.safe-path";
     CONTAINER_PATH_ABSOLUTE => Normative, "oci.linux.container-path.absolute";
     CPU_BURST_AT_MOST_QUOTA => Normative, "oci.linux.cpu.burst-at-most-quota";
+    CPU_IDLE_RANGE => Normative, "oci.linux.cpu.idle-range";
     CPU_REALTIME_RUNTIME_AT_MOST_PERIOD => RuntimeConstraint, "oci.linux.cpu.realtime-runtime-at-most-period";
     DEVICE_PATH_ABSOLUTE => RuntimeConstraint, "oci.linux.device.path.absolute";
     DOMAINNAME_REQUIRES_UTS_NAMESPACE => RuntimeConstraint, "oci.linux.domainname.requires-uts-namespace";

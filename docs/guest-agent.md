@@ -442,7 +442,8 @@ runtime applies it to `a3s-workload` with `memory.oom.group=0`, derives the
 outer memory, CPU, and PID envelope from the declared headroom, and sends all
 later OCI exec processes directly to the workload child. Live updates modify
 the derived outer envelope and exact workload settings in one rollback-safe
-transaction. Stats and freeze/thaw observe only the workload child, so memory
+transaction. CPU burst and idle are leaf scheduling controls and are never
+copied into the derived outer envelope. Stats and freeze/thaw observe only the workload child, so memory
 pressure cannot kill or freeze the trusted control transport. Cleanup removes
 both children and the complete owned topology.
 

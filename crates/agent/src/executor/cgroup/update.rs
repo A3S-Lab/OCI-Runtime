@@ -88,7 +88,9 @@ struct CgroupUpdatePlan {
     memory_swap: Option<i64>,
     cpu_shares: Option<u64>,
     cpu_quota: Option<i64>,
+    cpu_burst: Option<u64>,
     cpu_period: Option<u64>,
+    cpu_idle: Option<i64>,
     cpuset_cpus: Option<String>,
     cpuset_mems: Option<String>,
     pids_limit: Option<i64>,
@@ -106,7 +108,9 @@ impl CgroupUpdatePlan {
             memory_swap: memory.and_then(|memory| memory.swap()),
             cpu_shares: cpu.and_then(|cpu| cpu.shares()),
             cpu_quota: cpu.and_then(|cpu| cpu.quota()),
+            cpu_burst: cpu.and_then(|cpu| cpu.burst()),
             cpu_period: cpu.and_then(|cpu| cpu.period()),
+            cpu_idle: cpu.and_then(|cpu| cpu.idle()),
             cpuset_cpus: cpu.and_then(|cpu| cpu.cpus().clone()),
             cpuset_mems: cpu.and_then(|cpu| cpu.mems().clone()),
             pids_limit: pids.map(|pids| pids.limit()),
@@ -151,6 +155,17 @@ impl CgroupUpdatePlan {
             return Err(update_invalid(
                 "linux.resources.cpu.period must be positive",
             ));
+        }
+        if self.cpu_burst.is_some_and(|burst| {
+            self.cpu_quota
+                .is_some_and(|quota| quota > 0 && burst > quota as u64)
+        }) {
+            return Err(update_invalid(
+                "linux.resources.cpu.burst must not exceed a positive CPU quota",
+            ));
+        }
+        if self.cpu_idle.is_some_and(|value| !matches!(value, 0 | 1)) {
+            return Err(update_invalid("linux.resources.cpu.idle must be 0 or 1"));
         }
         for (field, value) in [
             ("linux.resources.cpu.cpus", self.cpuset_cpus.as_deref()),
@@ -204,6 +219,8 @@ impl CgroupUpdatePlan {
                     .ok_or_else(|| update_invalid("control-plane CPU envelope overflows i64"))
             })
             .transpose()?;
+        management.cpu_burst = None;
+        management.cpu_idle = None;
         management.pids_limit = self
             .pids_limit
             .map(|value| {
@@ -307,19 +324,75 @@ impl CgroupUpdatePlan {
             }
         }
 
-        if self.cpu_quota.is_some() || self.cpu_period.is_some() {
+        if self.cpu_quota.is_some() || self.cpu_period.is_some() || self.cpu_burst.is_some() {
             let current = read_required(path, "cpu.max", UPDATE_OPERATION).await?;
             let (current_quota, current_period) = parse_cpu_max(&current)?;
+            let current_quota_value = parse_cpu_quota(&current_quota)?;
+            let effective_quota = match self.cpu_quota {
+                Some(-1) => None,
+                Some(value) => Some(u64::try_from(value).map_err(|error| {
+                    update_invalid(format!("CPU quota does not fit cgroup v2: {error}"))
+                })?),
+                None => current_quota_value,
+            };
+            let current_burst = match tokio::fs::read_to_string(path.join("cpu.max.burst")).await {
+                Ok(value) => parse_u64_value("cpu.max.burst", &value).map_err(as_update_error)?,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound && self.cpu_burst.is_none() =>
+                {
+                    0
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(update_error(
+                        ErrorCode::Unsupported,
+                        "cgroup v2 CPU burst control is unavailable",
+                    ));
+                }
+                Err(error) => {
+                    return Err(update_error(
+                        ErrorCode::FailedPrecondition,
+                        format!("failed to read cgroup CPU burst control: {error}"),
+                    ));
+                }
+            };
+            let effective_burst = self.cpu_burst.unwrap_or(current_burst);
+            if effective_quota.is_some_and(|quota| effective_burst > quota) {
+                return Err(update_invalid(format!(
+                    "linux.resources.cpu.burst {effective_burst} exceeds the effective positive CPU quota {}",
+                    effective_quota.unwrap_or_default()
+                )));
+            }
             let quota = match self.cpu_quota {
                 Some(-1) => "max".to_string(),
                 Some(value) => value.to_string(),
                 None => current_quota,
             };
             let period = self.cpu_period.unwrap_or(current_period);
-            settings.push(("cpu.max", format!("{quota} {period}")));
+            let max = ("cpu.max", format!("{quota} {period}"));
+            let burst = self
+                .cpu_burst
+                .map(|value| ("cpu.max.burst", value.to_string()));
+            if effective_quota.is_some_and(|quota| current_burst > quota) {
+                if let Some(burst) = burst {
+                    settings.push(burst);
+                }
+                if self.cpu_quota.is_some() || self.cpu_period.is_some() {
+                    settings.push(max);
+                }
+            } else {
+                if self.cpu_quota.is_some() || self.cpu_period.is_some() {
+                    settings.push(max);
+                }
+                if let Some(burst) = burst {
+                    settings.push(burst);
+                }
+            }
         }
         if let Some(shares) = self.cpu_shares {
             settings.push(("cpu.weight", shares_to_weight(shares).to_string()));
+        }
+        if let Some(idle) = self.cpu_idle {
+            settings.push(("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
             settings.push(("pids.max", value.to_string()));
@@ -475,6 +548,17 @@ fn parse_cpu_max(value: &str) -> Result<(String, u64)> {
     Ok((quota.to_string(), period))
 }
 
+fn parse_cpu_quota(value: &str) -> Result<Option<u64>> {
+    if value == "max" {
+        Ok(None)
+    } else {
+        value
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|error| update_invalid(format!("cpu.max quota is invalid: {error}")))
+    }
+}
+
 fn update_invalid(message: impl Into<String>) -> Error {
     update_error(ErrorCode::InvalidArgument, message)
 }
@@ -500,9 +584,11 @@ mod tests {
         std::fs::write(directory.path().join("memory.max"), "536870912\n").expect("memory max");
         std::fs::write(directory.path().join("memory.low"), "67108864\n").expect("memory low");
         std::fs::write(directory.path().join("cpu.max"), "50000 100000\n").expect("cpu max");
+        std::fs::write(directory.path().join("cpu.max.burst"), "5000\n").expect("CPU burst");
+        std::fs::write(directory.path().join("cpu.idle"), "0\n").expect("CPU idle");
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "memory": {"swap": 1073741824},
-            "cpu": {"period": 200000}
+            "cpu": {"period": 200000, "burst": 10000, "idle": 1}
         }))
         .expect("resource update");
         let plan = CgroupUpdatePlan::from_resources(&resources).expect("update plan");
@@ -514,11 +600,86 @@ mod tests {
             [
                 ("memory.swap.max", "536870912".to_string()),
                 ("cpu.max", "50000 200000".to_string()),
+                ("cpu.max.burst", "10000".to_string()),
+                ("cpu.idle", "1".to_string()),
             ]
         );
 
         std::fs::write(directory.path().join("memory.max"), "max\n").expect("unlimited memory");
         assert!(plan.settings(directory.path(), true).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn orders_cpu_quota_and_burst_updates_without_transient_invalid_state() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        std::fs::write(directory.path().join("cpu.max"), "100000 100000\n").expect("CPU max");
+        std::fs::write(directory.path().join("cpu.max.burst"), "80000\n").expect("CPU burst");
+
+        let lower: LinuxResources = serde_json::from_value(serde_json::json!({
+            "cpu": {"quota": 50000, "burst": 40000}
+        }))
+        .expect("lower CPU update");
+        assert_eq!(
+            CgroupUpdatePlan::from_resources(&lower)
+                .expect("lower plan")
+                .settings(directory.path(), true)
+                .await
+                .expect("lower settings"),
+            [
+                ("cpu.max.burst", "40000".to_string()),
+                ("cpu.max", "50000 100000".to_string()),
+            ]
+        );
+
+        std::fs::write(directory.path().join("cpu.max"), "50000 100000\n")
+            .expect("lowered CPU max");
+        std::fs::write(directory.path().join("cpu.max.burst"), "40000\n")
+            .expect("lowered CPU burst");
+        let raise: LinuxResources = serde_json::from_value(serde_json::json!({
+            "cpu": {"quota": 100000, "burst": 80000}
+        }))
+        .expect("raise CPU update");
+        assert_eq!(
+            CgroupUpdatePlan::from_resources(&raise)
+                .expect("raise plan")
+                .settings(directory.path(), true)
+                .await
+                .expect("raise settings"),
+            [
+                ("cpu.max", "100000 100000".to_string()),
+                ("cpu.max.burst", "80000".to_string()),
+            ]
+        );
+
+        let invalid: LinuxResources = serde_json::from_value(serde_json::json!({
+            "cpu": {"quota": 30000}
+        }))
+        .expect("invalid CPU update");
+        assert!(CgroupUpdatePlan::from_resources(&invalid)
+            .expect("syntactically valid update")
+            .settings(directory.path(), true)
+            .await
+            .expect_err("effective burst above the new quota must fail")
+            .message
+            .contains("burst"));
+    }
+
+    #[tokio::test]
+    async fn rejects_an_unavailable_cpu_burst_control() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        std::fs::write(directory.path().join("cpu.max"), "50000 100000\n").expect("CPU max");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "cpu": {"burst": 10000}
+        }))
+        .expect("CPU burst update");
+
+        let error = CgroupUpdatePlan::from_resources(&resources)
+            .expect("CPU burst update plan")
+            .settings(directory.path(), true)
+            .await
+            .expect_err("a missing CPU burst control must fail");
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Unsupported);
+        assert!(error.message.contains("burst"));
     }
 
     #[tokio::test]
@@ -537,6 +698,8 @@ mod tests {
                     ("memory.oom.group", "1"),
                     ("memory.swap.max", "536870912"),
                     ("cpu.max", "225000 100000"),
+                    ("cpu.max.burst", "5000"),
+                    ("cpu.idle", "0"),
                     ("pids.max", "528"),
                     ("cgroup.procs", ""),
                 ],
@@ -549,6 +712,8 @@ mod tests {
                     ("memory.oom.group", "0"),
                     ("memory.swap.max", "536870912"),
                     ("cpu.max", "200000 100000"),
+                    ("cpu.max.burst", "10000"),
+                    ("cpu.idle", "0"),
                     ("pids.max", "512"),
                     ("cgroup.procs", ""),
                 ],
@@ -588,7 +753,7 @@ mod tests {
         };
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "memory": {"limit": 268435456, "swap": 536870912},
-            "cpu": {"quota": 100000, "period": 100000},
+            "cpu": {"quota": 100000, "burst": 20000, "period": 100000, "idle": 1},
             "pids": {"limit": 256}
         }))
         .expect("resource update");
@@ -605,6 +770,8 @@ mod tests {
                     ("memory.oom.group", "1"),
                     ("memory.swap.max", "268435456"),
                     ("cpu.max", "125000 100000"),
+                    ("cpu.max.burst", "5000"),
+                    ("cpu.idle", "0"),
                     ("pids.max", "272"),
                 ],
             ),
@@ -615,6 +782,8 @@ mod tests {
                     ("memory.oom.group", "0"),
                     ("memory.swap.max", "268435456"),
                     ("cpu.max", "100000 100000"),
+                    ("cpu.max.burst", "20000"),
+                    ("cpu.idle", "1"),
                     ("pids.max", "256"),
                 ],
             ),

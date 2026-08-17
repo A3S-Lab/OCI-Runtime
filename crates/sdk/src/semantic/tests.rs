@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 85);
+    assert_eq!(registry.len(), 86);
     assert_eq!(
         registry
             .iter()
@@ -134,7 +134,7 @@ fn accepts_validated_normative_cross_field_boundaries() {
             "maskedPaths": ["/proc/kcore"],
             "readonlyPaths": ["/proc/sys"],
             "resources": {
-                "cpu": {"quota": 20, "burst": 10},
+                "cpu": {"quota": 20, "burst": 10, "idle": 1},
                 "blockIO": {
                     "weightDevice": [{
                         "major": 8,
@@ -374,6 +374,7 @@ fn reports_linux_namespace_security_and_resource_relationships() {
                 "cpu": {
                     "quota": 10,
                     "burst": 20,
+                    "idle": 2,
                     "realtimeRuntime": 20,
                     "realtimePeriod": 10
                 },
@@ -419,6 +420,7 @@ fn reports_linux_namespace_security_and_resource_relationships() {
         "oci.linux.seccomp.listener-metadata.requires-path",
         "oci.linux.seccomp.errno-action",
         "oci.linux.cpu.burst-at-most-quota",
+        "oci.linux.cpu.idle-range",
         "oci.linux.cpu.realtime-runtime-at-most-period",
         "oci.linux.block-io.weight-device.weight-required",
         "oci.linux.rdma.limit-required",

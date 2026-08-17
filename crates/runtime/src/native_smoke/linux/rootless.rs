@@ -775,7 +775,13 @@ async fn exercise_cgroup_control(
             "reservation": 32 * 1024 * 1024,
             "swap": 384 * 1024 * 1024
         },
-        "cpu": {"shares": 256, "quota": 40000, "period": 100000},
+        "cpu": {
+            "shares": 256,
+            "quota": 40000,
+            "burst": 8000,
+            "period": 100000,
+            "idle": 0
+        },
         "pids": {"limit": 48}
     });
     if device_policy {

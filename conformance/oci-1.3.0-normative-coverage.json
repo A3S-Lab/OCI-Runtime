@@ -8886,10 +8886,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`cpu`** (object, OPTIONAL) represents the cgroup subsystems `cpu` and `cpusets`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
     },
     {
       "id": "sha256:557ed8fc7ece2f244f0c29faf61eb972d9e7c7d549d65f499756713a0c37e7ac",
@@ -8900,10 +8909,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`shares`** *(uint64, OPTIONAL)* - specifies a relative share of CPU time available to the tasks in a cgroup",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
     },
     {
       "id": "sha256:d7548127dc8bfbdea6714f61323ead7b3cd78afef2bad45c1630f331d0469c08",
@@ -8914,10 +8932,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`quota`** *(int64, OPTIONAL)* - specifies the total amount of time in microseconds for which all tasks in a cgroup can run during one period (as defined by **`period`** below)",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
     },
     {
       "id": "sha256:e332cc6bca0930016cdd669785aa25fbd627ce8f951a996118a5172489e8f95d",
@@ -8947,10 +8974,15 @@
       "keyword": "may",
       "occurrence": 2,
       "source": "If specified with any (valid) positive value, it MUST be no smaller than `burst` (runtimes MAY generate an error).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.cpu.burst-at-most-quota"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:ba92ea4fca8f80365ff79bcc9d15aca2aef8a5f41e843bfc0a1a8a1dea03ff78",
@@ -8961,10 +8993,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`burst`** *(uint64, OPTIONAL)* - specifies the maximum amount of accumulated time in microseconds for which all tasks in a cgroup can run additionally for burst during one period (as defined by **`period`** below)",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
     },
     {
       "id": "sha256:e288b8f4b39b37fffa1234b455188672a229ec3e6b14afbe053fe091b554abbe",
@@ -8994,10 +9035,15 @@
       "keyword": "may",
       "occurrence": 2,
       "source": "If specified, this value MUST be no larger than any positive `quota` (runtimes MAY generate an error).",
-      "disposition": "pending-review",
-      "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.linux.cpu.burst-at-most-quota"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:df9baa330635e2237518d4efde44040b8f2ab9c9804c664bce0b6f849ee3adf4",
@@ -9008,10 +9054,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`period`** *(uint64, OPTIONAL)* - specifies a period of time in microseconds for how regularly a cgroup's access to CPU resources should be reallocated (CFS scheduler only)",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
     },
     {
       "id": "sha256:060beff6f2855509d8d709118c8e6966426d5aee1a3574de58cc6bf42661e8f3",
@@ -9022,10 +9077,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`realtimeRuntime`** *(int64, OPTIONAL)* - specifies a period of time in microseconds for the longest continuous period in which the tasks in a cgroup have access to CPU resources",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.realtime-controls.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls"
+      ]
     },
     {
       "id": "sha256:f91fcb5a5de9b56037a1b378ca3f930e79f96fd9d7e4cdd75f1e2c5e1767dad7",
@@ -9036,10 +9095,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`realtimePeriod`** *(uint64, OPTIONAL)* - same as **`period`** but applies to realtime scheduler only",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.realtime-controls.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls"
+      ]
     },
     {
       "id": "sha256:580a992baabc35283035db9cac7510a9e0be39c14a546145820b0954ace84d32",
@@ -9050,10 +9113,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`cpus`** *(string, OPTIONAL)* - list of CPUs the container will run on. This is a comma-separated list, with dashes to represent ranges. For example, `0-3,7` represents CPUs 0,1,2,3, and 7.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
     },
     {
       "id": "sha256:8e45fcdd0d8d8c1a4b54674607142eb1767269702df78f859d724183d416f358",
@@ -9064,10 +9136,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`mems`** *(string, OPTIONAL)* - list of memory nodes the container will run on. This is a comma-separated list, with dashes to represent ranges. For example, `0-3,7` represents memory nodes 0,1,2,3, and 7.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
     },
     {
       "id": "sha256:1c31030b903c80df1b1e8d64c08d56d63de656b7389e86056333a03f72d021af",
@@ -9078,10 +9159,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`idle`** *(int64, OPTIONAL)* - cgroups are configured with minimum weight, 0: default behavior, 1: SCHED_IDLE.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls",
+        "oci.linux.cpu.idle-range"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:477691657f896fe1f6d886d87de2905037814931b9cf859d071bc75781b3aa30",
