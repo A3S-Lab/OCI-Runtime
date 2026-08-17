@@ -11,6 +11,7 @@ mod filesystem;
 mod hook;
 mod inherited_descriptor;
 mod init;
+mod intel_rdt;
 mod io;
 mod io_priority;
 mod memory_policy;
@@ -537,6 +538,9 @@ impl LinuxExecutor {
             if let Err(error) = record.force_stop_all().await {
                 first_error.get_or_insert(error);
             } else {
+                if let Err(error) = record.process.cleanup_intel_rdt() {
+                    first_error.get_or_insert(error);
+                }
                 match record.recovery_record() {
                     Ok(record) => recovery.push(record),
                     Err(error) => {
@@ -801,6 +805,7 @@ impl LinuxExecutor {
                 remove_container_directory(&self.device_source_root, &device_source_directory).await
             {
                 let _ = process.force_stop().await;
+                let _ = process.cleanup_intel_rdt();
                 if cleanup_device_targets(&runtime_directory).is_ok() {
                     let _ =
                         remove_container_directory(&self.runtime_root, &runtime_directory).await;
@@ -821,6 +826,7 @@ impl LinuxExecutor {
             .await
             {
                 let _ = process.force_stop().await;
+                let _ = process.cleanup_intel_rdt();
                 if cleanup_device_targets(&runtime_directory).is_ok() {
                     let _ =
                         remove_container_directory(&self.runtime_root, &runtime_directory).await;
@@ -1102,6 +1108,7 @@ impl LinuxExecutor {
             // that has not completed its final wait yet. Always reap that
             // wrapper before releasing the runtime directory.
             record.force_stop_all().await?;
+            record.process.cleanup_intel_rdt()?;
             record.status = ContainerState::Stopped;
             (
                 record.runtime_directory.clone(),

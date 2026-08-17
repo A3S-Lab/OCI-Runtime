@@ -12,6 +12,7 @@ mod fingerprint;
 mod handoff;
 mod id;
 mod linux_capability;
+mod linux_intel_rdt;
 mod linux_memory_policy;
 mod linux_mount_option;
 mod linux_sysctl;
@@ -52,6 +53,10 @@ pub use handoff::{
 };
 pub use id::{ContainerId, Generation, OperationId, ProcessId, TrustDomainId};
 pub use linux_capability::{oci_linux_capability_number, OCI_LINUX_CAPABILITY_NAMES};
+pub use linux_intel_rdt::{
+    OCI_LINUX_INTEL_RDT_MAX_CLOS_ID_BYTES, OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES,
+    OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINES, OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINE_BYTES,
+};
 pub use linux_memory_policy::{
     OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MAX_NODE_BITS,
     OCI_LINUX_MEMORY_POLICY_MODES,

@@ -91,6 +91,13 @@ process control exist.
 `DriverReadiness::ProbeOnly` prevents selection by the default
 `HostRuntimeService`.
 
+Intel RDT is a configuration-specific prerequisite, not part of this baseline
+probe. A bundle with `linux.intelRdt` requires a resctrl filesystem mounted in
+the runtime mount namespace. Create returns a typed error before hooks if no
+such mount exists or if the requested CLOS, schemata, monitoring group, or PID
+assignment cannot be prepared and read back. Bundles that omit `intelRdt` do
+not inspect or mutate resctrl.
+
 ## Optional KVM probe
 
 The KVM probe reports three independent facts:
@@ -561,9 +568,14 @@ therefore terminates the authenticated process tree instead of orphaning a live
 generation that a replacement driver cannot safely identify.
 
 Every executor root contains a versioned owner record, and every successfully
-created generation contains a versioned recovery record. Those mode-0600 files
-bind the immutable configuration digest to the exact owner, launcher, and init
-PID start times plus only the cgroup directories created for that generation.
+created generation contains a versioned recovery record. Recovery schema v3
+binds the immutable configuration digest to the exact owner, launcher, and init
+PID start times plus only the cgroup directories created for that generation
+and the exact resctrl paths owned for cleanup. It reads v2 and v1 records
+without inventing resctrl ownership.
+For v3 records, monitoring cleanup is limited to
+`<clos>/mon_groups/<container-id>`, and a removable CLOS must be the direct
+`<resctrl>/<container-id>` child.
 Recovery rejects missing, duplicate, oversized, symlinked, permissive,
 digest-drifted, generation-drifted, PID-drifted, or live-owner evidence. Numeric
 PID equality alone is never accepted.
@@ -581,8 +593,8 @@ durable state. Its `a3s.oci.native-linux-recovery-smoke.v2` report requires:
 3. repeated kill is idempotent;
 4. wait fails explicitly because no authenticated reaper survived to retain an
    exact exit result, rather than inventing signal 9;
-5. stopped-only delete removes the durable record, exact executor slot, and
-   runtime-created cgroups;
+5. stopped-only delete removes the durable record, exact executor slot,
+   runtime-created cgroups, and recorded runtime-owned resctrl paths;
 6. replacement-driver shutdown leaves the executor parent empty;
 7. the report binds both owner processes to their effective UID/GID and records
    whether an explicit cgroup-v2 delegation was requested and verified;

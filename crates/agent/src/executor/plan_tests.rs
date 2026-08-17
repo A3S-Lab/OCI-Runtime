@@ -562,6 +562,44 @@ fn plans_linux_memory_policy_for_init_and_preserves_omission() {
 }
 
 #[test]
+fn plans_current_intel_rdt_fields_and_preserves_omission() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["linux"] = serde_json::json!({
+        "intelRdt": {
+            "closID": "latency-sensitive",
+            "l3CacheSchema": "L3:0=ff",
+            "memBwSchema": "MB:0=70",
+            "schemata": ["L2:0=f"],
+            "enableMonitoring": true
+        }
+    });
+    let config = serde_json::to_string(&config).expect("encode Intel RDT config");
+    let plan =
+        InitPlan::from_bundle(&bundle(&config), &null_io()).expect("plan current Intel RDT fields");
+    assert!(plan.intel_rdt.is_some());
+
+    let omitted =
+        InitPlan::from_bundle(&bundle(FIXED_CONFIG), &null_io()).expect("plan omitted Intel RDT");
+    assert!(omitted.intel_rdt.is_none());
+}
+
+#[test]
+fn rejects_deprecated_intel_rdt_monitoring_fields() {
+    for field in ["enableCMT", "enableMBM"] {
+        let mut config: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+        config["linux"] = serde_json::json!({"intelRdt": {}});
+        config["linux"]["intelRdt"][field] = serde_json::json!(true);
+        let config = serde_json::to_string(&config).expect("encode legacy Intel RDT config");
+        let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+            .expect_err("deprecated Intel RDT fields must fail closed");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains(&format!("linux.intelRdt.{field}")));
+    }
+}
+
+#[test]
 fn plans_exec_cpu_affinity_and_ignores_it_for_init() {
     let mut config_value: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");

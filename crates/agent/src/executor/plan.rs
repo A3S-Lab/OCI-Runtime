@@ -14,6 +14,7 @@ use super::cgroup::CgroupPlan;
 use super::cpu_affinity::CpuAffinityPlan;
 use super::device::DevicePlan;
 use super::hook::HookSet;
+use super::intel_rdt::IntelRdtPlan;
 use super::io_priority::IoPriorityPlan;
 use super::memory_policy::MemoryPolicyPlan;
 use super::mount::{self, MountPlan};
@@ -163,6 +164,7 @@ pub(super) struct InitPlan {
     pub(super) capabilities: CapabilityPlan,
     pub(super) seccomp: SeccompPlan,
     pub(super) cgroup: CgroupPlan,
+    pub(super) intel_rdt: Option<IntelRdtPlan>,
     pub(super) devices: DevicePlan,
     pub(super) namespaces: NamespacePlan,
     pub(super) sysctls: SysctlPlan,
@@ -232,6 +234,11 @@ impl InitPlan {
             namespaces.new_user(),
         )?;
         let cgroup = CgroupPlan::from_linux(spec.linux().as_ref(), &annotations)?;
+        let intel_rdt = IntelRdtPlan::from_oci(
+            spec.linux()
+                .as_ref()
+                .and_then(|linux| linux.intel_rdt().as_ref()),
+        )?;
         if cgroup.uses_control_workload_layout() {
             if !namespaces.new_cgroup() {
                 return Err(invalid(
@@ -331,6 +338,7 @@ impl InitPlan {
             capabilities: process_plan.capabilities,
             seccomp,
             cgroup,
+            intel_rdt,
             devices,
             namespaces,
             sysctls,
@@ -471,6 +479,20 @@ fn validate_profile(raw: &Value) -> Result<()> {
             &["devices", "memory", "cpu", "pids"],
         )?;
     }
+    if let Some(intel_rdt) = linux.get("intelRdt") {
+        let intel_rdt = object(intel_rdt, "linux.intelRdt")?;
+        reject_unimplemented_keys(
+            intel_rdt,
+            "linux.intelRdt",
+            &[
+                "closID",
+                "schemata",
+                "l3CacheSchema",
+                "memBwSchema",
+                "enableMonitoring",
+            ],
+        )?;
+    }
     reject_unimplemented_keys(
         linux,
         "linux",
@@ -489,6 +511,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "readonlyPaths",
             "personality",
             "memoryPolicy",
+            "intelRdt",
         ],
     )
 }

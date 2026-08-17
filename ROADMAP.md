@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 381-entry pending normative evidence backlog.
+- [ ] Close the 345-entry pending normative evidence backlog.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1406,6 +1406,15 @@ leak. Only then may KVM become `experimental`.
   policy before credential reduction and seccomp, and require exact syscall
   plus workload read-back on Native Linux, HVF, and WHPX. Omission preserves
   the inherited policy without issuing a syscall.
+- [x] Implement the OCI 1.3 Intel RDT lifecycle in the runtime-namespace
+  parent. Create or reuse the requested CLOS, apply `l3CacheSchema`,
+  `memBwSchema`, and `schemata` in normative order with read-back, assign the
+  authenticated init PID before runtime hooks, manage a dedicated monitoring
+  group, preserve explicit CLOS ownership, and recover exact runtime-owned
+  paths after owner death. Omission does not inspect or mutate resctrl.
+- [ ] Qualify Intel RDT on a CAT/MBA-capable x86_64 Linux host, including
+  real-kernel CLOS and monitoring limits, assignment inheritance, delete,
+  failed-Create rollback, and owner-death cleanup with zero resctrl residue.
 - [x] Parse OCI Linux sysctls once in the SDK, accept only known IPC, network,
   UTS-domain, and user-namespace controls, reject aliases and host-global
   mutation, and apply bounded deterministic writes through retained procfs.

@@ -625,45 +625,107 @@ fn validate_intel_rdt(linux: &Map<String, Value>, collector: &mut ViolationColle
         return;
     };
     if let Some(clos_id) = rdt.get("closID").and_then(Value::as_str) {
-        if matches!(clos_id, "." | "..")
+        if clos_id.is_empty()
+            || clos_id.len() > crate::OCI_LINUX_INTEL_RDT_MAX_CLOS_ID_BYTES
+            || matches!(clos_id, "." | "..")
             || (clos_id != "/" && clos_id.contains('/'))
             || contains_nul(clos_id)
         {
             collector.invalid(
                 "/linux/intelRdt/closID",
                 rules::INTEL_RDT_CLOS_ID_SAFE_NAME,
-                "Intel RDT closID must be a safe resctrl directory name or /",
+                format!(
+                    "Intel RDT closID must be / or a nonempty safe resctrl directory name of at most {} bytes",
+                    crate::OCI_LINUX_INTEL_RDT_MAX_CLOS_ID_BYTES
+                ),
             );
         }
     }
+    let mut total_lines = 0_usize;
+    let mut total_bytes = 0_usize;
     if let Some(lines) = rdt.get("schemata").and_then(Value::as_array) {
-        for (index, line) in lines.iter().filter_map(Value::as_str).enumerate() {
-            if line.contains('\r') || line.contains('\n') {
+        total_lines = total_lines.saturating_add(lines.len());
+        for (index, line) in lines.iter().enumerate() {
+            let Some(line) = line.as_str() else {
+                continue;
+            };
+            let pointer = format!("/linux/intelRdt/schemata/{index}");
+            if line.is_empty() || contains_nul(line) || line.contains('\r') || line.contains('\n') {
                 collector.invalid(
-                    format!("/linux/intelRdt/schemata/{index}"),
+                    pointer.clone(),
                     rules::INTEL_RDT_SCHEMATA_SINGLE_LINE,
-                    "Intel RDT schemata entries must not contain newlines",
+                    "Intel RDT schemata entries must be nonempty single lines without NUL bytes",
                 );
             }
+            validate_intel_rdt_line_bound(&pointer, line, collector);
+            total_bytes = total_bytes.saturating_add(line.len().saturating_add(1));
         }
     }
     if let Some(schema) = rdt.get("l3CacheSchema").and_then(Value::as_str) {
-        if !schema.starts_with("L3:") || schema.contains('\r') || schema.contains('\n') {
+        total_lines = total_lines.saturating_add(1);
+        if !schema.starts_with("L3:")
+            || contains_nul(schema)
+            || schema.contains('\r')
+            || schema.contains('\n')
+        {
             collector.invalid(
                 "/linux/intelRdt/l3CacheSchema",
                 rules::INTEL_RDT_L3_SCHEMA,
                 "l3CacheSchema must start with L3: and contain no newlines",
             );
         }
+        validate_intel_rdt_line_bound("/linux/intelRdt/l3CacheSchema", schema, collector);
+        total_bytes = total_bytes.saturating_add(schema.len().saturating_add(1));
     }
     if let Some(schema) = rdt.get("memBwSchema").and_then(Value::as_str) {
-        if !schema.starts_with("MB:") || schema.contains('\r') || schema.contains('\n') {
+        total_lines = total_lines.saturating_add(1);
+        if !schema.starts_with("MB:")
+            || contains_nul(schema)
+            || schema.contains('\r')
+            || schema.contains('\n')
+        {
             collector.invalid(
                 "/linux/intelRdt/memBwSchema",
                 rules::INTEL_RDT_MEMORY_BANDWIDTH_SCHEMA,
                 "memBwSchema must start with MB: and contain no newlines",
             );
         }
+        validate_intel_rdt_line_bound("/linux/intelRdt/memBwSchema", schema, collector);
+        total_bytes = total_bytes.saturating_add(schema.len().saturating_add(1));
+    }
+    if total_lines > crate::OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINES {
+        collector.invalid(
+            "/linux/intelRdt",
+            rules::INTEL_RDT_SCHEMATA_COUNT_BOUNDED,
+            format!(
+                "Intel RDT contains {total_lines} schemata lines across all ordered writes; maximum is {}",
+                crate::OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINES
+            ),
+        );
+    }
+    if total_bytes > crate::OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES {
+        collector.invalid(
+            "/linux/intelRdt",
+            rules::INTEL_RDT_SCHEMATA_TOTAL_BOUNDED,
+            format!(
+                "Intel RDT schemata consumes {total_bytes} bytes; maximum is {}",
+                crate::OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES
+            ),
+        );
+    }
+}
+
+fn validate_intel_rdt_line_bound(pointer: &str, line: &str, collector: &mut ViolationCollector) {
+    if line.len() > crate::OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINE_BYTES {
+        collector.invalid(
+            pointer,
+            rules::INTEL_RDT_SCHEMATA_LINE_BOUNDED,
+            format!(
+                "Intel RDT schemata line is {} bytes; maximum is {}",
+                line.len(),
+                crate::OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINE_BYTES
+            ),
+        );
     }
 }
 

@@ -119,9 +119,9 @@ fn compiled_linux_features() -> Result<LinuxFeature> {
         .build()
         .map_err(feature_build_error)?;
     let intel_rdt = IntelRdtBuilder::default()
-        .enabled(false)
-        .schemata(false)
-        .monitoring(false)
+        .enabled(true)
+        .schemata(true)
+        .monitoring(true)
         .build()
         .map_err(feature_build_error)?;
     let net_devices = NetDevicesBuilder::default()

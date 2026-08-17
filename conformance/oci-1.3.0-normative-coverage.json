@@ -9489,10 +9489,17 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`intelRdt`** (object, OPTIONAL) represents the [Intel Resource Director Technology][intel-rdt-cat-kernel-interface].",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.process-assignment",
+        "oci.linux.intel-rdt.resctrl-required"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_current_intel_rdt_fields_and_preserves_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::parses_only_unescaped_resctrl_mounts"
+      ]
     },
     {
       "id": "sha256:c6cdf8783dbd1c9273e7ff213b3691195ed6401e56938cb562d3ddc126681d1c",
@@ -9503,10 +9510,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If `intelRdt` is set, the runtime MUST write the container process ID to the `tasks` file in a proper sub-directory in a mounted `resctrl` pseudo-filesystem. That sub-directory name is specified by `closID` parameter.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.process-assignment",
+        "oci.linux.intel-rdt.resctrl-required"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_current_intel_rdt_fields_and_preserves_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::parses_only_unescaped_resctrl_mounts"
+      ]
     },
     {
       "id": "sha256:e6469a4e6635385878564d14a2ad8532026e7f1402fcfda0bcd8e1a88376800d",
@@ -9517,10 +9531,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If no mounted `resctrl` pseudo-filesystem is available in the [runtime mount namespace](glossary.md#runtime-namespace), the runtime MUST [generate an error](runtime.md#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.process-assignment",
+        "oci.linux.intel-rdt.resctrl-required"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_current_intel_rdt_fields_and_preserves_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::parses_only_unescaped_resctrl_mounts"
+      ]
     },
     {
       "id": "sha256:eec24c173b7eb306a80de1b9f4d85ba24440ad21f0eee964792badd525959969",
@@ -9531,10 +9552,15 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "If `intelRdt` is not set, the runtime MUST NOT manipulate any `resctrl` pseudo-filesystems.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.omission-no-op"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::plans_ordered_schemata_monitoring_and_omission",
+        "executor::intel_rdt::tests::omitted_plan_does_not_inspect_resctrl_or_validate_a_group_name"
+      ]
     },
     {
       "id": "sha256:6d76a794c7b547e46626b97926185f1bf2c2a988ba8ed840995a22a9831a8f4d",
@@ -9545,10 +9571,18 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`closID`** *(string, OPTIONAL)* - specifies the identity for RDT Class of Service (CLOS).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:f2a00efca3ded87448ed37eba4ec9bc7d3452a0c8149868ab3be9a39f0b29d6a",
@@ -9559,10 +9593,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "As a special case, value `/` means that the container MUST be assigned to the default CLOS (the",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:cfa5857aadbd08258c85600093647c41df49799f7f03b66fe509a47eeb818309",
@@ -9573,10 +9615,17 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`l3CacheSchema`** *(string, OPTIONAL)* - specifies the schema for L3 cache id and capacity bitmask (CBM).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.l3-schema",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:789c2695e49a7eb4bd880cd62ab5242f72481d29afcf8a128d662f08cf7d53d9",
@@ -9587,10 +9636,17 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "The value SHOULD start with `L3:` and SHOULD NOT contain newlines.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.l3-schema",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:4c00a90df49cabdcdd5aa612b983a03e39af962e4e2d77df66332577bbd87118",
@@ -9601,10 +9657,17 @@
       "keyword": "should-not",
       "occurrence": 2,
       "source": "The value SHOULD start with `L3:` and SHOULD NOT contain newlines.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.l3-schema",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:8f124f859428104cf746fd6c5e5be78061694321a1e647bf22c6fbc9cca46478",
@@ -9615,10 +9678,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`memBwSchema`** *(string, OPTIONAL)* - specifies the schema of memory bandwidth per L3 cache id.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.memory-bandwidth-schema",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:a0276d5b180500e7639afc715acfddbac7b8252869f18374992f7755f078a59c",
@@ -9629,10 +9698,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The value MUST start with `MB:` and MUST NOT contain newlines.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.memory-bandwidth-schema",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:80ee48ede1fd218a4d01ae61ff900d6b3dee32981e494c9b1da0c9ea39893eb9",
@@ -9643,10 +9718,16 @@
       "keyword": "must-not",
       "occurrence": 2,
       "source": "The value MUST start with `MB:` and MUST NOT contain newlines.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.memory-bandwidth-schema",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:98bfbdc4c4dfb8880f84f50c31f1b8cf941b5b79e60f0a5c08edb49d1b2ad335",
@@ -9657,10 +9738,17 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`schemata`** *(array of strings, OPTIONAL)* - specifies the schemata to be written to the `schemata` file in resctrlfs. Each element represents one line in the `schemata` file. The value MUST NOT contain newlines.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata.single-line",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "semantic::tests::bounds_intel_rdt_names_and_schemata_without_rejecting_new_resource_lines",
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:06397d28536ddf1915ed74aa645a71eeb434fac09a8c7eb24e2143eb635e2dfd",
@@ -9671,10 +9759,17 @@
       "keyword": "must-not",
       "occurrence": 2,
       "source": "* **`schemata`** *(array of strings, OPTIONAL)* - specifies the schemata to be written to the `schemata` file in resctrlfs. Each element represents one line in the `schemata` file. The value MUST NOT contain newlines.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata.single-line",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "semantic::tests::bounds_intel_rdt_names_and_schemata_without_rejecting_new_resource_lines",
+        "executor::intel_rdt::tests::rejects_unsafe_names_unbounded_or_multiline_schemata",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order"
+      ]
     },
     {
       "id": "sha256:06f2becb8eb232ee160a77e741884477be945bd6221658fc9a60c35ae89a3042",
@@ -9685,10 +9780,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`enableMonitoring`** *(boolean, OPTIONAL)* - enables resctrl monitoring for the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.monitoring-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::monitoring_creation_failure_is_reported_and_rolls_back_owned_clos",
+        "executor::recovery::tests::intel_rdt_recovery_removes_monitoring_before_owned_control_and_retries"
+      ]
     },
     {
       "id": "sha256:16e9063932e0aff241ec857e77f4a32b87345eed0a6daeaa47b1d10fe774b82c",
@@ -9699,10 +9800,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The following rules on parameters MUST be applied:",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::plans_ordered_schemata_monitoring_and_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership"
+      ]
     },
     {
       "id": "sha256:107cf76e47a57c1ea7a885094f1c1024c92f9992fd5854ecfe1a02c968bf81f0",
@@ -9713,10 +9820,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* If both `l3CacheSchema` and `memBwSchema` are set, runtimes MUST write the values to the `schemata` file in that sub-directory discussed in `closID`. The runtimes MUST write `l3CacheSchema` first and `memBwSchema` last.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::plans_ordered_schemata_monitoring_and_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership"
+      ]
     },
     {
       "id": "sha256:d122f12f1a0639e6a888fe972c8557b5f6f1898032d9530cf3fa2ac8bac62ee3",
@@ -9727,10 +9840,16 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "* If both `l3CacheSchema` and `memBwSchema` are set, runtimes MUST write the values to the `schemata` file in that sub-directory discussed in `closID`. The runtimes MUST write `l3CacheSchema` first and `memBwSchema` last.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::plans_ordered_schemata_monitoring_and_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership"
+      ]
     },
     {
       "id": "sha256:d2d83f9afcf26d5d122035762710c064f9c7b0009cc7aaec3e987f0c906c960b",
@@ -9741,10 +9860,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* If either `l3CacheSchema` or `memBwSchema` is set, runtimes MUST write the value to the `schemata` file in the that sub-directory discussed in `closID`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::plans_ordered_schemata_monitoring_and_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership"
+      ]
     },
     {
       "id": "sha256:b694aea40363dc07491ab12eed13b68262fa32e9b6e6bcc293bc31aab1b9ceb0",
@@ -9755,10 +9880,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* If `schemata` field is set, runtimes MUST write the value to the `schemata` file in the that sub-directory discussed in `closID`. If also `l3CacheSchema` or `memBwSchema` is set the value of `schemata` field must be written last, after the values from `l3CacheSchema` and `memBwSchema` has been written.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::plans_ordered_schemata_monitoring_and_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership"
+      ]
     },
     {
       "id": "sha256:dfd166eed70289747470c5f4a442470e649666b8cf1a0cec9beaad24c76766b6",
@@ -9769,10 +9900,16 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "* If none of `l3CacheSchema`, `memBwSchema` or `schemata` is set, runtimes MUST NOT write to `schemata` files in any `resctrl` pseudo-filesystems.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::plans_ordered_schemata_monitoring_and_omission",
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership"
+      ]
     },
     {
       "id": "sha256:097173140c2976673559624488ba4ce710c87ff7b8689c3e63cfb08b561983b8",
@@ -9783,10 +9920,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* If `closID` is not set, runtimes MUST use the container ID from [`start`](runtime.md#start) and create the `<container-id>` directory.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:f5128bc6207fc44456dc014fba9bf56ecdf254bd01c56f02402d83c48066269e",
@@ -9797,10 +9942,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* if `closID` directory in a mounted `resctrl` pseudo-filesystem doesn't exist, the runtimes MUST create it.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:054f13b5302964a433408d76a4efa7a22eed42adae33e0f17df1259dd9bb9188",
@@ -9811,10 +9964,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* if `closID` directory in a mounted `resctrl` pseudo-filesystem exists, runtimes MUST compare `l3CacheSchema` and/or `memBwSchema` value with `schemata` file, and [generate an error](runtime.md#errors) if doesn't match.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:76abca48831e0a199ac5037264358cf858faf992ac58f00b2d215dff3174ed13",
@@ -9825,10 +9986,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* If `closID` is set, and none of `l3CacheSchema`, `memBwSchema` or `schemata` are set, runtime MUST check if corresponding pre-configured directory `closID` is present in mounted `resctrl`. If such pre-configured directory `closID` exists, runtime MUST assign container to this `closID` and [generate an error](runtime.md#errors) if directory does not exist.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:37e5e3fbcd3a2e49e0b63a150440c37c48c08aca00c457c717709577afc8dfa4",
@@ -9839,10 +10008,18 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "* If `closID` is set, and none of `l3CacheSchema`, `memBwSchema` or `schemata` are set, runtime MUST check if corresponding pre-configured directory `closID` is present in mounted `resctrl`. If such pre-configured directory `closID` exists, runtime MUST assign container to this `closID` and [generate an error](runtime.md#errors) if directory does not exist.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:4ccc7f2354950fee10156ba55383092cc74e4c9468c0e388086332ed1447b299",
@@ -9853,10 +10030,18 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* If `closID` is not set and the runtime has created the sub-directory, the runtime MUST remove the sub-directory when the container is deleted.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:3a9b2d1a56239b5929cc6f51747d23897f6bb67a267fa63cdf0f455f1caa795e",
@@ -9867,10 +10052,18 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "* If `closID` is set or the runtime has not created the sub-directory, the runtime MUST NOT remove the sub-directory when the container is deleted.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::preconfigured_clos_is_compared_and_never_removed",
+        "executor::intel_rdt::tests::configured_clos_without_schemata_must_already_exist",
+        "executor::intel_rdt::tests::default_and_explicit_clos_preserve_external_ownership",
+        "executor::recovery::tests::intel_rdt_recovery_rejects_broad_or_tampered_paths"
+      ]
     },
     {
       "id": "sha256:a6db5ed848676ac6b453065d4dc53b06837dc4dab2132dc284d195560e7a5189",
@@ -9881,10 +10074,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* If `enableMonitoring` is set, the runtime MUST create a dedicated MON group",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.monitoring-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::monitoring_creation_failure_is_reported_and_rolls_back_owned_clos",
+        "executor::recovery::tests::intel_rdt_recovery_removes_monitoring_before_owned_control_and_retries"
+      ]
     },
     {
       "id": "sha256:27dc818919399193b1d236fbe7a7c1e6fbf4fc412f1c941c3c7572cf09f8d8b4",
@@ -9895,10 +10094,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "for the container. The runtime MUST use the container ID from",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.monitoring-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::monitoring_creation_failure_is_reported_and_rolls_back_owned_clos",
+        "executor::recovery::tests::intel_rdt_recovery_removes_monitoring_before_owned_control_and_retries"
+      ]
     },
     {
       "id": "sha256:f9b1980894723f551172ab3d8fe0fb041501630aee759fcfdfea41f63205c646",
@@ -9909,10 +10114,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "(named after `closID` or `<container-id>`, see above). The runtime MUST",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.monitoring-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::monitoring_creation_failure_is_reported_and_rolls_back_owned_clos",
+        "executor::recovery::tests::intel_rdt_recovery_removes_monitoring_before_owned_control_and_retries"
+      ]
     },
     {
       "id": "sha256:caf150b4ce9f905553662e15a51e5f456dd2fd410f575b4a2705ff601f7915c6",
@@ -9923,10 +10134,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "group fails (e.g. the maximum number of MON groups is reached) the runtime MUST",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.intel-rdt.monitoring-lifecycle"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "executor::intel_rdt::tests::monitoring_creation_failure_is_reported_and_rolls_back_owned_clos",
+        "executor::recovery::tests::intel_rdt_recovery_removes_monitoring_before_owned_control_and_retries"
+      ]
     },
     {
       "id": "sha256:89bdc5c041769157f692e39045875579fd5373b9e379717f1354559208f831fb",
@@ -12934,10 +13151,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`intelRdt`** (object, OPTIONAL) represents the runtime's implementation status of Intel RDT.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.intel-rdt.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:54f77466ecad3c91aed822fe948afeb5f939f7d5c5603bc334857eb565d7b949",
@@ -12948,10 +13169,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`enabled`** (bool, OPTIONAL) represents whether the runtime supports Intel RDT.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.intel-rdt.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:ffd17f2f137c5d8b5bb7b35da0f934d244ce66b6ba33f86d0ec699c1cb6653cb",
@@ -12962,10 +13187,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`schemata`** (bool, OPTIONAL) represents whether the",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.intel-rdt.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:f55217080fbf477f70f409ec0a549df7ff0c66a0929e1a31d41eb2f4f2b66678",
@@ -12976,10 +13205,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`monitoring`** (bool, OPTIONAL) represents whether the",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.intel-rdt.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:ebb34045315ea27e178cce95e2606032ef8a3cbaa826de097bfad62f6670a2c9",

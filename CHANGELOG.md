@@ -6,6 +6,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI Linux Intel RDT enforcement in the shared Linux executor. The SDK now
+  applies one bounded CLOS/schemata contract, including nonempty safe CLOS
+  names, 256 schemata lines, 4 KiB per line, and 64 KiB across all ordered
+  writes. The runtime-namespace parent discovers resctrl, creates or verifies
+  the requested CLOS, applies `l3CacheSchema`, `memBwSchema`, and complete
+  `schemata` in OCI order with read-back, and assigns the authenticated init
+  PID before prestart and createRuntime hooks. `/` selects the default CLOS;
+  omitted `closID` creates and later removes the container-ID CLOS; explicit
+  CLOS directories remain externally owned. Dedicated monitoring groups are
+  assigned and removed with the same lifecycle. Native recovery record v3
+  retains only the exact owned resctrl paths and removes monitoring before an
+  owned CLOS after owner death. OCI Features now reports Intel RDT, schemata,
+  and monitoring support. Seven owner-bound rules promote all 32 Intel RDT
+  configuration requirements and four feature-report requirements, leaving
+  283 enforced, 25 validated, two conformant, and 345 pending entries.
 - OCI Linux NUMA memory-policy enforcement for configured init. One SDK
   registry owns all seven OCI modes and all three flags for validation,
   execution, and feature reporting. The bounded planner validates node lists

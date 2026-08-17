@@ -75,7 +75,10 @@ define_rules! {
     INTEL_RDT_CLOS_ID_SAFE_NAME => RuntimeConstraint, "oci.linux.intel-rdt.clos-id.safe-name";
     INTEL_RDT_L3_SCHEMA => RuntimeConstraint, "oci.linux.intel-rdt.l3-schema";
     INTEL_RDT_MEMORY_BANDWIDTH_SCHEMA => RuntimeConstraint, "oci.linux.intel-rdt.memory-bandwidth-schema";
+    INTEL_RDT_SCHEMATA_COUNT_BOUNDED => RuntimeConstraint, "oci.linux.intel-rdt.schemata.count-bounded";
+    INTEL_RDT_SCHEMATA_LINE_BOUNDED => RuntimeConstraint, "oci.linux.intel-rdt.schemata.line-bounded";
     INTEL_RDT_SCHEMATA_SINGLE_LINE => RuntimeConstraint, "oci.linux.intel-rdt.schemata.single-line";
+    INTEL_RDT_SCHEMATA_TOTAL_BOUNDED => RuntimeConstraint, "oci.linux.intel-rdt.schemata.total-bounded";
     IO_PRIORITY_IDLE_CLASS_DATA_ZERO => RuntimeConstraint, "oci.linux.io-priority.idle-class-data-zero";
     IO_PRIORITY_RANGE => Normative, "oci.linux.io-priority.range";
     MEMORY_POLICY_FLAGS_COMPATIBLE => RuntimeConstraint, "oci.linux.memory-policy.flags-compatible";

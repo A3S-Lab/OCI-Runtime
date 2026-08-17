@@ -59,12 +59,25 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "runtime-feature-report",
     ),
     OciNonSemanticRule::new(
+        "oci.linux.features.intel-rdt.accurate",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
         "oci.linux.features.memory-policy.recognized",
         "runtime-feature-report",
     ),
     OciNonSemanticRule::new(
         "oci.linux.features.mount-options.recognized",
         "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new("oci.linux.intel-rdt.clos-lifecycle", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.intel-rdt.monitoring-lifecycle", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.intel-rdt.omission-no-op", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.intel-rdt.process-assignment", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.intel-rdt.resctrl-required", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.intel-rdt.schemata-order-and-readback",
+        "linux-executor",
     ),
     OciNonSemanticRule::new("oci.linux.memory-policy.exact-policy", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.mount-options.control", "linux-executor"),

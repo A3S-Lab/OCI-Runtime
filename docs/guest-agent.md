@@ -193,6 +193,16 @@ complete launcher → namespace PID 1 → configured-process parent chain, the
 init's `NSpid` mapping to 1, the configured process's mapping above 1, both PID
 namespace links, and the requested user/time namespace identities.
 
+If `linux.intelRdt` is configured, the same parent prepares resctrl before it
+spawns init. It opens the default CLOS, creates the container-ID CLOS, or
+creates or verifies an explicit CLOS according to the OCI fields; applies
+`l3CacheSchema`, `memBwSchema`, and complete `schemata` in that order; and
+requires read-back of every requested resource line. After authenticating the
+runtime-visible PID at the first barrier, it writes that PID to the control
+`tasks` file and then to the dedicated monitoring `tasks` file when monitoring
+is enabled. Assignment therefore completes before prestart or createRuntime
+hooks can observe the container.
+
 At that first barrier the parent runs `prestart` and `createRuntime` in the
 runtime namespace with `creating` OCI state. It then releases the wrapper to
 run `createContainer` in the container namespace before pivoting. The wrapper
@@ -215,8 +225,11 @@ error. The parent then runs `poststart` in the runtime namespace with
 State observes the configured process, kill delivers one positive Linux signal
 through its retained pidfd, and delete supports stopped-only and force cleanup.
 Cleanup also signals through the pidfd and always reaps the authenticated
-launcher before removing its runtime directory. After the container record,
-retained namespaces/rootfs, cgroup leaf, and runtime directory are gone,
+launcher before removing its runtime directory. It removes a dedicated
+monitoring group first and removes a CLOS only when the runtime created the
+container-ID directory; `/` and explicit `closID` directories remain external.
+After the container record, retained namespaces/rootfs, cgroup leaf, owned
+resctrl paths, and runtime directory are gone,
 `poststop` receives `stopped` state without a PID. A failed poststop hook logs
 a warning and does not prevent later hooks or successful cleanup. Session
 shutdown uses the same ordering. Numeric PID reuse can therefore never
