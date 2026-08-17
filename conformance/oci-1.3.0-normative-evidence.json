@@ -674,6 +674,28 @@
     },
     {
       "requirementIds": [
+        "sha256:ba20b81e3993530d237879f2e990938b18860dbd9bf9692ae149331b8e3832ad",
+        "sha256:032d6378d53ff10f26774547610517d52f9e9516ef9941ae5bf56ff678c490f9",
+        "sha256:8b0a3ce38e32d2c651396ce844e37032a103cd8c508961c2eb3555ea6ae985c8",
+        "sha256:2ccaeba5c2c2edbafdf6bda3925e91279ba2681054ad85b7dcb7a0e8a6ace918",
+        "sha256:50a8e731c746614bcf0f4907c7aa477804ddc4ebe0536ee00d1cf8200025888c",
+        "sha256:4d87c4a740ab6f059578e654b3f52e62248602588d6f040c0b9a9a9b11d83671",
+        "sha256:bbc0e19a3f2ba56cae934a929e7615f3da5f68908f7829e4b5a71cb452306566",
+        "sha256:96d3210013dad5b26b3a58a4b27232b7ec858a08372e8bea1ad1c43bf4452cba",
+        "sha256:70261e2943d94219c3c700659fc9131971bb0fe6404d5d43c68443f652a1d872",
+        "sha256:50e6f41553fcef929ecdb6456fc7db90f6b634809c070d59346932007f95e48a"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-schema-validation",
+      "ruleIds": [
+        "oci.annotations.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:964cdbc18ba751489db3a08921658519eb9ca3bfd14988b93ed1680acac0b294"
       ],
       "disposition": "validated",
@@ -684,6 +706,19 @@
       "testIds": [
         "semantic::tests::accepts_validated_normative_cross_field_boundaries",
         "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:ea9638d96fae91db229c7291a8480bf9f760ad72e82f8a76e01b00820924a5d8"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.common.annotations.unknown-preserved"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
       ]
     },
     {

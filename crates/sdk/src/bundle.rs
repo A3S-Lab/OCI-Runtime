@@ -507,7 +507,9 @@ mod tests {
                 "readonlyPaths": ["/proc/sys"]
             },
             "annotations": {
-                "dev.a3s.test": "full-spec-pass-through"
+                "dev.a3s.test": "full-spec-pass-through",
+                "com.example.empty": "",
+                "com.example.structured": "{\"nested\":true}"
             }
         })
     }
@@ -531,6 +533,11 @@ mod tests {
         assert_eq!(
             encoded["annotations"]["dev.a3s.test"],
             json!("full-spec-pass-through")
+        );
+        assert_eq!(encoded["annotations"]["com.example.empty"], json!(""));
+        assert_eq!(
+            encoded["annotations"]["com.example.structured"],
+            json!("{\"nested\":true}")
         );
         assert!(bundle.config_digest().starts_with("sha256:"));
         assert_eq!(bundle.config_json(), config_json);
