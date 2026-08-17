@@ -726,7 +726,7 @@ fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{digest:x}")
 }
 
-fn canonical_text_sha256(source: &str) -> String {
+pub(crate) fn canonical_text_sha256(source: &str) -> String {
     sha256(source.replace("\r\n", "\n").as_bytes())
 }
 
