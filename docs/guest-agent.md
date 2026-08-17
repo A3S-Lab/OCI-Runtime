@@ -383,13 +383,21 @@ The executor creates one private controller-enabled cgroup-v2 root. The
 default layout places init and exec in one owned leaf, which permits a later
 update even when create supplied no initial limits.
 
+`linux.cgroupsPath` keeps its OCI path class through validation. An absolute
+value is resolved from the visible cgroup v2 mount point; a relative value is
+resolved from the executor's stable private manager. The same value is reused
+for recreation, live control, recovery, and delete. Invalid or ambiguous paths
+fail semantic validation before runtime mutation, and only paths recorded as
+runtime-owned are removed.
+
 A non-root native executor may instead receive one explicit delegated root at
 open time. The root must be a canonical empty cgroup-v2 directory owned by the
 executor's effective UID/GID with `cpu`, `cpuset`, `memory`, and `pids`
 already enabled. The executor pins its filesystem device and inode, rechecks
 ownership and controller state before first use, and creates the same private
 manager layout beneath that root. A rootless `linux.cgroupsPath` without this
-authority fails before container state or filesystem mutation.
+authority fails before container state or filesystem mutation. An absolute
+rootless value must also resolve inside that exact delegation.
 
 If a rootless plan also needs the six default device nodes, the CLI must start
 the synchronous bounded helper before Tokio and consume that bootstrap when it

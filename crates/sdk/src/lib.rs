@@ -14,6 +14,7 @@ mod handoff;
 mod id;
 mod image_annotation;
 mod linux_capability;
+mod linux_cgroup_path;
 mod linux_intel_rdt;
 mod linux_memory_policy;
 mod linux_mount_option;
@@ -59,6 +60,10 @@ pub use image_annotation::{
     OCI_IMAGE_SPEC_COMMIT, OCI_IMAGE_SPEC_VERSION, OCI_IMAGE_STOP_SIGNAL_ANNOTATION,
 };
 pub use linux_capability::{oci_linux_capability_number, OCI_LINUX_CAPABILITY_NAMES};
+pub use linux_cgroup_path::{
+    OciLinuxCgroupPath, OciLinuxCgroupPathError, OciLinuxCgroupPathErrorKind,
+    OCI_LINUX_CGROUP_NAME_MAX_BYTES, OCI_LINUX_CGROUP_PATH_MAX_BYTES,
+};
 pub use linux_intel_rdt::{
     OCI_LINUX_INTEL_RDT_MAX_CLOS_ID_BYTES, OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_BYTES,
     OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINES, OCI_LINUX_INTEL_RDT_MAX_SCHEMATA_LINE_BYTES,

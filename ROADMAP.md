@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 325-entry pending normative evidence backlog.
+- [ ] Close the 318-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -1324,7 +1324,7 @@ leak. Only then may KVM become `experimental`.
 - [x] After all mounts are in place, create the conditional OCI Linux
   `/dev/fd`, `/dev/stdin`, `/dev/stdout`, and `/dev/stderr` links without
   replacing conflicting container content. Verify their exact targets through
-  native Linux v18 and Apple Silicon utility-VM v11 retained evidence.
+  native Linux v19 and Apple Silicon utility-VM v11 retained evidence.
 - [x] Create new IPC, network, and cgroup namespaces atomically before the
   created barrier.
 - [x] Create a new PID namespace, retain a dedicated namespace PID 1
@@ -1442,6 +1442,12 @@ leak. Only then may KVM become `experimental`.
   generation-fenced partial resource updates with exact read-back and
   reverse-order rollback, and expose normalized CPU, memory, PID, and event
   statistics through native Linux and the shared utility-VM lifecycle harness.
+- [x] Preserve OCI `linux.cgroupsPath` identity in one SDK parser, resolve
+  absolute values from the visible cgroup v2 mount, keep relative values stable
+  below one private manager, confine rootless absolute values to the verified
+  delegation, and retain exact normal and owner-death cleanup paths. Native
+  x86_64/aarch64 gates read both host memberships, recreate the relative value
+  at the same location, and require both leaves to disappear after delete.
 - [x] Add the opt-in `control-workload-v1` topology for a trusted configured
   init: retain exact workload limits in `linux.resources`, derive a bounded
   outer management envelope, create fixed control/workload children, pass
@@ -1492,7 +1498,7 @@ leak. Only then may KVM become `experimental`.
     descriptor, observe bounded non-overlapping UID/GID maps from inside the
     namespace, recheck its device/inode identity immediately before `setns`,
     and use the observed namespace-root mapping with the existing detached
-    device-source and exact-cleanup path. Native Linux multi-container v18 and
+    device-source and exact-cleanup path. Native Linux multi-container v19 and
     real Apple Silicon utility-VM multi-container v11 verify all six nodes from
     inside the joined-user workload.
   - [ ] Run create, update, stats, pause/resume, recovery, and cleanup evidence

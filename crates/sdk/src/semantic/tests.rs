@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 84);
+    assert_eq!(registry.len(), 85);
     assert_eq!(
         registry
             .iter()
@@ -341,6 +341,7 @@ fn reports_linux_namespace_security_and_resource_relationships() {
         "hostname": "semantic-test",
         "domainname": "example.test",
         "linux": {
+            "cgroupsPath": "tenant/../workload",
             "uidMappings": [
                 {"containerID": 0, "hostID": 1000, "size": 2},
                 {"containerID": 1, "hostID": 2000, "size": 1}
@@ -401,6 +402,7 @@ fn reports_linux_namespace_security_and_resource_relationships() {
     let rules = rules(&value, OciSemanticPhase::Configuration);
     for expected in [
         "oci.linux.namespace.type.unique",
+        "oci.linux.cgroups-path.safe-path",
         "oci.linux.namespace.path.absolute",
         "oci.linux.id-mapping.container-range.unique",
         "oci.linux.hostname.requires-uts-namespace",

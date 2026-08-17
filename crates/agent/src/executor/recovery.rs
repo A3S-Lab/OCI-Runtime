@@ -789,36 +789,41 @@ fn validate_cgroup_record(cgroup: &RecoveryCgroupRecord) -> Result<()> {
         ));
     }
     validate_absolute_normalized(&cgroup.leaf, "cgroup leaf")?;
-    if cgroup.leaf == cgroup.manager_root || !cgroup.leaf.starts_with(&cgroup.manager_root) {
+    let ownership_root = if cgroup.leaf.starts_with(&cgroup.manager_root) {
+        &cgroup.manager_root
+    } else {
+        &cgroup.authority_root
+    };
+    if cgroup.leaf == *ownership_root || !cgroup.leaf.starts_with(ownership_root) {
         return Err(recovery_error(
             ErrorCode::PermissionDenied,
             format!(
-                "native recovery cgroup leaf escapes manager root: {}",
+                "native recovery cgroup leaf escapes its recorded authority: {}",
                 cgroup.leaf.display()
             ),
         ));
     }
+    let mut unique = std::collections::BTreeSet::new();
     for path in &cgroup.created {
         validate_absolute_normalized(path, "created cgroup")?;
-        if path == &cgroup.manager_root || !path.starts_with(&cgroup.manager_root) {
+        if path == ownership_root
+            || path == &cgroup.manager_root
+            || !path.starts_with(ownership_root)
+            || !unique.insert(path)
+        {
             return Err(recovery_error(
                 ErrorCode::PermissionDenied,
                 format!(
-                    "native recovery cgroup path escapes manager root: {}",
+                    "native recovery cgroup path escapes its recorded authority or is duplicated: {}",
                     path.display()
                 ),
             ));
         }
     }
-    if !cgroup.created.iter().any(|path| path == &cgroup.leaf)
-        && !cgroup
-            .created
-            .iter()
-            .any(|path| cgroup.leaf.starts_with(path))
-    {
+    if !cgroup.created.iter().any(|path| path == &cgroup.leaf) {
         return Err(recovery_error(
             ErrorCode::PermissionDenied,
-            "native recovery cgroup leaf is not below a created path",
+            "native recovery cgroup leaf is not an exact runtime-created path",
         ));
     }
     Ok(())
@@ -1381,8 +1386,8 @@ mod tests {
         let escaping = RecoveryCgroupRecord {
             authority_root: PathBuf::from("/sys/fs/cgroup"),
             manager_root: PathBuf::from("/sys/fs/cgroup/a3s-oci-1-test"),
-            leaf: PathBuf::from("/sys/fs/cgroup/unrelated"),
-            created: vec![PathBuf::from("/sys/fs/cgroup/unrelated")],
+            leaf: PathBuf::from("/outside/unrelated"),
+            created: vec![PathBuf::from("/outside/unrelated")],
         };
         assert!(validate_cgroup_record(&escaping).is_err());
 
@@ -1395,6 +1400,21 @@ mod tests {
             )],
         };
         assert!(validate_cgroup_record(&unrelated_authority).is_err());
+
+        let absolute = RecoveryCgroupRecord {
+            authority_root: PathBuf::from("/sys/fs/cgroup"),
+            manager_root: PathBuf::from("/sys/fs/cgroup/a3s-oci-1-test"),
+            leaf: PathBuf::from("/sys/fs/cgroup/tenant/workload"),
+            created: vec![
+                PathBuf::from("/sys/fs/cgroup/tenant"),
+                PathBuf::from("/sys/fs/cgroup/tenant/workload"),
+            ],
+        };
+        validate_cgroup_record(&absolute).expect("absolute cgroup recovery record");
+
+        let mut duplicate = absolute;
+        duplicate.created.push(duplicate.leaf.clone());
+        assert!(validate_cgroup_record(&duplicate).is_err());
     }
 
     #[test]

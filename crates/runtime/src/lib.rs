@@ -116,10 +116,10 @@ pub use macos_hvf_host_smoke::{
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use macos_hvf_service::{MacosHvfHostService, MacosHvfHostServiceConfig};
 pub use multi_container_report::{
-    InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
-    NativeLinuxMultiContainerSmokeReport, NetworkModeEvidence, OciVmMultiContainerSmokeReport,
-    PidSupervisionEvidence, RootfsMountEvidence, StorageVolumeEvidence,
-    WindowsOciVmMultiContainerSmokeReport,
+    CgroupPathEvidence, InitializationEvidence, MultiContainerLifecycleEvidence,
+    NamespaceJoinEvidence, NativeLinuxMultiContainerSmokeReport, NetworkModeEvidence,
+    OciVmMultiContainerSmokeReport, PidSupervisionEvidence, RootfsMountEvidence,
+    StorageVolumeEvidence, WindowsOciVmMultiContainerSmokeReport,
 };
 #[cfg(target_os = "linux")]
 pub use native_control::{

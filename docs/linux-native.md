@@ -408,7 +408,7 @@ replay the exact signal-9 terminal result.
 Run it with a second bundle containing its own rootfs:
 
 ```sh
-jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
+jq '.linux.cgroupsPath = "/a3s-oci-smoke-b"' \
   "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
 mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
 
@@ -419,13 +419,16 @@ sudo target/debug/a3s-oci native-linux-multi-container-smoke \
   --work-parent "$work_parent"
 ```
 
-The two simultaneously live bundles must use distinct cgroup v2 paths; the
-checked-in fixture reserves `a3s-oci-smoke-a` for bundle A.
+The two simultaneously live bundles must use distinct cgroup v2 paths. Bundle
+A uses relative `a3s-oci-smoke-a`; bundle B uses an absolute path so the gate
+can compare its host membership directly with the requested mount-relative
+value.
 
-The `a3s.oci.native-linux-multi-container-smoke.v18` success additionally
+The `a3s.oci.native-linux-multi-container-smoke.v19` success additionally
 requires exact create/start/kill/delete replay, stable repeated wait results,
-independent wait/state progress, both marker removals, executor shutdown, and
-complete durable-session removal. It then keeps a prepared donor behind its
+independent wait/state progress, exact absolute-path membership, same-location
+relative-path recreation, both cgroup removals, both marker removals, executor
+shutdown, and complete durable-session removal. It then keeps a prepared donor behind its
 create barrier and requires:
 
 1. a namespace descriptor whose type disagrees with its OCI entry to fail

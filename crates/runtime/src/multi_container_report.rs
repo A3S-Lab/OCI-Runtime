@@ -4,9 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::AgentVmSmokeReport;
 
+mod cgroup_path;
+
+pub use cgroup_path::CgroupPathEvidence;
+
 /// Schema emitted by the native Linux multi-container lifecycle diagnostic.
 pub const NATIVE_LINUX_MULTI_CONTAINER_SCHEMA_VERSION: &str =
-    "a3s.oci.native-linux-multi-container-smoke.v18";
+    "a3s.oci.native-linux-multi-container-smoke.v19";
 /// Schema emitted by the utility-VM multi-container lifecycle diagnostic.
 pub const OCI_VM_MULTI_CONTAINER_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-multi-container-smoke.v11";
 /// Schema emitted by the Windows bootstrap-profile multi-container diagnostic.
@@ -515,6 +519,8 @@ pub struct NativeLinuxMultiContainerSmokeReport {
     pub service_operations: Vec<RuntimeOperation>,
     /// Per-container generation, replay, isolation, and lifecycle evidence.
     pub lifecycle: MultiContainerLifecycleEvidence,
+    /// Absolute, relative, repeated, and cleanup cgroup-path evidence.
+    pub cgroup_paths: CgroupPathEvidence,
     /// Existing-namespace type validation, joins, and lifecycle evidence.
     pub namespace_join: NamespaceJoinEvidence,
     /// Private, host-inherited, and donor-shared network namespace evidence.
@@ -548,6 +554,7 @@ impl NativeLinuxMultiContainerSmokeReport {
             bundles_loaded: false,
             service_operations: Vec::new(),
             lifecycle: MultiContainerLifecycleEvidence::default(),
+            cgroup_paths: CgroupPathEvidence::default(),
             namespace_join: NamespaceJoinEvidence::default(),
             network_modes: NetworkModeEvidence::default(),
             rootfs_mount: RootfsMountEvidence::default(),
@@ -613,6 +620,7 @@ impl NativeLinuxMultiContainerSmokeReport {
                     oom_killed: false,
                 })
             && self.lifecycle.wait_status_b == self.lifecycle.wait_status_a
+            && self.cgroup_paths.is_success()
             && self.namespace_join.is_success()
             && self.network_modes.is_success()
             && self.rootfs_mount.is_success()
@@ -726,9 +734,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        InitializationEvidence, MultiContainerLifecycleEvidence, NamespaceJoinEvidence,
-        NetworkModeEvidence, PidSupervisionEvidence, RootfsMountEvidence, StorageVolumeEvidence,
-        WindowsOciVmMultiContainerSmokeReport,
+        CgroupPathEvidence, InitializationEvidence, MultiContainerLifecycleEvidence,
+        NamespaceJoinEvidence, NetworkModeEvidence, PidSupervisionEvidence, RootfsMountEvidence,
+        StorageVolumeEvidence, WindowsOciVmMultiContainerSmokeReport,
     };
     use crate::AgentVmSmokeReport;
 
@@ -740,6 +748,25 @@ mod tests {
         let mut incomplete = complete;
         incomplete.b_unchanged_after_a_delete = false;
         assert!(!incomplete.is_success());
+    }
+
+    #[test]
+    fn cgroup_path_success_requires_exact_absolute_relative_repeat_and_cleanup_evidence() {
+        let mut evidence = CgroupPathEvidence {
+            requested_relative: Some("tenant/workload".into()),
+            requested_absolute: Some("/a3s-oci-absolute".into()),
+            observed_relative_initial: Some("/a3s-oci-private/tenant/workload".into()),
+            observed_relative_recreated: Some("/a3s-oci-private/tenant/workload".into()),
+            observed_absolute: Some("/a3s-oci-absolute".into()),
+            absolute_mountpoint_resolution_verified: true,
+            relative_recreate_resolution_verified: true,
+            distinct_locations: true,
+            paths_removed_after_delete: true,
+        };
+        assert!(evidence.is_success());
+
+        evidence.paths_removed_after_delete = false;
+        assert!(!evidence.is_success());
     }
 
     #[test]
