@@ -696,6 +696,22 @@
     },
     {
       "requirementIds": [
+        "sha256:a920a560bf8395af4cfe4d0774b6668a106ad50542b7d28d37181adf478bed67"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.potentially-unsafe-config-annotations.accurate"
+      ],
+      "testIds": [
+        "attachment::tests::extension_names_follow_the_canonical_capability_order",
+        "config_annotation::tests::builtin_unsafe_config_annotations_are_exact_sorted_reverse_dns_keys",
+        "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:8742bebdcd90656f6f2a59d33c971ea8cb4f00ebe0d846d7804e3c6aa5a98b79"
       ],
       "disposition": "validated",

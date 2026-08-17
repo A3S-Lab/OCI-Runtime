@@ -479,7 +479,13 @@ impl OciRuntimeService for HostRuntimeService {
             .lifecycle
             .as_deref()
             .map_or([].as_slice(), |lifecycle| lifecycle.drivers.hooks());
-        let oci = feature_report::build(self.lifecycle.is_some(), hooks)?;
+        let attachments = self
+            .lifecycle
+            .as_deref()
+            .map_or_else(AttachmentCapabilities::base_v1, |lifecycle| {
+                lifecycle.drivers.attachment_capabilities().clone()
+            });
+        let oci = feature_report::build(self.lifecycle.is_some(), hooks, &attachments)?;
 
         let mut operations = BTreeSet::from([RuntimeOperation::Features]);
         if let Some(lifecycle) = &self.lifecycle {
@@ -491,12 +497,7 @@ impl OciRuntimeService for HostRuntimeService {
             oci,
             drivers: self.runtime_features(),
             operations: operations.into_iter().collect(),
-            attachments: self
-                .lifecycle
-                .as_deref()
-                .map_or_else(AttachmentCapabilities::base_v1, |lifecycle| {
-                    lifecycle.drivers.attachment_capabilities().clone()
-                }),
+            attachments,
         })
     }
 

@@ -6,6 +6,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Accurate OCI potentially-unsafe configuration annotation discovery. One SDK
+  registry owns the six built-in A3S keys that can change or gate runtime
+  behavior, and configured host services merge only annotation-backed
+  extensions advertised by their active drivers. Probe-only discovery remains
+  empty, while every reported list is sorted, deduplicated, and schema-valid.
+  One owner-bound rule promotes the OCI feature requirement, leaving 285
+  enforced, 43 validated, two conformant, and 325 pending entries.
 - OCI Linux Intel RDT enforcement in the shared Linux executor. The SDK now
   applies one bounded CLOS/schemata contract, including nonempty safe CLOS
   names, 256 schemata lines, 4 KiB per line, and 64 KiB across all ordered

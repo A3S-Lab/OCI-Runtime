@@ -50,6 +50,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.common.rlimit.exact-values", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
     OciNonSemanticRule::new("oci.common.root.readonly", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.features.potentially-unsafe-config-annotations.accurate",
+        "runtime-feature-report",
+    ),
     OciNonSemanticRule::new("oci.hooks.command", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.container-namespace", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.failure-policy", "linux-executor"),

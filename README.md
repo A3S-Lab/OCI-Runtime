@@ -446,6 +446,12 @@ optional `tmpcopyup` behavior. Feature discovery reports the 60 implemented
 OCI names plus the `rnodev` extension, in sorted order, and does not advertise
 `tmpcopyup`.
 
+Configured host services also report every built-in annotation that can alter
+runtime behavior, together with annotation-backed extensions implemented by
+their active drivers. Probe-only discovery stays empty, and driver-specific
+extensions such as bundle handoff appear only when the selected driver set
+actually advertises them.
+
 These commands can require root privileges, hypervisor access, signed
 artifacts, or destructive cleanup within an explicitly supplied test root.
 Read the linked host guide before running them.
@@ -459,8 +465,8 @@ The repository turns release claims into checked inventories:
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 84 |
-| Owner-bound non-semantic rules | 65 |
-| OCI normative dispositions | 284 enforced · 43 validated · 2 conformant · 326 pending review |
+| Owner-bound non-semantic rules | 66 |
+| OCI normative dispositions | 285 enforced · 43 validated · 2 conformant · 325 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |

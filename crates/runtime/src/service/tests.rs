@@ -17,18 +17,19 @@ use a3s_oci_sdk::oci_spec::runtime::{
     Arch, ContainerState, LinuxNamespaceType, LinuxResources, LinuxSeccompAction, Process,
 };
 use a3s_oci_sdk::{
-    async_trait, CloseStdinRequest, ContainerId, ContainerOperationRequest, ContainerRecord,
-    ContainerStats, ContainerTarget, CpuStats, CreateAttachments, CreateRequest, DeleteMode,
-    DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp, FileRequest,
-    FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp, FilesystemRequest,
-    FilesystemResponse, Generation, IoMode, IsolationRequest, KillRequest, ListRequest,
-    MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext, OperationId,
-    OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
+    async_trait, AttachmentCapabilities, CloseStdinRequest, ContainerId, ContainerOperationRequest,
+    ContainerRecord, ContainerStats, ContainerTarget, CpuStats, CreateAttachments, CreateRequest,
+    DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp,
+    FileRequest, FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp,
+    FilesystemRequest, FilesystemResponse, Generation, IoMode, IsolationRequest, KillRequest,
+    ListRequest, MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext,
+    OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
     ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
     Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
     TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
-    ATTACHMENT_SCHEMA_V1, OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS,
-    OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
+    ATTACHMENT_SCHEMA_V1, BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS,
+    OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES,
+    OCI_LINUX_MOUNT_OPTIONS,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
@@ -105,6 +106,7 @@ struct RecordingDriver {
     capability: DriverCapability,
     operations: Vec<RuntimeOperation>,
     hooks: Vec<OciHookPhase>,
+    attachments: AttachmentCapabilities,
     calls: Mutex<Vec<DriverCall>>,
     acknowledgements: Mutex<Vec<OperationId>>,
     states: Mutex<HashMap<ContainerId, (Generation, DriverState)>>,
@@ -145,6 +147,7 @@ impl RecordingDriver {
                 RuntimeOperation::Wait,
             ],
             hooks: Vec::new(),
+            attachments: AttachmentCapabilities::base_v1(),
             calls: Mutex::new(Vec::new()),
             acknowledgements: Mutex::new(Vec::new()),
             states: Mutex::new(HashMap::new()),
@@ -235,6 +238,15 @@ impl RecordingDriver {
     fn with_hooks(hooks: Vec<OciHookPhase>) -> Self {
         let mut driver = Self::supported();
         driver.hooks = hooks;
+        driver
+    }
+
+    fn with_attachment_extension(name: &str, versions: Vec<u16>) -> Self {
+        let mut driver = Self::supported();
+        driver.attachments = driver
+            .attachments
+            .with_extension(name, versions)
+            .expect("test attachment capability");
         driver
     }
 
@@ -530,6 +542,10 @@ impl RuntimeDriver for RecordingDriver {
 
     fn hooks(&self) -> &[OciHookPhase] {
         &self.hooks
+    }
+
+    fn attachment_capabilities(&self) -> AttachmentCapabilities {
+        self.attachments.clone()
     }
 
     async fn acknowledge_operation(&self, operation_id: &OperationId) -> Result<()> {
@@ -1449,6 +1465,11 @@ async fn reports_only_operations_that_are_currently_implemented() {
 
     assert_eq!(info.operations, vec![RuntimeOperation::Features]);
     assert!(info.attachments.supports_schema(ATTACHMENT_SCHEMA_V1));
+    assert!(info.attachments.extension_names().next().is_none());
+    assert_eq!(
+        info.oci.potentially_unsafe_config_annotations().as_deref(),
+        Some([].as_slice())
+    );
     assert_eq!(info.oci.oci_version_min(), "1.0.0");
     assert_eq!(info.oci.oci_version_max(), "1.3.0");
     assert_eq!(info.oci.hooks().as_deref(), Some([].as_slice()));
@@ -1568,6 +1589,40 @@ async fn reports_only_operations_that_are_currently_implemented() {
         .expect("compile pinned schemas")
         .validate_features(&info.oci)
         .expect("runtime feature report must match the pinned OCI schema");
+}
+
+#[tokio::test]
+async fn reports_builtin_and_driver_unsafe_config_annotations_for_configured_services() {
+    const DRIVER_EXTENSION: &str = "dev.a3s.network.tsi";
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let driver = Arc::new(RecordingDriver::with_attachment_extension(
+        DRIVER_EXTENSION,
+        vec![2, 1],
+    ));
+    let service = open_service(&temporary, driver).await;
+    let info = service.features().await.expect("configured feature report");
+
+    let mut expected = BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS
+        .iter()
+        .copied()
+        .chain([DRIVER_EXTENSION])
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    expected.sort();
+    expected.dedup();
+    assert_eq!(
+        info.oci.potentially_unsafe_config_annotations().as_deref(),
+        Some(expected.as_slice())
+    );
+    assert_eq!(
+        info.attachments.extension_names().collect::<Vec<_>>(),
+        vec![DRIVER_EXTENSION]
+    );
+    OciSchemaValidator::new()
+        .expect("compile pinned schemas")
+        .validate_features(&info.oci)
+        .expect("unsafe annotation feature report must match the pinned OCI schema");
 }
 
 #[tokio::test]
