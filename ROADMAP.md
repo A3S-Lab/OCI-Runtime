@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 296-entry pending normative evidence backlog.
+- [ ] Close the 255-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -478,6 +478,11 @@ driver implements.
   - [x] Report the exact built-in behavior-changing configuration annotations
     and merge annotation-backed extensions from the active driver capability
     inventory, while keeping probe-only discovery empty.
+  - [x] Validate every emitted feature document against the pinned schema and
+    bind its version range, hooks, Linux availability, namespaces, cgroup,
+    seccomp, AppArmor, SELinux, and ID-mapped-mount claims to the same SDK
+    registries and executor tests. Keep the compile-time-only recommendation
+    open because configured driver capabilities are resolved at runtime.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1442,8 +1447,12 @@ leak. Only then may KVM become `experimental`.
   network-device authority, and advertise `linux.netDevices.enabled=true` from
   the same implementation. Native Linux qualification covers real dummy-device
   move/rename, MTU/MAC/address/state read-back, conflict, partial rollback,
-  rootless rejection, and cleanup. Ten OCI requirements are owner-bound,
-  leaving 312 enforced and 296 pending entries.
+  rootless rejection, and cleanup. Ten OCI requirements are owner-bound.
+- [x] Make the OCI feature report fail closed against the pinned schema, derive
+  its accepted specification range and seccomp values from SDK-owned
+  registries, and prove every advertised seccomp action, architecture, and
+  operator against the shared executor. Forty-one feature requirements are
+  now owner-bound, leaving 353 enforced and 255 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

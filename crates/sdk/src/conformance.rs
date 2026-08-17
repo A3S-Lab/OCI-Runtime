@@ -50,10 +50,14 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.common.rlimit.exact-values", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
     OciNonSemanticRule::new("oci.common.root.readonly", "linux-executor"),
+    OciNonSemanticRule::new("oci.features.document.schema", "runtime-feature-report"),
+    OciNonSemanticRule::new("oci.features.hooks.accurate", "runtime-feature-report"),
+    OciNonSemanticRule::new("oci.features.linux.available", "runtime-feature-report"),
     OciNonSemanticRule::new(
         "oci.features.potentially-unsafe-config-annotations.accurate",
         "runtime-feature-report",
     ),
+    OciNonSemanticRule::new("oci.features.version-range", "runtime-feature-report"),
     OciNonSemanticRule::new("oci.hooks.command", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.container-namespace", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.failure-policy", "linux-executor"),
@@ -61,7 +65,15 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.hooks.runtime-namespace", "linux-executor"),
     OciNonSemanticRule::new("oci.hooks.state-stdin", "linux-executor"),
     OciNonSemanticRule::new(
+        "oci.linux.features.apparmor.accurate",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
         "oci.linux.features.capabilities.recognized",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
+        "oci.linux.features.cgroup.accurate",
         "runtime-feature-report",
     ),
     OciNonSemanticRule::new(
@@ -77,7 +89,23 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "runtime-feature-report",
     ),
     OciNonSemanticRule::new(
+        "oci.linux.features.mount-extensions.idmap",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
+        "oci.linux.features.namespaces.recognized",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
         "oci.linux.features.net-devices.accurate",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
+        "oci.linux.features.seccomp.recognized",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
+        "oci.linux.features.selinux.accurate",
         "runtime-feature-report",
     ),
     OciNonSemanticRule::new("oci.linux.intel-rdt.clos-lifecycle", "linux-executor"),

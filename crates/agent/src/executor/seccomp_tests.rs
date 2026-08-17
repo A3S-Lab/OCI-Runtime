@@ -1,7 +1,10 @@
 use std::process::Command;
 
-use a3s_oci_sdk::oci_spec::runtime::Linux;
-use a3s_oci_sdk::ErrorCode;
+use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxSeccompAction, LinuxSeccompOperator};
+use a3s_oci_sdk::{
+    ErrorCode, OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES,
+    OCI_LINUX_SECCOMP_KNOWN_FLAGS, OCI_LINUX_SECCOMP_OPERATORS,
+};
 use serde_json::json;
 
 use super::seccomp::SeccompPlan;
@@ -45,7 +48,7 @@ fn rejects_seccomp_features_that_cannot_be_enforced() {
 
 #[test]
 fn plans_the_supported_seccomp_architectures() {
-    for architecture in ["SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"] {
+    for architecture in OCI_LINUX_SECCOMP_ARCHITECTURES {
         let plan = plan(json!({
             "defaultAction": "SCMP_ACT_ERRNO",
             "defaultErrnoRet": 1,
@@ -58,6 +61,57 @@ fn plans_the_supported_seccomp_architectures() {
         .expect("supported seccomp architecture");
         assert!(plan.is_enabled());
         assert_eq!(plan.filter_count(), 1);
+    }
+}
+
+#[test]
+fn plans_every_advertised_seccomp_action_and_operator() {
+    for action in OCI_LINUX_SECCOMP_ACTIONS {
+        let mut configuration = json!({"defaultAction": action});
+        if matches!(
+            *action,
+            LinuxSeccompAction::ScmpActErrno | LinuxSeccompAction::ScmpActTrace
+        ) {
+            configuration["defaultErrnoRet"] = json!(1);
+        }
+        plan(configuration)
+            .unwrap_or_else(|error| panic!("advertised seccomp action {action} failed: {error}"));
+    }
+
+    for operator in OCI_LINUX_SECCOMP_OPERATORS {
+        let mut argument = json!({
+            "index": 0,
+            "value": 1,
+            "op": operator
+        });
+        if *operator == LinuxSeccompOperator::ScmpCmpMaskedEq {
+            argument["valueTwo"] = json!(u64::MAX);
+        }
+        plan(json!({
+            "defaultAction": "SCMP_ACT_ERRNO",
+            "defaultErrnoRet": 1,
+            "syscalls": [{
+                "names": ["getpid"],
+                "action": "SCMP_ACT_ALLOW",
+                "args": [argument]
+            }]
+        }))
+        .unwrap_or_else(|error| {
+            panic!("advertised seccomp comparison operator {operator} failed: {error}")
+        });
+    }
+}
+
+#[test]
+fn recognizes_but_does_not_advertise_unsupported_seccomp_flags() {
+    for flag in OCI_LINUX_SECCOMP_KNOWN_FLAGS {
+        let error = plan(json!({
+            "defaultAction": "SCMP_ACT_ALLOW",
+            "flags": [flag]
+        }))
+        .expect_err("known but unsupported seccomp flags must fail before mutation");
+        assert_eq!(error.code, ErrorCode::Unsupported, "{flag}");
+        assert!(error.message.contains("flags"), "{flag}: {error}");
     }
 }
 

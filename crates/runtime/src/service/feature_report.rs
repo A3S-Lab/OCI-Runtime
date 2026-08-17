@@ -2,15 +2,16 @@ use std::collections::HashMap;
 use std::fmt;
 
 use a3s_oci_sdk::oci_spec::runtime::{
-    ApparmorBuilder, Arch, CgroupBuilder, Features, FeaturesBuilder, IDMapBuilder, IntelRdtBuilder,
-    LinuxFeature, LinuxFeatureBuilder, LinuxNamespaceType, LinuxSeccompAction, MemoryPolicyBuilder,
+    ApparmorBuilder, CgroupBuilder, Features, FeaturesBuilder, IDMapBuilder, IntelRdtBuilder,
+    LinuxFeature, LinuxFeatureBuilder, LinuxNamespaceType, MemoryPolicyBuilder,
     MountExtensionsBuilder, NetDevicesBuilder, SeccompBuilder, SelinuxBuilder,
 };
 use a3s_oci_sdk::{
-    AttachmentCapabilities, Error, ErrorCode, Result,
+    AttachmentCapabilities, Error, ErrorCode, OciSchemaValidator, Result,
     BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS, OCI_LINUX_CAPABILITY_NAMES,
     OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES, OCI_LINUX_MOUNT_OPTIONS,
-    OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
+    OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
+    OCI_LINUX_SECCOMP_OPERATORS, OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN,
 };
 
 use crate::driver::OciHookPhase;
@@ -50,7 +51,7 @@ pub(super) fn build(
             .to_string(),
         ),
     ]);
-    FeaturesBuilder::default()
+    let features = FeaturesBuilder::default()
         .oci_version_min(OCI_RUNTIME_SPEC_VERSION_MIN)
         .oci_version_max(OCI_RUNTIME_SPEC_VERSION_MAX)
         .hooks(
@@ -67,7 +68,9 @@ pub(super) fn build(
             attachments,
         ))
         .build()
-        .map_err(feature_build_error)
+        .map_err(feature_build_error)?;
+    OciSchemaValidator::new()?.validate_features(&features)?;
+    Ok(features)
 }
 
 fn potentially_unsafe_config_annotations(
@@ -100,39 +103,19 @@ fn compiled_linux_features() -> Result<LinuxFeature> {
         .map_err(feature_build_error)?;
     let seccomp = SeccompBuilder::default()
         .enabled(true)
-        .actions(vec![
-            LinuxSeccompAction::ScmpActAllow,
-            LinuxSeccompAction::ScmpActErrno,
-            LinuxSeccompAction::ScmpActKill,
-            LinuxSeccompAction::ScmpActKillProcess,
-            LinuxSeccompAction::ScmpActKillThread,
-            LinuxSeccompAction::ScmpActLog,
-            LinuxSeccompAction::ScmpActTrace,
-            LinuxSeccompAction::ScmpActTrap,
-        ])
+        .actions(OCI_LINUX_SECCOMP_ACTIONS.to_vec())
         .operators(
-            [
-                "SCMP_CMP_EQ",
-                "SCMP_CMP_GE",
-                "SCMP_CMP_GT",
-                "SCMP_CMP_LE",
-                "SCMP_CMP_LT",
-                "SCMP_CMP_MASKED_EQ",
-                "SCMP_CMP_NE",
-            ]
-            .map(str::to_string)
-            .to_vec(),
+            OCI_LINUX_SECCOMP_OPERATORS
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
         )
-        .archs(vec![Arch::ScmpArchAarch64, Arch::ScmpArchX86_64])
+        .archs(OCI_LINUX_SECCOMP_ARCHITECTURES.to_vec())
         .known_flags(
-            [
-                "SECCOMP_FILTER_FLAG_LOG",
-                "SECCOMP_FILTER_FLAG_SPEC_ALLOW",
-                "SECCOMP_FILTER_FLAG_TSYNC",
-                "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV",
-            ]
-            .map(str::to_string)
-            .to_vec(),
+            OCI_LINUX_SECCOMP_KNOWN_FLAGS
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
         )
         .supported_flags(Vec::<String>::new())
         .build()

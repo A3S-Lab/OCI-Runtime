@@ -453,8 +453,8 @@ fn validate_version(spec: &Spec) -> Result<()> {
         )
         .for_operation("validate-bundle")
     })?;
-    let minimum = Version::new(1, 0, 0);
-    let maximum = Version::new(1, 3, 0);
+    let minimum = supported_version(OCI_RUNTIME_SPEC_VERSION_MIN)?;
+    let maximum = supported_version(OCI_RUNTIME_SPEC_VERSION_MAX)?;
     if version < minimum || version > maximum {
         return Err(Error::new(
             ErrorCode::Unsupported,
@@ -466,6 +466,16 @@ fn validate_version(spec: &Spec) -> Result<()> {
         .for_operation("validate-bundle"));
     }
     Ok(())
+}
+
+fn supported_version(value: &str) -> Result<Version> {
+    Version::parse(value).map_err(|error| {
+        Error::new(
+            ErrorCode::Internal,
+            format!("invalid compiled OCI specification version {value:?}: {error}"),
+        )
+        .for_operation("validate-bundle")
+    })
 }
 
 fn config_too_large(path: &Path, actual: u64) -> Error {
@@ -490,7 +500,7 @@ mod tests {
     use oci_spec::runtime::Spec;
     use serde_json::json;
 
-    use super::{OciBundle, OCI_RUNTIME_SPEC_VERSION_MAX};
+    use super::{OciBundle, OCI_RUNTIME_SPEC_VERSION_MAX, OCI_RUNTIME_SPEC_VERSION_MIN};
     use crate::{ErrorCode, OciSemanticPhase};
 
     fn complete_v1_3_fixture() -> serde_json::Value {
@@ -723,6 +733,23 @@ mod tests {
         let error =
             OciBundle::from_spec(absolute, spec).expect_err("future version must be rejected");
         assert_eq!(error.code, ErrorCode::Unsupported);
+    }
+
+    #[test]
+    fn accepts_both_advertised_specification_version_boundaries() {
+        let absolute = std::env::current_dir()
+            .expect("current directory")
+            .join("advertised-version-bundle");
+
+        for version in [OCI_RUNTIME_SPEC_VERSION_MIN, OCI_RUNTIME_SPEC_VERSION_MAX] {
+            OciBundle::from_json(
+                &absolute,
+                format!(r#"{{"ociVersion":"{version}","root":{{"path":"rootfs"}}}}"#),
+            )
+            .unwrap_or_else(|error| {
+                panic!("advertised OCI specification version {version} must be accepted: {error}")
+            });
+        }
     }
 
     #[test]

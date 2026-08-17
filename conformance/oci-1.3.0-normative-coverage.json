@@ -12657,10 +12657,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "A [runtime](glossary.md#runtime) MAY provide a JSON structure about its implemented features to [runtime callers](glossary.md#runtime-caller).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.document.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_official_minimal_documents",
+        "schema::tests::matches_upstream_v1_3_fixture_expectations",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:f1a7391b8af72a4ae483f2c64149d402c705b448117bc06cb7db37c0236c1319",
@@ -12685,10 +12691,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "All properties in the Features structure except `ociVersionMin` and `ociVersionMax` MAY either be absent or have the `null` value.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.document.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_official_minimal_documents",
+        "schema::tests::matches_upstream_v1_3_fixture_expectations",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:5c901337fd8a39e48f55ca42c9dda60e11246b3bdc0e5e997fc782cfa2b0951e",
@@ -12699,10 +12711,16 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "The `null` value MUST NOT be confused with an empty value such as `0`, `false`, `\"\"`, `[]`, and `{}`.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.document.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_official_minimal_documents",
+        "schema::tests::matches_upstream_v1_3_fixture_expectations",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:9601375155c3dce78c2f0b50cda44117eb5215e0db8b312a7ac8cf0b0646e665",
@@ -12713,10 +12731,16 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`ociVersionMin`** (string, REQUIRED) The minimum recognized version of the Open Container Initiative Runtime Specification.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.version-range"
+      ],
+      "testIds": [
+        "bundle::tests::accepts_both_advertised_specification_version_boundaries",
+        "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:f71e28302daad6b4d4e1329380e5ac28e60e2e952b4d4e005886af7c53177d8e",
@@ -12727,10 +12751,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST accept this value as the [`ociVersion` property of `config.json`](config.md#specification-version).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.version-range"
+      ],
+      "testIds": [
+        "bundle::tests::accepts_both_advertised_specification_version_boundaries",
+        "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:ceba5cdf5a7920b74158d375fd9d83d0f7c0ec6ae44d5877f2e5a4ef101d49e0",
@@ -12741,10 +12771,16 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`ociVersionMax`** (string, REQUIRED) The maximum recognized version of the Open Container Initiative Runtime Specification.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.version-range"
+      ],
+      "testIds": [
+        "bundle::tests::accepts_both_advertised_specification_version_boundaries",
+        "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:01647d16cbedeb66fed3d5eaf8c449c82a48334023c3926a12f10456aaacc8cf",
@@ -12755,10 +12791,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST accept this value as the [`ociVersion` property of `config.json`](config.md#specification-version).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.version-range"
+      ],
+      "testIds": [
+        "bundle::tests::accepts_both_advertised_specification_version_boundaries",
+        "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:73a5ec0c1f4dbfee015ce938327f661a628283acdcc2058a9ed4aaf9bd407f5f",
@@ -12769,10 +12811,16 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "The value MUST NOT be less than the value of the `ociVersionMin` property.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.version-range"
+      ],
+      "testIds": [
+        "bundle::tests::accepts_both_advertised_specification_version_boundaries",
+        "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:db3060aa33c8dcd6480048a15bd4c0bf6411f34d98994d713d07ebe82fc01765",
@@ -12783,10 +12831,16 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "The Features structure MUST NOT contain properties that are not defined in this version of the Open Container Initiative Runtime Specification.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.document.schema"
+      ],
+      "testIds": [
+        "schema::tests::validates_official_minimal_documents",
+        "schema::tests::matches_upstream_v1_3_fixture_expectations",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:ef5bcec07deb7beb4916eada00eb00af069a27c5c2f705ac68571e8813057196",
@@ -12797,10 +12851,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`hooks`** (array of strings, OPTIONAL) The recognized names of the [hooks](config.md#posix-platform-hooks).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.hooks.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:2fac1db60c505a4ea17a8d9e60d3d94e8ae6a8892af55bccf8542aff1763e8d6",
@@ -12811,10 +12871,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST support the elements in this array as the [`hooks` property of `config.json`](config.md#posix-platform-hooks).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.hooks.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order"
+      ]
     },
     {
       "id": "sha256:ce5b900f004c3e15613e3d0c65f1025aacc7ffdb453032773c30e4f8ac11d188",
@@ -12882,10 +12948,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`linux`** (object, OPTIONAL) [Linux-specific features](features-linux.md).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.linux.available"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:ac104071bcd61449d2fb1952fdadc4c377a4467fc395345d7f680ca7cd603aa5",
@@ -12896,10 +12966,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This MAY be set if the runtime supports `linux` platform.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.linux.available"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:96d3210013dad5b26b3a58a4b27232b7ec858a08372e8bea1ad1c43bf4452cba",
@@ -12985,10 +13059,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`namespaces`** (array of strings, OPTIONAL) The recognized names of the namespaces, including namespaces that might not be supported by the host operating system.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.namespaces.recognized"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths"
+      ]
     },
     {
       "id": "sha256:8e4167ee2344be8bb93aac20967c0e150c975d81bed0e54ea9d13dc16ffa1507",
@@ -12999,10 +13078,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array as the [`type` of `linux.namespaces` objects in `config.json`](config-linux.md#namespaces).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.namespaces.recognized"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths"
+      ]
     },
     {
       "id": "sha256:0a9e00992c10f315d11815ce40df8ae0f497372c77fb6cdc4814169c7af9fa34",
@@ -13051,10 +13135,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`cgroup`** (object, OPTIONAL) represents the runtime's implementation status of cgroup managers.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.cgroup.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::plan_tests::rejects_unimplemented_cgroup_v2_resource_families"
+      ]
     },
     {
       "id": "sha256:91dc5fec856015b1b5a5df7840c93cfcce0523310aa33b957dba9b9a7f01a3ac",
@@ -13065,10 +13155,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`v1`** (bool, OPTIONAL) represents whether the runtime supports cgroup v1.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.cgroup.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::plan_tests::rejects_unimplemented_cgroup_v2_resource_families"
+      ]
     },
     {
       "id": "sha256:afff8f105d3d2868a95de63053124fdf6c940b560efdc5075e438d40b350c52b",
@@ -13079,10 +13175,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`v2`** (bool, OPTIONAL) represents whether the runtime supports cgroup v2.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.cgroup.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::plan_tests::rejects_unimplemented_cgroup_v2_resource_families"
+      ]
     },
     {
       "id": "sha256:d2a207e39c7ff6fa0d6edfec0cd475b86f14d461864c2c8ba627cebc10b4bd5b",
@@ -13093,10 +13195,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`systemd`** (bool, OPTIONAL) represents whether the runtime supports system-wide systemd cgroup manager.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.cgroup.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::plan_tests::rejects_unimplemented_cgroup_v2_resource_families"
+      ]
     },
     {
       "id": "sha256:7f0088d831ee51a2b8c88a20b7f3fd48264a3fa271325ee7720b9d174999dfbf",
@@ -13107,10 +13215,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`systemdUser`** (bool, OPTIONAL) represents whether the runtime supports user-scoped systemd cgroup manager.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.cgroup.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::plan_tests::rejects_unimplemented_cgroup_v2_resource_families"
+      ]
     },
     {
       "id": "sha256:e8bd5060dbfb2d5e6b1269db1dd0f7e6ac145374666185010b2c65145757d045",
@@ -13121,10 +13235,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`rdma`** (bool, OPTIONAL) represents whether the runtime supports RDMA cgroup controller.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.cgroup.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::plan_tests::rejects_unimplemented_cgroup_v2_resource_families"
+      ]
     },
     {
       "id": "sha256:e08f82706d3f2729d83cbe414cb53be962e89e93dad3d32188eedf3e2f15bd95",
@@ -13135,10 +13255,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`seccomp`** (object, OPTIONAL) represents the runtime's implementation status of seccomp.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:3ccc4ae21099c558703f8eac9a281576e43e47d947188e6da79c250538463cf0",
@@ -13149,10 +13278,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`enabled`** (bool, OPTIONAL) represents whether the runtime supports seccomp.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:b77b78ab6d58abd53146af16ac9e20c5b554c35e352d07ba9f9d16e3c7387ea7",
@@ -13163,10 +13301,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`actions`** (array of strings, OPTIONAL) The recognized names of the seccomp actions.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:07d273375ed58caa6209a986de60af86d3c2ef6a6fcc97bc62e18647f0b7103c",
@@ -13177,10 +13324,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array in the [`syscalls[].action` property of the `linux.seccomp` object in `config.json`](config-linux.md#seccomp).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:cfe61033d2ad5228703f57991eebad4dc19f3d7be59ba8f2ec41a500e679bf34",
@@ -13191,10 +13347,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`operators`** (array of strings, OPTIONAL) The recognized names of the seccomp operators.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:2eea82bc6074da6aa563545149c2542926b30a1b966776de87f005ae47f534dc",
@@ -13205,10 +13370,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array in the [`syscalls[].args[].op` property of the `linux.seccomp` object in `config.json`](config-linux.md#seccomp).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:3e3d19fc3d2e125aa8f1d1999ab2f9a7535e93a00d5d0ea741c712d05ffb1a5e",
@@ -13219,10 +13393,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`archs`** (array of strings, OPTIONAL) The recognized names of the seccomp architectures.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:d1f87a7c0a172959b0b33f13acc5abbfee4049767d84e85c410992fd6d3c3365",
@@ -13233,10 +13416,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array in the [`architectures` property of the `linux.seccomp` object in `config.json`](config-linux.md#seccomp).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:b6ea3e33c9a1ced4f09019f645d3ef3ddc30e990929403f90a2fc3c816aa1bbb",
@@ -13247,10 +13439,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`knownFlags`** (array of strings, OPTIONAL) The recognized names of the seccomp flags.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:00b957741da38ada629df2fa11973b1f63386dd9a266886c0ad091c38971a73c",
@@ -13261,10 +13462,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize the elements in this array in the [`flags` property of the `linux.seccomp` object in `config.json`](config-linux.md#seccomp).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:43915837b2755211f916749d1db1a2afcf7b305d51bb61e028991f827f731acb",
@@ -13275,10 +13485,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`supportedFlags`** (array of strings, OPTIONAL) The recognized and supported names of the seccomp flags.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:ab4836b8fa003886f4c2d5f6b33f154d0fedad17c56f6441d83c0bd4fe17eca5",
@@ -13289,10 +13508,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST recognize and support the elements in this array in the [`flags` property of the `linux.seccomp` object in `config.json`](config-linux.md#seccomp).",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.seccomp.recognized"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     },
     {
       "id": "sha256:6725b5aeca238f7e402e633d8aceaf2b29e2c8868bf5072768c79129f13fef22",
@@ -13303,10 +13531,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`apparmor`** (object, OPTIONAL) represents the runtime's implementation status of AppArmor.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.apparmor.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
     },
     {
       "id": "sha256:02bdae507fd0fc01fe06a7dc68a4a8b37f38887d197c4485cb4ecab9b3d65d04",
@@ -13317,10 +13550,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`enabled`** (bool, OPTIONAL) represents whether the runtime supports AppArmor.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.apparmor.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
     },
     {
       "id": "sha256:8bddae79e0e696495264af3d3d5017018c105cba83e18ee2cd4217921a5b3a0c",
@@ -13331,10 +13569,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`selinux`** (object, OPTIONAL) represents the runtime's implementation status of SELinux.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.selinux.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
     },
     {
       "id": "sha256:7409a47e3d497e2fe76fd038443fa36764b3a28bf6f888fe351d53940d40509f",
@@ -13345,10 +13588,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`enabled`** (bool, OPTIONAL) represents whether the runtime supports SELinux.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.selinux.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
     },
     {
       "id": "sha256:c94b51ac2b45d8ba88af8a1a97fa4d8b06a7db387a74564e5d7b8ad98647687c",
@@ -13531,10 +13779,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`mountExtensions`** (object, OPTIONAL) represents whether the runtime supports certain mount features, irrespective of the availability of the features on the host operating system.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-extensions.idmap"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement"
+      ]
     },
     {
       "id": "sha256:49da25a48ce852ec89d6593e23b8a6609551dffa55046dff8e99f4b47a40ca36",
@@ -13545,10 +13799,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`idmap`** (object, OPTIONAL) represents whether the runtime supports idmap mounts using the `uidMappings` and `gidMappings` properties of the mount.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-extensions.idmap"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement"
+      ]
     },
     {
       "id": "sha256:c8a0d8d860a5fd68ea5e99e27b9ca212496e93451931b44151b31b64fe9e2df2",
@@ -13559,10 +13819,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`enabled`** (bool, OPTIONAL) represents whether the runtime parses and attempts to use the `uidMappings` and `gidMappings` properties of mounts if provided.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-extensions.idmap"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement"
+      ]
     },
     {
       "id": "sha256:08388ed749c9e44478749189ff840cde53d1b05ccc27b3e152b60e46335f1914",
@@ -13573,10 +13839,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "In such cases, runtimes MUST still set this value to `true`, to indicate that the runtime recognises the `uidMappings` and `gidMappings` properties.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.mount-extensions.idmap"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement"
+      ]
     },
     {
       "id": "sha256:433659a19a4afc239edff0bd8fd39785a7d391a2fe6867d84b6e2a245168ca20",
