@@ -258,7 +258,10 @@ fn run_container_init(invocation: ContainerInitInvocation) -> Result<()> {
         plan.bundle_directory.clone(),
         plan.annotations.clone(),
     )?;
-    let namespace_isolation = plan.sysctls.namespace_isolation();
+    let mut namespace_isolation = plan.sysctls.namespace_isolation();
+    if !plan.network_devices.is_empty() {
+        namespace_isolation.require(a3s_oci_sdk::OciLinuxSysctlNamespace::Network);
+    }
     if let Err(error) =
         namespace::enter_new_namespaces(&plan.namespaces, &namespace_isolation, &mut control)
     {

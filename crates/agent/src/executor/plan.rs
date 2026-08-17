@@ -19,6 +19,7 @@ use super::io_priority::IoPriorityPlan;
 use super::memory_policy::MemoryPolicyPlan;
 use super::mount::{self, MountPlan};
 use super::namespace::NamespacePlan;
+use super::network_device::NetworkDevicePlan;
 use super::personality::PersonalityPlan;
 use super::rlimit::RlimitPlan;
 use super::rootfs::RootfsPropagation;
@@ -166,6 +167,7 @@ pub(super) struct InitPlan {
     pub(super) cgroup: CgroupPlan,
     pub(super) intel_rdt: Option<IntelRdtPlan>,
     pub(super) devices: DevicePlan,
+    pub(super) network_devices: NetworkDevicePlan,
     pub(super) namespaces: NamespacePlan,
     pub(super) sysctls: SysctlPlan,
     pub(super) mounts: Vec<MountPlan>,
@@ -227,6 +229,7 @@ impl InitPlan {
         }
         let sysctls =
             SysctlPlan::from_linux(spec.linux().as_ref(), &namespaces, domainname.as_deref())?;
+        let network_devices = NetworkDevicePlan::from_linux(spec.linux().as_ref(), &namespaces)?;
         super::portable_rootfs_metadata::validate_plan(
             &annotations,
             root.path().is_absolute(),
@@ -340,6 +343,7 @@ impl InitPlan {
             cgroup,
             intel_rdt,
             devices,
+            network_devices,
             namespaces,
             sysctls,
             mounts,
@@ -512,6 +516,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
             "personality",
             "memoryPolicy",
             "intelRdt",
+            "netDevices",
         ],
     )
 }

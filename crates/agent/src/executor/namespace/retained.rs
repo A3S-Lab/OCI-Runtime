@@ -177,6 +177,25 @@ impl RetainedExecutionContext {
             .collect()
     }
 
+    pub(crate) fn duplicate_network_namespace(&self) -> Result<File> {
+        let namespace = self
+            .namespaces
+            .iter()
+            .find(|namespace| namespace.kind.clone_flag == libc::CLONE_NEWNET)
+            .ok_or_else(|| {
+                retained_error(
+                    ErrorCode::FailedPrecondition,
+                    "configured network namespace was not retained for network-device movement",
+                )
+            })?;
+        namespace.descriptor.try_clone().map_err(|error| {
+            retained_error(
+                ErrorCode::Internal,
+                format!("failed to duplicate retained network namespace: {error}"),
+            )
+        })
+    }
+
     pub(crate) fn inherited_descriptors(
         &self,
         init_pidfd: RawFd,

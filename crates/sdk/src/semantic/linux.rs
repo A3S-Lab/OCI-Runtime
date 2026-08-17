@@ -8,6 +8,8 @@ use crate::{
 
 use super::{contains_nul, is_posix_absolute, rules, OciSemanticRule, ViolationCollector};
 
+const LINUX_INTERFACE_NAME_BYTES: usize = 15;
+
 #[derive(Default)]
 struct NamespaceFacts {
     entries: BTreeMap<String, bool>,
@@ -390,12 +392,13 @@ fn validate_net_devices(
             "netDevices requires an explicit Linux network namespace",
         );
     }
+    let mut exact_targets = BTreeSet::new();
     for (host_name, device) in devices {
         if !valid_network_device_name(host_name) {
             collector.invalid(
                 format!("/linux/netDevices/{}", escape_pointer(host_name)),
                 rules::NET_DEVICE_HOST_NAME_VALID,
-                "host network device names must be 1-16 bytes and contain no slash, colon, or space",
+                "host network device names must be 1-15 bytes and contain no slash, colon, or whitespace",
             );
         }
         if contains_nul(host_name) {
@@ -414,7 +417,7 @@ fn validate_net_devices(
                 collector.invalid(
                     format!("/linux/netDevices/{}/name", escape_pointer(host_name)),
                     rules::NET_DEVICE_CONTAINER_NAME_VALID,
-                    "container network device names must be 1-16 bytes and contain no slash, colon, or space",
+                    "container network device names must be 1-15 bytes and contain no slash, colon, or whitespace",
                 );
             }
             if contains_nul(name) {
@@ -424,15 +427,50 @@ fn validate_net_devices(
                     "network device names must not contain a NUL byte",
                 );
             }
+            if !name.is_empty() {
+                let template = name.ends_with("%d");
+                let percent_count = name.bytes().filter(|byte| *byte == b'%').count();
+                if percent_count != 0 && (!template || percent_count != 1) {
+                    collector.invalid(
+                        format!("/linux/netDevices/{}/name", escape_pointer(host_name)),
+                        rules::NET_DEVICE_TARGET_TEMPLATE,
+                        "network device targets may use `%d` only as one appended name template",
+                    );
+                } else if !template && !exact_targets.insert(name) {
+                    collector.invalid(
+                        format!("/linux/netDevices/{}/name", escape_pointer(host_name)),
+                        rules::NET_DEVICE_TARGET_UNIQUE,
+                        "network device target names must be unique unless they use an appended `%d` template",
+                    );
+                }
+            } else {
+                if !exact_targets.insert(host_name.as_str()) {
+                    collector.invalid(
+                        format!("/linux/netDevices/{}", escape_pointer(host_name)),
+                        rules::NET_DEVICE_TARGET_UNIQUE,
+                        "network device target names must be unique",
+                    );
+                }
+            }
+        } else {
+            if !exact_targets.insert(host_name.as_str()) {
+                collector.invalid(
+                    format!("/linux/netDevices/{}", escape_pointer(host_name)),
+                    rules::NET_DEVICE_TARGET_UNIQUE,
+                    "network device target names must be unique",
+                );
+            }
         }
     }
 }
 
 fn valid_network_device_name(name: &str) -> bool {
     !name.is_empty()
-        && name.len() <= 16
+        && name.len() <= LINUX_INTERFACE_NAME_BYTES
         && !matches!(name, "." | "..")
-        && !name.contains(['/', ':', ' '])
+        && !name
+            .bytes()
+            .any(|byte| byte == b'/' || byte == b':' || byte.is_ascii_whitespace())
 }
 
 fn validate_time_offsets(

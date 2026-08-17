@@ -226,6 +226,21 @@ following:
 25. state returns `NotFound` and durable list is empty after delete;
 26. the marker, executor root, and complete smoke session are removed.
 
+The qualification wrapper also runs four OCI 1.3 `linux.netDevices` profiles.
+For the positive profile it creates a down dummy interface with MTU 1450, a
+fixed MAC address, and `192.0.2.10/24`, requests the target template
+`a3seth%d`, and starts the same v20 lifecycle. The workload must observe
+`a3seth0`, the exact MTU, MAC, and permanent address, and the `UP` flag before
+it can emit the normal success marker. Deleting the private namespace must
+leave no virtual device in the host namespace.
+
+The three negative profiles prove that an exact `lo` target collision fails
+without moving its source, a collision introduced by an earlier `%d` move
+rolls every source back with its original name and attributes, and a rootless
+request fails before touching a host dummy interface. The exit trap tracks all
+test-created interfaces and deletes any source still present after a failed or
+interrupted run.
+
 The smoke uses `SIGKILL` to prove exact signal-status propagation through the
 namespace PID 1 and outer launcher. The runtime never resolves the numeric PID
 again for lifecycle or cleanup signaling.
@@ -252,7 +267,8 @@ Run the same gate on a supported Ubuntu host:
 bash .github/scripts/native-linux-smoke.sh
 ```
 
-The script installs `busybox-static`, `jq`, `uidmap`, and `util-linux`, builds
+The script installs `busybox-static`, `iproute2`, `jq`, `uidmap`, and
+`util-linux`, builds
 the matching `a3s-oci-agent` and CLI binaries, constructs the checked-in
 rootful fixture with a 100000:200000-owned searchable rootfs, `/proc` mount
 target, and writable hook trace, injects one hook for every OCI phase, checks
@@ -332,6 +348,13 @@ cgroup-v2 directory owned by the effective UID/GID, and expose and enable the
 device/inode identity before creating a private `a3s-oci-*` manager below it;
 it never guesses a systemd scope or enables controllers outside the supplied
 delegation.
+
+`linux.netDevices` is deliberately outside the current rootless authority
+contract. A bundle that requests it is rejected before an executor slot,
+namespace, rootfs, cgroup, or host interface is mutated. The qualification
+script supplies a real host dummy interface and compares it before and after
+the rejected Create, so this is a retained permission boundary rather than a
+schema-only check.
 
 A positive rootless run also uses `--rootless-device-bootstrap` and starts
 with non-root real UID/GID plus effective root. Before Tokio is created, the

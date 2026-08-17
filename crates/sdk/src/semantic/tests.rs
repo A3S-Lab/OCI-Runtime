@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 86);
+    assert_eq!(registry.len(), 88);
     assert_eq!(
         registry
             .iter()
@@ -171,6 +171,49 @@ fn schema_good_net_device_fixture_still_requires_runtime_namespace_semantics() {
     .expect("decode upstream net-device fixture");
     let rules = rules(&value, OciSemanticPhase::Configuration);
     assert!(rules.contains("oci.linux.net-device.requires-network-namespace"));
+}
+
+#[test]
+fn validates_linux_network_device_names_templates_and_exact_targets() {
+    let valid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "namespaces": [{"type": "network"}],
+            "netDevices": {
+                "veth0": {"name": "eth%d"},
+                "veth1": {"name": "eth%d"},
+                "veth2": {"name": "lan0"}
+            }
+        }
+    });
+    OciSemanticValidator::new()
+        .expect("construct validator")
+        .validate(OciSemanticPhase::Configuration, &valid)
+        .expect("valid appended templates and exact target");
+
+    let invalid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "namespaces": [{"type": "network"}],
+            "netDevices": {
+                "interface-name-too-long": {},
+                "veth0": {"name": "eth%d-rest"},
+                "veth1": {"name": "lan0"},
+                "veth2": {"name": "lan0"},
+                "veth3": {"name": "eth%%d"}
+            }
+        }
+    });
+    let rules = rules(&invalid, OciSemanticPhase::Configuration);
+    for expected in [
+        "oci.linux.net-device.host-name.valid",
+        "oci.linux.net-device.target-template",
+        "oci.linux.net-device.target.unique",
+    ] {
+        assert!(rules.contains(expected), "missing rule {expected}");
+    }
 }
 
 #[test]

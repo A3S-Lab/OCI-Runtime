@@ -32,10 +32,17 @@ apparmor_userns_original=""
 apparmor_userns_changed=false
 absolute_cgroup_path="/a3s-oci-absolute-$$"
 absolute_cgroup_host_path="/sys/fs/cgroup${absolute_cgroup_path}"
+network_device_sources=()
+network_device_success_source="a3snd$$"
+network_device_conflict_source="a3snc$$"
+network_device_rollback_first="a3snr0$$"
+network_device_rollback_second="a3snr1$$"
+network_device_rootless_source="a3snl$$"
 
 restore_host() {
   local command_status=$?
   local cleanup_status=0
+  local network_device
   local status
   trap - EXIT
   set +e
@@ -48,6 +55,16 @@ restore_host() {
     sudo kill -KILL "$recovery_owner_pid"
     wait "$recovery_owner_pid" 2>/dev/null
   fi
+
+  for network_device in "${network_device_sources[@]}"; do
+    if sudo ip link show dev "$network_device" >/dev/null 2>&1; then
+      sudo ip link delete dev "$network_device"
+      status=$?
+      if ((status != 0)); then
+        cleanup_status=$status
+      fi
+    fi
+  done
 
   if [[ "$rootless_cgroup_bind_mounted" == true ]]; then
     sudo umount "$rootless_cgroup_parent"
@@ -171,7 +188,7 @@ if [[ ! "$soak_iterations" =~ ^[0-9]+$ ]] ||
 fi
 
 sudo apt-get update
-sudo apt-get install --yes busybox-static jq uidmap util-linux
+sudo apt-get install --yes busybox-static iproute2 jq uidmap util-linux
 cargo build -p a3s-oci-agent -p a3s-oci-cli
 
 features="$("$PWD/target/debug/a3s-oci" features)"
@@ -193,6 +210,10 @@ bundle_b="$qualification_root/bundle-b"
 control_bundle="$qualification_root/control-bundle"
 recovery_bundle="$qualification_root/recovery-bundle"
 rootless_bundle="$qualification_root/rootless-bundle"
+network_device_bundle="$qualification_root/network-device-bundle"
+network_device_conflict_bundle="$qualification_root/network-device-conflict-bundle"
+network_device_rollback_bundle="$qualification_root/network-device-rollback-bundle"
+network_device_rootless_bundle="$qualification_root/network-device-rootless-bundle"
 rootless_bin="$qualification_root/rootless-bin"
 work_parent="$qualification_root/work"
 rootless_work_parent="$qualification_root/rootless-work"
@@ -329,6 +350,69 @@ test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$control_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$recovery_bundle/rootfs")" = '100000:200000'
 
+# shellcheck disable=SC2016 # Expanded inside the network-device workload.
+network_device_command_prefix='test -e /sys/class/net/a3seth0; test "$(/bin/busybox cat /sys/class/net/a3seth0/mtu)" = 1450; network_flags=$(/bin/busybox cat /sys/class/net/a3seth0/flags); test "$((network_flags & 1))" = 1; test "$(/bin/busybox cat /sys/class/net/a3seth0/address)" = 02:00:00:00:00:10; /bin/busybox ip -4 address show dev a3seth0 | /bin/busybox grep -q "inet 192.0.2.10/24"; '
+for candidate in \
+  "$network_device_bundle" \
+  "$network_device_conflict_bundle" \
+  "$network_device_rollback_bundle"; do
+  mkdir "$candidate"
+  cp -a --no-preserve=ownership "$bundle/." "$candidate/"
+  candidate_trace="$candidate/rootfs/.a3s-oci-hook-trace"
+  jq --arg host_trace "$candidate_trace" '
+      .hooks |= with_entries(
+        .value |= map(
+          .env |= map(
+            if startswith("A3S_HOOK_TRACE=")
+               and . != "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+            then "A3S_HOOK_TRACE=" + $host_trace
+            else .
+            end
+          )
+        )
+      )
+    ' "$candidate/config.json" >"$candidate/config.json.tmp"
+  mv "$candidate/config.json.tmp" "$candidate/config.json"
+  sudo chown -R 100000:200000 "$candidate/rootfs"
+  sudo chmod 0666 "$candidate_trace"
+done
+jq \
+  --arg source "$network_device_success_source" \
+  --arg command_prefix "$network_device_command_prefix" \
+  '
+    .linux.netDevices = {($source): {name: "a3seth%d"}}
+    | .process.args[2] = ($command_prefix + .process.args[2])
+    | .annotations["dev.a3s.oci.net-devices"] = "move-rename-preserve-up-v1"
+  ' \
+  "$network_device_bundle/config.json" >"$network_device_bundle/config.json.tmp"
+mv "$network_device_bundle/config.json.tmp" "$network_device_bundle/config.json"
+jq \
+  --arg source "$network_device_conflict_source" \
+  '
+    .linux.netDevices = {($source): {name: "lo"}}
+    | .annotations["dev.a3s.oci.net-devices"] = "target-conflict-v1"
+  ' \
+  "$network_device_conflict_bundle/config.json" \
+  >"$network_device_conflict_bundle/config.json.tmp"
+mv \
+  "$network_device_conflict_bundle/config.json.tmp" \
+  "$network_device_conflict_bundle/config.json"
+jq \
+  --arg first "$network_device_rollback_first" \
+  --arg second "$network_device_rollback_second" \
+  '
+    .linux.netDevices = {
+      ($first): {name: "a3seth%d"},
+      ($second): {name: "a3seth0"}
+    }
+    | .annotations["dev.a3s.oci.net-devices"] = "partial-failure-rollback-v1"
+  ' \
+  "$network_device_rollback_bundle/config.json" \
+  >"$network_device_rollback_bundle/config.json.tmp"
+mv \
+  "$network_device_rollback_bundle/config.json.tmp" \
+  "$network_device_rollback_bundle/config.json"
+
 if getent passwd "$rootless_uid" >/dev/null; then
   printf 'Required rootless smoke UID %s is already allocated\n' "$rootless_uid" >&2
   exit 1
@@ -438,6 +522,26 @@ test "$(stat --format '%u:%g' "$rootless_bundle/rootfs")" \
 test "$(stat --format '%u:%g' \
   "$rootless_bundle/rootfs/.a3s-oci-rootless-subordinate")" \
   = '300000:400000'
+
+mkdir "$network_device_rootless_bundle"
+cp -a --no-preserve=ownership \
+  "$rootless_bundle/." "$network_device_rootless_bundle/"
+jq \
+  --arg source "$network_device_rootless_source" \
+  '
+    .linux.namespaces += [{"type": "network"}]
+    | .linux.netDevices = {($source): {name: "a3sroot%d"}}
+    | .annotations["dev.a3s.oci.net-devices"] = "rootless-rejection-v1"
+  ' \
+  "$network_device_rootless_bundle/config.json" \
+  >"$network_device_rootless_bundle/config.json.tmp"
+mv \
+  "$network_device_rootless_bundle/config.json.tmp" \
+  "$network_device_rootless_bundle/config.json"
+sudo chown -R \
+  "$rootless_uid:$rootless_gid" "$network_device_rootless_bundle"
+sudo chown 300000:400000 \
+  "$network_device_rootless_bundle/rootfs/.a3s-oci-rootless-subordinate"
 
 report_native_failure() {
   local rootfs="$1"
@@ -578,6 +682,85 @@ run_smoke() {
     return "$status"
   fi
   verify_single_container_report "$expected_kvm_present" "$output"
+}
+
+create_dummy_network_device() {
+  local name="$1"
+  local mtu="$2"
+  local mac="$3"
+  local address="${4:-}"
+
+  sudo ip link add name "$name" type dummy
+  network_device_sources+=("$name")
+  sudo ip link set dev "$name" address "$mac"
+  sudo ip link set dev "$name" mtu "$mtu"
+  if [[ -n "$address" ]]; then
+    sudo ip address add "$address" dev "$name"
+  fi
+  sudo ip link set dev "$name" down
+}
+
+verify_host_network_device() {
+  local name="$1"
+  local mtu="$2"
+  local mac="$3"
+  local address="${4:-}"
+  local flags
+
+  sudo ip link show dev "$name" >/dev/null
+  test "$(cat "/sys/class/net/$name/mtu")" = "$mtu"
+  test "$(cat "/sys/class/net/$name/address")" = "$mac"
+  flags="$(cat "/sys/class/net/$name/flags")"
+  test "$((flags & 1))" = 0
+  if [[ -n "$address" ]]; then
+    sudo ip -4 address show dev "$name" | grep -Fq "inet $address "
+  fi
+}
+
+verify_host_network_device_absent() {
+  local name="$1"
+
+  if sudo ip link show dev "$name" >/dev/null 2>&1; then
+    printf 'Network device %s unexpectedly remained in the host namespace\n' \
+      "$name" >&2
+    return 1
+  fi
+}
+
+run_network_device_negative_smoke() {
+  local case_name="$1"
+  local smoke_bundle="$2"
+  local expected_reason="$3"
+  local output
+  local status
+
+  if output="$(sudo "$PWD/target/debug/a3s-oci" native-linux-smoke \
+      --agent "$PWD/target/debug/a3s-oci-agent" \
+      --bundle "$smoke_bundle" \
+      --work-parent "$work_parent")"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output"
+  if ((status != 2)); then
+    report_native_failure "$smoke_bundle/rootfs"
+    return 1
+  fi
+  jq --exit-status \
+    --arg reason "$expected_reason" \
+    '.schema_version == "a3s.oci.native-linux-smoke.v20"
+     and .status != "available"
+     and (.reason | contains($reason))
+     and ((.reason | contains("rollback also failed")) | not)
+     and (.created_pid == null)
+     and .executor_runtime_clean
+     and .session_root_clean
+     and .marker_removed' \
+    <<<"$output" >/dev/null
+  test ! -e "$smoke_bundle/rootfs/.a3s-oci-native-smoke"
+  test -z "$(find "$work_parent" -mindepth 1 -print -quit)"
+  printf 'Network-device negative case passed: %s\n' "$case_name"
 }
 
 run_service_smoke() {
@@ -1070,6 +1253,7 @@ run_rootless_negative_smoke() {
   local case_name="$1"
   local delegated_root="$2"
   local expected_reason="$3"
+  local smoke_bundle="${4:-$rootless_bundle}"
   local output
   local status
   local before_work
@@ -1081,7 +1265,7 @@ run_rootless_negative_smoke() {
   local -a command=(
     "$rootless_bin/a3s-oci" native-linux-rootless-smoke
     --agent "$rootless_bin/a3s-oci-agent"
-    --bundle "$rootless_bundle"
+    --bundle "$smoke_bundle"
     --work-parent "$rootless_work_parent"
   )
 
@@ -1092,9 +1276,9 @@ run_rootless_negative_smoke() {
   before_work="$(sudo find "$rootless_work_parent" -mindepth 1 -printf '%P\n' | sort)"
   before_cgroup="$(sudo find "$rootless_cgroup_parent" -mindepth 1 -printf '%P\n' | sort)"
   before_rootfs="$(
-    sudo find "$rootless_bundle/rootfs" -xdev \
+    sudo find "$smoke_bundle/rootfs" -xdev \
       -printf '%P|%y|%m|%U|%G|%s|%T@|%l\n' | sort
-    sudo find "$rootless_bundle/rootfs" -xdev -type f \
+    sudo find "$smoke_bundle/rootfs" -xdev -type f \
       -exec sha256sum {} + | sort
   )"
   if output="$(sudo sh -c '
@@ -1125,17 +1309,17 @@ run_rootless_negative_smoke() {
   after_work="$(sudo find "$rootless_work_parent" -mindepth 1 -printf '%P\n' | sort)"
   after_cgroup="$(sudo find "$rootless_cgroup_parent" -mindepth 1 -printf '%P\n' | sort)"
   after_rootfs="$(
-    sudo find "$rootless_bundle/rootfs" -xdev \
+    sudo find "$smoke_bundle/rootfs" -xdev \
       -printf '%P|%y|%m|%U|%G|%s|%T@|%l\n' | sort
-    sudo find "$rootless_bundle/rootfs" -xdev -type f \
+    sudo find "$smoke_bundle/rootfs" -xdev -type f \
       -exec sha256sum {} + | sort
   )"
   test "$after_work" = "$before_work"
   test "$after_cgroup" = "$before_cgroup"
   test "$after_rootfs" = "$before_rootfs"
-  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-smoke"
-  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress"
-  test ! -e "$rootless_bundle/rootfs/.a3s-oci-rootless-progress.next"
+  test ! -e "$smoke_bundle/rootfs/.a3s-oci-rootless-smoke"
+  test ! -e "$smoke_bundle/rootfs/.a3s-oci-rootless-progress"
+  test ! -e "$smoke_bundle/rootfs/.a3s-oci-rootless-progress.next"
   printf 'Rootless negative case passed: %s\n' "$case_name"
 }
 
@@ -1726,6 +1910,17 @@ if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   kvm_original_moved=true
 fi
 
+create_dummy_network_device \
+  "$network_device_rootless_source" 1500 02:00:00:00:00:30
+run_rootless_negative_smoke \
+  network-device-authority \
+  "$rootless_cgroup_parent" \
+  "rootless linux.netDevices requires network-device authority" \
+  "$network_device_rootless_bundle"
+verify_host_network_device \
+  "$network_device_rootless_source" 1500 02:00:00:00:00:30
+sudo ip link delete dev "$network_device_rootless_source"
+
 run_rootless_negative_smoke \
   missing-delegation \
   "" \
@@ -1801,6 +1996,39 @@ run_rootless_post_open_negative_smoke \
 run_rootless_owner_death_recovery
 run_rootless_smoke
 run_rootless_device_policy_smoke
+create_dummy_network_device \
+  "$network_device_conflict_source" 1500 02:00:00:00:00:20
+run_network_device_negative_smoke \
+  target-conflict \
+  "$network_device_conflict_bundle" \
+  "already exists in the container network namespace"
+verify_host_network_device \
+  "$network_device_conflict_source" 1500 02:00:00:00:00:20
+sudo ip link delete dev "$network_device_conflict_source"
+
+create_dummy_network_device \
+  "$network_device_rollback_first" 1450 02:00:00:00:00:11 192.0.2.11/24
+create_dummy_network_device \
+  "$network_device_rollback_second" 1500 02:00:00:00:00:12
+run_network_device_negative_smoke \
+  partial-failure-rollback \
+  "$network_device_rollback_bundle" \
+  "apply route netlink network-device request"
+verify_host_network_device \
+  "$network_device_rollback_first" 1450 02:00:00:00:00:11 192.0.2.11/24
+verify_host_network_device \
+  "$network_device_rollback_second" 1500 02:00:00:00:00:12
+sudo ip link delete dev "$network_device_rollback_first"
+sudo ip link delete dev "$network_device_rollback_second"
+
+create_dummy_network_device \
+  "$network_device_success_source" 1450 02:00:00:00:00:10 192.0.2.10/24
+run_smoke \
+  false \
+  "$network_device_bundle" \
+  "$network_device_bundle/rootfs/.a3s-oci-hook-trace"
+verify_host_network_device_absent "$network_device_success_source"
+
 run_smoke false
 run_smoke false "$control_bundle" "$control_hook_trace"
 run_service_smoke false

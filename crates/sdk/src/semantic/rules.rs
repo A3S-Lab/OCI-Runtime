@@ -99,6 +99,8 @@ define_rules! {
     NET_DEVICE_HOST_NAME_VALID => RuntimeConstraint, "oci.linux.net-device.host-name.valid";
     NET_DEVICE_NAME_NO_NUL => RuntimeConstraint, "oci.linux.net-device.name.no-nul";
     NET_DEVICE_REQUIRES_NETWORK_NAMESPACE => RuntimeConstraint, "oci.linux.net-device.requires-network-namespace";
+    NET_DEVICE_TARGET_TEMPLATE => RuntimeConstraint, "oci.linux.net-device.target-template";
+    NET_DEVICE_TARGET_UNIQUE => RuntimeConstraint, "oci.linux.net-device.target.unique";
     PERSONALITY_DOMAIN_REQUIRED => Normative, "oci.linux.personality.domain.required";
     PERSONALITY_FLAGS_EMPTY => RuntimeConstraint, "oci.linux.personality.flags-empty";
     RDMA_LIMIT_REQUIRED => Normative, "oci.linux.rdma.limit-required";

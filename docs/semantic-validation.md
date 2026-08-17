@@ -57,7 +57,7 @@ The initial rule set covers:
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 85 rule identifiers come from one typed registry. Twenty-five are classified
+All 88 rule identifiers come from one typed registry. Twenty-five are classified
 as direct OCI normative validators and are currently bound to 43 exact source
 entries in the normative evidence manifest. Linux `oomScoreAdj`, scheduler,
 and I/O-priority runtime constraints plus executor and real-host tests promote
@@ -76,6 +76,12 @@ source of truth. An accepted key is classified as IPC, network, UTS, or user
 namespace state. The Linux executor then checks the selected namespace
 identity, bounds the transaction, verifies procfs read-back, and rolls back any
 partial change before Create can be reported as ready.
+
+For Linux network devices, validation requires an explicit network namespace,
+bounds host and target interface names, accepts `%d` only as one appended
+template, and rejects duplicate exact targets. The executor repeats the
+security-critical bounds while building a deterministic move plan, then
+preflights real source and target namespaces before the first netlink mutation.
 
 For Linux cgroups, validation and execution share `OciLinuxCgroupPath` rather
 than applying host-native path rules. The parser therefore behaves identically
