@@ -120,7 +120,7 @@ caches init and process terminal results, and dispatches the exact generation
 through `NativeLinuxDriver` to the shared `LinuxExecutor`. The submitted bundle
 is strictly loaded before the lifecycle begins.
 
-The versioned `a3s.oci.native-linux-smoke.v19` report requires all of the
+The versioned `a3s.oci.native-linux-smoke.v20` report requires all of the
 following:
 
 1. the service advertises exactly `features`, `create`, `state`, `start`,
@@ -150,8 +150,9 @@ following:
    `init_rlimits_verified`, exact configured `oom_score_adj`
    value of 100, IPC `kernel.shm_rmid_forced=1`, network
    `net.ipv4.ip_forward=1`, best-effort I/O priority 4, `SCHED_BATCH` with nice
-   6, and the exact `LINUX32` execution domain as
-   `init_personality_verified`,
+   6, the exact `LINUX32` execution domain as `init_personality_verified`,
+   and an exact `MPOL_BIND` node-0 NUMA policy with
+   `MPOL_F_STATIC_NODES` as `init_memory_policy_verified`,
    reads capability masks `CapInh=0x400`, `CapPrm=0x401`, `CapEff=0x401`,
    `CapBnd=0x401`, and `CapAmb=0x400` as
    `init_capabilities_verified`, and reads `NoNewPrivs=1` as
@@ -266,7 +267,7 @@ configured with one container ID and duplicates the inherited Box FD 3/4/5
 roles before it opens any workload.
 
 The `native-linux-service-smoke` command reuses the complete
-`a3s.oci.native-linux-smoke.v19` lifecycle assertions over a real `0600` Unix
+`a3s.oci.native-linux-smoke.v20` lifecycle assertions over a real `0600` Unix
 socket. In addition to the 26 lifecycle requirements above, success requires:
 
 1. the service root, state root, and executor parent are real, owner-owned

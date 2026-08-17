@@ -13,7 +13,7 @@
     "args": [
       "/bin/sh",
       "-c",
-      "set -eu; trap 'exit 0' TERM; test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 0 && $3 == 1 { ok = 1 } END { exit !ok }' /proc/self/uid_map; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 0 && $3 == 1 { ok = 1 } END { exit !ok }' /proc/self/gid_map; /bin/busybox awk '$1 == \"monotonic\" && $2 == 3600 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; /bin/busybox awk '$1 == \"boottime\" && $2 == 7200 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke; while :; do /bin/busybox sleep 1; done"
+      "set -eu; trap 'exit 0' TERM; test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; /bin/busybox awk '$2 == \"bind=static:0\" { ok = 1 } END { exit !ok }' /proc/self/numa_maps; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 0 && $3 == 1 { ok = 1 } END { exit !ok }' /proc/self/uid_map; /bin/busybox awk 'NR == 1 && $1 == 0 && $2 == 0 && $3 == 1 { ok = 1 } END { exit !ok }' /proc/self/gid_map; /bin/busybox awk '$1 == \"monotonic\" && $2 == 3600 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; /bin/busybox awk '$1 == \"boottime\" && $2 == 7200 && $3 == 0 { ok = 1 } END { exit !ok }' /proc/self/timens_offsets; printf 'a3s-oci-create-start-user-time-v1\\n' > /.a3s-oci-create-start-smoke; while :; do /bin/busybox sleep 1; done"
     ],
     "env": [
       "PATH=/bin"
@@ -40,6 +40,11 @@
     "personality": {
       "domain": "LINUX32",
       "flags": []
+    },
+    "memoryPolicy": {
+      "mode": "MPOL_BIND",
+      "nodes": "0",
+      "flags": ["MPOL_F_STATIC_NODES"]
     },
     "namespaces": [
       {

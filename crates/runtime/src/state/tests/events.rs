@@ -455,7 +455,12 @@ async fn event_long_poll_wakes_for_a_matching_event_and_times_out_cleanly() {
     let waiting_store = store.clone();
     let waiter = tokio::spawn(async move {
         waiting_store
-            .events(&events_request(None, 0, 8, Some(2_000)))
+            // The Windows CI runner can spend several seconds scanning the
+            // durable journal while the full workspace test suite is under
+            // heavy filesystem load. Keep this deadline comfortably above
+            // that scheduling variance; a successful wake still returns as
+            // soon as the event is committed.
+            .events(&events_request(None, 0, 8, Some(30_000)))
             .await
     });
     tokio::time::sleep(Duration::from_millis(25)).await;

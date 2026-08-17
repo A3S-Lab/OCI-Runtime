@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI Linux NUMA memory-policy enforcement for configured init. One SDK
+  registry owns all seven OCI modes and all three flags for validation,
+  execution, and feature reporting. The bounded planner validates node lists
+  and mode/flag relationships, while the shared Linux executor applies the
+  policy before credential reduction and seccomp and immediately reads the
+  complete mode, flags, and effective node mask back through
+  `get_mempolicy`. `MPOL_PREFERRED` selects the lowest requested node, matching
+  Linux, and omission performs no syscall. Native Linux smoke report v20 plus
+  HVF and WHPX fixtures verify `MPOL_BIND` with `MPOL_F_STATIC_NODES` on node
+  0 from inside the workload. Nine requirements move to enforced, leaving 247
+  enforced, 25 validated, two conformant, and 381 pending entries.
 - OCI Linux execution personality for configured init. The SDK requires a
   domain whenever `linux.personality` is present and rejects every nonempty
   flags list because OCI 1.3 defines no supported flag values. The shared

@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 75);
+    assert_eq!(registry.len(), 78);
     assert_eq!(
         registry
             .iter()
@@ -394,6 +394,52 @@ fn reports_linux_namespace_security_and_resource_relationships() {
         "oci.linux.personality.flags-empty",
     ] {
         assert!(rules.contains(expected), "missing rule {expected}");
+    }
+}
+
+#[test]
+fn reports_linux_memory_policy_shape_and_flag_relationships() {
+    let cases = [
+        json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "linux": {"memoryPolicy": {}}
+        }),
+        json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "linux": {
+                "memoryPolicy": {
+                    "mode": "MPOL_DEFAULT",
+                    "nodes": "0-",
+                    "flags": ["MPOL_F_NUMA_BALANCING", "MPOL_F_STATIC_NODES"]
+                }
+            }
+        }),
+        json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "linux": {
+                "memoryPolicy": {
+                    "mode": "MPOL_BIND",
+                    "nodes": "0",
+                    "flags": ["MPOL_F_RELATIVE_NODES", "MPOL_F_STATIC_NODES"]
+                }
+            }
+        }),
+    ];
+    let reported = cases
+        .iter()
+        .flat_map(|value| rules(value, OciSemanticPhase::Configuration))
+        .collect::<BTreeSet<_>>();
+
+    for expected in [
+        "oci.linux.memory-policy.mode.required",
+        "oci.linux.memory-policy.nodes.format",
+        "oci.linux.memory-policy.nodes-forbidden",
+        "oci.linux.memory-policy.flags-compatible",
+    ] {
+        assert!(reported.contains(expected), "missing rule {expected}");
     }
 }
 

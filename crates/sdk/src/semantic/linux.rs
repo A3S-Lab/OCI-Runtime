@@ -671,14 +671,28 @@ fn validate_memory_policy(linux: &Map<String, Value>, collector: &mut ViolationC
     let Some(policy) = linux.get("memoryPolicy").and_then(Value::as_object) else {
         return;
     };
+    if !policy.contains_key("mode") {
+        collector.invalid(
+            "/linux/memoryPolicy/mode",
+            rules::MEMORY_POLICY_MODE_REQUIRED,
+            "linux.memoryPolicy.mode is required when memoryPolicy is configured",
+        );
+    }
     let Some(mode) = policy.get("mode").and_then(Value::as_str) else {
         return;
     };
-    let nodes = policy
-        .get("nodes")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|nodes| !nodes.is_empty());
+    let raw_nodes = policy.get("nodes").and_then(Value::as_str);
+    if raw_nodes.is_some_and(|nodes| !valid_memory_node_list(nodes)) {
+        collector.invalid(
+            "/linux/memoryPolicy/nodes",
+            rules::MEMORY_POLICY_NODES_FORMAT,
+            format!(
+                "linux.memoryPolicy.nodes must contain comma-separated indices and ranges below {}",
+                crate::OCI_LINUX_MEMORY_POLICY_MAX_NODE_BITS
+            ),
+        );
+    }
+    let nodes = raw_nodes.map(str::trim).filter(|nodes| !nodes.is_empty());
     if matches!(mode, "MPOL_DEFAULT" | "MPOL_LOCAL") && nodes.is_some() {
         collector.invalid(
             "/linux/memoryPolicy/nodes",
@@ -697,6 +711,57 @@ fn validate_memory_policy(linux: &Map<String, Value>, collector: &mut ViolationC
             format!("{mode} requires at least one memory node"),
         );
     }
+    let flags = policy
+        .get("flags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let relative = flags.contains(&"MPOL_F_RELATIVE_NODES");
+    let static_nodes = flags.contains(&"MPOL_F_STATIC_NODES");
+    let numa_balancing = flags.contains(&"MPOL_F_NUMA_BALANCING");
+    if relative && static_nodes {
+        collector.invalid(
+            "/linux/memoryPolicy/flags",
+            rules::MEMORY_POLICY_FLAGS_COMPATIBLE,
+            "MPOL_F_RELATIVE_NODES and MPOL_F_STATIC_NODES are mutually exclusive",
+        );
+    }
+    if numa_balancing && mode != "MPOL_BIND" {
+        collector.invalid(
+            "/linux/memoryPolicy/flags",
+            rules::MEMORY_POLICY_FLAGS_COMPATIBLE,
+            "MPOL_F_NUMA_BALANCING is valid only with MPOL_BIND",
+        );
+    }
+    if nodes.is_none() && (relative || static_nodes) {
+        collector.invalid(
+            "/linux/memoryPolicy/flags",
+            rules::MEMORY_POLICY_FLAGS_COMPATIBLE,
+            "relative or static NUMA-node flags require a nonempty nodes mask",
+        );
+    }
+}
+
+fn valid_memory_node_list(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 4_096
+        && value.split(',').all(|range| {
+            let mut bounds = range.split('-');
+            let start = bounds.next().and_then(|bound| bound.parse::<usize>().ok());
+            let end = bounds
+                .next()
+                .map(|bound| bound.parse::<usize>().ok())
+                .unwrap_or(start);
+            bounds.next().is_none()
+                && start.is_some_and(|start| {
+                    end.is_some_and(|end| {
+                        start <= end && end < crate::OCI_LINUX_MEMORY_POLICY_MAX_NODE_BITS
+                    })
+                })
+        })
 }
 
 fn validate_personality(linux: &Map<String, Value>, collector: &mut ViolationCollector) {

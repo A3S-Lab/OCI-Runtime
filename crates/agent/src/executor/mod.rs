@@ -13,6 +13,7 @@ mod inherited_descriptor;
 mod init;
 mod io;
 mod io_priority;
+mod memory_policy;
 mod mount;
 #[cfg(test)]
 mod mount_tests;

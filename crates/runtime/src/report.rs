@@ -14,7 +14,7 @@ pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
-pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v19";
+pub const NATIVE_LINUX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.native-linux-smoke.v20";
 /// Schema emitted by the native Linux rootless lifecycle smoke.
 pub const NATIVE_LINUX_ROOTLESS_SMOKE_SCHEMA_VERSION: &str =
     "a3s.oci.native-linux-rootless-smoke.v4";
@@ -388,6 +388,8 @@ pub struct NativeLinuxSmokeReport {
     pub init_scheduler_verified: bool,
     /// Whether init read back its exact OCI Linux execution personality.
     pub init_personality_verified: bool,
+    /// Whether init inherited its exact OCI Linux NUMA memory policy.
+    pub init_memory_policy_verified: bool,
     /// Whether init read back all five exact OCI capability sets.
     pub init_capabilities_verified: bool,
     /// Whether init read back `NoNewPrivs: 1` after enforcement.
@@ -491,6 +493,7 @@ impl NativeLinuxSmokeReport {
             init_io_priority_verified: false,
             init_scheduler_verified: false,
             init_personality_verified: false,
+            init_memory_policy_verified: false,
             init_capabilities_verified: false,
             init_no_new_privileges_verified: false,
             processes_verified: false,
@@ -598,6 +601,7 @@ impl NativeLinuxSmokeReport {
             && self.init_io_priority_verified
             && self.init_scheduler_verified
             && self.init_personality_verified
+            && self.init_memory_policy_verified
             && self.init_capabilities_verified
             && self.init_no_new_privileges_verified
             && self.processes_verified
