@@ -382,10 +382,12 @@ mod tests {
         link[8..12].copy_from_slice(&(libc::IFF_UP as u32).to_ne_bytes());
         link.extend(attribute(IFLA_IFNAME, b"eth0\0"));
         link.extend(attribute(IFLA_MTU, &1500_u32.to_ne_bytes()));
+        link.extend(attribute(IFLA_QDISC, b"noop\0"));
         let parsed = parse_link(&link).expect("parse link");
         assert_eq!(parsed.index, 17);
         assert_eq!(parsed.name, "eth0");
         assert_eq!(parsed.attributes[&IFLA_MTU], 1500_u32.to_ne_bytes());
+        assert!(!parsed.attributes.contains_key(&IFLA_QDISC));
 
         let mut address = vec![0_u8; INTERFACE_ADDRESS_BYTES];
         address[0] = libc::AF_INET as u8;

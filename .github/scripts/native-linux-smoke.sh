@@ -752,6 +752,7 @@ run_network_device_negative_smoke() {
     '.schema_version == "a3s.oci.native-linux-smoke.v20"
      and .status != "available"
      and (.reason | contains($reason))
+     and ((.reason | contains("rollback also failed")) | not)
      and (.created_pid == null)
      and .executor_runtime_clean
      and .session_root_clean

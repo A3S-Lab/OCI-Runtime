@@ -39,6 +39,7 @@ const IFLA_ADDRESS: u16 = 1;
 const IFLA_BROADCAST: u16 = 2;
 const IFLA_IFNAME: u16 = 3;
 const IFLA_MTU: u16 = 4;
+#[cfg(test)]
 const IFLA_QDISC: u16 = 6;
 const IFLA_MASTER: u16 = 10;
 const IFLA_TXQLEN: u16 = 13;
@@ -72,11 +73,12 @@ const IFF_LOWER_UP: u32 = 1 << 16;
 const IFF_DORMANT: u32 = 1 << 17;
 const VOLATILE_LINK_FLAGS: u32 = libc::IFF_RUNNING as u32 | IFF_LOWER_UP | IFF_DORMANT;
 
-const STABLE_LINK_ATTRIBUTES: [u16; 13] = [
+// IFLA_QDISC is kernel-managed status state: bringing a device up can replace
+// `noop` with `noqueue` even when no qdisc configuration was requested.
+const STABLE_LINK_ATTRIBUTES: [u16; 12] = [
     IFLA_ADDRESS,
     IFLA_BROADCAST,
     IFLA_MTU,
-    IFLA_QDISC,
     IFLA_TXQLEN,
     IFLA_LINKMODE,
     IFLA_GROUP,
