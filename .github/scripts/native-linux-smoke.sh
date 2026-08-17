@@ -30,6 +30,8 @@ unprivileged_userns_original=""
 unprivileged_userns_changed=false
 apparmor_userns_original=""
 apparmor_userns_changed=false
+absolute_cgroup_path="/a3s-oci-absolute-$$"
+absolute_cgroup_host_path="/sys/fs/cgroup${absolute_cgroup_path}"
 
 restore_host() {
   local command_status=$?
@@ -94,6 +96,13 @@ restore_host() {
   fi
   if [[ "$rootless_cgroup_created" == true && -d "$rootless_cgroup_parent" ]]; then
     sudo rmdir "$rootless_cgroup_parent"
+    status=$?
+    if ((status != 0)); then
+      cleanup_status=$status
+    fi
+  fi
+  if [[ -d "$absolute_cgroup_host_path" ]]; then
+    sudo rmdir "$absolute_cgroup_host_path"
     status=$?
     if ((status != 0)); then
       cleanup_status=$status
@@ -218,7 +227,7 @@ done
 cp fixtures/native-linux/config.json "$rootless_bundle/config.json"
 cp "$(command -v busybox)" "$rootless_bundle/rootfs/bin/busybox"
 ln -s busybox "$rootless_bundle/rootfs/bin/sh"
-jq '.linux.cgroupsPath = "a3s-oci-smoke-b"' \
+jq --arg cgroup "$absolute_cgroup_path" '.linux.cgroupsPath = $cgroup' \
   "$bundle_b/config.json" >"$bundle_b/config.json.tmp"
 mv "$bundle_b/config.json.tmp" "$bundle_b/config.json"
 hook_trace="$bundle/rootfs/.a3s-oci-hook-trace"
@@ -615,7 +624,8 @@ run_multi_container_smoke() {
   fi
   jq --exit-status \
     --argjson expected "$expected_kvm_present" \
-    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v18"
+    --arg absolute "$absolute_cgroup_path" \
+    '.schema_version == "a3s.oci.native-linux-multi-container-smoke.v19"
      and .platform == "linux" and .status == "available"
      and .kvm_device_present == $expected
      and .bundles_loaded
@@ -664,6 +674,16 @@ run_multi_container_smoke() {
      and .lifecycle.wait_b_replayed
      and .lifecycle.delete_b_replayed
      and .lifecycle.b_missing_after_delete
+     and .cgroup_paths.requested_relative == "a3s-oci-smoke-a"
+     and .cgroup_paths.requested_absolute == $absolute
+     and (.cgroup_paths.observed_relative_initial | endswith("/a3s-oci-smoke-a"))
+     and .cgroup_paths.observed_relative_recreated
+         == .cgroup_paths.observed_relative_initial
+     and .cgroup_paths.observed_absolute == $absolute
+     and .cgroup_paths.absolute_mountpoint_resolution_verified
+     and .cgroup_paths.relative_recreate_resolution_verified
+     and .cgroup_paths.distinct_locations
+     and .cgroup_paths.paths_removed_after_delete
      and (.namespace_join.donor_pid > 0)
      and .namespace_join.wrong_type_rejected_before_state
      and .namespace_join.joined_non_mount_namespaces

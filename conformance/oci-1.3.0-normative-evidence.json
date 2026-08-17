@@ -1636,6 +1636,59 @@
         "fixtures/utility-vm/config.json::init-personality-readback",
         "fixtures/utility-vm/config.windows.json::init-personality-readback"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:536474a59f7b55d1fa3557e9795249ffe11767b15ea9b7801ee96a8e76bd904e",
+        "sha256:aa91ef585462874603e84a5c5d3af2618b248f15bcd58eb9cfca5f2ccaa7acc7",
+        "sha256:b756d7b0115c84d10b9efa5c41df498fd5e65aeb2cffb10c3b11fd0a8ce5d6d1"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cgroups-path.safe-path",
+        "oci.linux.cgroups-path.absolute-mountpoint"
+      ],
+      "testIds": [
+        "linux_cgroup_path::preserves_absolute_and_relative_oci_cgroup_path_semantics",
+        "executor::cgroup::plan::tests::preserves_absolute_and_relative_cgroup_path_identity",
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "executor::cgroup::manager::tests::rejects_absolute_paths_outside_a_rootless_delegation",
+        ".github/scripts/native-linux-smoke.sh::absolute-cgroups-path-readback-and-cleanup"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:cbc99d5acd0f5b68ec2d95b55d667de46e9fdff1a29aa2d1f2399112408cc959",
+        "sha256:9e4455f5caf259e9415b8926d7dd3f15e74bc41aaff97f32bcadff1b09fffee7"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cgroups-path.stable-location"
+      ],
+      "testIds": [
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "multi_container_report::tests::cgroup_path_success_requires_exact_absolute_relative_repeat_and_cleanup_evidence",
+        ".github/scripts/native-linux-smoke.sh::relative-cgroups-path-recreate-readback-and-cleanup"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:0b38556dc4beed8ab7b145ebab46ef95e015363d2470f26782e390699f6c6025",
+        "sha256:4a5834c632049311819fc7c8ced8a44eb81a0c0dfbbe23e5cfd9c559db8365c6"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cgroups-path.safe-path"
+      ],
+      "testIds": [
+        "linux_cgroup_path::rejects_ambiguous_or_dangerous_cgroup_paths_before_execution",
+        "linux_cgroup_path::bounds_the_complete_path_and_each_cgroup_name",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::cgroup::plan::tests::rejects_unsafe_cgroup_paths_during_planning"
+      ]
     }
   ]
 }

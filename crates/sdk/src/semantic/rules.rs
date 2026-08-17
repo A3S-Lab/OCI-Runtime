@@ -63,6 +63,7 @@ define_rules! {
     ROOT_PATH_NON_EMPTY => Normative, "oci.common.root.path.non-empty";
     ROOT_REQUIRED => Normative, "oci.common.root.required";
     BLOCK_IO_WEIGHT_DEVICE_WEIGHT_REQUIRED => Normative, "oci.linux.block-io.weight-device.weight-required";
+    CGROUP_PATH_SAFE => RuntimeConstraint, "oci.linux.cgroups-path.safe-path";
     CONTAINER_PATH_ABSOLUTE => Normative, "oci.linux.container-path.absolute";
     CPU_BURST_AT_MOST_QUOTA => Normative, "oci.linux.cpu.burst-at-most-quota";
     CPU_REALTIME_RUNTIME_AT_MOST_PERIOD => RuntimeConstraint, "oci.linux.cpu.realtime-runtime-at-most-period";

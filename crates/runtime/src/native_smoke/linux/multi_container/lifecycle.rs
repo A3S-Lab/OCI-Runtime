@@ -28,6 +28,19 @@ pub(super) async fn exercise(
 ) -> Result<(), String> {
     report.service_operations = native_call("features", client.features()).await?.operations;
 
+    let requested_relative = requested_cgroup_path(bundles[0], "first")?;
+    let requested_absolute = requested_cgroup_path(bundles[1], "second")?;
+    require(
+        !requested_relative.starts_with('/'),
+        "first multi-container bundle must use a relative linux.cgroupsPath",
+    )?;
+    require(
+        requested_absolute.starts_with('/'),
+        "second multi-container bundle must use an absolute linux.cgroupsPath",
+    )?;
+    report.cgroup_paths.requested_relative = Some(requested_relative.clone());
+    report.cgroup_paths.requested_absolute = Some(requested_absolute.clone());
+
     let id_a = container_id(nonce, "a")?;
     let id_b = container_id(nonce, "b")?;
     let create_a = create_request(nonce, "a-create-1", id_a.clone(), bundles[0])?;
@@ -64,6 +77,41 @@ pub(super) async fn exercise(
         report.lifecycle.distinct_created_pids,
         "containers did not receive distinct positive PIDs",
     )?;
+    let observed_relative_initial = unified_cgroup_membership(
+        report
+            .lifecycle
+            .created_pid_a
+            .expect("positive first container PID was verified"),
+    )
+    .await?;
+    let observed_absolute = unified_cgroup_membership(
+        report
+            .lifecycle
+            .created_pid_b
+            .expect("positive second container PID was verified"),
+    )
+    .await?;
+    require(
+        Path::new(&observed_relative_initial).ends_with(Path::new(&requested_relative)),
+        format!(
+            "relative linux.cgroupsPath resolved to unexpected membership {observed_relative_initial}"
+        ),
+    )?;
+    report.cgroup_paths.absolute_mountpoint_resolution_verified =
+        observed_absolute == requested_absolute;
+    require(
+        report.cgroup_paths.absolute_mountpoint_resolution_verified,
+        format!(
+            "absolute linux.cgroupsPath resolved to {observed_absolute}, expected {requested_absolute}"
+        ),
+    )?;
+    report.cgroup_paths.distinct_locations = observed_relative_initial != observed_absolute;
+    require(
+        report.cgroup_paths.distinct_locations,
+        "absolute and relative linux.cgroupsPath values resolved to the same location",
+    )?;
+    report.cgroup_paths.observed_relative_initial = Some(observed_relative_initial.clone());
+    report.cgroup_paths.observed_absolute = Some(observed_absolute.clone());
     assert_state(client, &target_a1, &created_a, "container A after create").await?;
     assert_state(client, &target_b, &created_b, "container B after create").await?;
     report.lifecycle.both_created_before_start = true;
@@ -183,6 +231,23 @@ pub(super) async fn exercise(
         "container A recreation did not preserve generation and start barriers",
     )?;
     let target_a2 = ContainerTarget::exact(id_a, recreated_a.generation);
+    let recreated_pid = recreated_a
+        .state
+        .pid()
+        .as_ref()
+        .copied()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| "recreated container A did not expose a positive PID".to_string())?;
+    let observed_relative_recreated = unified_cgroup_membership(recreated_pid).await?;
+    report.cgroup_paths.relative_recreate_resolution_verified =
+        observed_relative_recreated == observed_relative_initial;
+    report.cgroup_paths.observed_relative_recreated = Some(observed_relative_recreated.clone());
+    require(
+        report.cgroup_paths.relative_recreate_resolution_verified,
+        format!(
+            "recreated relative linux.cgroupsPath moved from {observed_relative_initial} to {observed_relative_recreated}"
+        ),
+    )?;
     report.lifecycle.stale_generation_rejected = state_is_stale(client, &target_a1).await?;
     require(
         report.lifecycle.stale_generation_rejected,
@@ -295,7 +360,85 @@ pub(super) async fn exercise(
         report.lifecycle.b_missing_after_delete,
         "container B remained visible after delete",
     )?;
+    let mountpoint = visible_cgroup2_mountpoint().await?;
+    report.cgroup_paths.paths_removed_after_delete =
+        !membership_path_exists(&mountpoint, &observed_relative_initial).await?
+            && !membership_path_exists(&mountpoint, &observed_absolute).await?;
+    require(
+        report.cgroup_paths.paths_removed_after_delete,
+        "deleting both containers left an exact workload cgroup behind",
+    )?;
     Ok(())
+}
+
+fn requested_cgroup_path(bundle: &OciBundle, label: &str) -> Result<String, String> {
+    bundle
+        .spec()
+        .linux()
+        .as_ref()
+        .and_then(|linux| linux.cgroups_path().as_ref())
+        .and_then(|path| path.to_str())
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{label} multi-container bundle has no UTF-8 linux.cgroupsPath"))
+}
+
+async fn unified_cgroup_membership(pid: i32) -> Result<String, String> {
+    let source = format!("/proc/{pid}/cgroup");
+    let contents = tokio::fs::read_to_string(&source)
+        .await
+        .map_err(|error| format!("failed to read {source}: {error}"))?;
+    let mut unified = contents.lines().filter_map(|line| {
+        let (hierarchy, remainder) = line.split_once(':')?;
+        let (controllers, path) = remainder.split_once(':')?;
+        (hierarchy == "0" && controllers.is_empty()).then_some(path)
+    });
+    let path = unified
+        .next()
+        .filter(|path| {
+            path.starts_with('/')
+                && !path
+                    .as_bytes()
+                    .iter()
+                    .any(|byte| matches!(byte, 0 | b'\n' | b'\r'))
+        })
+        .ok_or_else(|| format!("{source} has no valid unified cgroup v2 membership"))?;
+    if unified.next().is_some() {
+        return Err(format!(
+            "{source} has more than one unified cgroup membership"
+        ));
+    }
+    Ok(path.to_string())
+}
+
+async fn visible_cgroup2_mountpoint() -> Result<std::path::PathBuf, String> {
+    let contents = tokio::fs::read_to_string("/proc/self/mountinfo")
+        .await
+        .map_err(|error| format!("failed to read cgroup mount topology: {error}"))?;
+    contents
+        .lines()
+        .find_map(|line| {
+            let (left, right) = line.split_once(" - ")?;
+            if right.split_ascii_whitespace().next()? != "cgroup2" {
+                return None;
+            }
+            let mountpoint = left.split_ascii_whitespace().nth(4)?;
+            (!mountpoint.contains('\\')).then(|| std::path::PathBuf::from(mountpoint))
+        })
+        .ok_or_else(|| "no visible cgroup v2 mountpoint was found".to_string())
+}
+
+async fn membership_path_exists(mountpoint: &Path, membership: &str) -> Result<bool, String> {
+    let relative = membership
+        .strip_prefix('/')
+        .ok_or_else(|| format!("cgroup membership is not absolute: {membership}"))?;
+    let path = mountpoint.join(relative);
+    tokio::fs::try_exists(&path).await.map_err(|error| {
+        format!(
+            "failed to inspect cgroup cleanup {}: {error}",
+            path.display()
+        )
+    })
 }
 
 pub(super) fn wait_request(target: ContainerTarget) -> WaitRequest {

@@ -8287,10 +8287,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`cgroupsPath`** (string, OPTIONAL) path to the cgroups.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.safe-path",
+        "oci.linux.cgroups-path.absolute-mountpoint"
+      ],
+      "testIds": [
+        "linux_cgroup_path::preserves_absolute_and_relative_oci_cgroup_path_semantics",
+        "executor::cgroup::plan::tests::preserves_absolute_and_relative_cgroup_path_identity",
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "executor::cgroup::manager::tests::rejects_absolute_paths_outside_a_rootless_delegation",
+        ".github/scripts/native-linux-smoke.sh::absolute-cgroups-path-readback-and-cleanup"
+      ]
     },
     {
       "id": "sha256:aa91ef585462874603e84a5c5d3af2618b248f15bcd58eb9cfca5f2ccaa7acc7",
@@ -8301,10 +8310,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The value of `cgroupsPath` MUST be either an absolute path or a relative path.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.safe-path",
+        "oci.linux.cgroups-path.absolute-mountpoint"
+      ],
+      "testIds": [
+        "linux_cgroup_path::preserves_absolute_and_relative_oci_cgroup_path_semantics",
+        "executor::cgroup::plan::tests::preserves_absolute_and_relative_cgroup_path_identity",
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "executor::cgroup::manager::tests::rejects_absolute_paths_outside_a_rootless_delegation",
+        ".github/scripts/native-linux-smoke.sh::absolute-cgroups-path-readback-and-cleanup"
+      ]
     },
     {
       "id": "sha256:b756d7b0115c84d10b9efa5c41df498fd5e65aeb2cffb10c3b11fd0a8ce5d6d1",
@@ -8315,10 +8333,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* In the case of an absolute path (starting with `/`), the runtime MUST take the path to be relative to the cgroups mount point.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.safe-path",
+        "oci.linux.cgroups-path.absolute-mountpoint"
+      ],
+      "testIds": [
+        "linux_cgroup_path::preserves_absolute_and_relative_oci_cgroup_path_semantics",
+        "executor::cgroup::plan::tests::preserves_absolute_and_relative_cgroup_path_identity",
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "executor::cgroup::manager::tests::rejects_absolute_paths_outside_a_rootless_delegation",
+        ".github/scripts/native-linux-smoke.sh::absolute-cgroups-path-readback-and-cleanup"
+      ]
     },
     {
       "id": "sha256:cbc99d5acd0f5b68ec2d95b55d667de46e9fdff1a29aa2d1f2399112408cc959",
@@ -8329,10 +8356,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "* In the case of a relative path (not starting with `/`), the runtime MAY interpret the path relative to a runtime-determined location in the cgroups hierarchy.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.stable-location"
+      ],
+      "testIds": [
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "multi_container_report::tests::cgroup_path_success_requires_exact_absolute_relative_repeat_and_cleanup_evidence",
+        ".github/scripts/native-linux-smoke.sh::relative-cgroups-path-recreate-readback-and-cleanup"
+      ]
     },
     {
       "id": "sha256:9e4455f5caf259e9415b8926d7dd3f15e74bc41aaff97f32bcadff1b09fffee7",
@@ -8343,10 +8376,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If the value is specified, the runtime MUST consistently attach to the same place in the cgroups hierarchy given the same value of `cgroupsPath`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.stable-location"
+      ],
+      "testIds": [
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "multi_container_report::tests::cgroup_path_success_requires_exact_absolute_relative_repeat_and_cleanup_evidence",
+        ".github/scripts/native-linux-smoke.sh::relative-cgroups-path-recreate-readback-and-cleanup"
+      ]
     },
     {
       "id": "sha256:2ebafb7f6a07a58e89b41095f897f407e11003468d5ef7a3dd1884c3fa2ef798",
@@ -8371,10 +8410,17 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Runtimes MAY consider certain `cgroupsPath` values to be invalid, and MUST generate an error if this is the case.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.safe-path"
+      ],
+      "testIds": [
+        "linux_cgroup_path::rejects_ambiguous_or_dangerous_cgroup_paths_before_execution",
+        "linux_cgroup_path::bounds_the_complete_path_and_each_cgroup_name",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::cgroup::plan::tests::rejects_unsafe_cgroup_paths_during_planning"
+      ]
     },
     {
       "id": "sha256:4a5834c632049311819fc7c8ced8a44eb81a0c0dfbbe23e5cfd9c559db8365c6",
@@ -8385,10 +8431,17 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "Runtimes MAY consider certain `cgroupsPath` values to be invalid, and MUST generate an error if this is the case.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.safe-path"
+      ],
+      "testIds": [
+        "linux_cgroup_path::rejects_ambiguous_or_dangerous_cgroup_paths_before_execution",
+        "linux_cgroup_path::bounds_the_complete_path_and_each_cgroup_name",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::cgroup::plan::tests::rejects_unsafe_cgroup_paths_during_planning"
+      ]
     },
     {
       "id": "sha256:669815b24667165f9314dbae7a062ad4c9e1ffc4093c7e2d9a64d8a98473339a",

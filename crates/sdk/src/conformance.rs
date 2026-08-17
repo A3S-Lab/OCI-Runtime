@@ -86,6 +86,11 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "linux-executor",
     ),
     OciNonSemanticRule::new("oci.linux.memory-policy.exact-policy", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.cgroups-path.absolute-mountpoint",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new("oci.linux.cgroups-path.stable-location", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.mount-options.control", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.linux.mount-options.filesystem-specific-pass-through",

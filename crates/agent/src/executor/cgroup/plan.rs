@@ -1,16 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use a3s_oci_sdk::oci_spec::runtime::{Linux, LinuxResources};
 use a3s_oci_sdk::{
-    Error, ErrorCode, Result, CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION,
+    Error, ErrorCode, OciLinuxCgroupPath, Result, CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION,
     CONTROL_CGROUP_MEMORY_HEADROOM_ANNOTATION, CONTROL_CGROUP_PIDS_HEADROOM_ANNOTATION,
     CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION, CONTROL_WORKLOAD_CGROUP_LAYOUT_V1,
 };
 
 use super::cgroup_error;
-
-const MAX_CGROUP_PATH_BYTES: usize = 4_096;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 enum CgroupLayout {
@@ -29,7 +27,7 @@ pub(super) struct ControlHeadroom {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::executor) struct CgroupPlan {
     layout: CgroupLayout,
-    pub(super) relative_path: Option<PathBuf>,
+    pub(super) path: Option<OciLinuxCgroupPath>,
     memory_limit: Option<i64>,
     memory_reservation: Option<i64>,
     memory_swap: Option<i64>,
@@ -55,10 +53,10 @@ impl CgroupPlan {
             }
             return Ok(Self::default());
         };
-        let relative_path = linux
+        let path = linux
             .cgroups_path()
             .as_deref()
-            .map(validate_cgroup_path)
+            .map(parse_cgroup_path)
             .transpose()?;
         let Some(resources) = linux.resources().as_ref() else {
             if !matches!(layout, CgroupLayout::Flat) {
@@ -68,7 +66,7 @@ impl CgroupPlan {
             }
             return Ok(Self {
                 layout,
-                relative_path,
+                path,
                 ..Self::default()
             });
         };
@@ -79,7 +77,7 @@ impl CgroupPlan {
         let pids = resources.pids().as_ref();
         let plan = Self {
             layout,
-            relative_path,
+            path,
             memory_limit: memory.and_then(|memory| memory.limit()),
             memory_reservation: memory.and_then(|memory| memory.reservation()),
             memory_swap: memory.and_then(|memory| memory.swap()),
@@ -91,7 +89,7 @@ impl CgroupPlan {
             pids_limit: pids.map(|pids| pids.limit()),
         };
         plan.validate()?;
-        if plan.has_limits() && plan.relative_path.is_none() {
+        if plan.has_limits() && plan.path.is_none() {
             return Err(unsupported(
                 "linux.cgroupsPath",
                 "resource limits require an explicit normalized cgroup v2 path",
@@ -289,7 +287,7 @@ impl CgroupPlan {
     }
 
     pub(in crate::executor) fn has_cgroup(&self) -> bool {
-        self.relative_path.is_some()
+        self.path.is_some()
     }
 
     pub(in crate::executor) fn uses_control_workload_layout(&self) -> bool {
@@ -349,28 +347,11 @@ fn positive_annotation(annotations: &BTreeMap<String, String>, key: &str) -> Res
         .ok_or_else(|| invalid(format!("annotation {key:?} must be a positive i64")))
 }
 
-fn validate_cgroup_path(path: &Path) -> Result<PathBuf> {
+fn parse_cgroup_path(path: &Path) -> Result<OciLinuxCgroupPath> {
     let value = path
         .to_str()
         .ok_or_else(|| invalid("linux.cgroupsPath is not valid UTF-8"))?;
-    if value.is_empty() || value.len() > MAX_CGROUP_PATH_BYTES || value.as_bytes().contains(&0) {
-        return Err(invalid(format!(
-            "linux.cgroupsPath must contain 1..={MAX_CGROUP_PATH_BYTES} bytes and no NUL"
-        )));
-    }
-    let relative = value.trim_start_matches('/');
-    let path = Path::new(relative);
-    if relative.is_empty()
-        || path.components().any(|component| {
-            !matches!(component, Component::Normal(_))
-                || component.as_os_str().to_string_lossy().contains(':')
-        })
-    {
-        return Err(invalid(
-            "linux.cgroupsPath must be a normalized cgroupfs path without systemd syntax",
-        ));
-    }
-    Ok(path.to_path_buf())
+    OciLinuxCgroupPath::parse(value).map_err(|error| invalid(error.to_string()))
 }
 
 pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> Result<()> {
@@ -462,6 +443,52 @@ mod tests {
             serde_json::from_str(include_str!("../../../../../fixtures/a3s-box/config.json"))
                 .expect("decode fixture");
         serde_json::from_value(config["linux"].clone()).expect("decode Linux config")
+    }
+
+    fn linux_with_cgroup_path(path: &str) -> Linux {
+        serde_json::from_value(serde_json::json!({"cgroupsPath": path}))
+            .expect("decode Linux cgroup path")
+    }
+
+    #[test]
+    fn preserves_absolute_and_relative_cgroup_path_identity() {
+        let absolute = CgroupPlan::from_linux(
+            Some(&linux_with_cgroup_path("/tenant/workload")),
+            &BTreeMap::new(),
+        )
+        .expect("absolute cgroup plan");
+        let relative = CgroupPlan::from_linux(
+            Some(&linux_with_cgroup_path("tenant/workload")),
+            &BTreeMap::new(),
+        )
+        .expect("relative cgroup plan");
+
+        assert!(absolute.path.as_ref().expect("absolute path").is_absolute());
+        assert!(!relative.path.as_ref().expect("relative path").is_absolute());
+        assert_eq!(
+            absolute.path.as_ref().expect("absolute path").relative(),
+            relative.path.as_ref().expect("relative path").relative()
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_cgroup_paths_during_planning() {
+        for path in [
+            "",
+            "/",
+            "tenant/",
+            "tenant//workload",
+            "tenant/./workload",
+            "tenant/../workload",
+            "system.slice:a3s:workload",
+            "tenant\nworkload",
+            "tenant\0workload",
+        ] {
+            let error =
+                CgroupPlan::from_linux(Some(&linux_with_cgroup_path(path)), &BTreeMap::new())
+                    .expect_err("unsafe cgroup path must fail planning");
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        }
     }
 
     #[test]

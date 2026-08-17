@@ -45,6 +45,9 @@ The initial rule set covers:
   devices; sysctl parsing also preserves OCI dot/slash notation while rejecting
   traversal, aliases at execution planning, hostname conflicts, and
   host-global controls;
+- absolute or relative Linux `cgroupsPath` identity with bounded normalized
+  cgroupfs names and early rejection of traversal, control characters, NUL,
+  systemd syntax, and ambiguous separators;
 - mount ID mappings, seccomp listener/errno relationships, selected CPU,
   block-I/O, and RDMA relationships;
 - bounded Intel RDT names and schemata, required memory-policy mode, bounded node
@@ -54,8 +57,8 @@ The initial rule set covers:
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 81 rule identifiers come from one typed registry. Twenty-two are classified
-as direct OCI normative validators and are currently bound to 31 exact source
+All 85 rule identifiers come from one typed registry. Twenty-five are classified
+as direct OCI normative validators and are currently bound to 43 exact source
 entries in the normative evidence manifest. Linux `oomScoreAdj`, scheduler,
 and I/O-priority runtime constraints plus executor and real-host tests promote
 14 process requirements to `enforced`. Scheduler validation covers duplicate
@@ -73,6 +76,13 @@ source of truth. An accepted key is classified as IPC, network, UTS, or user
 namespace state. The Linux executor then checks the selected namespace
 identity, bounds the transaction, verifies procfs read-back, and rolls back any
 partial change before Create can be reported as ready.
+
+For Linux cgroups, validation and execution share `OciLinuxCgroupPath` rather
+than applying host-native path rules. The parser therefore behaves identically
+on Linux, macOS, and Windows while preserving whether a value began with `/`.
+The Linux executor resolves that bit only after it has a verified cgroup v2
+mount and, for rootless execution, rejects absolute targets outside the retained
+delegation.
 
 Intel RDT validation and execution share public SDK bounds: a CLOS name is at
 most 255 bytes, complete `schemata` contains at most 256 entries, each line is

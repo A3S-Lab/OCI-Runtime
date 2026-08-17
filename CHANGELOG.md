@@ -6,6 +6,19 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Exact OCI Linux `cgroupsPath` semantics. One host-independent SDK parser
+  rejects empty, traversing, ambiguous, overlong, control-character, and
+  systemd-form paths before runtime mutation while preserving the absolute or
+  relative identity. The Linux executor resolves absolute values from the
+  visible cgroup v2 mount, confines rootless absolute values to the verified
+  delegation, and resolves relative values from one stable private manager.
+  Runtime-owned shared prefixes are retained for normal and owner-death
+  cleanup. Native Linux multi-container report v19 reads the exact host
+  memberships, recreates a relative path at the same location, verifies an
+  absolute path at the mount root, and requires both leaves to disappear.
+  One shared semantic rule and two owner-bound executor rules promote seven OCI
+  requirements, leaving 292 enforced, 43 validated, two conformant, and 318
+  pending entries.
 - Accurate OCI potentially-unsafe configuration annotation discovery. One SDK
   registry owns the six built-in A3S keys that can change or gate runtime
   behavior, and configured host services merge only annotation-backed

@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use crate::{OciLinuxSysctlKey, OciLinuxSysctlKeyErrorKind, OciLinuxSysctlNamespace};
+use crate::{
+    OciLinuxCgroupPath, OciLinuxSysctlKey, OciLinuxSysctlKeyErrorKind, OciLinuxSysctlNamespace,
+};
 
 use super::{contains_nul, is_posix_absolute, rules, OciSemanticRule, ViolationCollector};
 
@@ -56,6 +58,7 @@ pub(super) fn inspect(value: &Value, collector: &mut ViolationCollector) {
         namespaces.creates("user") && uid_mappings && gid_mappings,
         collector,
     );
+    validate_cgroup_path(linux, collector);
     validate_container_paths(linux, collector);
     validate_namespace_dependent_fields(configuration, linux, &namespaces, collector);
     validate_net_devices(linux, &namespaces, collector);
@@ -66,6 +69,19 @@ pub(super) fn inspect(value: &Value, collector: &mut ViolationCollector) {
     validate_intel_rdt(linux, collector);
     validate_memory_policy(linux, collector);
     validate_personality(linux, collector);
+}
+
+fn validate_cgroup_path(linux: &Map<String, Value>, collector: &mut ViolationCollector) {
+    let Some(path) = linux.get("cgroupsPath").and_then(Value::as_str) else {
+        return;
+    };
+    if let Err(error) = OciLinuxCgroupPath::parse(path) {
+        collector.invalid(
+            "/linux/cgroupsPath",
+            rules::CGROUP_PATH_SAFE,
+            error.to_string(),
+        );
+    }
 }
 
 fn validate_namespaces(
