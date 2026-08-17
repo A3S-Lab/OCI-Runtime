@@ -608,7 +608,9 @@ fn resource_profile() -> Result<LinuxResources, String> {
         "cpu": {
             "shares": 512,
             "quota": 50000,
+            "burst": 10000,
             "period": 100000,
+            "idle": 0,
             "cpus": "0",
             "mems": "0"
         },

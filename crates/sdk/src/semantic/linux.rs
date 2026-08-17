@@ -585,6 +585,17 @@ fn validate_cpu(resources: &Map<String, Value>, collector: &mut ViolationCollect
             );
         }
     }
+    if cpu
+        .get("idle")
+        .and_then(Value::as_i64)
+        .is_some_and(|idle| !matches!(idle, 0 | 1))
+    {
+        collector.invalid(
+            "/linux/resources/cpu/idle",
+            rules::CPU_IDLE_RANGE,
+            "CPU idle must be 0 for default scheduling or 1 for SCHED_IDLE",
+        );
+    }
     if let (Some(runtime), Some(period)) = (
         cpu.get("realtimeRuntime").and_then(Value::as_i64),
         cpu.get("realtimePeriod").and_then(Value::as_u64),

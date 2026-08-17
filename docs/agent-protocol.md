@@ -63,8 +63,10 @@ Protocol version 5 adds `update` and `stats`. Update carries an idempotent
 mutation context, an exact container generation, and one OCI `LinuxResources`
 patch. Omitted supported resource fields retain their current cgroup-v2
 values. The executor applies supported memory, swap, reservation, CPU
-shares/quota/period/cpuset, and PID-limit changes with exact read-back and
-reverse-order rollback after a partial failure. Stats returns a typed,
+shares/quota/burst/period/cpuset/idle, and PID-limit changes with exact
+read-back and reverse-order rollback after a partial failure. Quota and period
+are independent, and quota/burst changes are ordered so the kernel never sees
+an invalid intermediate pair. Stats returns a typed,
 generation-bound snapshot with a positive Unix-nanosecond timestamp,
 normalized CPU nanoseconds, memory bytes, process count, and named cgroup
 integer counters. When the workload cgroup exposes `io.stat`, the executor

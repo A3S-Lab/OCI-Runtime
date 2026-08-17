@@ -830,7 +830,9 @@
     {
       "requirementIds": [
         "sha256:e332cc6bca0930016cdd669785aa25fbd627ce8f951a996118a5172489e8f95d",
-        "sha256:e288b8f4b39b37fffa1234b455188672a229ec3e6b14afbe053fe091b554abbe"
+        "sha256:aa74ab9199eb278b97ef357199b34e434ef5d5ea108a88facd9b18e47f441de3",
+        "sha256:e288b8f4b39b37fffa1234b455188672a229ec3e6b14afbe053fe091b554abbe",
+        "sha256:5d658da3f99d4aca258719bc54e29914c5c94d85b607de4086f77ab3b6b6c734"
       ],
       "disposition": "validated",
       "owner": "sdk-semantic-validation",
@@ -840,6 +842,62 @@
       "testIds": [
         "semantic::tests::accepts_validated_normative_cross_field_boundaries",
         "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:9fcee1fb3de774610ea3a8d48f1760793991a5a4710185a588868bb656286b7d",
+        "sha256:557ed8fc7ece2f244f0c29faf61eb972d9e7c7d549d65f499756713a0c37e7ac",
+        "sha256:d7548127dc8bfbdea6714f61323ead7b3cd78afef2bad45c1630f331d0469c08",
+        "sha256:ba92ea4fca8f80365ff79bcc9d15aca2aef8a5f41e843bfc0a1a8a1dea03ff78",
+        "sha256:df9baa330635e2237518d4efde44040b8f2ab9c9804c664bce0b6f849ee3adf4",
+        "sha256:580a992baabc35283035db9cac7510a9e0be39c14a546145820b0954ace84d32",
+        "sha256:8e45fcdd0d8d8c1a4b54674607142eb1767269702df78f859d724183d416f358"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::preserves_independent_cpu_quota_and_period_requests",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:1c31030b903c80df1b1e8d64c08d56d63de656b7389e86056333a03f72d021af"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cpu.cgroup-v2-controls",
+        "oci.linux.cpu.idle-range"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:060beff6f2855509d8d709118c8e6966426d5aee1a3574de58cc6bf42661e8f3",
+        "sha256:f91fcb5a5de9b56037a1b378ca3f930e79f96fd9d7e4cdd75f1e2c5e1767dad7"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cpu.realtime-controls.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls"
       ]
     },
     {

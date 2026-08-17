@@ -182,8 +182,8 @@ following:
    pidfd, process wait returns signal 9, and repeated process wait is stable;
 10. process inventory returns exactly the live init and second exec process;
 11. one exact durable update changes memory limit/reservation/swap, CPU
-   shares/quota/period/cpuset, and the PID limit; retrying it returns the same
-   container record;
+   shares/quota/burst/period/cpuset/idle, and the PID limit; retrying it
+   returns the same container record;
 12. two normalized stats snapshots remain generation-fenced, expose positive
    CPU and process counters, retain the updated memory limit, and carry the
    expected cgroup-v2 event metrics;

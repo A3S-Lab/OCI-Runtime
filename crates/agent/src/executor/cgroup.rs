@@ -483,7 +483,11 @@ fn apply_settings(path: &Path, settings: &[(&'static str, String)]) -> Result<()
         let destination = path.join(file);
         std::fs::write(&destination, value.as_bytes()).map_err(|error| {
             cgroup_error(
-                ErrorCode::PermissionDenied,
+                if error.kind() == io::ErrorKind::NotFound {
+                    ErrorCode::Unsupported
+                } else {
+                    ErrorCode::PermissionDenied
+                },
                 format!(
                     "failed to apply cgroup setting {}={value}: {error}",
                     destination.display()
@@ -744,9 +748,21 @@ mod tests {
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        cgroup_event_value, enable_controllers, install_control_workload_descriptors_from_pre_exec,
-        open_cgroup_procs, open_control_workload_membership,
+        apply_settings, cgroup_event_value, enable_controllers,
+        install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
+        open_control_workload_membership,
     };
+
+    #[test]
+    fn reports_an_unavailable_cgroup_control_as_unsupported() {
+        let directory = tempfile::tempdir().expect("temporary cgroup parent");
+        let missing_cgroup = directory.path().join("missing");
+        let error = apply_settings(&missing_cgroup, &[("cpu.idle", "1".to_string())])
+            .expect_err("an unavailable cgroup control must fail");
+
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains("cpu.idle"));
+    }
 
     #[test]
     fn roots_init_in_management_until_the_cgroup_namespace_exists() {

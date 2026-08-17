@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 318-entry pending normative evidence backlog.
+- [ ] Close the 306-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -1435,9 +1435,11 @@ leak. Only then may KVM become `experimental`.
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
 - [x] Apply and read back cgroup v2 memory limit/reservation/swap, CPU
-  shares/quota/period/cpuset, and PID limits; join init and exec to the same
-  owned leaf; freeze and thaw that leaf through `cgroup.freeze` and verify the
-  exact transition through `cgroup.events`.
+  shares/quota/burst/period/cpuset/idle, and PID limits; allow independent CPU
+  quota and period requests, reject cgroup v1 realtime controls, and order
+  live quota/burst changes without a transient invalid state. Join init and
+  exec to the same owned leaf; freeze and thaw that leaf through
+  `cgroup.freeze` and verify the exact transition through `cgroup.events`.
 - [x] Create a private controller-enabled cgroup-v2 manager, apply
   generation-fenced partial resource updates with exact read-back and
   reverse-order rollback, and expose normalized CPU, memory, PID, and event
@@ -1471,6 +1473,11 @@ leak. Only then may KVM become `experimental`.
     mutating the rootfs or cgroup by requiring an explicit cgroup path before
     any device-policy mutation.
 - [ ] Complete the remaining cgroup v2 resource boundary.
+  - [x] Bind every OCI CPU field to cgroup v2 or an explicit pre-mutation
+    rejection. Preserve omitted current values during partial updates, return
+    `Unsupported` for unavailable burst or idle controls, and keep burst and
+    idle on the exact workload leaf rather than the derived
+    `control-workload-v1` management envelope.
   - [x] Enforce or explicitly reject I/O, hugepage, RDMA, and unified resource
     requests with exact read-back and rollback.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
