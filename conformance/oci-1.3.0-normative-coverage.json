@@ -9028,10 +9028,24 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`memory`** (object, OPTIONAL) represents the cgroup subsystem `memory` and it's used to set limits on the container's memory usage.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::plan::tests::accepts_memory_reservation_above_the_hard_limit",
+        "executor::cgroup::plan::tests::rejects_memory_values_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::finite_memory_swap_requires_a_finite_compatible_limit",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_memory",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_memory_updates",
+        "executor::cgroup::update::tests::partial_memory_update_accepts_an_unlimited_current_reservation",
+        "executor::cgroup::update::tests::rejects_memory_update_values_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_memory",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
     },
     {
       "id": "sha256:5c8e8b23df2872cd8260a8bdec76416f5f2af321e743ba3dda61e51c1a8661ed",
@@ -9042,10 +9056,24 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`limit`** *(int64, OPTIONAL)* - sets limit of memory usage",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::plan::tests::accepts_memory_reservation_above_the_hard_limit",
+        "executor::cgroup::plan::tests::rejects_memory_values_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::finite_memory_swap_requires_a_finite_compatible_limit",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_memory",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_memory_updates",
+        "executor::cgroup::update::tests::partial_memory_update_accepts_an_unlimited_current_reservation",
+        "executor::cgroup::update::tests::rejects_memory_update_values_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_memory",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
     },
     {
       "id": "sha256:5aabf932f5f54a79a3e6bd776f0ef2e23479adf0167f5bae7d55e58792a6ffce",
@@ -9056,10 +9084,24 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`reservation`** *(int64, OPTIONAL)* - sets soft limit of memory usage",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::plan::tests::accepts_memory_reservation_above_the_hard_limit",
+        "executor::cgroup::plan::tests::rejects_memory_values_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::finite_memory_swap_requires_a_finite_compatible_limit",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_memory",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_memory_updates",
+        "executor::cgroup::update::tests::partial_memory_update_accepts_an_unlimited_current_reservation",
+        "executor::cgroup::update::tests::rejects_memory_update_values_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_memory",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
     },
     {
       "id": "sha256:5334db41521b9015eab39a396772f9364fc6cd7007cd1fef5c7adec2b0872a2f",
@@ -9070,10 +9112,24 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`swap`** *(int64, OPTIONAL)* - sets limit of memory+Swap usage",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::plan::tests::accepts_memory_reservation_above_the_hard_limit",
+        "executor::cgroup::plan::tests::rejects_memory_values_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::finite_memory_swap_requires_a_finite_compatible_limit",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_memory",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_memory_updates",
+        "executor::cgroup::update::tests::partial_memory_update_accepts_an_unlimited_current_reservation",
+        "executor::cgroup::update::tests::rejects_memory_update_values_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_memory",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
     },
     {
       "id": "sha256:bc45899903a180197bce423b961242570d15c86ed4ac5cc33f3fac2836e023cc",
@@ -9084,10 +9140,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`kernel`** *(int64, OPTIONAL, NOT RECOMMENDED)* - sets hard limit for kernel memory",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:82e8d0c19e0f18c21b89d5aaa877e0e0d7bc071ac980b75632a7cca232c2031c",
@@ -9098,10 +9159,15 @@
       "keyword": "not-recommended",
       "occurrence": 2,
       "source": "* **`kernel`** *(int64, OPTIONAL, NOT RECOMMENDED)* - sets hard limit for kernel memory",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:116907ccadb1b554cd95fab2ea82067d5db962750ab361b08f8bb2fa595adf95",
@@ -9112,10 +9178,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`kernelTCP`** *(int64, OPTIONAL, NOT RECOMMENDED)* - sets hard limit for kernel TCP buffer memory",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:a24757e5a458c1804145e719300f16c980b3b0b67b781cc6288eeca6475758da",
@@ -9126,10 +9197,15 @@
       "keyword": "not-recommended",
       "occurrence": 2,
       "source": "* **`kernelTCP`** *(int64, OPTIONAL, NOT RECOMMENDED)* - sets hard limit for kernel TCP buffer memory",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:4b68bbb8794361c258274ca0f738c90952f6e244423e46d86fbc7e72b2f22cab",
@@ -9140,10 +9216,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`swappiness`** *(uint64, OPTIONAL)* - sets swappiness parameter of vmscan (See sysctl's vm.swappiness)",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:5ebdb9e9c2ffc0ad2ce9610ad58a709df98d32e5c2c787bde0550283ffbf16e1",
@@ -9154,10 +9235,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`disableOOMKiller`** *(bool, OPTIONAL)* - enables or disables the OOM killer.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:51a7bee3f02e346a746f09509911ee30c7d0786e7b324bbbae7893084d3e584e",
@@ -9168,10 +9254,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`useHierarchy`** *(bool, OPTIONAL)* - enables or disables hierarchical memory accounting.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:9055f7a63b583bd4df6a2e00ed0dd504db7dcac45c8f64efe5f8ed10ba730f18",
@@ -9182,10 +9273,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`checkBeforeUpdate`** *(bool, OPTIONAL)* - enables container memory usage check before setting a new limit.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:7dfb82756d791f84004de71c11f7a5b97fb5cd7737aa0e7aca70d08f16946675",
@@ -9196,10 +9292,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "If enabled (`true`), runtime MAY check if a new memory limit is lower than the current usage, and MUST",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:687549672c7b2510031b333f8d4376aa4524c3f401698625352c9e9c4d72e197",
@@ -9210,10 +9311,15 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "If enabled (`true`), runtime MAY check if a new memory limit is lower than the current usage, and MUST",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
     },
     {
       "id": "sha256:9fcee1fb3de774610ea3a8d48f1760793991a5a4710185a588868bb656286b7d",

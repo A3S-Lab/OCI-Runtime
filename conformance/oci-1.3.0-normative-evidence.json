@@ -902,6 +902,55 @@
     },
     {
       "requirementIds": [
+        "sha256:7b809afbad832376e1ba4582b909ec055cacc819927e4d023ba56fa902748451",
+        "sha256:5c8e8b23df2872cd8260a8bdec76416f5f2af321e743ba3dda61e51c1a8661ed",
+        "sha256:5aabf932f5f54a79a3e6bd776f0ef2e23479adf0167f5bae7d55e58792a6ffce",
+        "sha256:5334db41521b9015eab39a396772f9364fc6cd7007cd1fef5c7adec2b0872a2f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.memory.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::plan::tests::accepts_memory_reservation_above_the_hard_limit",
+        "executor::cgroup::plan::tests::rejects_memory_values_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::finite_memory_swap_requires_a_finite_compatible_limit",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_memory",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_memory_updates",
+        "executor::cgroup::update::tests::partial_memory_update_accepts_an_unlimited_current_reservation",
+        "executor::cgroup::update::tests::rejects_memory_update_values_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_memory",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:bc45899903a180197bce423b961242570d15c86ed4ac5cc33f3fac2836e023cc",
+        "sha256:82e8d0c19e0f18c21b89d5aaa877e0e0d7bc071ac980b75632a7cca232c2031c",
+        "sha256:116907ccadb1b554cd95fab2ea82067d5db962750ab361b08f8bb2fa595adf95",
+        "sha256:a24757e5a458c1804145e719300f16c980b3b0b67b781cc6288eeca6475758da",
+        "sha256:4b68bbb8794361c258274ca0f738c90952f6e244423e46d86fbc7e72b2f22cab",
+        "sha256:5ebdb9e9c2ffc0ad2ce9610ad58a709df98d32e5c2c787bde0550283ffbf16e1",
+        "sha256:51a7bee3f02e346a746f09509911ee30c7d0786e7b324bbbae7893084d3e584e",
+        "sha256:9055f7a63b583bd4df6a2e00ed0dd504db7dcac45c8f64efe5f8ed10ba730f18",
+        "sha256:7dfb82756d791f84004de71c11f7a5b97fb5cd7737aa0e7aca70d08f16946675",
+        "sha256:687549672c7b2510031b333f8d4376aa4524c3f401698625352c9e9c4d72e197"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.memory.unsupported-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:1d5c01ffffac2480a4ee5229e97002c2162c4ffb4601d128e9fa6f3915f3879e",
         "sha256:0a16a7718f20b2a37b5659d894e5913057f06d89b205e5b5da7a3a19b1538635",
         "sha256:8a2962ed06f320230159567a68d3a97bda9250edc0a5f98b6c5eb97f073ce60f"
