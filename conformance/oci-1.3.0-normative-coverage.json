@@ -7175,10 +7175,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Runtimes MAY [log](runtime.md#warnings) unknown properties but MUST otherwise ignore them.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.common.extensibility.unknown-properties-ignored"
+      ],
+      "testIds": [
+        "bundle::tests::ignores_unknown_configuration_properties_without_losing_exact_bundle",
+        "client_contract::client_preserves_complete_oci_spec_and_unknown_properties_at_service_boundary",
+        "executor::plan_tests::ignores_unknown_configuration_properties_during_planning"
+      ]
     },
     {
       "id": "sha256:b2715f74eaae5fb228070d43a06db6810d491f6c8d4f85eb11ee3f181387029b",
@@ -7189,10 +7195,16 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "Runtimes MAY [log](runtime.md#warnings) unknown properties but MUST otherwise ignore them.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.common.extensibility.unknown-properties-ignored"
+      ],
+      "testIds": [
+        "bundle::tests::ignores_unknown_configuration_properties_without_losing_exact_bundle",
+        "client_contract::client_preserves_complete_oci_spec_and_unknown_properties_at_service_boundary",
+        "executor::plan_tests::ignores_unknown_configuration_properties_during_planning"
+      ]
     },
     {
       "id": "sha256:4e2d24b19c710d6df50058598845974215bbe29749f2e5b9d7c64f41250aea2c",

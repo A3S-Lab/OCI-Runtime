@@ -30,6 +30,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.bundle.config.version.required", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.semver", "runtime-bundle"),
     OciNonSemanticRule::new(
+        "oci.common.extensibility.unknown-properties-ignored",
+        "runtime-bundle",
+    ),
+    OciNonSemanticRule::new(
         "oci.common.process.capabilities.exact-sets",
         "linux-executor",
     ),

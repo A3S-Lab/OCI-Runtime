@@ -35,7 +35,7 @@ pub struct OciBundle {
 }
 
 impl OciBundle {
-    /// Load and strictly decode `config.json` from an existing bundle.
+    /// Load and validate `config.json` from an existing bundle.
     pub async fn load(directory: impl AsRef<Path>) -> Result<Self> {
         let directory = tokio::fs::canonicalize(directory.as_ref())
             .await
@@ -367,25 +367,15 @@ fn decode_spec(bytes: &[u8], path: &Path) -> Result<Spec> {
         .for_operation("load-bundle")
     })?;
     OciSchemaValidator::new()?.validate(OciSchemaDocument::Configuration, &raw)?;
-    if let Some(object) = raw.as_object() {
-        let invalid_top_level_mappings = ["uidMappings", "gidMappings"]
-            .into_iter()
-            .filter(|field| object.contains_key(*field))
-            .collect::<Vec<_>>();
-        if !invalid_top_level_mappings.is_empty() {
-            return Err(Error::new(
-                ErrorCode::InvalidArgument,
-                format!(
-                    "OCI configuration {} contains non-standard top-level properties: {}",
-                    path.display(),
-                    invalid_top_level_mappings.join(", ")
-                ),
-            )
-            .for_operation("load-bundle"));
-        }
-    }
-
     let mut typed = raw.clone();
+    if let Some(object) = typed.as_object_mut() {
+        // oci-spec retains these deprecated compatibility fields even though
+        // they never existed on the OCI Spec object. Keep them in the exact
+        // raw configuration, but exclude them from the executable projection
+        // just like every other unknown property.
+        object.remove("uidMappings");
+        object.remove("gidMappings");
+    }
     if let Some(process) = typed.get_mut("process") {
         crate::process_serde::normalize_for_typed_model(process);
     }
@@ -400,11 +390,7 @@ fn decode_spec(bytes: &[u8], path: &Path) -> Result<Spec> {
         .for_operation("load-bundle")
     })?;
     let mut deserializer = serde_json::Deserializer::from_slice(&typed_bytes);
-    let mut unknown = Vec::new();
-    let spec: Spec = serde_ignored::deserialize(&mut deserializer, |field| {
-        unknown.push(field.to_string());
-    })
-    .map_err(|error| {
+    let spec = Spec::deserialize(&mut deserializer).map_err(|error| {
         Error::new(
             ErrorCode::InvalidArgument,
             format!("invalid OCI configuration {}: {error}", path.display()),
@@ -421,20 +407,6 @@ fn decode_spec(bytes: &[u8], path: &Path) -> Result<Spec> {
         )
         .for_operation("load-bundle")
     })?;
-
-    unknown.sort();
-    unknown.dedup();
-    if !unknown.is_empty() {
-        return Err(Error::new(
-            ErrorCode::InvalidArgument,
-            format!(
-                "OCI configuration {} contains unknown properties: {}",
-                path.display(),
-                unknown.join(", ")
-            ),
-        )
-        .for_operation("load-bundle"));
-    }
 
     validate_version(&spec)?;
     OciSemanticValidator::new()?.validate_schema_valid(OciSemanticPhase::Configuration, &raw)?;
@@ -637,43 +609,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_unknown_configuration_properties() {
+    async fn ignores_unknown_configuration_properties_without_losing_exact_bundle() {
         let temporary = tempfile::tempdir().expect("create temporary bundle");
         let mut config = complete_v1_3_fixture();
-        config["unknownSecurityControl"] = json!(true);
-        std::fs::write(
-            temporary.path().join("config.json"),
-            serde_json::to_vec(&config).expect("encode fixture"),
-        )
-        .expect("write fixture");
+        config["futureTopLevel"] = json!({"version": 2});
+        config["uidMappings"] = json!([{"containerID": 0, "hostID": 1000, "size": 1}]);
+        config["gidMappings"] = json!([{"containerID": 0, "hostID": 2000, "size": 1}]);
+        config["process"]["futureProcessField"] = json!(["opaque", 7]);
+        config["linux"]["resources"]["memory"]["futureMemoryField"] = json!(true);
+        let config_json = serde_json::to_string_pretty(&config).expect("encode fixture");
+        std::fs::write(temporary.path().join("config.json"), &config_json).expect("write fixture");
 
-        let error = OciBundle::load(temporary.path())
+        let bundle = OciBundle::load(temporary.path())
             .await
-            .expect_err("unknown fields must not be ignored");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-        assert!(error.message.contains("unknownSecurityControl"));
-    }
+            .expect("unknown properties must otherwise be ignored");
+        let typed = serde_json::to_value(bundle.spec()).expect("encode typed known fields");
+        assert!(typed.get("futureTopLevel").is_none());
+        assert!(typed.get("uidMappings").is_none());
+        assert!(typed.get("gidMappings").is_none());
+        assert!(typed["process"].get("futureProcessField").is_none());
+        assert!(typed["linux"]["resources"]["memory"]
+            .get("futureMemoryField")
+            .is_none());
 
-    #[tokio::test]
-    async fn rejects_non_standard_top_level_id_mappings() {
-        let temporary = tempfile::tempdir().expect("create temporary bundle");
-        let mut config = complete_v1_3_fixture();
-        config["uidMappings"] = json!([{
-            "containerID": 0,
-            "hostID": 1000,
-            "size": 1
-        }]);
-        std::fs::write(
-            temporary.path().join("config.json"),
-            serde_json::to_vec(&config).expect("encode fixture"),
-        )
-        .expect("write fixture");
+        assert_eq!(bundle.config_json(), config_json);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(bundle.config_json())
+                .expect("decode retained configuration"),
+            config
+        );
 
-        let error = OciBundle::load(temporary.path())
-            .await
-            .expect_err("deprecated non-standard top-level field must be rejected");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-        assert!(error.message.contains("uidMappings"));
+        let encoded = serde_json::to_vec(&bundle).expect("serialize immutable bundle");
+        let decoded: OciBundle =
+            serde_json::from_slice(&encoded).expect("deserialize immutable bundle");
+        assert_eq!(decoded, bundle);
+        assert_eq!(decoded.config_json(), config_json);
     }
 
     #[test]

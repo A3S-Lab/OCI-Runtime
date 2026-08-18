@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 218-entry pending normative evidence backlog.
+- [ ] Close the remaining 216-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -491,6 +491,11 @@ driver implements.
     UID/GID, supplementary groups, umask, and the Linux-only rejection of
     native non-Linux clauses. Keep only the bundle-author recommendation to
     use the conventional `rootfs` name open in these headings.
+  - [x] Honor OCI configuration extensibility by retaining the exact raw
+    document and digest while excluding unknown top-level and nested
+    properties from the typed execution projection. Treat the dependency's
+    deprecated top-level ID-mapping compatibility fields the same way instead
+    of rejecting or applying them. Two requirements are owner-bound.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1460,8 +1465,8 @@ leak. Only then may KVM become `experimental`.
   its accepted specification range and seccomp values from SDK-owned
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
-  owner-bound. Subsequent common-configuration review leaves 388 enforced,
-  47 validated, and 218 pending entries.
+  owner-bound. Subsequent common-configuration and extensibility review leaves
+  390 enforced, 47 validated, and 216 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

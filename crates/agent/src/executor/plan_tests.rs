@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
     ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize, CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION,
@@ -141,6 +143,31 @@ fn plans_exact_common_process_fields_for_init_and_exec() {
         !exec.terminal,
         "an omitted terminal field defaults to false"
     );
+}
+
+#[test]
+fn ignores_unknown_configuration_properties_during_planning() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed configuration");
+    config["futureTopLevel"] = serde_json::json!({"version": 2});
+    config["process"]["futureProcessField"] = serde_json::json!(["opaque", 7]);
+    config["linux"] = serde_json::json!({
+        "namespaces": [{"type": "mount"}],
+        "futureLinuxField": {"enabled": true}
+    });
+    config["mounts"] = serde_json::json!([{
+        "destination": "/proc",
+        "type": "proc",
+        "source": "proc",
+        "futureMountField": "opaque"
+    }]);
+    let encoded = serde_json::to_string(&config).expect("encode extensible configuration");
+
+    let plan = InitPlan::from_bundle(&bundle(&encoded), &null_io())
+        .expect("unknown properties must not change executor planning");
+    assert_eq!(plan.args, ["/bin/sh", "-c", "printf ready"]);
+    assert_eq!(plan.mounts.len(), 1);
+    assert_eq!(plan.mounts[0].destination, Path::new("/proc"));
 }
 
 #[test]
