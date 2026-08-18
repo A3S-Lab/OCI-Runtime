@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 216-entry pending normative evidence backlog.
+- [ ] Close the remaining 198-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -496,6 +496,12 @@ driver implements.
     properties from the typed execution projection. Treat the dependency's
     deprecated top-level ID-mapping compatibility fields the same way instead
     of rejecting or applying them. Two requirements are owner-bound.
+  - [x] Classify the common platform sections at the Linux-only admission
+    boundary: accept Linux and utility-VM configuration together, reject
+    native FreeBSD, Solaris, Windows, and z/OS sections before mutation, and
+    bind optional LSM, z/OS privilege, Windows username, hostname, and
+    domainname fields to their existing exact enforcement boundaries. Eighteen
+    requirements are owner-bound.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1465,8 +1471,8 @@ leak. Only then may KVM become `experimental`.
   its accepted specification range and seccomp values from SDK-owned
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
-  owner-bound. Subsequent common-configuration and extensibility review leaves
-  390 enforced, 47 validated, and 216 pending entries.
+  owner-bound. Subsequent common-configuration, platform, and extensibility
+  review leaves 404 enforced, 51 validated, and 198 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

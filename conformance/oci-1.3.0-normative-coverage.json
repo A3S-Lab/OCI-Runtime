@@ -4603,10 +4603,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`apparmorProfile`** (string, OPTIONAL) specifies the name of the AppArmor profile for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.apparmor.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
     },
     {
       "id": "sha256:fd38796efd0bc4465e7fec0a3308836194c148585beeda1e5cb7e1f7e1cb7977",
@@ -5143,10 +5148,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`selinuxLabel`** (string, OPTIONAL) specifies the SELinux label for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.linux.features.selinux.accurate"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+      ]
     },
     {
       "id": "sha256:a1c94801345bf5bfaf2c9a63bdc4af4295906ecca14c4833be615a2324322716",
@@ -5318,10 +5328,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`noNewPrivileges`** (bool, OPTIONAL) setting `noNewPrivileges` to true prevents the process from gaining additional privileges.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.no-new-privileges"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::init-and-exec-no-new-privileges-readback",
+        "executor::no_new_privileges::tests::applies_and_reads_back_in_isolated_process",
+        "executor::no_new_privileges::tests::disabled_request_does_not_change_the_current_process"
+      ]
     },
     {
       "id": "sha256:bcb64b3cd15e87a99738da5304c7c27ed4fff12eba4dab202d21de0457239531",
@@ -5408,10 +5424,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`username`** (string, OPTIONAL) specifies the user name for the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.windows-process-field"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_windows_process_fields_as_unsupported"
+      ]
     },
     {
       "id": "sha256:7a35875ee9a16136d459e3a94dcc33696c6684d6b557be6d0d8bf13207bfa80a",
@@ -5422,10 +5442,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`hostname`** (string, OPTIONAL) specifies the container's hostname as seen by processes running inside the container.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.uts-names.exact"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::configured-uts-names-applied",
+        "executor::plan_tests::accepts_a_new_uts_namespace_and_bounded_uts_names",
+        "executor::plan_tests::rejects_uts_names_outside_the_supported_profile"
+      ]
     },
     {
       "id": "sha256:23c8b3b88932aecd4eb437476c6e8fcf9f29cf483924e1e7b7aa4c27d8ec286d",
@@ -5436,10 +5462,16 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`domainname`** (string, OPTIONAL) specifies the container's domainname as seen by processes running inside the container.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.uts-names.exact"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::configured-uts-names-applied",
+        "executor::plan_tests::accepts_a_new_uts_namespace_and_bounded_uts_names",
+        "executor::plan_tests::rejects_uts_names_outside_the_supported_profile"
+      ]
     },
     {
       "id": "sha256:13607b7c7a685104ac35d53ab327278c90ec9e9534f590d9b61ae7bc58f1688c",
@@ -5450,10 +5482,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`freebsd`** (object, OPTIONAL) [FreeBSD-specific configuration](config-freebsd.md).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:e42d4d0338941cad2e10ef433fe2d6158b730e3f6fba7a06b084c781ed7b94d3",
@@ -5464,10 +5500,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This MAY be set if the target platform of this spec is `freebsd`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:9c480556899006ce20050b6d58ad97cd24b6ab91462da00aebb3d71ca8f9144c",
@@ -5478,10 +5518,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`linux`** (object, OPTIONAL) [Linux-specific configuration](config-linux.md).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.platform-sections.accepted"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_applicable_linux_and_vm_platform_sections_together",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:90720252928b414e291fa91dbc35bda9997c4d8ee6572017e6055cdd334ae863",
@@ -5492,10 +5537,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This MAY be set if the target platform of this spec is `linux`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.platform-sections.accepted"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_applicable_linux_and_vm_platform_sections_together",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:c294b4310dbdbcbaec5008da38f8909387cb6ef3aec851435294d6119d56450c",
@@ -5506,10 +5556,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`solaris`** (object, OPTIONAL) [Solaris-specific configuration](config-solaris.md).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:977adccc82b404f21f49f3b80a5919ed5d7a2251d146f9cd584ab073707f4ca1",
@@ -5520,10 +5574,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This MAY be set if the target platform of this spec is `solaris`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:83c18112f86f1dc8e70b1e1ba0f3d2c439864c9d07ea096a7bdb5a0412c63dc4",
@@ -5534,10 +5592,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`vm`** (object, OPTIONAL) [Virtual-machine-specific configuration](config-vm.md).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.platform-sections.accepted"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_applicable_linux_and_vm_platform_sections_together",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:84e2748d347645865004d8d9b447ba0844fa69860e83a9a8fd66df3ebda4da85",
@@ -5548,10 +5611,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This MAY be set if the target platform and architecture of this spec support hardware virtualization.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.platform-sections.accepted"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_applicable_linux_and_vm_platform_sections_together",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
     },
     {
       "id": "sha256:4653122aac48cda849a1b15188a162b6a8b91c87af1c6d920ee6d5ab96d6e9ee",
@@ -5562,10 +5630,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`windows`** (object, OPTIONAL) [Windows-specific configuration](config-windows.md).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:0cca090f65d3d566aaf1d5d53a7f88c256f1202bcd54e352a5313052e9c9bd2b",
@@ -5576,10 +5648,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "This MUST be set if the target platform of this spec is `windows`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:0d551caffa6321b380332b501b88e6955032df8539233d38da8dc5c7073507a5",
@@ -5590,10 +5666,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`zos`** (object, OPTIONAL) [z/OS-specific configuration](config-zos.md).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:060020bf8de77b9bcb90e9634082d5deaf79fbbc7a5ce2c7fee8c19cbb2ec0ba",
@@ -5604,10 +5684,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "This MAY be set if the target platform of this spec is `zos`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:d9b6ef48f299b8fc62b11a59e4e1ab29329f21732f71f315ce41d21bc238bf12",
