@@ -4,9 +4,9 @@ use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::{
-    normalize_cgroup_value, parse_max_value, parse_u64_value, pids_max_value, read_required,
-    shares_to_weight, validate_cpuset, validate_pids_limit, validate_supported_resource_fields,
-    CgroupHandle, ControlHeadroom,
+    cgroup_v2_limit_value, normalize_cgroup_value, parse_max_value, parse_u64_value, read_required,
+    shares_to_weight, validate_cpuset, validate_memory_value, validate_pids_limit,
+    validate_supported_resource_fields, CgroupHandle, ControlHeadroom,
 };
 
 const UPDATE_OPERATION: &str = "update-container-cgroup";
@@ -121,20 +121,17 @@ impl CgroupUpdatePlan {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.memory_limit.is_some_and(|value| value <= 0) {
-            return Err(update_invalid(
-                "linux.resources.memory.limit must be positive",
-            ));
-        }
-        if self.memory_reservation.is_some_and(|value| value < 0) {
-            return Err(update_invalid(
-                "linux.resources.memory.reservation must be non-negative",
-            ));
-        }
-        if self.memory_swap.is_some_and(|value| value < -1) {
-            return Err(update_invalid(
-                "linux.resources.memory.swap must be -1 or non-negative",
-            ));
+        for (field, value) in [
+            ("linux.resources.memory.limit", self.memory_limit),
+            (
+                "linux.resources.memory.reservation",
+                self.memory_reservation,
+            ),
+            ("linux.resources.memory.swap", self.memory_swap),
+        ] {
+            if let Some(value) = value {
+                validate_memory_value(field, value).map_err(as_update_error)?;
+            }
         }
         if self
             .cpu_shares
@@ -187,6 +184,11 @@ impl CgroupUpdatePlan {
         management.memory_limit = self
             .memory_limit
             .map(|value| {
+                if value == -1 {
+                    return Err(update_invalid(
+                        "control/workload cgroup layout requires a finite memory limit",
+                    ));
+                }
                 value
                     .checked_add(headroom.memory_bytes)
                     .ok_or_else(|| update_invalid("control-plane memory envelope overflows i64"))
@@ -253,39 +255,22 @@ impl CgroupUpdatePlan {
             let current_max =
                 parse_max_value("memory.max", &current_max_text).map_err(as_update_error)?;
             let effective_max = match self.memory_limit {
+                Some(-1) => None,
                 Some(limit) => Some(u64::try_from(limit).map_err(|error| {
                     update_invalid(format!("memory limit does not fit cgroup v2: {error}"))
                 })?),
                 None => current_max,
             };
-            let current_low_text = read_required(path, "memory.low", UPDATE_OPERATION).await?;
-            let current_low =
-                parse_u64_value("memory.low", &current_low_text).map_err(as_update_error)?;
-            let effective_low = match self.memory_reservation {
-                Some(reservation) => u64::try_from(reservation).map_err(|error| {
-                    update_invalid(format!(
-                        "memory reservation does not fit cgroup v2: {error}"
-                    ))
-                })?,
-                None => current_low,
-            };
-            if effective_max.is_some_and(|limit| effective_low > limit) {
-                return Err(update_invalid(
-                    "linux.resources.memory.reservation must not exceed the effective memory limit",
-                ));
-            }
-
-            let new_max = self.memory_limit.map(|value| value.to_string());
-            let new_low = self.memory_reservation.map(|value| value.to_string());
+            let new_max = self.memory_limit.map(cgroup_v2_limit_value);
+            let new_low = self.memory_reservation.map(cgroup_v2_limit_value);
             match (new_max, new_low) {
                 (Some(max), Some(low)) => {
-                    let new_limit = effective_max.ok_or_else(|| {
-                        update_error(
-                            ErrorCode::Internal,
-                            "finite memory update lost its effective limit",
-                        )
-                    })?;
-                    if current_max.is_some_and(|current| new_limit < current) {
+                    let lowers_finite_limit = match (current_max, effective_max) {
+                        (_, None) => false,
+                        (None, Some(_)) => true,
+                        (Some(current), Some(next)) => next < current,
+                    };
+                    if lowers_finite_limit {
                         settings.push(("memory.low", low));
                         settings.push(("memory.max", max));
                     } else {
@@ -399,7 +384,7 @@ impl CgroupUpdatePlan {
             settings.push(("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
-            settings.push(("pids.max", pids_max_value(value)));
+            settings.push(("pids.max", cgroup_v2_limit_value(value)));
         }
         Ok(settings)
     }
@@ -611,6 +596,123 @@ mod tests {
 
         std::fs::write(directory.path().join("memory.max"), "max\n").expect("unlimited memory");
         assert!(plan.settings(directory.path(), true).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn plans_zero_and_unlimited_memory_updates() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        std::fs::write(directory.path().join("memory.max"), "536870912\n").expect("memory max");
+        std::fs::write(directory.path().join("memory.low"), "67108864\n").expect("memory low");
+
+        for (value, expected) in [(0, "0"), (-1, "max")] {
+            let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+                "memory": {
+                    "limit": value,
+                    "reservation": value,
+                    "swap": value
+                }
+            }))
+            .expect("memory resource update");
+            let plan =
+                CgroupUpdatePlan::from_resources(&resources).expect("valid memory update plan");
+
+            let settings = plan
+                .settings(directory.path(), true)
+                .await
+                .expect("memory update settings");
+            assert!(settings.contains(&("memory.max", expected.to_string())));
+            assert!(settings.contains(&("memory.low", expected.to_string())));
+            assert!(settings.contains(&("memory.swap.max", expected.to_string())));
+            assert!(settings.contains(&("memory.oom.group", "1".to_string())));
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_memory_update_accepts_an_unlimited_current_reservation() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        std::fs::write(directory.path().join("memory.max"), "536870912\n").expect("memory max");
+        std::fs::write(directory.path().join("memory.low"), "max\n").expect("memory low");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "memory": {"swap": 1073741824}
+        }))
+        .expect("memory swap update");
+
+        assert_eq!(
+            CgroupUpdatePlan::from_resources(&resources)
+                .expect("valid memory update plan")
+                .settings(directory.path(), true)
+                .await
+                .expect("partial memory update"),
+            [("memory.swap.max", "536870912".to_string())]
+        );
+    }
+
+    #[test]
+    fn rejects_memory_update_values_below_the_unlimited_sentinel() {
+        for field in ["limit", "reservation", "swap"] {
+            let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+                "memory": {field: -2}
+            }))
+            .expect("invalid memory resource update");
+            let error = CgroupUpdatePlan::from_resources(&resources)
+                .expect_err("a memory update below -1 must fail planning");
+
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+            assert!(error.message.contains("-1 or non-negative"));
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_memory_update_controls() {
+        for (field, value) in [
+            ("kernel", serde_json::json!(1)),
+            ("kernelTCP", serde_json::json!(1)),
+            ("swappiness", serde_json::json!(50)),
+            ("disableOOMKiller", serde_json::json!(true)),
+            ("useHierarchy", serde_json::json!(true)),
+            ("checkBeforeUpdate", serde_json::json!(true)),
+        ] {
+            let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+                "memory": {field: value}
+            }))
+            .expect("unsupported memory resource update");
+            let error = CgroupUpdatePlan::from_resources(&resources)
+                .expect_err("unsupported cgroup v1 memory update must fail planning");
+
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Unsupported);
+            assert!(error
+                .message
+                .contains(&format!("linux.resources.memory.{field}")));
+        }
+    }
+
+    #[test]
+    fn control_workload_updates_accept_zero_but_reject_unlimited_memory() {
+        let headroom = ControlHeadroom {
+            memory_bytes: 67_108_864,
+            cpu_quota_micros: 25_000,
+            pids: 16,
+        };
+        let zero: LinuxResources = serde_json::from_value(serde_json::json!({
+            "memory": {"limit": 0}
+        }))
+        .expect("zero-memory resource update");
+        let management = CgroupUpdatePlan::from_resources(&zero)
+            .expect("zero-memory update plan")
+            .management_plan(&headroom)
+            .expect("zero-memory management envelope");
+        assert_eq!(management.memory_limit, Some(67_108_864));
+
+        let unlimited: LinuxResources = serde_json::from_value(serde_json::json!({
+            "memory": {"limit": -1}
+        }))
+        .expect("unlimited-memory resource update");
+        let error = CgroupUpdatePlan::from_resources(&unlimited)
+            .expect("unlimited memory is valid for a flat cgroup")
+            .management_plan(&headroom)
+            .expect_err("control/workload update must retain a finite memory limit");
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("finite memory limit"));
     }
 
     #[tokio::test]

@@ -105,34 +105,29 @@ impl CgroupPlan {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.memory_limit.is_some_and(|value| value <= 0) {
-            return Err(invalid("linux.resources.memory.limit must be positive"));
+        for (field, value) in [
+            ("linux.resources.memory.limit", self.memory_limit),
+            (
+                "linux.resources.memory.reservation",
+                self.memory_reservation,
+            ),
+            ("linux.resources.memory.swap", self.memory_swap),
+        ] {
+            if let Some(value) = value {
+                validate_memory_value(field, value)?;
+            }
         }
-        if self
-            .memory_reservation
-            .is_some_and(|value| value < 0 || self.memory_limit.is_some_and(|limit| value > limit))
-        {
-            return Err(invalid(
-                "linux.resources.memory.reservation must be non-negative and not exceed limit",
-            ));
-        }
-        if self.memory_swap.is_some_and(|value| {
-            value < -1
-                || self
-                    .memory_limit
-                    .is_some_and(|limit| value != -1 && value < limit)
-        }) {
-            return Err(invalid(
-                "linux.resources.memory.swap must be -1 or at least the memory limit",
-            ));
-        }
-        if self
-            .memory_swap
-            .is_some_and(|value| value != -1 && self.memory_limit.is_none())
-        {
-            return Err(invalid(
-                "linux.resources.memory.swap requires memory.limit when it is finite",
-            ));
+        if let Some(swap) = self.memory_swap.filter(|value| *value != -1) {
+            let Some(limit) = self.memory_limit.filter(|value| *value != -1) else {
+                return Err(invalid(
+                    "finite linux.resources.memory.swap requires a finite memory.limit",
+                ));
+            };
+            if swap < limit {
+                return Err(invalid(
+                    "linux.resources.memory.swap must be at least the finite memory.limit",
+                ));
+            }
         }
         if self
             .cpu_shares
@@ -174,7 +169,7 @@ impl CgroupPlan {
             validate_pids_limit(value)?;
         }
         if matches!(self.layout, CgroupLayout::ControlWorkload(_))
-            && (self.memory_limit.is_none()
+            && (self.memory_limit.is_none_or(|value| value == -1)
                 || self.cpu_quota.is_none_or(|value| value <= 0)
                 || self.cpu_period.is_none()
                 || self.pids_limit.is_none_or(|value| value == -1))
@@ -199,14 +194,14 @@ impl CgroupPlan {
             settings.push(("cpuset.cpus", value.clone()));
         }
         if let Some(value) = self.memory_limit {
-            settings.push(("memory.max", value.to_string()));
+            settings.push(("memory.max", cgroup_v2_limit_value(value)));
             settings.push((
                 "memory.oom.group",
                 if oom_group { "1" } else { "0" }.to_string(),
             ));
         }
         if let Some(value) = self.memory_reservation {
-            settings.push(("memory.low", value.to_string()));
+            settings.push(("memory.low", cgroup_v2_limit_value(value)));
         }
         if let Some(value) = self.memory_swap {
             let value = if value == -1 {
@@ -236,7 +231,7 @@ impl CgroupPlan {
             settings.push(("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
-            settings.push(("pids.max", pids_max_value(value)));
+            settings.push(("pids.max", cgroup_v2_limit_value(value)));
         }
         settings
     }
@@ -246,9 +241,17 @@ impl CgroupPlan {
         management.layout = CgroupLayout::Flat;
         management.memory_limit = self
             .memory_limit
-            .and_then(|value| value.checked_add(headroom.memory_bytes))
-            .ok_or_else(|| invalid("control-plane memory envelope overflows i64"))
-            .map(Some)?;
+            .map(|value| {
+                if value == -1 {
+                    return Err(invalid(
+                        "control/workload cgroup layout requires a finite memory limit",
+                    ));
+                }
+                value
+                    .checked_add(headroom.memory_bytes)
+                    .ok_or_else(|| invalid("control-plane memory envelope overflows i64"))
+            })
+            .transpose()?;
         management.memory_reservation = None;
         management.memory_swap = self
             .memory_swap
@@ -461,8 +464,19 @@ pub(super) fn validate_pids_limit(value: i64) -> Result<()> {
     }
 }
 
-pub(super) fn pids_max_value(value: i64) -> String {
-    debug_assert!(value >= -1, "PIDs limit must be validated before encoding");
+pub(super) fn validate_memory_value(field: &str, value: i64) -> Result<()> {
+    if value < -1 {
+        Err(invalid(format!("{field} must be -1 or non-negative")))
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn cgroup_v2_limit_value(value: i64) -> String {
+    debug_assert!(
+        value >= -1,
+        "cgroup v2 limit must be validated before encoding"
+    );
     if value == -1 {
         "max".to_string()
     } else {
@@ -521,6 +535,14 @@ mod tests {
             "resources": {"pids": {"limit": limit}}
         }))
         .expect("decode Linux PIDs controls")
+    }
+
+    fn linux_with_memory(memory: serde_json::Value) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "memory/controls",
+            "resources": {"memory": memory}
+        }))
+        .expect("decode Linux memory controls")
     }
 
     fn control_workload_annotations() -> BTreeMap<String, String> {
@@ -663,6 +685,105 @@ mod tests {
     }
 
     #[test]
+    fn plans_zero_and_unlimited_memory_controls() {
+        for (value, expected) in [(0, "0"), (-1, "max")] {
+            let plan = CgroupPlan::from_linux(
+                Some(&linux_with_memory(serde_json::json!({
+                    "limit": value,
+                    "reservation": value,
+                    "swap": value
+                }))),
+                &BTreeMap::new(),
+            )
+            .expect("valid memory plan");
+
+            assert_eq!(
+                plan.settings(),
+                [
+                    ("memory.max", expected.to_string()),
+                    ("memory.oom.group", "1".to_string()),
+                    ("memory.low", expected.to_string()),
+                    ("memory.swap.max", expected.to_string()),
+                ]
+            );
+            assert_eq!(plan.required_controllers(), ["memory"].into());
+        }
+    }
+
+    #[test]
+    fn accepts_memory_reservation_above_the_hard_limit() {
+        let plan = CgroupPlan::from_linux(
+            Some(&linux_with_memory(serde_json::json!({
+                "limit": 64,
+                "reservation": 128
+            }))),
+            &BTreeMap::new(),
+        )
+        .expect("cgroup v2 clamps memory.low to the effective hard limit");
+
+        assert_eq!(
+            plan.settings(),
+            [
+                ("memory.max", "64".to_string()),
+                ("memory.oom.group", "1".to_string()),
+                ("memory.low", "128".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_memory_values_below_the_unlimited_sentinel() {
+        for field in ["limit", "reservation", "swap"] {
+            let error = CgroupPlan::from_linux(
+                Some(&linux_with_memory(serde_json::json!({field: -2}))),
+                &BTreeMap::new(),
+            )
+            .expect_err("a memory value below -1 must fail planning");
+
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+            assert!(error.message.contains("-1 or non-negative"));
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_memory_controls() {
+        for (field, value) in [
+            ("kernel", serde_json::json!(1)),
+            ("kernelTCP", serde_json::json!(1)),
+            ("swappiness", serde_json::json!(50)),
+            ("disableOOMKiller", serde_json::json!(true)),
+            ("useHierarchy", serde_json::json!(true)),
+            ("checkBeforeUpdate", serde_json::json!(true)),
+        ] {
+            let error = CgroupPlan::from_linux(
+                Some(&linux_with_memory(serde_json::json!({field: value}))),
+                &BTreeMap::new(),
+            )
+            .expect_err("unsupported cgroup v1 memory control must fail planning");
+
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Unsupported);
+            assert!(error
+                .message
+                .contains(&format!("linux.resources.memory.{field}")));
+        }
+    }
+
+    #[test]
+    fn finite_memory_swap_requires_a_finite_compatible_limit() {
+        for memory in [
+            serde_json::json!({"swap": 128}),
+            serde_json::json!({"limit": -1, "swap": 128}),
+            serde_json::json!({"limit": 128, "swap": 64}),
+        ] {
+            let error = CgroupPlan::from_linux(Some(&linux_with_memory(memory)), &BTreeMap::new())
+                .expect_err("finite swap needs a compatible finite memory limit");
+
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+            assert!(error.message.contains("memory.swap"));
+        }
+    }
+
+    #[test]
     fn rejects_pids_limits_below_the_unlimited_sentinel() {
         let error = CgroupPlan::from_linux(Some(&linux_with_pids(-2)), &BTreeMap::new())
             .expect_err("a PIDs limit below -1 must fail planning");
@@ -692,6 +813,33 @@ mod tests {
             serde_json::from_value(unlimited).expect("decode unlimited-PIDs Linux fixture");
         let error = CgroupPlan::from_linux(Some(&unlimited), &annotations)
             .expect_err("control/workload layout must retain a finite PIDs limit");
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("finite memory, CPU, and PID limits"));
+    }
+
+    #[test]
+    fn control_workload_accepts_zero_but_rejects_unlimited_memory() {
+        let annotations = control_workload_annotations();
+        let mut zero = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        zero["resources"]["memory"]["limit"] = serde_json::json!(0);
+        let zero = serde_json::from_value(zero).expect("decode zero-memory Linux fixture");
+        let plan = CgroupPlan::from_linux(Some(&zero), &annotations)
+            .expect("zero is a finite memory limit");
+        assert!(plan.settings().contains(&("memory.max", "0".to_string())));
+        assert!(plan
+            .management_plan(plan.control_headroom().expect("control headroom"))
+            .expect("zero-memory management envelope")
+            .settings()
+            .contains(&("memory.max", "67108864".to_string())));
+
+        let mut unlimited = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        unlimited["resources"]["memory"]["limit"] = serde_json::json!(-1);
+        unlimited["resources"]["memory"]["reservation"] = serde_json::json!(-1);
+        unlimited["resources"]["memory"]["swap"] = serde_json::json!(-1);
+        let unlimited =
+            serde_json::from_value(unlimited).expect("decode unlimited-memory Linux fixture");
+        let error = CgroupPlan::from_linux(Some(&unlimited), &annotations)
+            .expect_err("control/workload layout must retain a finite memory limit");
         assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
         assert!(error.message.contains("finite memory, CPU, and PID limits"));
     }
