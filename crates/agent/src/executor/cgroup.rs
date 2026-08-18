@@ -21,7 +21,8 @@ mod update;
 pub(super) use manager::{CgroupManager, RootlessCgroupDelegation};
 pub(super) use plan::CgroupPlan;
 use plan::{
-    shares_to_weight, validate_cpuset, validate_supported_resource_fields, ControlHeadroom,
+    pids_max_value, shares_to_weight, validate_cpuset, validate_pids_limit,
+    validate_supported_resource_fields, ControlHeadroom,
 };
 
 const CGROUP_EVENTS: &str = "cgroup.events";

@@ -902,6 +902,28 @@
     },
     {
       "requirementIds": [
+        "sha256:1d5c01ffffac2480a4ee5229e97002c2162c4ffb4601d128e9fa6f3915f3879e",
+        "sha256:0a16a7718f20b2a37b5659d894e5913057f06d89b205e5b5da7a3a19b1538635",
+        "sha256:8a2962ed06f320230159567a68d3a97bda9250edc0a5f98b6c5eb97f073ce60f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.pids.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_pids_limits",
+        "executor::cgroup::plan::tests::rejects_pids_limits_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_pids",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_pids_updates",
+        "executor::cgroup::update::tests::rejects_pids_updates_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_pids",
+        "executor::cgroup::update::tests::applies_updates_with_exact_read_back",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:740ac90fb12eb528d2f9f993405048707294bf8d931d3d1f6b3cccea4c900970"
       ],
       "disposition": "validated",

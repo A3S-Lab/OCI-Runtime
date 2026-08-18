@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 198-entry pending normative evidence backlog.
+- [ ] Close the remaining 195-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -1472,16 +1472,21 @@ leak. Only then may KVM become `experimental`.
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, and extensibility
-  review leaves 404 enforced, 51 validated, and 198 pending entries.
+  review plus the PIDs controller promotion leaves 407 enforced, 51 validated,
+  and 195 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
 - [x] Apply and read back cgroup v2 memory limit/reservation/swap, CPU
-  shares/quota/burst/period/cpuset/idle, and PID limits; allow independent CPU
-  quota and period requests, reject cgroup v1 realtime controls, and order
-  live quota/burst changes without a transient invalid state. Join init and
-  exec to the same owned leaf; freeze and thaw that leaf through
-  `cgroup.freeze` and verify the exact transition through `cgroup.events`.
+  shares/quota/burst/period/cpuset/idle, and PID limits; map the OCI PIDs
+  unlimited sentinel to `pids.max=max`, preserve zero as a valid limit for
+  Create and Update, and reject values below `-1`. Keep `control-workload-v1`
+  finite while accepting zero for the exact workload leaf and adding only its
+  configured headroom to the management envelope. Allow independent CPU quota
+  and period requests, reject cgroup v1 realtime controls, and order live
+  quota/burst changes without a transient invalid state. Join init and exec to
+  the same owned leaf; freeze and thaw that leaf through `cgroup.freeze` and
+  verify the exact transition through `cgroup.events`.
 - [x] Create a private controller-enabled cgroup-v2 manager, apply
   generation-fenced partial resource updates with exact read-back and
   reverse-order rollback, and expose normalized CPU, memory, PID, and event

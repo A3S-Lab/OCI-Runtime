@@ -9847,10 +9847,21 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`pids`** (object, OPTIONAL) represents the cgroup subsystem `pids`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.pids.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_pids_limits",
+        "executor::cgroup::plan::tests::rejects_pids_limits_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_pids",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_pids_updates",
+        "executor::cgroup::update::tests::rejects_pids_updates_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_pids",
+        "executor::cgroup::update::tests::applies_updates_with_exact_read_back",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
     },
     {
       "id": "sha256:0a16a7718f20b2a37b5659d894e5913057f06d89b205e5b5da7a3a19b1538635",
@@ -9861,10 +9872,21 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`limit`** *(int64, OPTIONAL)* - specifies the maximum number of tasks in the cgroup, with `-1` indicating no limit (`max`).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.pids.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_pids_limits",
+        "executor::cgroup::plan::tests::rejects_pids_limits_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_pids",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_pids_updates",
+        "executor::cgroup::update::tests::rejects_pids_updates_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_pids",
+        "executor::cgroup::update::tests::applies_updates_with_exact_read_back",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
     },
     {
       "id": "sha256:8a2962ed06f320230159567a68d3a97bda9250edc0a5f98b6c5eb97f073ce60f",
@@ -9875,10 +9897,21 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "> Note: Even though it may superficially seem redundant, `0` is a valid limit value for the `pids` cgroup controller from the kernel's perspective and SHOULD be treated as such by runtimes.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.pids.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_pids_limits",
+        "executor::cgroup::plan::tests::rejects_pids_limits_below_the_unlimited_sentinel",
+        "executor::cgroup::plan::tests::control_workload_accepts_zero_but_rejects_unlimited_pids",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_pids_updates",
+        "executor::cgroup::update::tests::rejects_pids_updates_below_the_unlimited_sentinel",
+        "executor::cgroup::update::tests::control_workload_updates_accept_zero_but_reject_unlimited_pids",
+        "executor::cgroup::update::tests::applies_updates_with_exact_read_back",
+        "native_smoke::linux::lifecycle::exercise_control_plane"
+      ]
     },
     {
       "id": "sha256:450ad86b7d0f53a7762cfa9d5f89ab6d0bc79bdaf21fdc5948f423950632ff1a",

@@ -4,8 +4,9 @@ use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::{
-    normalize_cgroup_value, parse_max_value, parse_u64_value, read_required, shares_to_weight,
-    validate_cpuset, validate_supported_resource_fields, CgroupHandle, ControlHeadroom,
+    normalize_cgroup_value, parse_max_value, parse_u64_value, pids_max_value, read_required,
+    shares_to_weight, validate_cpuset, validate_pids_limit, validate_supported_resource_fields,
+    CgroupHandle, ControlHeadroom,
 };
 
 const UPDATE_OPERATION: &str = "update-container-cgroup";
@@ -175,10 +176,8 @@ impl CgroupUpdatePlan {
                 validate_cpuset(field, value).map_err(as_update_error)?;
             }
         }
-        if self.pids_limit.is_some_and(|value| value <= 0) {
-            return Err(update_invalid(
-                "linux.resources.pids.limit must be positive",
-            ));
+        if let Some(value) = self.pids_limit {
+            validate_pids_limit(value).map_err(as_update_error)?;
         }
         Ok(())
     }
@@ -224,6 +223,11 @@ impl CgroupUpdatePlan {
         management.pids_limit = self
             .pids_limit
             .map(|value| {
+                if value == -1 {
+                    return Err(update_invalid(
+                        "control/workload cgroup layout requires a finite PID limit",
+                    ));
+                }
                 value
                     .checked_add(headroom.pids)
                     .ok_or_else(|| update_invalid("control-plane PID envelope overflows i64"))
@@ -395,7 +399,7 @@ impl CgroupUpdatePlan {
             settings.push(("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
-            settings.push(("pids.max", value.to_string()));
+            settings.push(("pids.max", pids_max_value(value)));
         }
         Ok(settings)
     }
@@ -680,6 +684,67 @@ mod tests {
             .expect_err("a missing CPU burst control must fail");
         assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Unsupported);
         assert!(error.message.contains("burst"));
+    }
+
+    #[tokio::test]
+    async fn plans_zero_and_unlimited_pids_updates() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        for (limit, expected) in [(0, "0"), (-1, "max")] {
+            let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+                "pids": {"limit": limit}
+            }))
+            .expect("PIDs resource update");
+            let plan = CgroupUpdatePlan::from_resources(&resources).expect("valid PIDs update");
+
+            assert_eq!(
+                plan.settings(directory.path(), true)
+                    .await
+                    .expect("PIDs update settings"),
+                [("pids.max", expected.to_string())]
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_pids_updates_below_the_unlimited_sentinel() {
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "pids": {"limit": -2}
+        }))
+        .expect("invalid PIDs resource update");
+        let error = CgroupUpdatePlan::from_resources(&resources)
+            .expect_err("a PIDs update below -1 must fail planning");
+
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("-1 or non-negative"));
+    }
+
+    #[test]
+    fn control_workload_updates_accept_zero_but_reject_unlimited_pids() {
+        let headroom = ControlHeadroom {
+            memory_bytes: 67_108_864,
+            cpu_quota_micros: 25_000,
+            pids: 16,
+        };
+        let zero: LinuxResources = serde_json::from_value(serde_json::json!({
+            "pids": {"limit": 0}
+        }))
+        .expect("zero-PIDs resource update");
+        let management = CgroupUpdatePlan::from_resources(&zero)
+            .expect("zero-PIDs update plan")
+            .management_plan(&headroom)
+            .expect("zero-PIDs management envelope");
+        assert_eq!(management.pids_limit, Some(16));
+
+        let unlimited: LinuxResources = serde_json::from_value(serde_json::json!({
+            "pids": {"limit": -1}
+        }))
+        .expect("unlimited-PIDs resource update");
+        let error = CgroupUpdatePlan::from_resources(&unlimited)
+            .expect("unlimited PIDs is valid for a flat cgroup")
+            .management_plan(&headroom)
+            .expect_err("control/workload update must retain a finite PIDs limit");
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("finite PID limit"));
     }
 
     #[tokio::test]
