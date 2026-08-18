@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 89);
+    assert_eq!(registry.len(), 94);
     assert_eq!(
         registry
             .iter()
@@ -194,6 +194,89 @@ fn requires_rates_for_every_block_io_throttle_list() {
             "missing rate rule for {field}"
         );
     }
+}
+
+#[test]
+fn validates_linux_device_identity_and_conditional_numbers() {
+    let valid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "devices": [
+                {"type": "c", "path": "/dev/null", "major": 1, "minor": 3},
+                {"type": "p", "path": "/run/a3s/device-fifo"},
+                {
+                    "type": "p",
+                    "path": "/run/a3s/device-fifo-with-ignored-numbers",
+                    "major": -1,
+                    "minor": 9223372036854775807_i64
+                }
+            ]
+        }
+    });
+    OciSemanticValidator::new()
+        .expect("construct validator")
+        .validate(OciSemanticPhase::Configuration, &valid)
+        .expect("character devices have numbers and FIFO numbers are optional");
+
+    let invalid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "devices": [
+                {"type": "c", "path": "/dev/missing-major", "minor": 3},
+                {"type": "b", "path": "/dev/missing-minor", "major": 8},
+                {"type": "c", "path": "/dev/first", "major": 10, "minor": 229},
+                {"type": "u", "path": "/outside-dev/second", "major": 10, "minor": 229},
+                {"type": "c", "path": "/dev/negative", "major": -1, "minor": 0},
+                {"type": "b", "path": "/dev/too-large", "major": 4294967296_u64, "minor": 0}
+            ]
+        }
+    });
+    let violations = rules(&invalid, OciSemanticPhase::Configuration);
+    assert!(violations.contains("oci.linux.device.major-minor-required"));
+    assert!(violations.contains("oci.linux.device.identity.unique"));
+    assert!(violations.contains("oci.linux.device.number.kernel-range"));
+}
+
+#[test]
+fn validates_device_access_types_and_masks_without_requiring_access() {
+    let valid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "resources": {
+                "devices": [
+                    {"allow": false},
+                    {"allow": true, "type": "a", "access": ""},
+                    {"allow": true, "type": "c", "major": 1, "minor": 3, "access": "rwm"},
+                    {"allow": true, "type": "b", "major": 8, "access": "r"}
+                ]
+            }
+        }
+    });
+    OciSemanticValidator::new()
+        .expect("construct validator")
+        .validate(OciSemanticPhase::Configuration, &valid)
+        .expect("omitted and empty access masks are valid no-op entries");
+
+    let invalid = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "resources": {
+                "devices": [
+                    {"allow": true, "type": "u", "access": "r"},
+                    {"allow": true, "type": "p", "access": "w"},
+                    {"allow": true, "type": "x", "access": "m"},
+                    {"allow": true, "type": "c", "access": "rx"}
+                ]
+            }
+        }
+    });
+    let violations = rules(&invalid, OciSemanticPhase::Configuration);
+    assert!(violations.contains("oci.linux.device-access.type"));
+    assert!(violations.contains("oci.linux.device-access.mask"));
 }
 
 #[test]

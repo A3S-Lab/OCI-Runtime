@@ -6,6 +6,22 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI Linux device and configured-init console enforcement. Rootful execution
+  now accepts block, character, unbuffered-character, and FIFO nodes at any
+  normalized container path; preserves exact type, device identity, mode, and
+  mapped ownership; rejects duplicate paths, duplicate kernel identities, and
+  conflicting existing targets; supplies all six default devices and the
+  required `/dev/ptmx`; and binds the configured PTY slave to `/dev/console`.
+  A rootfs-identity-bound manifest removes only runtime-created placeholders
+  after Delete, shutdown, owner death, or failed Create while preserving
+  caller-owned files. Device-access rules retain list order, treat omitted or
+  empty access masks as no-ops, and avoid loading BPF for an all-no-op list.
+  The rootful Native Linux gate proves a 120x40 configured-init PTY, console
+  identity, a mapped FIFO outside `/dev`, new-target cleanup, and preservation
+  of a pre-existing console file. Four owner-bound executor rules and four
+  semantic rules promote 19 requirements, leaving 454 enforced, 51 validated,
+  two conformant, and 148 pending entries. The separate prohibition on access
+  to undeclared device nodes remains open.
 - Complete OCI Block I/O enforcement for cgroup v2. The shared Linux executor
   maps default and per-device weights through BFQ or generic `io.weight`,
   combines read/write BPS and IOPS throttles by device in `io.max`, reads every

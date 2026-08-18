@@ -183,6 +183,39 @@ fn validates_rule_shapes_and_access_values() {
 }
 
 #[test]
+fn omitted_and_empty_access_entries_are_ordered_no_ops() {
+    let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+        "devices": [
+            {"allow": true, "type": "c", "major": 1, "minor": 3},
+            {"allow": false, "type": "b", "major": 8, "minor": 0, "access": ""}
+        ]
+    }))
+    .expect("decode no-op device rules");
+    assert!(
+        DeviceAccessPolicy::from_oci(resources.devices().as_deref().expect("device rules"))
+            .expect("OCI permits omitted and empty access masks")
+            .is_none()
+    );
+
+    let policy = policy(serde_json::json!({
+        "devices": [
+            {"allow": false, "access": "rwm"},
+            {"allow": true, "type": "c", "major": 1, "minor": 3},
+            {"allow": true, "type": "c", "major": 1, "minor": 3, "access": "r"},
+            {"allow": false, "type": "c", "major": 1, "minor": 3, "access": ""}
+        ]
+    }));
+    assert!(evaluate(
+        &policy,
+        request(DeviceAccessKind::Character, 1, 3, "r")
+    ));
+    assert!(!evaluate(
+        &policy,
+        request(DeviceAccessKind::Character, 1, 3, "w")
+    ));
+}
+
+#[test]
 fn exact_rootless_policy_requires_the_bounded_six_device_rules() {
     let rootless_policy = policy(serde_json::json!({
         "devices": [

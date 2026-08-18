@@ -688,6 +688,70 @@ mod tests {
     }
 
     #[test]
+    fn validates_linux_device_schema_shapes() {
+        let validator = OciSchemaValidator::new().expect("compile pinned schemas");
+        validator
+            .validate(
+                OciSchemaDocument::Configuration,
+                &json!({
+                    "ociVersion": "1.3.0",
+                    "linux": {
+                        "devices": [
+                            {"type": "c", "path": "/dev/null", "major": 1, "minor": 3},
+                            {"type": "u", "path": "/run/a3s/char", "major": 10, "minor": 229},
+                            {"type": "b", "path": "/storage/block", "major": 8, "minor": 0},
+                            {
+                                "type": "p",
+                                "path": "/run/a3s/fifo",
+                                "fileMode": 416,
+                                "uid": 1,
+                                "gid": 2
+                            }
+                        ],
+                        "resources": {
+                            "devices": [
+                                {"allow": false},
+                                {"allow": true, "type": "a", "access": ""},
+                                {
+                                    "allow": true,
+                                    "type": "c",
+                                    "major": 1,
+                                    "minor": 3,
+                                    "access": "rwm"
+                                },
+                                {"allow": false, "type": "b", "major": 8}
+                            ]
+                        }
+                    }
+                }),
+            )
+            .expect("all OCI Linux device types and optional fields are schema-valid");
+        validator
+            .validate(
+                OciSchemaDocument::Configuration,
+                &json!({
+                    "ociVersion": "1.3.0",
+                    "linux": {"devices": [], "resources": {"devices": []}}
+                }),
+            )
+            .expect("both Linux device arrays are optional and may be empty");
+
+        for invalid_linux in [
+            json!({"devices": [{"path": "/dev/null", "major": 1, "minor": 3}]}),
+            json!({"devices": [{"type": "c", "major": 1, "minor": 3}]}),
+            json!({"devices": [{"type": "a", "path": "/dev/wildcard"}]}),
+            json!({"resources": {"devices": [{"type": "c", "access": "r"}]}}),
+        ] {
+            validator
+                .validate(
+                    OciSchemaDocument::Configuration,
+                    &json!({"ociVersion": "1.3.0", "linux": invalid_linux}),
+                )
+                .expect_err("required device fields and node types must follow the OCI schema");
+        }
+    }
+
+    #[test]
     fn accepts_runtime_spec_image_annotation_keys() {
         OciSchemaValidator::new()
             .expect("compile pinned schemas")
