@@ -68,7 +68,12 @@ impl InitializationFixture {
         let script_name = format!("a3s-oci-init-{nonce}");
         let script_path = rootfs.join("bin").join(&script_name);
         let script = format!(
-            "#!/bin/sh\nset -eu\ntest \"${{A3S_INIT_PROFILE:-}}\" = external\n\
+            "#!/bin/sh\nset -eu\ntest \"$PWD\" = \"{target}\"\n\
+             test \"${{A3S_INIT_PROFILE:-}}\" = external\n\
+             test \"$(/bin/busybox id -u)\" = 0\n\
+             test \"$(/bin/busybox id -g)\" = 0\n\
+             test \"$(umask)\" = 0022\n\
+             case \" $(/bin/busybox id -G) \" in *\" 1 \"*) ;; *) exit 1 ;; esac\n\
              printf 'a3s-oci-external-init-v1\\n' > {target}/evidence/external\n"
         );
         tokio::fs::write(&script_path, script)
@@ -115,6 +120,7 @@ impl InitializationFixture {
             None,
             &format!("a3s-oci-init-script-{nonce}"),
         )?;
+        let external_script = with_exact_process_profile(&external_script, &target)?;
         let direct_argv = build_profile(
             base,
             mount,
@@ -573,6 +579,24 @@ fn build_profile(
         .map_err(|error| format!("failed to validate init profile: {error}"))
 }
 
+fn with_exact_process_profile(bundle: &OciBundle, cwd: &str) -> Result<OciBundle, String> {
+    let mut config: Value = serde_json::from_str(bundle.config_json())
+        .map_err(|error| format!("failed to decode exact process profile: {error}"))?;
+    let process = config
+        .get_mut("process")
+        .ok_or_else(|| "exact process profile requires process".to_string())?;
+    let process = object_mut(process, "process")?;
+    process.insert("cwd".to_string(), Value::String(cwd.to_string()));
+    process.insert(
+        "user".to_string(),
+        json!({"uid": 0, "gid": 0, "umask": 18, "additionalGids": [1]}),
+    );
+    let encoded = serde_json::to_string(&config)
+        .map_err(|error| format!("failed to encode exact process profile: {error}"))?;
+    OciBundle::from_json(bundle.directory().to_path_buf(), encoded)
+        .map_err(|error| format!("failed to validate exact process profile: {error}"))
+}
+
 fn sleeping_init() -> Value {
     json!(["/bin/busybox", "sleep", "300"])
 }
@@ -639,7 +663,7 @@ mod tests {
     use a3s_oci_sdk::OciBundle;
     use serde_json::{json, Value};
 
-    use super::{build_profile, hooks, EvidenceMount};
+    use super::{build_profile, hooks, with_exact_process_profile, EvidenceMount};
 
     const CONFIG: &str = include_str!("../../../../../../fixtures/native-linux/config.json");
 
@@ -671,5 +695,14 @@ mod tests {
             .expect("mount list")
             .iter()
             .any(|mount| mount["destination"] == "/.matrix/evidence"));
+
+        let exact = with_exact_process_profile(&bundle, "/.matrix")
+            .expect("exact process execution profile");
+        let config: Value = serde_json::from_str(exact.config_json()).expect("exact profile JSON");
+        assert_eq!(config["process"]["cwd"], "/.matrix");
+        assert_eq!(config["process"]["user"]["uid"], 0);
+        assert_eq!(config["process"]["user"]["gid"], 0);
+        assert_eq!(config["process"]["user"]["umask"], 18);
+        assert_eq!(config["process"]["user"]["additionalGids"], json!([1]));
     }
 }

@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the 255-entry pending normative evidence backlog.
+- [ ] Close the remaining 218-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -483,6 +483,14 @@ driver implements.
     seccomp, AppArmor, SELinux, and ID-mapped-mount claims to the same SDK
     registries and executor tests. Keep the compile-time-only recommendation
     open because configured driver capabilities are resolved at runtime.
+  - [x] Bind common Root, Mounts, POSIX-platform Mounts, Process, and
+    POSIX-platform User behavior to exact admission, planning, init/exec, and
+    native workload evidence. The 37 promoted entries cover declared-root
+    directory checks, mount order and root-relative destinations, optional
+    mount fields, ID-mapped mounts, argv, environment, cwd, terminal default,
+    UID/GID, supplementary groups, umask, and the Linux-only rejection of
+    native non-Linux clauses. Keep only the bundle-author recommendation to
+    use the conventional `rootfs` name open in these headings.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1452,7 +1460,8 @@ leak. Only then may KVM become `experimental`.
   its accepted specification range and seccomp values from SDK-owned
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
-  now owner-bound, leaving 353 enforced and 255 pending entries.
+  owner-bound. Subsequent common-configuration review leaves 388 enforced,
+  47 validated, and 218 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

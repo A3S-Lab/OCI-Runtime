@@ -1693,10 +1693,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`root`** (object, OPTIONAL) specifies the container's root filesystem.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.root.required"
+      ],
+      "testIds": [
+        "semantic::tests::requires_a_root_for_linux_workloads"
+      ]
     },
     {
       "id": "sha256:3b5b0a16f59cf25109751416088ddb02a453f44186d8e143bb2d952b0870bece",
@@ -1707,10 +1711,14 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "On Windows, for Windows Server Containers, this field is REQUIRED.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:493ffcabebd1c19a000a724a0ce61c05ec9c657ede591b48f464f964f24e5d7d",
@@ -1721,10 +1729,14 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "For [Hyper-V Containers](config-windows.md#hyperv), this field MUST NOT be set.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:e3edff401547ac1dea717dc4be796cde5ac7aff43208ac9719e2de67c2145e6c",
@@ -1773,10 +1785,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* On Windows, `path` MUST be a [volume GUID path][naming-a-volume].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:0daa79b5f0f5ff5238ad72e28800a5d0699114c6643fccfa5c267a233a51d568",
@@ -1801,10 +1817,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "A directory MUST exist at the path declared by the field.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.root.directory"
+      ],
+      "testIds": [
+        "executor::init::tests::rejects_missing_or_non_directory_rootfs_before_namespace_entry"
+      ]
     },
     {
       "id": "sha256:0e05d484f01666644321b81be3498e5d737bb35173a84e5873f0a9a636a4437c",
@@ -1855,10 +1875,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* On Windows, this field MUST be omitted or false.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:1ff86f586d9cf1dc80c061a9fefe9af4589afa1e59a7bcccc1fb822f7d121c56",
@@ -1869,10 +1893,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`mounts`** (array of objects, OPTIONAL) specifies additional mounts beyond [`root`](#root).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.optional-fields"
+      ],
+      "testIds": [
+        "executor::mount_tests::accepts_omitted_mount_list_and_optional_mount_fields"
+      ]
     },
     {
       "id": "sha256:3c3e2f244bfd3cb88bc0c382e60cd8b58de6878627d746f88e120351ffe1c5e0",
@@ -1883,10 +1911,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST mount entries in the listed order.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.listed-order"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.exact_evidence"
+      ]
     },
     {
       "id": "sha256:c27b6bae5d95b1f12d147cfb551141488c39e7b15561f3937fe9e0134be96ded",
@@ -1916,10 +1949,14 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "* Linux: This value SHOULD be an absolute path.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.destination.root-relative"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations"
+      ]
     },
     {
       "id": "sha256:b37bb9cff57e93724e7ef0262a34fbfcc385d0738fc21193e0eb800a21c6fd1a",
@@ -1930,10 +1967,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "For compatibility with old tools and configurations, it MAY be a relative path, in which case it MUST be interpreted as relative to \"/\".",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.destination.root-relative"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations"
+      ]
     },
     {
       "id": "sha256:927e3127c426b1716b3d7dfb39f0d53fafac7f79e56c27ec482b47841efedf9e",
@@ -1944,10 +1985,14 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "For compatibility with old tools and configurations, it MAY be a relative path, in which case it MUST be interpreted as relative to \"/\".",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.destination.root-relative"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations"
+      ]
     },
     {
       "id": "sha256:2ed63ff99ded807b136998ad8167c5c58d92fcf1d51206d8613a63961e5d369d",
@@ -1958,10 +2003,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* Windows: This value MUST be an absolute path.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:ccd6ef1e52524ec6a6887c46d87495fdf7e4a8bb78ab812f194d32b9f12f5018",
@@ -1972,10 +2021,14 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "One mount destination MUST NOT be nested within another mount (e.g., c:\\\\foo and c:\\\\foo\\\\bar).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:f331169d747b56573bd45edae46ab5faf7edca33fc4f038e7ea0ca3488bbfa35",
@@ -1986,10 +2039,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* Solaris: This value MUST be an absolute path.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:f367d92879b280fb2537aa265956f9bb5ee637a1f091affceb0d9372ebdf68f7",
@@ -2000,10 +2057,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* For all other platforms: This value MUST be an absolute path.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:b74ad7a68f9ee4d95a5c07736c0a5ed4b2104aadfdf0cacbf0ea75d6334ca387",
@@ -2014,10 +2075,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`source`** (string, OPTIONAL) A device name, but can also be a file or directory name for bind mounts or a dummy.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.optional-fields"
+      ],
+      "testIds": [
+        "executor::mount_tests::accepts_omitted_mount_list_and_optional_mount_fields"
+      ]
     },
     {
       "id": "sha256:294f16be765fc017426a1b422afc327c5c6e553363c2cd468f751bf1443d1d42",
@@ -2028,10 +2093,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`options`** (array of strings, OPTIONAL) Mount options of the filesystem to be used.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.optional-fields"
+      ],
+      "testIds": [
+        "executor::mount_tests::accepts_omitted_mount_list_and_optional_mount_fields"
+      ]
     },
     {
       "id": "sha256:3a93c746a770f629905f86d54f44311d19854053bbe7bfdd81387979dc3137f2",
@@ -2042,10 +2111,14 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "* Windows: runtimes MUST support `ro`, mounting the filesystem read-only when `ro` is given.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
     },
     {
       "id": "sha256:65e772b7fef13913a38730500bb656d264f859a3f687c9b833a619f13099c299",
@@ -3850,10 +3923,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`type`** (string, OPTIONAL) The type of the filesystem to be mounted.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.optional-fields"
+      ],
+      "testIds": [
+        "executor::mount_tests::accepts_omitted_mount_list_and_optional_mount_fields"
+      ]
     },
     {
       "id": "sha256:8d4a237d6009e30be74c72a8f4d2e2b0b716a3eaeb19589310afedaa729bffb1",
@@ -3864,10 +3941,17 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`uidMappings`** (array of type LinuxIDMapping, OPTIONAL) The mapping to convert UIDs from the source file system to the destination mount point.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:41f294119063adf397a65e42654b8815c24c59344851874cd583c14d2dd2723f",
@@ -3878,10 +3962,17 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:81f3b47fea905ec46d1c42a53007d9538cc971d4ab5512f8ffa5e8243f2de1b1",
@@ -3892,10 +3983,17 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "If specified, the `options` field of the `mounts` structure SHOULD contain either `idmap` or `ridmap` to specify whether the mapping should be applied recursively for `rbind` mounts, as well as to ensure that older runtimes will not silently ignore this field.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:328400910decbdeb351b4e5c478e117ea81fea015a93ba9379f07ef6394e5304",
@@ -3925,10 +4023,17 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`gidMappings`** (array of type LinuxIDMapping, OPTIONAL) The mapping to convert GIDs from the source file system to the destination mount point.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:7993aaf388ef3f05d30e2e0f5df4722d9c86b328456936ebada5e5282fb1ab8b",
@@ -3939,10 +4044,17 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "This SHOULD be implemented using [`mount_setattr(MOUNT_ATTR_IDMAP)`][mount_setattr.2], available since Linux 5.12.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:7e753ae643da4822f5f559d1f01614fb959279bcc3adfef5b8f3b85c35aaf161",
@@ -3953,10 +4065,17 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "If specified, the `options` field of the `mounts` structure SHOULD contain either `idmap` or `ridmap` to specify whether the mapping should be applied recursively for `rbind` mounts, as well as to ensure that older runtimes will not silently ignore this field.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
     },
     {
       "id": "sha256:0164b27593de09918a968255a8903b5d9bafd6e38c8c43dac55702a9773274ad",
@@ -3986,10 +4105,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`process`** (object, OPTIONAL) specifies the container process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.required-for-start"
+      ],
+      "testIds": [
+        "semantic::tests::start_requires_a_process_but_configuration_loading_does_not"
+      ]
     },
     {
       "id": "sha256:f7d4882643e10264a1e6334b116092921f1e0a4276c1e0e6fc8025cb6549cfc7",
@@ -4019,10 +4142,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`terminal`** (bool, OPTIONAL) specifies whether a terminal is attached to the process, defaults to false.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.terminal.default"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec"
+      ]
     },
     {
       "id": "sha256:dcc520511dd6743f0f3ada5165bcfd573347bc0ed87aa8057fca88f744d2af05",
@@ -4120,10 +4247,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`cwd`** (string, REQUIRED) is the working directory that will be set for the executable.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.cwd.applied"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
     },
     {
       "id": "sha256:c082d6891182727bf42a85f13d30fcf33d510d7fe229565c42f080bc57fa6a36",
@@ -4153,10 +4285,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`env`** (array of strings, OPTIONAL) with the same semantics as [IEEE Std 1003.1-2008's `environ`][ieee-1003.1-2008-xbd-c8.1].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.environment.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
     },
     {
       "id": "sha256:f5ebc8f38b911c4ba1f8fc49be48c2c531843fb080844946026479bb1989a588",
@@ -4167,10 +4304,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`args`** (array of strings, OPTIONAL) with similar semantics to [IEEE Std 1003.1-2008 `execvp`'s *argv*][ieee-1003.1-2008-functions-exec].",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.arguments.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.direct_argv_verified"
+      ]
     },
     {
       "id": "sha256:121b5c9bd83c6a8f1daa0f073955775b178a1148a20be7262546c37b28158cd0",
@@ -4202,10 +4344,14 @@
       "keyword": "optional",
       "occurrence": 2,
       "source": "This specification extends the IEEE standard in that at least one entry is REQUIRED (non-Windows), and that entry is used with the same semantics as `execvp`'s *file*. This field is OPTIONAL on Windows, and `commandLine` is REQUIRED if this field is omitted.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.windows-process-field"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_windows_process_fields_as_unsupported"
+      ]
     },
     {
       "id": "sha256:a708c6a19b681883b0d303aecea4495e1c57eda50b63843f583ca99afa1ca865",
@@ -4216,10 +4362,14 @@
       "keyword": "required",
       "occurrence": 3,
       "source": "This specification extends the IEEE standard in that at least one entry is REQUIRED (non-Windows), and that entry is used with the same semantics as `execvp`'s *file*. This field is OPTIONAL on Windows, and `commandLine` is REQUIRED if this field is omitted.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.windows-process-field"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_windows_process_fields_as_unsupported"
+      ]
     },
     {
       "id": "sha256:6404dbf67cf4ff56d2bed0522fa69d408a6d73440355ffa3563c9205ba4ffdcd",
@@ -4230,10 +4380,14 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`commandLine`** (string, OPTIONAL) specifies the full command line to be executed on Windows.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.windows-process-field"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_windows_process_fields_as_unsupported"
+      ]
     },
     {
       "id": "sha256:6048efda448a094dfb59ccfcc21241e1532e95fd0e5e9aa8ed691e7f23340892",
@@ -5178,10 +5332,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`uid`** (int, REQUIRED) specifies the user ID in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.credentials.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
     },
     {
       "id": "sha256:3d7a2414e070406be4d1b0e2827bddeca6cc0142acf543dde01dc889d9cea95f",
@@ -5192,10 +5351,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`gid`** (int, REQUIRED) specifies the group ID in the [container namespace](glossary.md#container-namespace).",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.credentials.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
     },
     {
       "id": "sha256:93472a0b53f1e621c08c6432bec13fcfb028bc511509321638404099bdf1d36c",
@@ -5206,10 +5370,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`umask`** (int, OPTIONAL) specifies the [umask][umask_2] of the user. If unspecified, the umask should not be changed from the calling process' umask.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.umask.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
     },
     {
       "id": "sha256:fbafdd20b41135ac3f3b25674af148e7835e4d4ca38e3cdaeb60909badc42469",
@@ -5220,10 +5389,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`additionalGids`** (array of ints, OPTIONAL) specifies additional group IDs in the [container namespace](glossary.md#container-namespace) to be added to the process.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.supplementary-groups.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
     },
     {
       "id": "sha256:b94ce5258ceb8c3b16970456472eeb51d41e60540e5fabd6b1a3c0ce9385f5e3",

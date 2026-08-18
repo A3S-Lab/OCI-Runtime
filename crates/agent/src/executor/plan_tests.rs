@@ -77,6 +77,73 @@ fn accepts_the_exact_bootstrap_profile() {
 }
 
 #[test]
+fn plans_exact_common_process_fields_for_init_and_exec() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed process configuration");
+    let process = config["process"]
+        .as_object_mut()
+        .expect("process configuration object");
+    process.remove("terminal");
+    process.insert(
+        "user".to_string(),
+        serde_json::json!({
+            "uid": 101,
+            "gid": 202,
+            "umask": 18,
+            "additionalGids": [303, 404]
+        }),
+    );
+    process.insert(
+        "args".to_string(),
+        serde_json::json!(["/bin/program", "--exact", "argument"]),
+    );
+    process.insert(
+        "env".to_string(),
+        serde_json::json!(["A3S_EXACT=environment", "EMPTY="]),
+    );
+    process.insert("cwd".to_string(), serde_json::json!("/workspace/task"));
+    let encoded = serde_json::to_string(&config).expect("encode exact process configuration");
+
+    let init = InitPlan::from_bundle(&bundle(&encoded), &null_io())
+        .expect("plan exact configured init process");
+    let process: Process =
+        serde_json::from_value(config["process"].clone()).expect("decode exact exec process");
+    let exec = ProcessPlan::from_exec_process(&process, &null_io())
+        .expect("plan exact additional process");
+
+    for plan in [&init.args, &exec.args] {
+        assert_eq!(
+            plan,
+            &["/bin/program", "--exact", "argument"],
+            "argv must retain order and exact values"
+        );
+    }
+    for environment in [&init.environment, &exec.environment] {
+        assert_eq!(
+            environment,
+            &["A3S_EXACT=environment", "EMPTY="],
+            "the configured environment must not inherit or lose entries"
+        );
+    }
+    assert_eq!(init.cwd, "/workspace/task");
+    assert_eq!(exec.cwd, "/workspace/task");
+    assert_eq!((init.uid, init.gid), (101, 202));
+    assert_eq!((exec.uid, exec.gid), (101, 202));
+    assert_eq!(init.additional_gids, [303, 404]);
+    assert_eq!(exec.additional_gids, [303, 404]);
+    assert_eq!(init.umask, Some(0o22));
+    assert_eq!(exec.umask, Some(0o22));
+    assert!(
+        !init.terminal,
+        "an omitted terminal field defaults to false"
+    );
+    assert!(
+        !exec.terminal,
+        "an omitted terminal field defaults to false"
+    );
+}
+
+#[test]
 fn plans_namespaced_sysctls_and_rejects_alias_collisions() {
     let mut config: serde_json::Value =
         serde_json::from_str(UTS_CONFIG).expect("decode UTS config");

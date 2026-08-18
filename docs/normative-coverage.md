@@ -33,15 +33,30 @@ The v1.3.0 corpus currently contains 764 entries:
 | --- | ---: | --- |
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
-| `validated` | 45 | Exact semantic, bundle, annotation-map, pinned OCI Image annotation-value, and CPU burst/idle relationship rules with positive and negative SDK tests |
-| `enforced` | 353 | Root `config.json` placement and read-only-root enforcement; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; non-terminal `consoleSize` ignore semantics and terminal `consoleSize` PTY initialization; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; unknown configuration annotation preservation; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, ID-mapped mounts, unknown filesystem-option pass-through, and accurate mount-option feature reporting; exact absolute and stable relative Linux `cgroupsPath` resolution with invalid-path rejection and cleanup; complete cgroup v2 CPU shares/quota/burst/period/cpuset/idle enforcement with explicit cgroup v1 realtime rejection; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; OCI `oomScoreAdj`, scheduler, I/O-priority, init personality, init NUMA memory-policy, Intel RDT, and exec CPU-affinity semantics; schema-valid feature documents whose version, hooks, Linux platform, namespace, cgroup, seccomp, LSM, and ID-mapped-mount claims match the implementation; accurate unsafe-annotation, memory-policy, and Intel RDT feature reporting; and bounded transactional application of namespaced Linux sysctls enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
+| `validated` | 47 | Exact semantic, bundle, annotation-map, pinned OCI Image annotation-value, process/root phase, and CPU burst/idle relationship rules with positive and negative SDK tests |
+| `enforced` | 388 | Root `config.json` placement, declared-root directory admission, and read-only-root enforcement; ordered common mounts, root-relative destination normalization, optional mount fields, and ID-mapped mounts; exact init/exec argv, environment, cwd, terminal default, UID/GID, supplementary groups, and umask; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; non-terminal `consoleSize` ignore semantics and terminal `consoleSize` PTY initialization; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; unknown configuration annotation preservation; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, unknown filesystem-option pass-through, and accurate mount-option feature reporting; exact absolute and stable relative Linux `cgroupsPath` resolution with invalid-path rejection and cleanup; complete cgroup v2 CPU shares/quota/burst/period/cpuset/idle enforcement with explicit cgroup v1 realtime rejection; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; OCI `oomScoreAdj`, scheduler, I/O-priority, init personality, init NUMA memory-policy, Intel RDT, and exec CPU-affinity semantics; schema-valid feature documents whose version, hooks, Linux platform, namespace, cgroup, seccomp, LSM, and ID-mapped-mount claims match the implementation; accurate unsafe-annotation, memory-policy, and Intel RDT feature reporting; and bounded transactional application of namespaced Linux sysctls enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
 | `conformant` | 2 | The optional `tmpcopyup` entries are satisfied by typed rejection and exclusion from feature reporting; this is an explicit optional omission, not an implementation claim |
-| `pending-review` | 255 | Common, Linux, or VM entries awaiting exact evidence binding |
+| `pending-review` | 218 | Common, Linux, or VM entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
 platform-specific clauses; each pending entry still requires human
 applicability review.
+
+The common Root, Mounts, POSIX-platform Mounts, Process, and POSIX-platform
+User review promoted 37 entries. Rootfs admission now proves that the declared
+path resolves to a directory before namespace entry. Mount planning preserves
+the source array order, treats legacy relative destinations as rooted at `/`,
+accepts omitted source, type, and option fields where OCI permits them, and
+uses `mount_setattr(MOUNT_ATTR_IDMAP)` for explicit ID mappings. Init and exec
+retain the exact argv, environment, cwd, terminal default, UID/GID,
+supplementary groups, and umask. Native Linux rechecks those process values
+inside an executable-script workload. Common-document clauses that only
+describe native Windows, Solaris, FreeBSD, or z/OS workloads are tied to the
+pre-mutation Linux-only rejection boundary. The only pending entry in these
+five headings is the authoring recommendation to use the conventional
+`rootfs` name; the runtime accepts that name but does not rewrite bundle
+authors' valid alternatives.
 
 The common configuration and runtime-feature annotation maps now have pinned
 positive and negative schema evidence for omission, empty maps, string keys,
