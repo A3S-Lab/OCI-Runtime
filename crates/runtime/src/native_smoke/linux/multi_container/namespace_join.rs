@@ -16,6 +16,10 @@ use super::lifecycle::{
 use crate::namespace_join::{build_bundles, build_host_network_bundle};
 use crate::NativeLinuxMultiContainerSmokeReport;
 
+mod device_fixture;
+
+use device_fixture::JoinedMountDeviceFixture;
+
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) async fn exercise(
@@ -89,19 +93,36 @@ pub(super) async fn exercise(
     report.namespace_join.joined_pid_time_workload_verified = true;
     report.namespace_join.joined_user_default_devices_verified = true;
 
-    let mount_id = container_id(nonce, "namespace-mount")?;
-    let mount_create = create_request(
-        nonce,
-        "namespace-mount-create",
-        mount_id.clone(),
-        &bundles.mount,
-    )?;
-    let mount = native_call("create mount namespace joiner", client.create(mount_create)).await?;
-    require_created(&mount, "mount namespace joiner")?;
-    report.namespace_join.joined_mount_namespace = true;
-    let mount_target = ContainerTarget::exact(mount_id, mount.generation);
-    run_joiner(client, nonce, "namespace-mount", &mount_target).await?;
-    report.namespace_join.retained_rootfs_verified = true;
+    let joined_mount_devices = JoinedMountDeviceFixture::prepare(joiner_bundle)?;
+    let mount_result = async {
+        let mount_id = container_id(nonce, "namespace-mount")?;
+        let mount_create = create_request(
+            nonce,
+            "namespace-mount-create",
+            mount_id.clone(),
+            &bundles.mount,
+        )?;
+        let mount =
+            native_call("create mount namespace joiner", client.create(mount_create)).await?;
+        require_created(&mount, "mount namespace joiner")?;
+        report.namespace_join.joined_mount_namespace = true;
+        let mount_target = ContainerTarget::exact(mount_id, mount.generation);
+        run_joiner(client, nonce, "namespace-mount", &mount_target).await?;
+        report.namespace_join.retained_rootfs_verified = true;
+        Ok::<_, String>(mount_target)
+    }
+    .await;
+    let fixture_cleanup = joined_mount_devices.cleanup();
+    let mount_target = match (mount_result, fixture_cleanup) {
+        (Ok(target), Ok(())) => target,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(cleanup)) => return Err(cleanup),
+        (Err(error), Err(cleanup)) => {
+            return Err(format!(
+                "{error}; joined mount device fixture cleanup also failed: {cleanup}"
+            ));
+        }
+    };
 
     let host_id = container_id(nonce, "network-host")?;
     let host_create = create_request(nonce, "network-host-create", host_id.clone(), &host_network)?;

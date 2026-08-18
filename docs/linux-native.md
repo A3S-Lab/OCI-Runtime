@@ -226,6 +226,34 @@ following:
 25. state returns `NotFound` and durable list is empty after delete;
 26. the marker, executor root, and complete smoke session are removed.
 
+### Configured-init terminal and device-target gate
+
+The wrapper runs the full v20 lifecycle twice more with
+`process.terminal=true` and `consoleSize=120x40`. The workload requires file
+descriptors 0, 1, and 2 to be terminals, reads 40 rows by 120 columns through
+`stty`, and compares `/dev/console` with fd 0 by filesystem device, inode, and
+special-device identity. It also requires `/dev/ptmx` to resolve to
+`pts/ptmx` and an explicitly configured FIFO at `/run/a3s/device-fifo` to have
+mode 0640 and mapped owner 1:2.
+
+The first bundle starts without `/dev/console`; Delete must remove the console
+and FIFO placeholders created by the runtime. The second starts with a regular
+console placeholder containing a fixed marker. The PTY is mounted over it for
+the lifetime of the container, then the original file and bytes must reappear
+unchanged while the runtime-created FIFO disappears. This distinguishes mount
+lifetime from file ownership and exercises the same manifest cleanup used by
+failed Create, shutdown, and owner-death recovery.
+
+For a bounded rerun of only these two real-kernel profiles:
+
+```sh
+A3S_OCI_NATIVE_FOCUS=terminal-init \
+  bash .github/scripts/native-linux-smoke.sh
+```
+
+Any other nonempty focus value is rejected. The default remains the complete
+Native Linux matrix.
+
 The qualification wrapper also runs four OCI 1.3 `linux.netDevices` profiles.
 For the positive profile it creates a down dummy interface with MTU 1450, a
 fixed MAC address, and `192.0.2.10/24`, requests the target template
@@ -461,7 +489,9 @@ create barrier and requires:
    default devices bound at their exact type, number, mode, and namespace-root
    ownership;
 3. a second workload to join the donor mount namespace and execute through the
-   rootfs descriptor retained before `setns`;
+   rootfs descriptor retained before `setns`; its qualification-owned default
+   devices are staged from the executor's fixed inventory, verified without
+   injecting mounts into the donor namespace, and removed after joiner delete;
 4. PID/time joins to cross `exec` and remain running for a bounded observation
    window;
 5. both joiners to complete without changing the donor's created state;

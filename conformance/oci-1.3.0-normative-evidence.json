@@ -1895,6 +1895,113 @@
     },
     {
       "requirementIds": [
+        "sha256:8664cf3a63b2c06fb63a3939e6bad724245259ece94d579c418b43f3f1513d8c",
+        "sha256:83c1194f948415d642603411efb46b6600b9e4b3a849677d8dbcc9d5c3534b89",
+        "sha256:b6a34ccf78a111cbee43bfbb133b6160e6d364a4d585c7924d7769b3b37ed806",
+        "sha256:74265b8f18aebec24c86099e4d0315670743f46f301483c17ec9e0057c28a389",
+        "sha256:3fb3a66bbd46b4c675b3e82dcd399787ff9594859cd3aab8f611162670b0af8b",
+        "sha256:82d4e46c320b04cdf1a5a51222492d0cefe85ca3c2924ef2d8fe58159b652f2a",
+        "sha256:f0294904b5f80c8fcbd8bb83ea38f41855872d161b0deb13ce4fabf324bb2d96",
+        "sha256:7e488d15583817c4f283df60895ddf378d958fc422c2a478c3780f2dce0a5824",
+        "sha256:873e6a9074121e2cb0a50c10bc2b3573d1611b385b62b308abde0647fa755efc"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.device.nodes.exact"
+      ],
+      "testIds": [
+        "schema::tests::validates_linux_device_schema_shapes",
+        "executor::device::tests::plans_all_oci_device_types_outside_dev_with_exact_metadata",
+        "executor::device::tests::fifo_device_numbers_are_ignored_by_node_creation",
+        ".github/scripts/native-linux-smoke.sh::explicit-fifo-outside-dev-metadata-and-cleanup"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:3de5a52b112863066adc90714dc7ff18419ee7ee143850327e9fbe2cd8a79cd7"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.device.target-conflict"
+      ],
+      "testIds": [
+        "executor::device::tests::accepts_an_existing_exact_fifo_and_rejects_a_conflicting_file",
+        "executor::device::tests::rejects_default_device_identity_replacement_but_allows_metadata_override"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:a592fd4aeeaa915ac08493d51431509e0e199bc56b4beb2d0b78c9d685a2ed5f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.device.major-minor-required"
+      ],
+      "testIds": [
+        "schema::tests::validates_linux_device_schema_shapes",
+        "semantic::tests::validates_linux_device_identity_and_conditional_numbers",
+        "executor::device::tests::fifo_device_numbers_are_ignored_by_node_creation"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:3971574c607bb7ecb8bff9892d4b33ead486cf622fc3a390b6f4f541888d5e78"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.device.identity.unique"
+      ],
+      "testIds": [
+        "semantic::tests::validates_linux_device_identity_and_conditional_numbers",
+        "executor::device::tests::rejects_duplicate_character_device_identity_across_c_and_u_aliases"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:de386fbdbbdbf7dd1c9f09724c5a78cc53ec58030ce620691b62912ab0eb1ef2"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.device.default-nodes"
+      ],
+      "testIds": [
+        "executor::device::tests::rootless_default_devices_do_not_require_an_access_policy",
+        "executor::device::tests::joined_ptmx_verification_rejects_a_symlinked_dev_parent",
+        ".github/scripts/native-linux-smoke.sh::default-devices-ptmx-terminal-console-and-cleanup"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:7696a8d22349397048d8ba58a3c21cdc7d74bff44be3d0374996e2a0dfcb1d27",
+        "sha256:ac3de2f4f36de408858804ce11b37ece10facad3e34b82c4451b5ef9ac3f7c43",
+        "sha256:e5d193bd45cd0556f1da9b22aca19e8b35816ab7de4764be1ddabaade8954a11",
+        "sha256:48df258e76162b9b647553b76bde45e2b41197687313cf4d0e07b1da66aa8e1d",
+        "sha256:26b15eb6c8dfba64bbadf2867f1adc3234c757250d570c0840d01fc658219018",
+        "sha256:73388d17f11af04f1fa2a9fc3a485332f07f0e660b7fc42bd92c5a89c814c947"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.device-access.mask",
+        "oci.linux.device-access.ordered",
+        "oci.linux.device-access.type"
+      ],
+      "testIds": [
+        "schema::tests::validates_linux_device_schema_shapes",
+        "semantic::tests::validates_device_access_types_and_masks_without_requiring_access",
+        "executor::device::access::tests::containerd_default_policy_supports_major_and_minor_wildcards",
+        "executor::device::access::tests::ordered_rules_add_and_remove_access_subsets",
+        "executor::device::access::tests::all_device_rules_reset_the_accumulated_policy_in_list_order",
+        "executor::device::access::tests::omitted_and_empty_access_entries_are_ordered_no_ops"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:4ead0f9a50717de6ac83013cc6359b8a8ff2643a99ac1d11e10bb7254b230bdf",
         "sha256:bba7de1f6b9b82d67d2f113c1b8302092ff88fd0da1e4e4fcb2c830e4acf02eb",
         "sha256:97181949066c2ea865d9a139156d67f2558694026e6f3536cf7363aacadf5176"

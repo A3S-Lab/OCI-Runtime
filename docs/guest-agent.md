@@ -155,21 +155,47 @@ The current mount slice:
   moves instead of silently ignoring them.
 
 Device setup retains a separate boundary for source nodes and cleanup
-evidence. Rootful Native Linux creates private sources below the executor's
-owned runtime directory. A utility VM instead creates each container's
-short-lived sources below the Guest-local `/dev` devtmpfs, because its durable
-runtime directory is a host-backed virtiofs share and cannot provide portable
-Linux character/block device identity. Rootless Native Linux cannot create
-those sources after dropping privilege, so a parent-bound helper opens and
-verifies only the six fixed OCI default devices and passes their descriptors
-to the unprivileged owner. Supplying those defaults does not require an OCI
-device-access policy; when the exact A3S Box policy is present, the same helper
-also owns its bounded cgroup-device BPF operations. The device-target cleanup
-manifest remains in the durable runtime directory. Every source boundary
-rejects symbolic-link substitution, and the executor removes transient
-sources immediately after the bind-mounted targets cross the Create-ready
-barrier. Strict type, major/minor, ownership, mode, allowlist, and
-cgroup-device checks are unchanged.
+evidence. Rootful Native Linux accepts OCI block, character,
+unbuffered-character, and FIFO nodes at normalized paths inside or outside
+`/dev`. It rejects duplicate paths, duplicate kernel identities, and an
+existing target whose type, major/minor pair, mode, or mapped ownership does
+not match. Private sources live below the executor-owned source root. A
+utility VM instead creates each container's short-lived sources below the
+Guest-local `/dev` devtmpfs, because its durable runtime directory is a
+host-backed virtiofs share and cannot provide portable Linux device identity.
+
+Every private mount namespace also receives the six OCI default character
+devices and `/dev/ptmx -> pts/ptmx`. When configured init is terminal-backed,
+the launcher clones the exact PTY slave mount and binds it to `/dev/console`
+before the Create barrier. Rootless Native Linux cannot create sources after
+dropping privilege, so a parent-bound helper opens and verifies only the six
+fixed defaults and passes detached descriptors to the unprivileged owner.
+Supplying those defaults does not fabricate an OCI device-access policy; when
+the exact A3S Box policy is present, the same helper owns its bounded
+cgroup-device BPF operations. Ordered rootful rules preserve wildcard, reset,
+and access-subset behavior. An omitted or empty access string is an ordered
+no-op, and a list containing only no-ops does not load BPF.
+
+When configuration joins or inherits a mount namespace, the executor does not
+inject mounts into that shared or separately owned namespace. It instead
+retains the declared rootfs before `setns` and verifies every configured and
+default device plus `/dev/ptmx` beneath that exact descriptor. Missing,
+substituted, or incorrectly owned nodes fail Create. The Native Linux
+namespace-join gate stages the six defaults from the same fixed inventory used
+by the executor, proves this descriptor-only admission path, and removes only
+the qualification-owned nodes after the joiner is deleted.
+
+The v2 device-target manifest remains in the durable runtime directory. It
+pins the canonical rootfs device/inode and records only regular placeholders
+created by the runtime, including a new console target. Every record is
+persisted before a detached mount is attached. Delete, failed Create,
+graceful shutdown, and owner-death recovery wait for the mount namespace to
+release each target, recheck rootfs and target identity through `openat2`, and
+unlink only exact recorded placeholders. A caller-owned console or matching
+device node is never recorded and therefore survives cleanup. Every source
+and cleanup boundary rejects symbolic-link substitution, and transient source
+nodes are removed immediately after their detached mounts cross the
+Create-ready barrier.
 
 Graceful executor shutdown now consumes every live container's device-target
 manifest before clearing its runtime state or removing the Guest runtime root.
@@ -341,9 +367,10 @@ runtime-owned master and child descriptors 0-2 use the slave. The launcher
 creates a session and acquires the slave as its controlling terminal. The
 configured payload then becomes the leader of its dedicated supervised
 process group and moves that group into the foreground before untrusted code
-runs. Terminal output is merged into the existing stdout cursor, `resize`
-applies `TIOCSWINSZ`, and close-stdin delivers the active `VEOF` byte while
-retaining the readable master.
+runs. Configured init also binds that slave to `/dev/console` and applies the
+OCI `consoleSize` before the workload starts. Terminal output is merged into
+the existing stdout cursor, `resize` applies `TIOCSWINSZ`, and close-stdin
+delivers the active `VEOF` byte while retaining the readable master.
 
 Create retains descriptors for the configured process's root and every
 configured namespace. A fresh single-threaded exec helper inherits only those

@@ -69,6 +69,11 @@ define_rules! {
     CPU_BURST_AT_MOST_QUOTA => Normative, "oci.linux.cpu.burst-at-most-quota";
     CPU_IDLE_RANGE => Normative, "oci.linux.cpu.idle-range";
     CPU_REALTIME_RUNTIME_AT_MOST_PERIOD => RuntimeConstraint, "oci.linux.cpu.realtime-runtime-at-most-period";
+    DEVICE_ACCESS_MASK => Normative, "oci.linux.device-access.mask";
+    DEVICE_ACCESS_TYPE => Normative, "oci.linux.device-access.type";
+    DEVICE_IDENTITY_UNIQUE => Normative, "oci.linux.device.identity.unique";
+    DEVICE_MAJOR_MINOR_REQUIRED => Normative, "oci.linux.device.major-minor-required";
+    DEVICE_NUMBER_KERNEL_RANGE => RuntimeConstraint, "oci.linux.device.number.kernel-range";
     DEVICE_PATH_ABSOLUTE => RuntimeConstraint, "oci.linux.device.path.absolute";
     DOMAINNAME_REQUIRES_UTS_NAMESPACE => RuntimeConstraint, "oci.linux.domainname.requires-uts-namespace";
     HOSTNAME_REQUIRES_UTS_NAMESPACE => RuntimeConstraint, "oci.linux.hostname.requires-uts-namespace";

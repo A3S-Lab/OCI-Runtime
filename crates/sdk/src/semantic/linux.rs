@@ -61,6 +61,7 @@ pub(super) fn inspect(value: &Value, collector: &mut ViolationCollector) {
         collector,
     );
     validate_cgroup_path(linux, collector);
+    validate_devices(linux, collector);
     validate_container_paths(linux, collector);
     validate_namespace_dependent_fields(configuration, linux, &namespaces, collector);
     validate_net_devices(linux, &namespaces, collector);
@@ -71,6 +72,58 @@ pub(super) fn inspect(value: &Value, collector: &mut ViolationCollector) {
     validate_intel_rdt(linux, collector);
     validate_memory_policy(linux, collector);
     validate_personality(linux, collector);
+}
+
+fn validate_devices(linux: &Map<String, Value>, collector: &mut ViolationCollector) {
+    let Some(devices) = linux.get("devices").and_then(Value::as_array) else {
+        return;
+    };
+    let mut identities = BTreeMap::<(&str, i64, i64), usize>::new();
+    for (index, device) in devices.iter().filter_map(Value::as_object).enumerate() {
+        let Some(kind) = device.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        let kernel_kind = match kind {
+            "c" | "u" => "c",
+            "b" => "b",
+            "p" => continue,
+            _ => continue,
+        };
+        if !device.contains_key("major") || !device.contains_key("minor") {
+            collector.invalid(
+                format!("/linux/devices/{index}"),
+                rules::DEVICE_MAJOR_MINOR_REQUIRED,
+                "Linux block and character devices require both major and minor numbers",
+            );
+        }
+        let (Some(major), Some(minor)) = (
+            device.get("major").and_then(Value::as_i64),
+            device.get("minor").and_then(Value::as_i64),
+        ) else {
+            continue;
+        };
+        if !valid_device_number(major) || !valid_device_number(minor) {
+            collector.invalid(
+                format!("/linux/devices/{index}"),
+                rules::DEVICE_NUMBER_KERNEL_RANGE,
+                "Linux device numbers must fit the non-negative kernel u32 range",
+            );
+            continue;
+        }
+        if let Some(previous) = identities.insert((kernel_kind, major, minor), index) {
+            collector.invalid(
+                format!("/linux/devices/{index}"),
+                rules::DEVICE_IDENTITY_UNIQUE,
+                format!(
+                    "Linux device identity {kernel_kind} {major}:{minor} duplicates entry {previous}"
+                ),
+            );
+        }
+    }
+}
+
+fn valid_device_number(value: i64) -> bool {
+    u32::try_from(value).is_ok()
 }
 
 fn validate_cgroup_path(linux: &Map<String, Value>, collector: &mut ViolationCollector) {
@@ -598,9 +651,52 @@ fn validate_resources(linux: &Map<String, Value>, collector: &mut ViolationColle
     let Some(resources) = linux.get("resources").and_then(Value::as_object) else {
         return;
     };
+    validate_device_access(resources, collector);
     validate_cpu(resources, collector);
     validate_block_io(resources, collector);
     validate_rdma(resources, collector);
+}
+
+fn validate_device_access(resources: &Map<String, Value>, collector: &mut ViolationCollector) {
+    let Some(devices) = resources.get("devices").and_then(Value::as_array) else {
+        return;
+    };
+    for (index, device) in devices.iter().filter_map(Value::as_object).enumerate() {
+        if let Some(kind) = device.get("type").and_then(Value::as_str) {
+            if !matches!(kind, "a" | "b" | "c") {
+                collector.invalid(
+                    format!("/linux/resources/devices/{index}/type"),
+                    rules::DEVICE_ACCESS_TYPE,
+                    "Linux device-access type must be `a`, `b`, or `c`",
+                );
+            }
+        }
+        if let Some(access) = device.get("access").and_then(Value::as_str) {
+            if !access
+                .chars()
+                .all(|permission| matches!(permission, 'r' | 'w' | 'm'))
+            {
+                collector.invalid(
+                    format!("/linux/resources/devices/{index}/access"),
+                    rules::DEVICE_ACCESS_MASK,
+                    "Linux device access may contain only `r`, `w`, and `m`",
+                );
+            }
+        }
+        for field in ["major", "minor"] {
+            if device
+                .get(field)
+                .and_then(Value::as_i64)
+                .is_some_and(|value| !valid_device_number(value))
+            {
+                collector.invalid(
+                    format!("/linux/resources/devices/{index}/{field}"),
+                    rules::DEVICE_NUMBER_KERNEL_RANGE,
+                    "Linux device numbers must fit the non-negative kernel u32 range",
+                );
+            }
+        }
+    }
 }
 
 fn validate_cpu(resources: &Map<String, Value>, collector: &mut ViolationCollector) {

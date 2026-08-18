@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 167-entry pending normative evidence backlog.
+- [ ] Close the remaining 148-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -515,6 +515,14 @@ driver implements.
     applied mutations on failure. Require device identity and throttle rates,
     map OCI zero rates to cgroup v2 `max`, reject duplicate devices, and report
     `leafWeight` as unavailable on cgroup v2.
+  - [x] Bind 19 OCI Linux device entries to exact schema, planning, rootful
+    enforcement, cleanup, and ordered cgroup-device evidence. Cover all four
+    node types, paths outside `/dev`, conditional major/minor values, mode and
+    mapped ownership, duplicate kernel identities, existing-target conflicts,
+    the six defaults, `/dev/ptmx`, terminal `/dev/console`, and optional or
+    empty device-access fields. Keep the separate prohibition on access to
+    undeclared nodes pending until `CAP_MKNOD` and late-mounted device sources
+    share one complete fail-closed boundary.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1485,8 +1493,8 @@ leak. Only then may KVM become `experimental`.
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, and extensibility
-  review plus the PIDs, memory, and Block I/O controller promotions leaves 435
-  enforced, 51 validated, and 167 pending entries.
+  review plus the PIDs, memory, Block I/O, and Linux-device promotions leaves
+  454 enforced, 51 validated, and 148 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
@@ -1522,9 +1530,12 @@ leak. Only then may KVM become `experimental`.
   collision-checked membership FDs, keep guest cgroupfs read-only, and update,
   freeze, inspect, and clean up the workload topology through the same cgroup
   owner.
-- [x] Enforce the bounded A3S Box static device-node profile with
-  default-deny policy-shape validation, rootfs scans, `nodev` bind mounts,
-  cgroup-controlled `mknod`, and verified device-node creation.
+- [x] Enforce rootful OCI block, character, unbuffered-character, and FIFO
+  nodes at normalized paths inside or outside `/dev`, with exact identity,
+  mode, mapped ownership, existing-target conflict handling, and durable
+  cleanup. Supply the six default nodes, `/dev/ptmx`, and terminal-backed
+  `/dev/console`; retain the bounded A3S Box rootless profile and ordered
+  cgroup-device policy path.
 - [x] Complete the remaining process and rootless configuration boundary.
   - [x] Enforce supplementary credentials, I/O priority, exec CPU affinity,
     and supported rootless ID-mapping shapes before executor mutation; reject

@@ -24,6 +24,7 @@ recovery_owner_pid=""
 recovery_runtime_owner_pid=""
 soak_bundles=()
 soak_iterations="${A3S_OCI_NATIVE_SOAK_ITERATIONS:-25}"
+native_focus="${A3S_OCI_NATIVE_FOCUS:-}"
 soak_concurrent_containers=4
 soak_operation_timeout_ms=30000
 unprivileged_userns_original=""
@@ -208,6 +209,8 @@ qualification_root="$(mktemp -d /var/tmp/a3s-oci-native.XXXXXXXX)"
 bundle="$qualification_root/bundle"
 bundle_b="$qualification_root/bundle-b"
 control_bundle="$qualification_root/control-bundle"
+terminal_bundle="$qualification_root/terminal-bundle"
+terminal_existing_bundle="$qualification_root/terminal-existing-bundle"
 recovery_bundle="$qualification_root/recovery-bundle"
 rootless_bundle="$qualification_root/rootless-bundle"
 network_device_bundle="$qualification_root/network-device-bundle"
@@ -222,10 +225,12 @@ mkdir -p \
   "$bundle_b/rootfs/bin" "$bundle_b/rootfs/dev" "$bundle_b/rootfs/proc" \
   "$control_bundle/rootfs/bin" "$control_bundle/rootfs/dev" "$control_bundle/rootfs/proc" \
   "$control_bundle/rootfs/sys/fs/cgroup" \
+  "$terminal_bundle/rootfs/bin" "$terminal_bundle/rootfs/dev" \
+  "$terminal_bundle/rootfs/proc" "$terminal_bundle/rootfs/run/a3s" \
   "$recovery_bundle/rootfs/bin" "$recovery_bundle/rootfs/dev" "$recovery_bundle/rootfs/proc" \
   "$rootless_bundle/rootfs/bin" "$rootless_bundle/rootfs/dev" "$rootless_bundle/rootfs/proc" \
   "$rootless_bin" "$work_parent" "$rootless_work_parent"
-for candidate in "$bundle" "$bundle_b" "$control_bundle" "$recovery_bundle"; do
+for candidate in "$bundle" "$bundle_b" "$control_bundle" "$terminal_bundle" "$recovery_bundle"; do
   cp fixtures/native-linux/config.json "$candidate/config.json"
   cp "$(command -v busybox)" "$candidate/rootfs/bin/busybox"
   ln -s busybox "$candidate/rootfs/bin/sh"
@@ -323,7 +328,67 @@ jq \
   ' \
   "$bundle/config.json" >"$control_bundle/config.json.tmp"
 mv "$control_bundle/config.json.tmp" "$control_bundle/config.json"
-for candidate in "$bundle" "$bundle_b" "$control_bundle"; do
+terminal_hook_trace="$terminal_bundle/rootfs/.a3s-oci-hook-trace"
+# shellcheck disable=SC2016 # Expanded by the configured terminal init.
+terminal_command_prefix='test -t 0; test -t 1; test -t 2; test -c /dev/console; test "$(/bin/busybox readlink /dev/ptmx)" = pts/ptmx; test "$(/bin/busybox stty size)" = "40 120"; console_identity=$(/bin/busybox stat -Lc "%d:%i:%t:%T" /dev/console); stdin_identity=$(/bin/busybox stat -Lc "%d:%i:%t:%T" /proc/self/fd/0); test "$console_identity" = "$stdin_identity"; test -p /run/a3s/device-fifo; test "$(/bin/busybox stat -c "%a:%u:%g" /run/a3s/device-fifo)" = "640:1:2"; '
+jq \
+  --arg command_prefix "$terminal_command_prefix" \
+  --arg hook_trace "$terminal_hook_trace" \
+  '
+    .process.terminal = true
+    | .process.consoleSize = {width: 120, height: 40}
+    | .process.args[2] = ($command_prefix + .process.args[2])
+    | .linux.devices += [{
+        path: "/run/a3s/device-fifo",
+        type: "p",
+        fileMode: 416,
+        uid: 1,
+        gid: 2
+      }]
+    | .linux.cgroupsPath = "a3s-oci-terminal-init-smoke"
+    | .hooks |= with_entries(
+        .value |= map(
+          .env |= map(
+            if startswith("A3S_HOOK_TRACE=")
+               and . != "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+            then "A3S_HOOK_TRACE=" + $hook_trace
+            else .
+            end
+          )
+        )
+      )
+  ' \
+  "$bundle/config.json" >"$terminal_bundle/config.json.tmp"
+mv "$terminal_bundle/config.json.tmp" "$terminal_bundle/config.json"
+mkdir "$terminal_existing_bundle"
+cp -a --no-preserve=ownership "$terminal_bundle/." "$terminal_existing_bundle/"
+terminal_existing_hook_trace="$terminal_existing_bundle/rootfs/.a3s-oci-hook-trace"
+jq \
+  --arg hook_trace "$terminal_existing_hook_trace" \
+  '
+    .linux.cgroupsPath = "a3s-oci-terminal-existing-init-smoke"
+    | .hooks |= with_entries(
+        .value |= map(
+          .env |= map(
+            if startswith("A3S_HOOK_TRACE=")
+               and . != "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+            then "A3S_HOOK_TRACE=" + $hook_trace
+            else .
+            end
+          )
+        )
+      )
+  ' \
+  "$terminal_bundle/config.json" >"$terminal_existing_bundle/config.json.tmp"
+mv "$terminal_existing_bundle/config.json.tmp" "$terminal_existing_bundle/config.json"
+printf '%s\n' 'a3s-preexisting-console-v1' \
+  >"$terminal_existing_bundle/rootfs/dev/console"
+for candidate in \
+  "$bundle" \
+  "$bundle_b" \
+  "$control_bundle" \
+  "$terminal_bundle" \
+  "$terminal_existing_bundle"; do
   jq --exit-status \
     '.linux.uidMappings
          == [{"containerID": 0, "hostID": 100000, "size": 65536}]
@@ -333,6 +398,8 @@ for candidate in "$bundle" "$bundle_b" "$control_bundle"; do
 done
 sudo chown -R 100000:200000 "$bundle/rootfs" "$bundle_b/rootfs"
 sudo chown -R 100000:200000 "$control_bundle/rootfs"
+sudo chown -R 100000:200000 "$terminal_bundle/rootfs"
+sudo chown -R 100000:200000 "$terminal_existing_bundle/rootfs"
 sudo chown -R 100000:200000 "$recovery_bundle/rootfs"
 for candidate in "${soak_bundles[@]}"; do
   sudo chown -R 100000:200000 "$candidate/rootfs"
@@ -344,10 +411,18 @@ sudo chmod 0666 "$hook_trace"
 sudo touch "$control_hook_trace"
 sudo chown 100000:200000 "$control_hook_trace"
 sudo chmod 0666 "$control_hook_trace"
+sudo touch "$terminal_hook_trace"
+sudo chown 100000:200000 "$terminal_hook_trace"
+sudo chmod 0666 "$terminal_hook_trace"
+sudo touch "$terminal_existing_hook_trace"
+sudo chown 100000:200000 "$terminal_existing_hook_trace"
+sudo chmod 0666 "$terminal_existing_hook_trace"
 sudo chmod 0755 "$qualification_root"
 test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$control_bundle/rootfs")" = '100000:200000'
+test "$(stat --format '%u:%g' "$terminal_bundle/rootfs")" = '100000:200000'
+test "$(stat --format '%u:%g' "$terminal_existing_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$recovery_bundle/rootfs")" = '100000:200000'
 
 # shellcheck disable=SC2016 # Expanded inside the network-device workload.
@@ -1910,6 +1985,21 @@ if [[ -e /dev/kvm || -L /dev/kvm ]]; then
   kvm_original_moved=true
 fi
 
+if [[ "$native_focus" == terminal-init ]]; then
+  run_smoke false "$terminal_bundle" "$terminal_hook_trace"
+  test ! -e "$terminal_bundle/rootfs/dev/console"
+  test ! -e "$terminal_bundle/rootfs/run/a3s/device-fifo"
+  run_smoke false "$terminal_existing_bundle" "$terminal_existing_hook_trace"
+  test -f "$terminal_existing_bundle/rootfs/dev/console"
+  test "$(cat "$terminal_existing_bundle/rootfs/dev/console")" = \
+    'a3s-preexisting-console-v1'
+  test ! -e "$terminal_existing_bundle/rootfs/run/a3s/device-fifo"
+  exit 0
+elif [[ -n "$native_focus" ]]; then
+  printf 'unsupported A3S_OCI_NATIVE_FOCUS value: %s\n' "$native_focus" >&2
+  exit 2
+fi
+
 create_dummy_network_device \
   "$network_device_rootless_source" 1500 02:00:00:00:00:30
 run_rootless_negative_smoke \
@@ -1952,12 +2042,20 @@ sudo sh -c \
 sudo sh -c \
   'printf -- "-cpu -cpuset -memory -pids" > "$1/cgroup.subtree_control"' \
   sh "$rootless_cgroup_parent"
-sudo sleep 300 &
-rootless_cgroup_process_launcher_pid=$!
-rootless_cgroup_process_pid="$rootless_cgroup_process_launcher_pid"
 sudo sh -c \
-  'printf "%s" "$2" > "$1/cgroup.procs"' \
-  sh "$rootless_cgroup_parent" "$rootless_cgroup_process_pid"
+  'printf 0 > "$1/cgroup.procs"; exec sleep 300' \
+  sh "$rootless_cgroup_parent" &
+rootless_cgroup_process_launcher_pid=$!
+for _ in $(seq 1 100); do
+  rootless_cgroup_process_pid="$(
+    sudo sed -n '1p' "$rootless_cgroup_parent/cgroup.procs"
+  )"
+  if [[ -n "$rootless_cgroup_process_pid" ]]; then
+    break
+  fi
+  sleep 0.01
+done
+test -n "$rootless_cgroup_process_pid"
 run_rootless_negative_smoke \
   populated-delegation \
   "$rootless_cgroup_parent" \
@@ -2030,6 +2128,14 @@ run_smoke \
 verify_host_network_device_absent "$network_device_success_source"
 
 run_smoke false
+run_smoke false "$terminal_bundle" "$terminal_hook_trace"
+test ! -e "$terminal_bundle/rootfs/dev/console"
+test ! -e "$terminal_bundle/rootfs/run/a3s/device-fifo"
+run_smoke false "$terminal_existing_bundle" "$terminal_existing_hook_trace"
+test -f "$terminal_existing_bundle/rootfs/dev/console"
+test "$(cat "$terminal_existing_bundle/rootfs/dev/console")" = \
+  'a3s-preexisting-console-v1'
+test ! -e "$terminal_existing_bundle/rootfs/run/a3s/device-fifo"
 run_smoke false "$control_bundle" "$control_hook_trace"
 run_service_smoke false
 run_service_signal_cleanup

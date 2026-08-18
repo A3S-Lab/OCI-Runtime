@@ -50,6 +50,8 @@ The initial rule set covers:
   systemd syntax, and ambiguous separators;
 - mount ID mappings, seccomp listener/errno relationships, selected CPU,
   block-I/O, and RDMA relationships;
+- Linux device-node conditional major/minor values and duplicate kernel
+  identities, plus allowed-device types, access masks, and kernel ranges;
 - bounded Intel RDT names and schemata, required memory-policy mode, bounded node
   lists and mode/flag relationships, required Linux personality domain and
   empty flags, and Linux device/path safety;
@@ -57,15 +59,25 @@ The initial rule set covers:
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 88 rule identifiers come from one typed registry. Twenty-five are classified
-as direct OCI normative validators and are currently bound to 43 exact source
-entries in the normative evidence manifest. Linux `oomScoreAdj`, scheduler,
-and I/O-priority runtime constraints plus executor and real-host tests promote
-14 process requirements to `enforced`. Scheduler validation covers duplicate
-and policy-specific flags, nice and realtime-priority ranges, and deadline
+All 94 rule identifiers come from one typed registry. Thirty-one are
+classified as direct OCI normative validators and are currently bound to 58
+exact source entries in the normative evidence manifest. Linux
+`oomScoreAdj`, scheduler, I/O-priority, device, and resource runtime
+constraints plus executor and real-host tests promote their applicable
+requirements to `enforced`. Scheduler validation covers duplicate and
+policy-specific flags, nice and realtime-priority ranges, and deadline
 ordering and kernel bounds. The remainder are explicit kernel/runtime
 constraints or platform policy and cannot accidentally be reported as
 normative coverage.
+
+For Linux devices, schema validation requires node type/path and the
+allowed-list `allow` flag. Semantic validation requires major/minor values for
+block and character nodes, treats `c` and `u` as one kernel identity for
+duplicate detection, ignores irrelevant FIFO numbers, and accepts only `a`,
+`b`, or `c` with `r`, `w`, and `m` permissions in resource rules. Omitted and
+empty access masks are valid no-op entries. Execution repeats all
+security-critical path, identity, range, and metadata checks before creating
+or attaching a node.
 
 The validator does not invent hardware minima or silently convert unsupported
 controls. Host capabilities, path allowlists, and whether the selected driver

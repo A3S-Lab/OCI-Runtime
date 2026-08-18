@@ -5,10 +5,10 @@ use std::time::Duration;
 use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, State};
 use a3s_oci_sdk::{
     ContainerId, ContainerOperationRequest, ContainerTarget, CreateAttachments, CreateRequest,
-    DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExitStatus, IsolationRequest,
-    KillRequest, ListRequest, OciBundle, OciRuntimeService, OperationContext, OperationId,
-    ProcessIo, ProcessTarget, ProcessesRequest, RuntimeClient, RuntimeEventKind, Signal,
-    StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitRequest,
+    DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExitStatus, IoMode,
+    IsolationRequest, KillRequest, ListRequest, OciBundle, OciRuntimeService, OperationContext,
+    OperationId, ProcessIo, ProcessTarget, ProcessesRequest, RuntimeClient, RuntimeEventKind,
+    Signal, StartRequest, StateRequest, StatsRequest, UpdateRequest, WaitRequest,
 };
 use tokio::time::{sleep, timeout, Instant};
 
@@ -108,16 +108,8 @@ async fn exercise_client(
         id: id.clone(),
         bundle: bundle.clone(),
         isolation: IsolationRequest::SharedHostKernel,
-        attachments: CreateAttachments::from_bundle(
-            bundle,
-            ProcessIo {
-                stdin: a3s_oci_sdk::IoMode::Null,
-                stdout: a3s_oci_sdk::IoMode::Null,
-                stderr: a3s_oci_sdk::IoMode::Null,
-                terminal_size: None,
-            },
-        )
-        .map_err(|error| format!("failed to derive native create attachments: {error}"))?,
+        attachments: CreateAttachments::from_bundle(bundle, configured_init_io(bundle))
+            .map_err(|error| format!("failed to derive native create attachments: {error}"))?,
     };
     let mut dedicated = create.clone();
     dedicated.isolation = IsolationRequest::DedicatedVm;
@@ -332,6 +324,25 @@ async fn exercise_client(
         report.control_descriptors_closed_after_delete = true;
     }
     Ok(())
+}
+
+fn configured_init_io(bundle: &OciBundle) -> ProcessIo {
+    let mode = if bundle
+        .spec()
+        .process()
+        .as_ref()
+        .is_some_and(|process| process.terminal().unwrap_or(false))
+    {
+        IoMode::Terminal
+    } else {
+        IoMode::Null
+    };
+    ProcessIo {
+        stdin: mode,
+        stdout: mode,
+        stderr: mode,
+        terminal_size: None,
+    }
 }
 
 pub(crate) async fn verify_runtime_events(

@@ -55,7 +55,13 @@ impl DeviceAccessPolicy {
             .iter()
             .enumerate()
             .map(|(index, rule)| DeviceAccessRule::from_oci(index, rule))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|rule| rule.access != 0)
+            .collect::<Vec<_>>();
+        if rules.is_empty() {
+            return Ok(None);
+        }
         let policy = Self { rules };
         policy.validate()?;
         Ok(Some(policy))
@@ -302,7 +308,7 @@ fn parse_device_number(field: &str, value: Option<i64>) -> Result<Option<u32>> {
 
 fn parse_device_access_mask(field: &str, value: Option<&str>) -> Result<u8> {
     let Some(value) = value else {
-        return Err(invalid(format!("{field} is required")));
+        return Ok(0);
     };
     let mut mask = 0_u8;
     for access in value.chars() {
@@ -316,9 +322,6 @@ fn parse_device_access_mask(field: &str, value: Option<&str>) -> Result<u8> {
                 )));
             }
         }
-    }
-    if mask == 0 {
-        return Err(invalid(format!("{field} must not be empty")));
     }
     Ok(mask)
 }
