@@ -653,6 +653,41 @@ mod tests {
     }
 
     #[test]
+    fn requires_block_io_device_identity() {
+        let validator = OciSchemaValidator::new().expect("compile pinned schemas");
+        for field in [
+            "weightDevice",
+            "throttleReadBpsDevice",
+            "throttleWriteBpsDevice",
+            "throttleReadIOPSDevice",
+            "throttleWriteIOPSDevice",
+        ] {
+            for missing in ["major", "minor"] {
+                let mut entry = json!({"major": 8, "minor": 0});
+                if field == "weightDevice" {
+                    entry["weight"] = json!(100);
+                } else {
+                    entry["rate"] = json!(1);
+                }
+                entry.as_object_mut().expect("device entry").remove(missing);
+                validator
+                    .validate(
+                        OciSchemaDocument::Configuration,
+                        &json!({
+                            "ociVersion": "1.3.0",
+                            "linux": {
+                                "resources": {
+                                    "blockIO": {(field): [entry]}
+                                }
+                            }
+                        }),
+                    )
+                    .expect_err("block I/O device entries require major and minor numbers");
+            }
+        }
+    }
+
+    #[test]
     fn accepts_runtime_spec_image_annotation_keys() {
         OciSchemaValidator::new()
             .expect("compile pinned schemas")

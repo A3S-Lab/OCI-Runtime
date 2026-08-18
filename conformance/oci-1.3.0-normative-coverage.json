@@ -9626,10 +9626,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`blockIO`** (object, OPTIONAL) represents the cgroup subsystem `blkio` which implements the block IO controller.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::parses_flat_and_nested_keyed_kernel_state",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "executor::cgroup::plan::tests::plans_block_io_as_an_independent_keyed_controller",
+        "executor::cgroup::update::tests::plans_block_io_updates_only_for_the_workload_leaf"
+      ]
     },
     {
       "id": "sha256:f4235b06adc4a4fd7bace1b901a142fc713451cbce73a27189d815805ce1b796",
@@ -9640,10 +9649,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`weight`** *(uint16, OPTIONAL)* - specifies per-cgroup weight. This is default weight of the group on all devices until and unless overridden by per-device rules.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::parses_flat_and_nested_keyed_kernel_state",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "executor::cgroup::plan::tests::plans_block_io_as_an_independent_keyed_controller",
+        "executor::cgroup::update::tests::plans_block_io_updates_only_for_the_workload_leaf"
+      ]
     },
     {
       "id": "sha256:325bb263412e1b7c77ea439b5b538b18c0eeeee2b0620cde8a83e6dd0aeafb7d",
@@ -9654,10 +9672,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`leafWeight`** *(uint16, OPTIONAL)* - equivalents of `weight` for the purpose of deciding how much weight tasks in the given cgroup has while competing with the cgroup's child cgroups.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.leaf-weight.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries"
+      ]
     },
     {
       "id": "sha256:99c66611265ba819a43ca05fe7c1a95ecc10d4373bc48f94be8216d0f3c1b56e",
@@ -9668,10 +9691,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`weightDevice`** *(array of objects, OPTIONAL)* - an array of per-device bandwidth weights.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::parses_flat_and_nested_keyed_kernel_state",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "executor::cgroup::plan::tests::plans_block_io_as_an_independent_keyed_controller",
+        "executor::cgroup::update::tests::plans_block_io_updates_only_for_the_workload_leaf"
+      ]
     },
     {
       "id": "sha256:0e46d8d7ae27ce83cb66692d075c83e48055689482c510773fb81d882c7e4908",
@@ -9682,10 +9714,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`major, minor`** *(int64, REQUIRED)* - major, minor numbers for device.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.device-identity"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "schema::tests::requires_block_io_device_identity"
+      ]
     },
     {
       "id": "sha256:7cab3653815548b579ad966ca3f348b702071cfed79bb584c81a6e3b63fe689f",
@@ -9696,10 +9733,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`weight`** *(uint16, OPTIONAL)* - bandwidth weight for the device.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::parses_flat_and_nested_keyed_kernel_state",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "executor::cgroup::plan::tests::plans_block_io_as_an_independent_keyed_controller",
+        "executor::cgroup::update::tests::plans_block_io_updates_only_for_the_workload_leaf"
+      ]
     },
     {
       "id": "sha256:f36edd64bcf955e827dd00879ac0677cd27200c0cbcfe5d082acb56f50ba249b",
@@ -9710,10 +9756,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`leafWeight`** *(uint16, OPTIONAL)* - bandwidth weight for the device while competing with the cgroup's child cgroups, CFQ scheduler only",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.leaf-weight.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries"
+      ]
     },
     {
       "id": "sha256:740ac90fb12eb528d2f9f993405048707294bf8d931d3d1f6b3cccea4c900970",
@@ -9743,10 +9794,15 @@
       "keyword": "may",
       "occurrence": 2,
       "source": "You MUST specify at least one of `weight` or `leafWeight` in a given entry, and MAY specify both.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.leaf-weight.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries"
+      ]
     },
     {
       "id": "sha256:c8d031a07af3310cf393fab472945b546d33fa5d07e300157a59c6e1389023a7",
@@ -9757,10 +9813,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`throttleReadBpsDevice`**, **`throttleWriteBpsDevice`** *(array of objects, OPTIONAL)* - an array of per-device bandwidth rate limits.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::parses_flat_and_nested_keyed_kernel_state",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "executor::cgroup::plan::tests::plans_block_io_as_an_independent_keyed_controller",
+        "executor::cgroup::update::tests::plans_block_io_updates_only_for_the_workload_leaf"
+      ]
     },
     {
       "id": "sha256:d302c0fd817308827e44b693944e0482207bcbededaef505e8ce7cb926e0d9d8",
@@ -9771,10 +9836,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`major, minor`** *(int64, REQUIRED)* - major, minor numbers for device.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.device-identity"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "schema::tests::requires_block_io_device_identity"
+      ]
     },
     {
       "id": "sha256:163fd525c606c51bc15c11ed466ea762da2fe3a76498a4a211a4240a989ab4e4",
@@ -9785,10 +9855,18 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`rate`** *(uint64, REQUIRED)* - bandwidth rate limit in bytes per second for the device",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls",
+        "oci.linux.block-io.throttle.rate-required"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "semantic::tests::requires_rates_for_every_block_io_throttle_list"
+      ]
     },
     {
       "id": "sha256:8de996e522e61e4c40d99e752d3654a2cee7ec75c90a3a060613f6c563681e7b",
@@ -9799,10 +9877,19 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`throttleReadIOPSDevice`**, **`throttleWriteIOPSDevice`** *(array of objects, OPTIONAL)* - an array of per-device IO rate limits.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::parses_flat_and_nested_keyed_kernel_state",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "executor::cgroup::plan::tests::plans_block_io_as_an_independent_keyed_controller",
+        "executor::cgroup::update::tests::plans_block_io_updates_only_for_the_workload_leaf"
+      ]
     },
     {
       "id": "sha256:4434926fb5e9c5aa5c4ef35f81c94e91851431c53b33ecf2b651a26a91049b7f",
@@ -9813,10 +9900,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`major, minor`** *(int64, REQUIRED)* - major, minor numbers for device.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.device-identity"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "schema::tests::requires_block_io_device_identity"
+      ]
     },
     {
       "id": "sha256:9734d0282cd3da5530df482471db8b3cc2bbce13833712caf8c907fdcfa8ed9a",
@@ -9827,10 +9919,18 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`rate`** *(uint64, REQUIRED)* - IO rate limit for the device",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls",
+        "oci.linux.block-io.throttle.rate-required"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "semantic::tests::requires_rates_for_every_block_io_throttle_list"
+      ]
     },
     {
       "id": "sha256:6e66cda19982d63863be2842cb39638f7336a9b324c8b32ad5ffbff727f74923",

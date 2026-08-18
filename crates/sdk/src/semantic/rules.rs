@@ -62,6 +62,7 @@ define_rules! {
     RLIMIT_TYPE_UNIQUE => Normative, "oci.common.rlimit.type.unique";
     ROOT_PATH_NON_EMPTY => Normative, "oci.common.root.path.non-empty";
     ROOT_REQUIRED => Normative, "oci.common.root.required";
+    BLOCK_IO_THROTTLE_RATE_REQUIRED => Normative, "oci.linux.block-io.throttle.rate-required";
     BLOCK_IO_WEIGHT_DEVICE_WEIGHT_REQUIRED => Normative, "oci.linux.block-io.weight-device.weight-required";
     CGROUP_PATH_SAFE => RuntimeConstraint, "oci.linux.cgroups-path.safe-path";
     CONTAINER_PATH_ABSOLUTE => Normative, "oci.linux.container-path.absolute";

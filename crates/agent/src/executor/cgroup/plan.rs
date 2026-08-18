@@ -8,7 +8,7 @@ use a3s_oci_sdk::{
     CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION, CONTROL_WORKLOAD_CGROUP_LAYOUT_V1,
 };
 
-use super::cgroup_error;
+use super::{cgroup_error, io::BlockIoPlan};
 
 pub(super) const DEFAULT_CPU_PERIOD_MICROS: u64 = 100_000;
 
@@ -41,6 +41,7 @@ pub(in crate::executor) struct CgroupPlan {
     cpuset_cpus: Option<String>,
     cpuset_mems: Option<String>,
     pids_limit: Option<i64>,
+    block_io: BlockIoPlan,
 }
 
 impl CgroupPlan {
@@ -79,6 +80,7 @@ impl CgroupPlan {
         let memory = resources.memory().as_ref();
         let cpu = resources.cpu().as_ref();
         let pids = resources.pids().as_ref();
+        let block_io = BlockIoPlan::from_oci(resources.block_io().as_ref())?;
         let plan = Self {
             layout,
             path,
@@ -93,6 +95,7 @@ impl CgroupPlan {
             cpuset_cpus: cpu.and_then(|cpu| cpu.cpus().clone()),
             cpuset_mems: cpu.and_then(|cpu| cpu.mems().clone()),
             pids_limit: pids.map(|pids| pids.limit()),
+            block_io,
         };
         plan.validate()?;
         if plan.has_limits() && plan.path.is_none() {
@@ -253,6 +256,7 @@ impl CgroupPlan {
             })
             .transpose()?;
         management.memory_reservation = None;
+        management.block_io = BlockIoPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -295,6 +299,10 @@ impl CgroupPlan {
         }
     }
 
+    pub(super) fn block_io(&self) -> &BlockIoPlan {
+        &self.block_io
+    }
+
     pub(super) fn required_controllers(&self) -> BTreeSet<&'static str> {
         let mut controllers = BTreeSet::new();
         if self.memory_limit.is_some()
@@ -317,11 +325,14 @@ impl CgroupPlan {
         if self.pids_limit.is_some() {
             controllers.insert("pids");
         }
+        if !self.block_io.is_empty() {
+            controllers.insert("io");
+        }
         controllers
     }
 
     fn has_limits(&self) -> bool {
-        !self.settings().is_empty()
+        !self.settings().is_empty() || !self.block_io.is_empty()
     }
 
     pub(in crate::executor) fn has_cgroup(&self) -> bool {
@@ -402,10 +413,12 @@ pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> 
     let object = value
         .as_object()
         .ok_or_else(|| invalid("linux.resources must be an object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !matches!(field.as_str(), "devices" | "memory" | "cpu" | "pids"))
-    {
+    if let Some(field) = object.keys().find(|field| {
+        !matches!(
+            field.as_str(),
+            "devices" | "memory" | "cpu" | "pids" | "blockIO"
+        )
+    }) {
         return Err(unsupported(
             &format!("linux.resources.{field}"),
             "this cgroup v2 resource is not implemented",
@@ -418,6 +431,18 @@ pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> 
             &["shares", "quota", "burst", "period", "cpus", "mems", "idle"][..],
         ),
         ("pids", &["limit"][..]),
+        (
+            "blockIO",
+            &[
+                "weight",
+                "leafWeight",
+                "weightDevice",
+                "throttleReadBpsDevice",
+                "throttleWriteBpsDevice",
+                "throttleReadIOPSDevice",
+                "throttleWriteIOPSDevice",
+            ][..],
+        ),
     ] {
         if let Some(object) = object.get(name).and_then(serde_json::Value::as_object) {
             if let Some(field) = object
@@ -545,6 +570,14 @@ mod tests {
         .expect("decode Linux memory controls")
     }
 
+    fn linux_with_block_io(block_io: serde_json::Value) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "io/controls",
+            "resources": {"blockIO": block_io}
+        }))
+        .expect("decode Linux block I/O controls")
+    }
+
     fn control_workload_annotations() -> BTreeMap<String, String> {
         BTreeMap::from([
             (
@@ -654,6 +687,22 @@ mod tests {
             ]
         );
         assert_eq!(plan.required_controllers(), ["cpu", "cpuset"].into());
+    }
+
+    #[test]
+    fn plans_block_io_as_an_independent_keyed_controller() {
+        let linux = linux_with_block_io(serde_json::json!({
+            "weight": 500,
+            "weightDevice": [{"major": 8, "minor": 0, "weight": 250}],
+            "throttleReadBpsDevice": [{"major": 8, "minor": 0, "rate": 1048576}],
+            "throttleWriteIOPSDevice": [{"major": 8, "minor": 16, "rate": 200}]
+        }));
+        let plan =
+            CgroupPlan::from_linux(Some(&linux), &BTreeMap::new()).expect("block I/O cgroup plan");
+
+        assert!(plan.settings().is_empty());
+        assert!(!plan.block_io().is_empty());
+        assert_eq!(plan.required_controllers(), ["io"].into());
     }
 
     #[test]

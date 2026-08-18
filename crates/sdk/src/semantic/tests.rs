@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 88);
+    assert_eq!(registry.len(), 89);
     assert_eq!(
         registry
             .iter()
@@ -139,7 +139,13 @@ fn accepts_validated_normative_cross_field_boundaries() {
                     "weightDevice": [{
                         "major": 8,
                         "minor": 0,
-                        "weight": 100
+                        "weight": 100,
+                        "leafWeight": 200
+                    }],
+                    "throttleReadBpsDevice": [{
+                        "major": 8,
+                        "minor": 0,
+                        "rate": 1048576
                     }]
                 },
                 "rdma": {"mlx5_0": {"hcaHandles": 1}}
@@ -161,6 +167,33 @@ fn accepts_validated_normative_cross_field_boundaries() {
         .expect("construct validator")
         .validate(OciSemanticPhase::Start, &value)
         .expect("normative semantic boundaries must accept valid relationships");
+}
+
+#[test]
+fn requires_rates_for_every_block_io_throttle_list() {
+    for field in [
+        "throttleReadBpsDevice",
+        "throttleWriteBpsDevice",
+        "throttleReadIOPSDevice",
+        "throttleWriteIOPSDevice",
+    ] {
+        let value = json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"},
+            "linux": {
+                "resources": {
+                    "blockIO": {
+                        (field): [{"major": 8, "minor": 0}]
+                    }
+                }
+            }
+        });
+        assert!(
+            rules(&value, OciSemanticPhase::Configuration)
+                .contains("oci.linux.block-io.throttle.rate-required"),
+            "missing rate rule for {field}"
+        );
+    }
 }
 
 #[test]
@@ -423,7 +456,8 @@ fn reports_linux_namespace_security_and_resource_relationships() {
                 },
                 "memory": {"limit": 10, "reservation": 20},
                 "blockIO": {
-                    "weightDevice": [{"major": 8, "minor": 0}]
+                    "weightDevice": [{"major": 8, "minor": 0}],
+                    "throttleWriteIOPSDevice": [{"major": 8, "minor": 0}]
                 },
                 "rdma": {"mlx5_0": {}},
                 "hugepageLimits": [
@@ -465,6 +499,7 @@ fn reports_linux_namespace_security_and_resource_relationships() {
         "oci.linux.cpu.burst-at-most-quota",
         "oci.linux.cpu.idle-range",
         "oci.linux.cpu.realtime-runtime-at-most-period",
+        "oci.linux.block-io.throttle.rate-required",
         "oci.linux.block-io.weight-device.weight-required",
         "oci.linux.rdma.limit-required",
         "oci.linux.intel-rdt.clos-id.safe-name",

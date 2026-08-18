@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
+use super::io::{AppliedBlockIoUpdate, BlockIoPlan};
 use super::{
     cgroup_v2_limit_value, normalize_cgroup_value, parse_max_value, parse_u64_value, read_required,
     shares_to_weight, validate_cpuset, validate_memory_value, validate_pids_limit,
@@ -33,7 +34,12 @@ impl CgroupHandle {
             .settings(&self.leaf, self.control_workload.is_none())
             .await?;
         prepared.extend(prepare_update_settings(&self.leaf, settings).await?);
+        let prepared_block_io = plan.block_io.prepare_update(&self.leaf).await?;
         let applied = apply_prepared_update_settings(prepared).await?;
+        let applied_block_io = match prepared_block_io.apply().await {
+            Ok(applied_block_io) => applied_block_io,
+            Err(error) => return rollback_update(&applied, None, error).await,
+        };
 
         let Some(next_devices) = next_devices else {
             return Ok(());
@@ -53,7 +59,7 @@ impl CgroupHandle {
                 (true, false) => device_filter.authority.remove(&device_filter.key),
             };
             if let Err(error) = result {
-                return rollback_update(&applied, error).await;
+                return rollback_update(&applied, Some(&applied_block_io), error).await;
             }
             self.devices = next_devices;
             device_filter.active = next_active;
@@ -74,7 +80,7 @@ impl CgroupHandle {
             (None, None) => Ok(()),
         };
         if let Err(error) = device_update {
-            return rollback_update(&applied, error).await;
+            return rollback_update(&applied, Some(&applied_block_io), error).await;
         }
         self.devices = next_devices;
         self.device_filter = next_device_filter;
@@ -95,6 +101,7 @@ struct CgroupUpdatePlan {
     cpuset_cpus: Option<String>,
     cpuset_mems: Option<String>,
     pids_limit: Option<i64>,
+    block_io: BlockIoPlan,
 }
 
 impl CgroupUpdatePlan {
@@ -103,6 +110,8 @@ impl CgroupUpdatePlan {
         let memory = resources.memory().as_ref();
         let cpu = resources.cpu().as_ref();
         let pids = resources.pids().as_ref();
+        let block_io =
+            BlockIoPlan::from_oci(resources.block_io().as_ref()).map_err(as_update_error)?;
         let plan = Self {
             memory_limit: memory.and_then(|memory| memory.limit()),
             memory_reservation: memory.and_then(|memory| memory.reservation()),
@@ -115,6 +124,7 @@ impl CgroupUpdatePlan {
             cpuset_cpus: cpu.and_then(|cpu| cpu.cpus().clone()),
             cpuset_mems: cpu.and_then(|cpu| cpu.mems().clone()),
             pids_limit: pids.map(|pids| pids.limit()),
+            block_io,
         };
         plan.validate()?;
         Ok(plan)
@@ -195,6 +205,7 @@ impl CgroupUpdatePlan {
             })
             .transpose()?;
         management.memory_reservation = None;
+        management.block_io = BlockIoPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -433,6 +444,7 @@ async fn apply_prepared_update_settings(
         if let Err(error) = tokio::fs::write(&destination, setting.value.as_bytes()).await {
             return rollback_update(
                 &applied,
+                None,
                 update_error(
                     ErrorCode::PermissionDenied,
                     format!(
@@ -451,6 +463,7 @@ async fn apply_prepared_update_settings(
             Err(error) => {
                 return rollback_update(
                     &applied,
+                    None,
                     update_error(
                         ErrorCode::FailedPrecondition,
                         format!(
@@ -466,6 +479,7 @@ async fn apply_prepared_update_settings(
         if normalize_cgroup_value(&actual) != normalize_cgroup_value(&setting.value) {
             return rollback_update(
                 &applied,
+                None,
                 update_error(
                     ErrorCode::FailedPrecondition,
                     format!(
@@ -483,9 +497,13 @@ async fn apply_prepared_update_settings(
 
 async fn rollback_update(
     applied: &[(PathBuf, &'static str, String)],
+    block_io: Option<&AppliedBlockIoUpdate>,
     original: Error,
 ) -> Result<()> {
-    let mut failures = Vec::new();
+    let mut failures = match block_io {
+        Some(block_io) => block_io.rollback().await,
+        None => Vec::new(),
+    };
     for (path, file, value) in applied.iter().rev() {
         let destination = path.join(file);
         if let Err(error) = tokio::fs::write(&destination, value.as_bytes()).await {
@@ -805,6 +823,30 @@ mod tests {
                 [("pids.max", expected.to_string())]
             );
         }
+    }
+
+    #[test]
+    fn plans_block_io_updates_only_for_the_workload_leaf() {
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "blockIO": {
+                "weight": 500,
+                "weightDevice": [{"major": 8, "minor": 0, "weight": 250}],
+                "throttleReadBpsDevice": [{"major": 8, "minor": 0, "rate": 1048576}],
+                "throttleWriteIOPSDevice": [{"major": 8, "minor": 16, "rate": 200}]
+            }
+        }))
+        .expect("block I/O update");
+        let plan = CgroupUpdatePlan::from_resources(&resources).expect("block I/O update plan");
+        let management = plan
+            .management_plan(&ControlHeadroom {
+                memory_bytes: 64 * 1024 * 1024,
+                cpu_quota_micros: 25_000,
+                pids: 16,
+            })
+            .expect("management plan");
+
+        assert!(!plan.block_io.is_empty());
+        assert!(management.block_io.is_empty());
     }
 
     #[test]
