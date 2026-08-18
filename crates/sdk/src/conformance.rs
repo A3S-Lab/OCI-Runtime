@@ -151,6 +151,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.linux.cgroups-path.stable-location", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.cpu.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.cpu.realtime-controls.rejected", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.pids.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.mount-options.control", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.linux.mount-options.filesystem-specific-pass-through",

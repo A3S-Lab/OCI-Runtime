@@ -170,14 +170,14 @@ impl CgroupPlan {
                 validate_cpuset(field, value)?;
             }
         }
-        if self.pids_limit.is_some_and(|value| value <= 0) {
-            return Err(invalid("linux.resources.pids.limit must be positive"));
+        if let Some(value) = self.pids_limit {
+            validate_pids_limit(value)?;
         }
         if matches!(self.layout, CgroupLayout::ControlWorkload(_))
             && (self.memory_limit.is_none()
                 || self.cpu_quota.is_none_or(|value| value <= 0)
                 || self.cpu_period.is_none()
-                || self.pids_limit.is_none())
+                || self.pids_limit.is_none_or(|value| value == -1))
         {
             return Err(invalid(
                 "control/workload cgroup layout requires finite memory, CPU, and PID limits",
@@ -236,7 +236,7 @@ impl CgroupPlan {
             settings.push(("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
-            settings.push(("pids.max", value.to_string()));
+            settings.push(("pids.max", pids_max_value(value)));
         }
         settings
     }
@@ -269,11 +269,19 @@ impl CgroupPlan {
             .map(Some)?;
         management.cpu_burst = None;
         management.cpu_idle = None;
-        management.pids_limit = self
+        let pids_limit = self
             .pids_limit
-            .and_then(|value| value.checked_add(headroom.pids))
-            .ok_or_else(|| invalid("control-plane PID envelope overflows i64"))
-            .map(Some)?;
+            .ok_or_else(|| invalid("control/workload cgroup layout requires a finite PID limit"))?;
+        if pids_limit == -1 {
+            return Err(invalid(
+                "control/workload cgroup layout requires a finite PID limit",
+            ));
+        }
+        management.pids_limit = Some(
+            pids_limit
+                .checked_add(headroom.pids)
+                .ok_or_else(|| invalid("control-plane PID envelope overflows i64"))?,
+        );
         Ok(management)
     }
 
@@ -443,6 +451,25 @@ pub(super) fn validate_cpuset(field: &str, value: &str) -> Result<()> {
     }
 }
 
+pub(super) fn validate_pids_limit(value: i64) -> Result<()> {
+    if value < -1 {
+        Err(invalid(
+            "linux.resources.pids.limit must be -1 or non-negative",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn pids_max_value(value: i64) -> String {
+    debug_assert!(value >= -1, "PIDs limit must be validated before encoding");
+    if value == -1 {
+        "max".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 pub(super) const fn shares_to_weight(shares: u64) -> u64 {
     1 + ((shares - 2) * 9_999) / 262_142
 }
@@ -486,6 +513,35 @@ mod tests {
             "resources": {"cpu": cpu}
         }))
         .expect("decode Linux CPU controls")
+    }
+
+    fn linux_with_pids(limit: i64) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "pids/controls",
+            "resources": {"pids": {"limit": limit}}
+        }))
+        .expect("decode Linux PIDs controls")
+    }
+
+    fn control_workload_annotations() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (
+                CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION.to_string(),
+                CONTROL_WORKLOAD_CGROUP_LAYOUT_V1.to_string(),
+            ),
+            (
+                CONTROL_CGROUP_MEMORY_HEADROOM_ANNOTATION.to_string(),
+                "67108864".to_string(),
+            ),
+            (
+                CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION.to_string(),
+                "25000".to_string(),
+            ),
+            (
+                CONTROL_CGROUP_PIDS_HEADROOM_ANNOTATION.to_string(),
+                "16".to_string(),
+            ),
+        ])
     }
 
     #[test]
@@ -596,6 +652,51 @@ mod tests {
     }
 
     #[test]
+    fn plans_zero_and_unlimited_pids_limits() {
+        for (limit, expected) in [(0, "0"), (-1, "max")] {
+            let plan = CgroupPlan::from_linux(Some(&linux_with_pids(limit)), &BTreeMap::new())
+                .expect("valid PIDs plan");
+
+            assert_eq!(plan.settings(), [("pids.max", expected.to_string())]);
+            assert_eq!(plan.required_controllers(), ["pids"].into());
+        }
+    }
+
+    #[test]
+    fn rejects_pids_limits_below_the_unlimited_sentinel() {
+        let error = CgroupPlan::from_linux(Some(&linux_with_pids(-2)), &BTreeMap::new())
+            .expect_err("a PIDs limit below -1 must fail planning");
+
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("-1 or non-negative"));
+    }
+
+    #[test]
+    fn control_workload_accepts_zero_but_rejects_unlimited_pids() {
+        let annotations = control_workload_annotations();
+        let mut zero = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        zero["resources"]["pids"]["limit"] = serde_json::json!(0);
+        let zero = serde_json::from_value(zero).expect("decode zero-PIDs Linux fixture");
+        let plan =
+            CgroupPlan::from_linux(Some(&zero), &annotations).expect("zero is a finite PIDs limit");
+        assert!(plan.settings().contains(&("pids.max", "0".to_string())));
+        assert!(plan
+            .management_plan(plan.control_headroom().expect("control headroom"))
+            .expect("zero-PIDs management envelope")
+            .settings()
+            .contains(&("pids.max", "16".to_string())));
+
+        let mut unlimited = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        unlimited["resources"]["pids"]["limit"] = serde_json::json!(-1);
+        let unlimited =
+            serde_json::from_value(unlimited).expect("decode unlimited-PIDs Linux fixture");
+        let error = CgroupPlan::from_linux(Some(&unlimited), &annotations)
+            .expect_err("control/workload layout must retain a finite PIDs limit");
+        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+        assert!(error.message.contains("finite memory, CPU, and PID limits"));
+    }
+
+    #[test]
     fn rejects_invalid_cpu_burst_idle_and_realtime_controls() {
         for cpu in [
             serde_json::json!({"quota": 10000, "burst": 10001}),
@@ -619,24 +720,7 @@ mod tests {
 
     #[test]
     fn derives_management_headroom_while_preserving_exact_workload_limits() {
-        let annotations = BTreeMap::from([
-            (
-                CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION.to_string(),
-                CONTROL_WORKLOAD_CGROUP_LAYOUT_V1.to_string(),
-            ),
-            (
-                CONTROL_CGROUP_MEMORY_HEADROOM_ANNOTATION.to_string(),
-                "67108864".to_string(),
-            ),
-            (
-                CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION.to_string(),
-                "25000".to_string(),
-            ),
-            (
-                CONTROL_CGROUP_PIDS_HEADROOM_ANNOTATION.to_string(),
-                "16".to_string(),
-            ),
-        ]);
+        let annotations = control_workload_annotations();
         let mut linux = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
         linux["resources"]["cpu"]["burst"] = serde_json::json!(10_000);
         linux["resources"]["cpu"]["idle"] = serde_json::json!(1);
