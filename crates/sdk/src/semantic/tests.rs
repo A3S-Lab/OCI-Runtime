@@ -615,6 +615,26 @@ fn validates_vm_paths_without_inventing_hardware_minima() {
 }
 
 #[test]
+fn accepts_applicable_linux_and_vm_platform_sections_together() {
+    let value = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "linux": {
+            "namespaces": [{"type": "mount"}]
+        },
+        "vm": {
+            "hypervisor": {"path": "/runtime/vmm"},
+            "kernel": {"path": "/runtime/vmlinux"},
+            "image": {"path": "/runtime/root.raw", "format": "raw"}
+        }
+    });
+    OciSemanticValidator::new()
+        .expect("construct validator")
+        .validate(OciSemanticPhase::Configuration, &value)
+        .expect("Linux guest and utility-VM sections may coexist");
+}
+
+#[test]
 fn rejects_native_non_linux_workload_sections_as_unsupported() {
     for (field, platform) in [
         ("freebsd", json!({})),

@@ -30,6 +30,14 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.bundle.config.version.required", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.semver", "runtime-bundle"),
     OciNonSemanticRule::new(
+        "oci.common.extensibility.unknown-properties-ignored",
+        "runtime-bundle",
+    ),
+    OciNonSemanticRule::new(
+        "oci.common.platform-sections.accepted",
+        "sdk-semantic-validation",
+    ),
+    OciNonSemanticRule::new(
         "oci.common.process.capabilities.exact-sets",
         "linux-executor",
     ),
@@ -67,6 +75,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
     OciNonSemanticRule::new("oci.common.root.directory", "linux-executor"),
     OciNonSemanticRule::new("oci.common.root.readonly", "linux-executor"),
+    OciNonSemanticRule::new("oci.common.uts-names.exact", "linux-executor"),
     OciNonSemanticRule::new("oci.features.document.schema", "runtime-feature-report"),
     OciNonSemanticRule::new("oci.features.hooks.accurate", "runtime-feature-report"),
     OciNonSemanticRule::new("oci.features.linux.available", "runtime-feature-report"),

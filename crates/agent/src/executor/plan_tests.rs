@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use a3s_oci_sdk::oci_spec::runtime::Process;
 use a3s_oci_sdk::{
     ErrorCode, IoMode, OciBundle, ProcessIo, TerminalSize, CONTROL_CGROUP_CPU_HEADROOM_ANNOTATION,
@@ -141,6 +143,31 @@ fn plans_exact_common_process_fields_for_init_and_exec() {
         !exec.terminal,
         "an omitted terminal field defaults to false"
     );
+}
+
+#[test]
+fn ignores_unknown_configuration_properties_during_planning() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed configuration");
+    config["futureTopLevel"] = serde_json::json!({"version": 2});
+    config["process"]["futureProcessField"] = serde_json::json!(["opaque", 7]);
+    config["linux"] = serde_json::json!({
+        "namespaces": [{"type": "mount"}],
+        "futureLinuxField": {"enabled": true}
+    });
+    config["mounts"] = serde_json::json!([{
+        "destination": "/proc",
+        "type": "proc",
+        "source": "proc",
+        "futureMountField": "opaque"
+    }]);
+    let encoded = serde_json::to_string(&config).expect("encode extensible configuration");
+
+    let plan = InitPlan::from_bundle(&bundle(&encoded), &null_io())
+        .expect("unknown properties must not change executor planning");
+    assert_eq!(plan.args, ["/bin/sh", "-c", "printf ready"]);
+    assert_eq!(plan.mounts.len(), 1);
+    assert_eq!(plan.mounts[0].destination, Path::new("/proc"));
 }
 
 #[test]
@@ -683,22 +710,30 @@ fn plans_current_intel_rdt_fields_and_preserves_omission() {
 }
 
 #[test]
-fn rejects_deprecated_intel_rdt_monitoring_fields() {
+fn ignores_deprecated_intel_rdt_monitoring_properties() {
     for field in ["enableCMT", "enableMBM"] {
         let mut config: serde_json::Value =
             serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
         config["linux"] = serde_json::json!({"intelRdt": {}});
         config["linux"]["intelRdt"][field] = serde_json::json!(true);
         let config = serde_json::to_string(&config).expect("encode legacy Intel RDT config");
-        let error = OciBundle::from_json(
+        let bundle = OciBundle::from_json(
             std::env::current_dir()
                 .expect("current directory")
                 .join("bootstrap-test-bundle"),
             &config,
         )
-        .expect_err("deprecated Intel RDT fields must fail closed");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-        assert!(error.message.contains(field));
+        .expect("deprecated Intel RDT properties are ignored as unknown properties");
+        assert!(bundle.config_json().contains(field));
+        let typed = serde_json::to_value(bundle.spec()).expect("encode typed OCI projection");
+        assert!(typed["linux"]["intelRdt"].get(field).is_none());
+
+        let plan = InitPlan::from_bundle(&bundle, &null_io())
+            .expect("deprecated Intel RDT properties must not prevent planning");
+        assert!(
+            plan.intel_rdt.is_some(),
+            "the known intelRdt object remains configured after ignoring {field}"
+        );
     }
 }
 

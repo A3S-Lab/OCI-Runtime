@@ -47,14 +47,16 @@ impl OciRuntimeService for RecordingService {
 }
 
 #[tokio::test]
-async fn client_preserves_complete_oci_spec_at_service_boundary() {
+async fn client_preserves_complete_oci_spec_and_unknown_properties_at_service_boundary() {
     let config = json!({
         "ociVersion": "1.3.0",
+        "futureTopLevel": {"version": 2},
         "process": {
             "terminal": false,
             "user": { "uid": 1000, "gid": 1000 },
             "args": ["/bin/true"],
-            "cwd": "/"
+            "cwd": "/",
+            "futureProcessField": ["opaque", 7]
         },
         "root": { "path": "rootfs", "readonly": true },
         "linux": {
@@ -79,11 +81,11 @@ async fn client_preserves_complete_oci_spec_at_service_boundary() {
             "dev.a3s.test": "sdk-boundary"
         }
     });
-    let spec = serde_json::from_value(config).expect("decode OCI 1.3 fixture");
     let bundle_path = std::env::current_dir()
         .expect("current directory")
         .join("sdk-contract-bundle");
-    let bundle = OciBundle::from_spec(bundle_path, spec).expect("build immutable bundle");
+    let config_json = serde_json::to_string(&config).expect("encode OCI 1.3 fixture");
+    let bundle = OciBundle::from_json(bundle_path, config_json).expect("build immutable bundle");
     let attachments = CreateAttachments::from_bundle(&bundle, ProcessIo::default())
         .expect("build attachment contract");
     let request = CreateRequest {
@@ -108,6 +110,8 @@ async fn client_preserves_complete_oci_spec_at_service_boundary() {
         .clone()
         .expect("create request must reach service");
     let encoded = serde_json::to_value(recorded.bundle.spec()).expect("encode recorded spec");
+    let raw: serde_json::Value = serde_json::from_str(recorded.bundle.config_json())
+        .expect("decode exact recorded configuration");
 
     assert_eq!(
         encoded["linux"]["intelRdt"]["enableMonitoring"],
@@ -122,4 +126,8 @@ async fn client_preserves_complete_oci_spec_at_service_boundary() {
         encoded["annotations"]["dev.a3s.test"],
         json!("sdk-boundary")
     );
+    assert!(encoded.get("futureTopLevel").is_none());
+    assert!(encoded["process"].get("futureProcessField").is_none());
+    assert_eq!(raw["futureTopLevel"], json!({"version": 2}));
+    assert_eq!(raw["process"]["futureProcessField"], json!(["opaque", 7]));
 }

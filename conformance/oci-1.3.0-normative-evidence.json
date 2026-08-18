@@ -1209,7 +1209,8 @@
     },
     {
       "requirementIds": [
-        "sha256:50808ff63fa7076a8d4415076e89b328cf67b01298ef15997f0af19c77a8fe53"
+        "sha256:50808ff63fa7076a8d4415076e89b328cf67b01298ef15997f0af19c77a8fe53",
+        "sha256:81804b28905ab7266917912319a2f2127304a1df132653793086a9cd5fa98862"
       ],
       "disposition": "enforced",
       "owner": "linux-executor",
@@ -1967,7 +1968,8 @@
     {
       "requirementIds": [
         "sha256:6725b5aeca238f7e402e633d8aceaf2b29e2c8868bf5072768c79129f13fef22",
-        "sha256:02bdae507fd0fc01fe06a7dc68a4a8b37f38887d197c4485cb4ecab9b3d65d04"
+        "sha256:02bdae507fd0fc01fe06a7dc68a4a8b37f38887d197c4485cb4ecab9b3d65d04",
+        "sha256:be00d67ca50b9d646810a6a66880f15b185f2d530216a4a2946d04f8aa619dd5"
       ],
       "disposition": "enforced",
       "owner": "runtime-feature-report",
@@ -1982,7 +1984,8 @@
     {
       "requirementIds": [
         "sha256:8bddae79e0e696495264af3d3d5017018c105cba83e18ee2cd4217921a5b3a0c",
-        "sha256:7409a47e3d497e2fe76fd038443fa36764b3a28bf6f888fe351d53940d40509f"
+        "sha256:7409a47e3d497e2fe76fd038443fa36764b3a28bf6f888fe351d53940d40509f",
+        "sha256:36e94643387e135ca03d820dd66881211bb367f247c533f1db85271f6c3c3b1a"
       ],
       "disposition": "enforced",
       "owner": "runtime-feature-report",
@@ -2035,7 +2038,15 @@
         "sha256:ccd6ef1e52524ec6a6887c46d87495fdf7e4a8bb78ab812f194d32b9f12f5018",
         "sha256:f331169d747b56573bd45edae46ab5faf7edca33fc4f038e7ea0ca3488bbfa35",
         "sha256:f367d92879b280fb2537aa265956f9bb5ee637a1f091affceb0d9372ebdf68f7",
-        "sha256:3a93c746a770f629905f86d54f44311d19854053bbe7bfdd81387979dc3137f2"
+        "sha256:3a93c746a770f629905f86d54f44311d19854053bbe7bfdd81387979dc3137f2",
+        "sha256:13607b7c7a685104ac35d53ab327278c90ec9e9534f590d9b61ae7bc58f1688c",
+        "sha256:e42d4d0338941cad2e10ef433fe2d6158b730e3f6fba7a06b084c781ed7b94d3",
+        "sha256:c294b4310dbdbcbaec5008da38f8909387cb6ef3aec851435294d6119d56450c",
+        "sha256:977adccc82b404f21f49f3b80a5919ed5d7a2251d146f9cd584ab073707f4ca1",
+        "sha256:4653122aac48cda849a1b15188a162b6a8b91c87af1c6d920ee6d5ab96d6e9ee",
+        "sha256:0cca090f65d3d566aaf1d5d53a7f88c256f1202bcd54e352a5313052e9c9bd2b",
+        "sha256:0d551caffa6321b380332b501b88e6955032df8539233d38da8dc5c7073507a5",
+        "sha256:060020bf8de77b9bcb90e9634082d5deaf79fbbc7a5ce2c7fee8c19cbb2ec0ba"
       ],
       "disposition": "enforced",
       "owner": "sdk-semantic-validation",
@@ -2197,7 +2208,8 @@
       "requirementIds": [
         "sha256:7885296846b768ba504df1869e9bcc3a0d1821fb987200edadd11c921cba3560",
         "sha256:a708c6a19b681883b0d303aecea4495e1c57eda50b63843f583ca99afa1ca865",
-        "sha256:6404dbf67cf4ff56d2bed0522fa69d408a6d73440355ffa3563c9205ba4ffdcd"
+        "sha256:6404dbf67cf4ff56d2bed0522fa69d408a6d73440355ffa3563c9205ba4ffdcd",
+        "sha256:b94ce5258ceb8c3b16970456472eeb51d41e60540e5fabd6b1a3c0ce9385f5e3"
       ],
       "disposition": "enforced",
       "owner": "sdk-semantic-validation",
@@ -2249,6 +2261,55 @@
       "testIds": [
         "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
         ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:58641a4ea713199b4047649135fe743a7cfa176ade8ed0269216b21f7ca33d00",
+        "sha256:b2715f74eaae5fb228070d43a06db6810d491f6c8d4f85eb11ee3f181387029b"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.common.extensibility.unknown-properties-ignored"
+      ],
+      "testIds": [
+        "bundle::tests::ignores_unknown_configuration_properties_without_losing_exact_bundle",
+        "client_contract::client_preserves_complete_oci_spec_and_unknown_properties_at_service_boundary",
+        "executor::plan_tests::ignores_unknown_configuration_properties_during_planning"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:9c480556899006ce20050b6d58ad97cd24b6ab91462da00aebb3d71ca8f9144c",
+        "sha256:90720252928b414e291fa91dbc35bda9997c4d8ee6572017e6055cdd334ae863",
+        "sha256:83c18112f86f1dc8e70b1e1ba0f3d2c439864c9d07ea096a7bdb5a0412c63dc4",
+        "sha256:84e2748d347645865004d8d9b447ba0844fa69860e83a9a8fd66df3ebda4da85"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.platform-sections.accepted"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_applicable_linux_and_vm_platform_sections_together",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:7a35875ee9a16136d459e3a94dcc33696c6684d6b557be6d0d8bf13207bfa80a",
+        "sha256:23c8b3b88932aecd4eb437476c6e8fcf9f29cf483924e1e7b7aa4c27d8ec286d"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.uts-names.exact"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::configured-uts-names-applied",
+        "executor::plan_tests::accepts_a_new_uts_namespace_and_bounded_uts_names",
+        "executor::plan_tests::rejects_uts_names_outside_the_supported_profile"
       ]
     }
   ]
