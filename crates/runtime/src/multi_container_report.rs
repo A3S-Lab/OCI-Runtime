@@ -237,7 +237,8 @@ impl StorageVolumeEvidence {
 pub struct InitializationEvidence {
     /// Whether an inline shell init completed and emitted exact evidence.
     pub inline_shell_verified: bool,
-    /// Whether an executable file init received its requested environment and
+    /// Whether an executable file init received its exact environment,
+    /// working directory, UID/GID, supplementary groups, and umask and then
     /// completed with exact evidence.
     pub executable_script_verified: bool,
     /// Whether a direct argv init completed without a shell wrapper.

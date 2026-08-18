@@ -917,6 +917,38 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_or_non_directory_rootfs_before_namespace_entry() {
+        let temporary = tempdir().expect("temporary rootfs fixture");
+        let bundle = temporary.path().join("sandbox/bundle");
+        std::fs::create_dir_all(&bundle).expect("bundle directory");
+        let config = write_configuration(temporary.path(), Path::new("rootfs"));
+
+        let missing = prepare_container_init(
+            config.clone(),
+            bundle.clone(),
+            RootfsScope::BundleOnly,
+            &ProcessIo::default(),
+        )
+        .expect_err("the declared rootfs directory must exist");
+        assert_eq!(missing.code, ErrorCode::InvalidArgument);
+        assert!(missing
+            .message
+            .contains("failed to resolve container rootfs"));
+
+        std::fs::write(bundle.join("rootfs"), b"not a directory")
+            .expect("non-directory rootfs fixture");
+        let non_directory = prepare_container_init(
+            config,
+            bundle,
+            RootfsScope::BundleOnly,
+            &ProcessIo::default(),
+        )
+        .expect_err("the declared rootfs path must resolve to a directory");
+        assert_eq!(non_directory.code, ErrorCode::InvalidArgument);
+        assert!(non_directory.message.contains("rootfs is not a directory"));
+    }
+
+    #[test]
     fn bundle_scope_rejects_the_same_external_absolute_rootfs() {
         let temporary = tempdir().expect("temporary rootfs fixture");
         let bundle = temporary.path().join("sandbox/bundle");

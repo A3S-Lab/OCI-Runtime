@@ -95,6 +95,40 @@ fn preserves_mount_order_and_normalizes_relative_destinations() {
 }
 
 #[test]
+fn accepts_omitted_mount_list_and_optional_mount_fields() {
+    let mut without_mounts: serde_json::Value =
+        serde_json::from_str(MOUNT_CONFIG).expect("decode mount configuration");
+    without_mounts
+        .as_object_mut()
+        .expect("configuration object")
+        .remove("mounts");
+    let without_mounts =
+        serde_json::to_string(&without_mounts).expect("encode configuration without mounts");
+    let plan = InitPlan::from_bundle(&bundle(&without_mounts), &null_io())
+        .expect("the optional mount list may be omitted");
+    assert!(plan.mounts.is_empty());
+
+    let mut optional_fields: serde_json::Value =
+        serde_json::from_str(MOUNT_CONFIG).expect("decode mount configuration");
+    let mount = optional_fields["mounts"][1]
+        .as_object_mut()
+        .expect("second mount object");
+    mount.remove("source");
+    mount.remove("type");
+    mount.remove("options");
+    let optional_fields =
+        serde_json::to_string(&optional_fields).expect("encode optional mount fields");
+    let plan = InitPlan::from_bundle(&bundle(&optional_fields), &null_io())
+        .expect("source, type, and options are optional for a non-bind mount");
+    assert_eq!(plan.mounts.len(), 2);
+    assert_eq!(plan.mounts[1].index, 1);
+    assert_eq!(plan.mounts[1].destination, Path::new("/tmp"));
+    assert!(plan.mounts[1].source.is_none());
+    assert!(plan.mounts[1].filesystem_type.is_none());
+    assert!(plan.mounts[1].data.is_empty());
+}
+
+#[test]
 fn recognizes_every_supported_oci_linux_mount_option_as_control_data() {
     for option in OCI_LINUX_MOUNT_OPTIONS
         .iter()

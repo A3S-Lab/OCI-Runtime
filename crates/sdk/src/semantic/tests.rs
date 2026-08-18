@@ -616,26 +616,57 @@ fn validates_vm_paths_without_inventing_hardware_minima() {
 
 #[test]
 fn rejects_native_non_linux_workload_sections_as_unsupported() {
+    for (field, platform) in [
+        ("freebsd", json!({})),
+        ("solaris", json!({})),
+        ("windows", json!({"layerFolders": ["C:\\layers\\base"]})),
+        ("zos", json!({})),
+    ] {
+        let mut value = json!({
+            "ociVersion": "1.3.0",
+            "root": {"path": "rootfs"}
+        });
+        value[field] = platform;
+        let report = OciSemanticValidator::new()
+            .expect("construct validator")
+            .inspect(OciSemanticPhase::Configuration, &value)
+            .unwrap_or_else(|error| panic!("inspect native {field} configuration: {error}"));
+        assert_eq!(report.violations.len(), 1, "native {field} boundary");
+        assert_eq!(
+            report.violations[0].kind,
+            OciSemanticViolationKind::UnsupportedPlatform
+        );
+        assert_eq!(report.violations[0].rule, "oci.platform.linux-only");
+
+        let error = OciSemanticValidator::new()
+            .expect("construct validator")
+            .validate(OciSemanticPhase::Configuration, &value)
+            .expect_err("native non-Linux workload must be rejected");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+    }
+}
+
+#[test]
+fn rejects_windows_process_fields_as_unsupported() {
     let value = json!({
         "ociVersion": "1.3.0",
         "root": {"path": "rootfs"},
-        "windows": {"layerFolders": ["C:\\layers\\base"]}
+        "process": {
+            "cwd": "/",
+            "args": ["/bin/true"],
+            "commandLine": "cmd.exe /c exit 0",
+            "user": {"uid": 0, "gid": 0, "username": "ContainerUser"}
+        }
     });
     let report = OciSemanticValidator::new()
         .expect("construct validator")
         .inspect(OciSemanticPhase::Configuration, &value)
-        .expect("inspect native Windows configuration");
-    assert_eq!(report.violations.len(), 1);
-    assert_eq!(
-        report.violations[0].kind,
-        OciSemanticViolationKind::UnsupportedPlatform
-    );
-
-    let error = OciSemanticValidator::new()
-        .expect("construct validator")
-        .validate(OciSemanticPhase::Configuration, &value)
-        .expect_err("native Windows workload must be rejected");
-    assert_eq!(error.code, ErrorCode::Unsupported);
+        .expect("inspect native Windows process fields");
+    assert_eq!(report.violations.len(), 2);
+    assert!(report.violations.iter().all(|violation| {
+        violation.kind == OciSemanticViolationKind::UnsupportedPlatform
+            && violation.rule == "oci.platform.windows-process-field"
+    }));
 }
 
 #[test]

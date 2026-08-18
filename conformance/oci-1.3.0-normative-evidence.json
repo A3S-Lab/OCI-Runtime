@@ -2011,6 +2011,245 @@
         "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
         "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:abb94e86ce4dc1eabe4b3a112f71f3cfb126730107ed3be8516b45e13067cc81"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.root.required"
+      ],
+      "testIds": [
+        "semantic::tests::requires_a_root_for_linux_workloads"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:3b5b0a16f59cf25109751416088ddb02a453f44186d8e143bb2d952b0870bece",
+        "sha256:493ffcabebd1c19a000a724a0ce61c05ec9c657ede591b48f464f964f24e5d7d",
+        "sha256:a215d688a668698533b7c6a564505b78bf0920b49c34fe0d79ef1d5de06785f1",
+        "sha256:1b6d8da05459093cdc07afa2011c561b12e77a5ad308195ff667093d369a984c",
+        "sha256:2ed63ff99ded807b136998ad8167c5c58d92fcf1d51206d8613a63961e5d369d",
+        "sha256:ccd6ef1e52524ec6a6887c46d87495fdf7e4a8bb78ab812f194d32b9f12f5018",
+        "sha256:f331169d747b56573bd45edae46ab5faf7edca33fc4f038e7ea0ca3488bbfa35",
+        "sha256:f367d92879b280fb2537aa265956f9bb5ee637a1f091affceb0d9372ebdf68f7",
+        "sha256:3a93c746a770f629905f86d54f44311d19854053bbe7bfdd81387979dc3137f2"
+      ],
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.linux-only"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:1637a9a802756a9958372525793c3c45803cb184a7e7eb1dbee825530167cb1f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.root.directory"
+      ],
+      "testIds": [
+        "executor::init::tests::rejects_missing_or_non_directory_rootfs_before_namespace_entry"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:1ff86f586d9cf1dc80c061a9fefe9af4589afa1e59a7bcccc1fb822f7d121c56",
+        "sha256:b74ad7a68f9ee4d95a5c07736c0a5ed4b2104aadfdf0cacbf0ea75d6334ca387",
+        "sha256:294f16be765fc017426a1b422afc327c5c6e553363c2cd468f751bf1443d1d42",
+        "sha256:0834a73bd251083f54d962bde572fcbbc05925424006f1c75abab42ab990cd4d"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.optional-fields"
+      ],
+      "testIds": [
+        "executor::mount_tests::accepts_omitted_mount_list_and_optional_mount_fields"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:3c3e2f244bfd3cb88bc0c382e60cd8b58de6878627d746f88e120351ffe1c5e0"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.listed-order"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.exact_evidence"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:62db98f3a07902992e78d479609c720f776f0097539237d59b39168e32167bad",
+        "sha256:b37bb9cff57e93724e7ef0262a34fbfcc385d0738fc21193e0eb800a21c6fd1a",
+        "sha256:927e3127c426b1716b3d7dfb39f0d53fafac7f79e56c27ec482b47841efedf9e"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.destination.root-relative"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:8d4a237d6009e30be74c72a8f4d2e2b0b716a3eaeb19589310afedaa729bffb1",
+        "sha256:41f294119063adf397a65e42654b8815c24c59344851874cd583c14d2dd2723f",
+        "sha256:81f3b47fea905ec46d1c42a53007d9538cc971d4ab5512f8ffa5e8243f2de1b1",
+        "sha256:aa1e8cfdb933712308374484297f6b884c6d947dbd0babe8e682e3bd49c51776",
+        "sha256:7993aaf388ef3f05d30e2e0f5df4722d9c86b328456936ebada5e5282fb1ab8b",
+        "sha256:7e753ae643da4822f5f559d1f01614fb959279bcc3adfef5b8f3b85c35aaf161"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        "executor::mount_tests::plans_idmapped_filesystems_for_the_detached_fsopen_path",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmapped_mounts_enforced"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:afc4d05a6ea0135c371b7ab6289be3c76f2534dbea7c013ec79b91fd39faab99"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.process.required-for-start"
+      ],
+      "testIds": [
+        "semantic::tests::start_requires_a_process_but_configuration_loading_does_not"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:018569c898d550bf2e49d9c82e879d4bb43414b1a2b894532e16e9b44188782e"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.terminal.default"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:ffa69ba4f1ce4634c91a23fdae42cfcb1393c6e5243025688d902e31343d5fe8"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.cwd.applied"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:2d308cae038f92e6e4e681470ddbb262740633d8ff27cb5c666b56103ac43b1c"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.environment.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:f5ebc8f38b911c4ba1f8fc49be48c2c531843fb080844946026479bb1989a588"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.arguments.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.direct_argv_verified"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:7885296846b768ba504df1869e9bcc3a0d1821fb987200edadd11c921cba3560",
+        "sha256:a708c6a19b681883b0d303aecea4495e1c57eda50b63843f583ca99afa1ca865",
+        "sha256:6404dbf67cf4ff56d2bed0522fa69d408a6d73440355ffa3563c9205ba4ffdcd"
+      ],
+      "disposition": "enforced",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.platform.windows-process-field"
+      ],
+      "testIds": [
+        "semantic::tests::rejects_windows_process_fields_as_unsupported"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:bcb64b3cd15e87a99738da5304c7c27ed4fff12eba4dab202d21de0457239531",
+        "sha256:3d7a2414e070406be4d1b0e2827bddeca6cc0142acf543dde01dc889d9cea95f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.credentials.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:93472a0b53f1e621c08c6432bec13fcfb028bc511509321638404099bdf1d36c"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.umask.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:fbafdd20b41135ac3f3b25674af148e7835e4d4ca38e3cdaeb60909badc42469"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.supplementary-groups.exact"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        ".github/scripts/native-linux-smoke.sh::initialization.executable_script_verified"
+      ]
     }
   ]
 }
