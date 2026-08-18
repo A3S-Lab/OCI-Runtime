@@ -417,6 +417,19 @@ for recreation, live control, recovery, and delete. Invalid or ambiguous paths
 fail semantic validation before runtime mutation, and only paths recorded as
 runtime-owned are removed.
 
+For OCI 1.3 cgroup ownership, the executor requires all of the specification's
+delegation signals at once: a newly created cgroup namespace, the exact raw
+mount source `cgroup`, the exact raw destination `/sys/fs/cgroup`, no `ro`
+option, and a cgroup-v2 mount. It resolves `process.user.uid` through the
+container user mapping before mutation. Rootless execution may delegate only
+to its own effective UID, and the Linux all-ones chown sentinel is rejected.
+The runtime opens the created cgroup with `O_PATH`, preserves its GID, and
+changes only that directory and existing single-component files listed by
+`/sys/kernel/cgroup/delegate`. Missing listed files are harmless; a missing
+inventory falls back to `cgroup.procs`, `cgroup.subtree_control`, and
+`cgroup.threads`. Every changed UID is read back, and files outside the list
+are never touched.
+
 A non-root native executor may instead receive one explicit delegated root at
 open time. The root must be a canonical empty cgroup-v2 directory owned by the
 executor's effective UID/GID with `cpu`, `cpuset`, `memory`, and `pids`

@@ -149,6 +149,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "linux-executor",
     ),
     OciNonSemanticRule::new("oci.linux.cgroups-path.stable-location", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.cgroup-ownership.delegated-files",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new("oci.linux.block-io.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.block-io.device-identity", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.block-io.leaf-weight.rejected", "linux-executor"),

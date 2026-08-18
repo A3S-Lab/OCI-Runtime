@@ -97,7 +97,12 @@ impl PreparedProcess {
             rootless,
             plan.devices.has_node_setup(),
         )?;
-        let mut cgroup = CgroupHandle::create(&plan.cgroup, &plan.devices, cgroup_manager)?;
+        let mut cgroup = CgroupHandle::create(
+            &plan.cgroup,
+            &plan.cgroup_ownership,
+            &plan.devices,
+            cgroup_manager,
+        )?;
         let mut intel_rdt = IntelRdtHandle::create(plan.intel_rdt.as_ref(), hook_state.id())?;
         let init_cgroup_procs = cgroup.as_ref().map(CgroupHandle::init_procs_descriptor);
         let control_workload_descriptors = cgroup

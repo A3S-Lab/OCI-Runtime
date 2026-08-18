@@ -8901,10 +8901,23 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Runtimes MAY, according to the following rules, change (or cause to",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:ff90ec45264085580e929b935a0bd21104c7765765a7334288c7b19e624da62a",
@@ -8915,10 +8928,23 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "Runtimes SHOULD NOT change the ownership of container cgroups when",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:1ff6ce6a30c22ee6bc74154ec55183ba9ec188f48e6c4aada0854445c822e62a",
@@ -8929,10 +8955,23 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "A runtime SHOULD NOT change the ownership of a container cgroup",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:c539d3a654a35f91372ecc4110908a68e83796a924bb9cc4627380498012f70e",
@@ -8943,10 +8982,23 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "Runtimes SHOULD change the cgroup ownership if and only if the",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:5b9e646526ae666ec66af527831350905447bf1f8be22db950cfd2682e8eb575",
@@ -8957,10 +9009,23 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "SHOULD NOT change the cgroup ownership.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:e2725419dffe39b4868479e90caf09f2130b19dccdc0ab28462de04bcc236916",
@@ -8971,10 +9036,23 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "A runtime that changes the cgroup ownership SHOULD only change the",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:bd76ca303948567c50bf34f28417efbb0bcea60740e901b3ac642014b17c1226",
@@ -8985,10 +9063,23 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "cgroup. Runtimes MUST NOT fail in this scenario, and SHOULD change",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:1d17b22dac2762fb9473feb8a7d4807da323b72d101dcc7a241e3aa1f290de10",
@@ -8999,10 +9090,23 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "cgroup. Runtimes MUST NOT fail in this scenario, and SHOULD change",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:882c0c1d4949d606d76f315f71049e19c9391a40515567b1ec04e67a0157b661",
@@ -9013,10 +9117,23 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "runtime MUST fall back to using the following list of files:",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:64978927135730188d84e95cdbf242678d00411a06e0f53596b2909ab5241a57",
@@ -9027,10 +9144,23 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "The runtime SHOULD NOT change the ownership of any other files.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup-ownership.delegated-files"
+      ],
+      "testIds": [
+        "executor::cgroup::ownership::tests::requests_ownership_only_for_the_exact_writable_new_namespace_mount",
+        "executor::cgroup::ownership::tests::resolves_process_uid_through_the_container_user_mapping",
+        "executor::cgroup::ownership::tests::rootless_delegation_cannot_transfer_ownership_to_a_subordinate_uid",
+        "executor::cgroup::ownership::tests::rejects_the_linux_chown_no_change_uid_sentinel",
+        "executor::cgroup::ownership::tests::missing_kernel_inventory_uses_the_normative_fallback",
+        "executor::cgroup::ownership::tests::delegate_inventory_is_bounded_deduplicated_and_single_component",
+        "executor::cgroup::ownership::tests::ownership_targets_only_the_directory_and_listed_existing_files",
+        "executor::cgroup::ownership::tests::descriptor_relative_chown_preserves_the_group",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership",
+        ".github/scripts/native-linux-smoke.sh::cgroup-ownership-readonly"
+      ]
     },
     {
       "id": "sha256:7696a8d22349397048d8ba58a3c21cdc7d74bff44be3d0374996e2a0dfcb1d27",

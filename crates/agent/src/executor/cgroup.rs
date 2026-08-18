@@ -15,11 +15,13 @@ use super::device_policy::DevicePolicyAuthority;
 
 mod io;
 mod manager;
+mod ownership;
 mod plan;
 mod stats;
 mod update;
 
 pub(super) use manager::{CgroupManager, RootlessCgroupDelegation};
+pub(super) use ownership::CgroupOwnershipPlan;
 pub(super) use plan::CgroupPlan;
 use plan::{
     cgroup_v2_limit_value, shares_to_weight, validate_cpuset, validate_memory_value,
@@ -82,6 +84,7 @@ struct ControlWorkloadMembership {
 impl CgroupHandle {
     pub(super) fn create(
         plan: &CgroupPlan,
+        ownership: &CgroupOwnershipPlan,
         devices: &DevicePlan,
         manager: Option<&CgroupManager>,
     ) -> Result<Option<Self>> {
@@ -152,6 +155,7 @@ impl CgroupHandle {
                 apply_settings(&current, &plan.settings())?;
                 plan.block_io().apply_create(&current)?;
                 let init_procs = open_cgroup_procs(&current)?;
+                ownership.apply(&current)?;
                 return Ok((
                     current.clone(),
                     init_procs,
@@ -180,6 +184,7 @@ impl CgroupHandle {
             // moves through the protected control descriptor before the parent
             // enables domain controllers on this envelope.
             let membership = open_control_workload_membership(&current, &control, &workload)?;
+            ownership.apply(&current)?;
             let control_workload = ControlWorkloadCgroup {
                 management: current.clone(),
                 headroom: headroom.clone(),

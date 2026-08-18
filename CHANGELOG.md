@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI 1.3 cgroup-v2 ownership delegation. The shared Linux executor now
+  changes ownership only when the bundle requests a newly created cgroup
+  namespace and an exact writable `cgroup` mount at `/sys/fs/cgroup`. It maps
+  `process.user.uid` to the host UID, rejects unsafe rootless transfers and the
+  Linux chown no-change sentinel, preserves the group, and uses retained
+  descriptor-relative operations with ownership read-back. Only the container
+  cgroup directory and existing files named by
+  `/sys/kernel/cgroup/delegate` are changed; a missing inventory uses the
+  normative three-file fallback, while unlisted controls remain untouched.
+  Native Linux positive and read-only profiles prove write access, mapped
+  ownership, preservation of unlisted files, and complete lifecycle cleanup.
+  One owner-bound executor rule promotes all ten cgroup-ownership
+  requirements, leaving 465 enforced, 51 validated, two conformant, and 137
+  pending entries.
 - OCI Linux device and configured-init console enforcement. Rootful execution
   now accepts block, character, unbuffered-character, and FIFO nodes at any
   normalized container path; preserves exact type, device identity, mode, and

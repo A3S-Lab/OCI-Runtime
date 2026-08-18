@@ -638,6 +638,9 @@ mod tests {
             recursive_attributes: None,
             idmap: None,
             data: Vec::new(),
+            oci_cgroup_source: false,
+            oci_cgroup_destination: false,
+            oci_readonly_option: false,
         };
 
         let sources = DetachedMountSources::prepare(
