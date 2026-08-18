@@ -135,7 +135,9 @@ pub async fn native_linux_rootless_smoke_with_cgroup_delegation_barrier(
 /// Exercise rootless native Linux with a synchronous default-device bootstrap.
 ///
 /// The bootstrap retains the exact delegated cgroup and fixed default-device
-/// sources before permanently dropping the owner to its non-root identity.
+/// sources before permanently dropping the owner to its non-root identity. The
+/// delegation is required even when `linux.cgroupsPath` is omitted because the
+/// executor creates a private path for the immutable device boundary.
 #[doc(hidden)]
 pub async fn native_linux_rootless_smoke_with_device_bootstrap_barrier(
     init_executable: &Path,

@@ -661,7 +661,8 @@ impl LinuxExecutor {
             None => request.io.clone(),
         };
         let rootless = self.user_mapping_runtime.is_rootless();
-        let plan = InitPlan::from_bundle(&bundle, &process_io)?;
+        let mut plan = InitPlan::from_bundle(&bundle, &process_io)?;
+        plan.cgroup.ensure_runtime_path(&key.id, key.generation)?;
         if rootless {
             if !plan.namespaces.new_user() {
                 return Err(executor_error(
@@ -684,11 +685,10 @@ impl LinuxExecutor {
             if plan.cgroup.has_cgroup() && self.rootless_cgroup_delegation.is_none() {
                 return Err(executor_error(
                     ErrorCode::Unsupported,
-                    "rootless linux.cgroupsPath requires an explicit verified cgroup-v2 delegation",
+                    "rootless OCI device isolation requires an explicit verified cgroup-v2 delegation",
                 ));
             }
-            let device_support_requested =
-                plan.devices.has_node_setup() || plan.devices.has_access_policy();
+            let device_support_requested = plan.devices.has_device_filter();
             if device_support_requested
                 && self
                     .rootless_cgroup_delegation
@@ -1746,7 +1746,7 @@ mod rootless_device_tests {
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error
             .message
-            .contains("rootless device preparation requires"));
+            .contains("rootless OCI device isolation requires"));
     }
 
     #[tokio::test]

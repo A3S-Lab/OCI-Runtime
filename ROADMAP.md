@@ -515,14 +515,15 @@ driver implements.
     applied mutations on failure. Require device identity and throttle rates,
     map OCI zero rates to cgroup v2 `max`, reject duplicate devices, and report
     `leafWeight` as unavailable on cgroup v2.
-  - [x] Bind 19 OCI Linux device entries to exact schema, planning, rootful
+  - [x] Bind all 20 OCI Linux device entries to exact schema, planning, rootful
     enforcement, cleanup, and ordered cgroup-device evidence. Cover all four
     node types, paths outside `/dev`, conditional major/minor values, mode and
     mapped ownership, duplicate kernel identities, existing-target conflicts,
     the six defaults, `/dev/ptmx`, terminal `/dev/console`, and optional or
-    empty device-access fields. Keep the separate prohibition on access to
-    undeclared nodes pending until `CAP_MKNOD` and late-mounted device sources
-    share one complete fail-closed boundary.
+    empty device-access fields. Keep the declared/default device inventory as
+    an immutable upper bound beneath ordered resource rules, including an
+    omitted `cgroupsPath`, live allow-all updates, `CAP_MKNOD`, and a device
+    source whose bind mount is later remounted with `dev`.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1494,7 +1495,7 @@ leak. Only then may KVM become `experimental`.
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, and extensibility
   review plus the PIDs, memory, Block I/O, and Linux-device promotions leaves
-  454 enforced, 51 validated, and 148 pending entries.
+  455 enforced, 51 validated, and 147 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
@@ -1562,6 +1563,14 @@ leak. Only then may KVM become `experimental`.
     requests before mutation.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
+  - [x] Make the OCI declared/default device inventory an immutable cgroup-v2
+    BPF upper bound for rootful and delegated-rootless execution. Generate a
+    private generation-fenced cgroup path when `linux.cgroupsPath` is omitted,
+    intersect ordered `linux.resources.devices` rules with that boundary, and
+    preserve it when rules are cleared. Native ARM64 Linux evidence grants
+    `CAP_MKNOD`, permits a declared node, rejects an undeclared node, remounts
+    a `nodev` device source with `dev`, rejects the late access, and returns
+    executor, session, and cgroup inventories to zero.
   - [x] Qualify the rootless delegation model and device support for every
     advertised profile on real hosts. The v4 rootless gate retains an exact
     user-owned cgroup-v2 descriptor, starts a parent-bound privileged helper
@@ -1569,7 +1578,8 @@ leak. Only then may KVM become `experimental`.
     only structured install/replace/remove requests for normalized descendants.
     The first bounded profile is the exact six-device A3S Box fixture. Its smoke
     verifies retained device-node mounts, read-only replacement, failed-update
-    rollback, disable/re-enable, durable events, helper shutdown, and complete
+    rollback, resource-rule clear/restore with the inventory boundary retained,
+    durable events, helper shutdown, and complete
     cgroup/runtime cleanup. Runtime commit `bed43d2` passed both x86_64 and
     aarch64 real-host lanes in CI run `31714178349`. Both retained v4 reports
     record `available`, UID/GID 20000, verified helper, nodes, updates, events,

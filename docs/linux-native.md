@@ -251,8 +251,39 @@ A3S_OCI_NATIVE_FOCUS=terminal-init \
   bash .github/scripts/native-linux-smoke.sh
 ```
 
-Any other nonempty focus value is rejected. The default remains the complete
-Native Linux matrix.
+### Undeclared-device boundary gate
+
+The device-boundary profile intentionally omits `linux.cgroupsPath`; the
+executor assigns a private generation-fenced cgroup and installs the immutable
+declared/default inventory filter before the workload starts. The workload has
+`CAP_MKNOD` and `CAP_SYS_ADMIN`: it creates and uses the declared `c 1:3`
+identity, receives `EPERM` while creating undeclared `c 240:0`, remounts a
+`nodev` bind source with `dev`, and still receives `EPERM` while reading that
+source's undeclared node. Create, Start, Update, Kill, and Delete must complete
+with empty executor, session, and cgroup inventories.
+
+Run only this real-kernel profile with:
+
+```sh
+A3S_OCI_NATIVE_FOCUS=device-boundary \
+  bash .github/scripts/native-linux-smoke.sh
+```
+
+The delegated-rootless counterpart omits `linux.cgroupsPath` and removes the
+unrelated personality and memory-policy profiles from its temporary fixture.
+It then runs both the core lifecycle with its six-device bootstrap and the live
+device-policy replacement, rollback, clear, and restore sequence. This proves
+the generated private path through the delegated helper; the default full
+matrix retains the explicit path and both unrelated profiles:
+
+```sh
+A3S_OCI_NATIVE_FOCUS=rootless-device-boundary \
+  bash .github/scripts/native-linux-smoke.sh
+```
+
+The accepted focus values are `terminal-init`, `device-boundary`, and
+`rootless-device-boundary`; any other nonempty value is rejected. The default
+remains the complete Native Linux matrix.
 
 The qualification wrapper also runs four OCI 1.3 `linux.netDevices` profiles.
 For the positive profile it creates a down dummy interface with MTU 1450, a
@@ -369,13 +400,14 @@ effective host UID/GID with size 1, map no host ID 0, and cover
 container ID 1 through delegated subordinate ranges. Additional process GIDs
 are rejected because the child installs `setgroups=deny` before `newgidmap`.
 
-If the bundle contains `linux.cgroupsPath`, the command also requires
-`--delegated-cgroup-root`. That path must already be canonical, be an empty
-cgroup-v2 directory owned by the effective UID/GID, and expose and enable the
-`cpu`, `cpuset`, `memory`, and `pids` controllers. The runtime revalidates its
-device/inode identity before creating a private `a3s-oci-*` manager below it;
-it never guesses a systemd scope or enables controllers outside the supplied
-delegation.
+Helper-backed rootless execution requires `--delegated-cgroup-root` for the
+immutable device boundary whether `linux.cgroupsPath` is explicit or omitted.
+That path must already be canonical, be an empty cgroup-v2 directory owned by
+the effective UID/GID, and expose and enable the `cpu`, `cpuset`, `memory`, and
+`pids` controllers. The runtime revalidates its device/inode identity before
+creating a private `a3s-oci-*` manager below it; an omitted OCI path receives a
+generation-fenced path inside that manager. The runtime never guesses a
+systemd scope or enables controllers outside the supplied delegation.
 
 `linux.netDevices` is deliberately outside the current rootless authority
 contract. A bundle that requests it is rejected before an executor slot,
@@ -422,11 +454,12 @@ caller-supplied program descriptors.
 
 The v4 device-policy report verifies all six retained host nodes inside the
 container, read/write behavior for the common devices, a live read-only
-replacement, rejection with rollback for an out-of-profile update, disable and
-re-enable, the exact additional exec/update event sequence, helper shutdown,
-and an empty delegated subtree. Unexpected owner or channel loss closes the
-helper without detaching active filters, so policy remains fail-closed until
-the protected cgroups are recovered and removed.
+replacement, rejection with rollback for an out-of-profile update, resource
+rule clear and restore while the immutable inventory filter stays attached,
+the exact additional exec/update event sequence, helper shutdown, and an empty
+delegated subtree. Unexpected owner or channel loss closes the helper without
+detaching active filters, so policy remains fail-closed until the protected
+cgroups are recovered and removed.
 
 GitHub Actions prepares a dedicated cgroup-v2 subtree and runs these gates as
 the dedicated user on both x86_64 and aarch64. The jobs retain the rootless

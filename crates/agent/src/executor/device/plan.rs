@@ -12,7 +12,7 @@ use crate::executor::mount::MountPlan;
 use crate::executor::namespace::NamespacePlan;
 use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
 
-use super::access::{self, DeviceAccessPolicy, LoadedDeviceProgram};
+use super::access::{self, DeviceAccessBoundary, DeviceAccessPolicy, LoadedDeviceProgram};
 use super::console::{
     bind_console_source, ensure_ptmx_link, prepare_console_source, verify_console_metadata,
     verify_ptmx_from_root,
@@ -369,15 +369,22 @@ impl DevicePlan {
     }
 
     pub(in crate::executor) fn requires_setup(&self) -> bool {
-        self.has_node_setup() || self.has_access_policy() || self.terminal
+        self.has_node_setup() || self.has_device_filter() || self.terminal
     }
 
     pub(in crate::executor) fn has_node_setup(&self) -> bool {
         self.create_nodes && !self.nodes.is_empty()
     }
 
+    #[cfg(test)]
     pub(in crate::executor) fn has_access_policy(&self) -> bool {
         self.access_policy.is_some()
+    }
+
+    pub(in crate::executor) fn has_device_filter(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| node.kind.access_kind().is_some())
     }
 
     pub(in crate::executor) fn update_from_resources(
@@ -397,20 +404,18 @@ impl DevicePlan {
     }
 
     pub(in crate::executor) fn load_cgroup_device_program(&self) -> Result<Option<OwnedFd>> {
-        self.access_policy
-            .as_ref()
-            .map(DeviceAccessPolicy::load)
+        self.access_boundary()?
+            .map(|boundary| boundary.load())
             .transpose()
     }
 
     pub(in crate::executor) fn load_device_program(&self) -> Result<LoadedDeviceProgram> {
         self.validate_serialized_policy()?;
-        self.access_policy
-            .as_ref()
+        self.access_boundary()?
             .ok_or_else(|| {
                 device_error(
                     ErrorCode::PermissionDenied,
-                    "serialized rootless device policy has no active access policy",
+                    "serialized rootless device policy has no OCI device boundary",
                 )
             })?
             .load_for_rootless_helper()
@@ -434,10 +439,13 @@ impl DevicePlan {
     }
 
     fn validate_serialized_policy(&self) -> Result<()> {
-        if !self.has_rootless_safe_nodes() || !self.has_rootless_safe_access_policy() {
+        if !self.has_rootless_safe_nodes()
+            || self.terminal
+            || (self.access_policy.is_some() && !self.has_rootless_safe_access_policy())
+        {
             return Err(device_error(
                 ErrorCode::PermissionDenied,
-                "serialized rootless device policy is not a bounded active allowlist",
+                "serialized rootless device policy is outside the bounded safe-device profile",
             ));
         }
         Ok(())
@@ -524,7 +532,7 @@ impl DevicePlan {
         &self,
         cgroup_path: &Path,
     ) -> Result<Option<OwnedFd>> {
-        if self.access_policy.is_none() {
+        if !self.has_device_filter() {
             return Ok(None);
         }
         let Some(loaded) = self.load_cgroup_device_program()? else {
@@ -547,6 +555,18 @@ impl DevicePlan {
         self.access_policy
             .as_ref()
             .is_some_and(|policy| policy.is_exact_rootless_allowlist(&expected))
+    }
+
+    fn access_boundary(&self) -> Result<Option<DeviceAccessBoundary>> {
+        if !self.has_device_filter() {
+            return Ok(None);
+        }
+        let nodes = self.nodes.iter().filter_map(|node| {
+            node.kind
+                .access_kind()
+                .map(|kind| (kind, node.major, node.minor))
+        });
+        DeviceAccessBoundary::for_oci_nodes(nodes, self.access_policy.clone()).map(Some)
     }
 
     #[cfg(test)]

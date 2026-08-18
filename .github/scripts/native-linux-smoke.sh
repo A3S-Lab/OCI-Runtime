@@ -211,6 +211,7 @@ bundle_b="$qualification_root/bundle-b"
 control_bundle="$qualification_root/control-bundle"
 terminal_bundle="$qualification_root/terminal-bundle"
 terminal_existing_bundle="$qualification_root/terminal-existing-bundle"
+device_boundary_bundle="$qualification_root/device-boundary-bundle"
 recovery_bundle="$qualification_root/recovery-bundle"
 rootless_bundle="$qualification_root/rootless-bundle"
 network_device_bundle="$qualification_root/network-device-bundle"
@@ -383,12 +384,63 @@ jq \
 mv "$terminal_existing_bundle/config.json.tmp" "$terminal_existing_bundle/config.json"
 printf '%s\n' 'a3s-preexisting-console-v1' \
   >"$terminal_existing_bundle/rootfs/dev/console"
+mkdir "$device_boundary_bundle"
+cp -a --no-preserve=ownership "$bundle/." "$device_boundary_bundle/"
+device_boundary_hook_trace="$device_boundary_bundle/rootfs/.a3s-oci-hook-trace"
+mkdir "$device_boundary_bundle/late-device-source"
+sudo mknod "$device_boundary_bundle/late-device-source/unknown" c 240 0
+sudo chmod 0666 "$device_boundary_bundle/late-device-source/unknown"
+# shellcheck disable=SC2016 # Expanded by the configured boundary workload.
+device_boundary_command='export LC_ALL=C; rm -f /declared-null /undeclared-device /late-device-error; /bin/busybox mknod /declared-null c 1 3; test -c /declared-null; printf probe > /declared-null; rm /declared-null; if /bin/busybox mknod /undeclared-device c 240 0 2>/late-device-error; then exit 91; fi; test ! -e /undeclared-device; /bin/busybox grep -q "Operation not permitted" /late-device-error; /bin/busybox mount -o remount,bind,dev /late-dev; if /bin/busybox dd if=/late-dev/unknown of=/dev/null bs=1 count=1 2>/late-device-error; then exit 92; fi; /bin/busybox grep -q "Operation not permitted" /late-device-error; rm /late-device-error; '
+jq \
+  --arg command_prefix "$device_boundary_command" \
+  --arg hook_trace "$device_boundary_hook_trace" \
+  '
+    del(.linux.cgroupsPath, .linux.personality, .linux.memoryPolicy)
+    | .process.capabilities.bounding += ["CAP_MKNOD", "CAP_SYS_ADMIN"]
+    | .process.capabilities.effective += ["CAP_MKNOD", "CAP_SYS_ADMIN"]
+    | .process.capabilities.permitted += ["CAP_MKNOD", "CAP_SYS_ADMIN"]
+    | .process.args[2] = (
+        $command_prefix
+        + (.process.args[2]
+            | split("test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; ")
+            | join("")
+            | split("/bin/busybox awk '\''$2 == \"bind=static:0\" { ok = 1 } END { exit !ok }'\'' /proc/self/numa_maps; ")
+            | join("")
+            | gsub("0000000000000401"; "0000000008200401"))
+      )
+    | .mounts += [{
+        destination: "/late-dev",
+        type: "bind",
+        source: "late-device-source",
+        options: ["bind", "nodev", "nosuid", "noexec"]
+      }]
+    | .annotations["dev.a3s.oci.device-boundary"] =
+        "inventory-cap-mknod-late-source-v1"
+    | .hooks |= with_entries(
+        .value |= map(
+          .env |= map(
+            if startswith("A3S_HOOK_TRACE=")
+               and . != "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+            then "A3S_HOOK_TRACE=" + $hook_trace
+            else .
+            end
+          )
+        )
+      )
+  ' \
+  "$device_boundary_bundle/config.json" \
+  >"$device_boundary_bundle/config.json.tmp"
+mv \
+  "$device_boundary_bundle/config.json.tmp" \
+  "$device_boundary_bundle/config.json"
 for candidate in \
   "$bundle" \
   "$bundle_b" \
   "$control_bundle" \
   "$terminal_bundle" \
-  "$terminal_existing_bundle"; do
+  "$terminal_existing_bundle" \
+  "$device_boundary_bundle"; do
   jq --exit-status \
     '.linux.uidMappings
          == [{"containerID": 0, "hostID": 100000, "size": 65536}]
@@ -400,6 +452,7 @@ sudo chown -R 100000:200000 "$bundle/rootfs" "$bundle_b/rootfs"
 sudo chown -R 100000:200000 "$control_bundle/rootfs"
 sudo chown -R 100000:200000 "$terminal_bundle/rootfs"
 sudo chown -R 100000:200000 "$terminal_existing_bundle/rootfs"
+sudo chown -R 100000:200000 "$device_boundary_bundle/rootfs"
 sudo chown -R 100000:200000 "$recovery_bundle/rootfs"
 for candidate in "${soak_bundles[@]}"; do
   sudo chown -R 100000:200000 "$candidate/rootfs"
@@ -417,12 +470,16 @@ sudo chmod 0666 "$terminal_hook_trace"
 sudo touch "$terminal_existing_hook_trace"
 sudo chown 100000:200000 "$terminal_existing_hook_trace"
 sudo chmod 0666 "$terminal_existing_hook_trace"
+sudo touch "$device_boundary_hook_trace"
+sudo chown 100000:200000 "$device_boundary_hook_trace"
+sudo chmod 0666 "$device_boundary_hook_trace"
 sudo chmod 0755 "$qualification_root"
 test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$control_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$terminal_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$terminal_existing_bundle/rootfs")" = '100000:200000'
+test "$(stat --format '%u:%g' "$device_boundary_bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$recovery_bundle/rootfs")" = '100000:200000'
 
 # shellcheck disable=SC2016 # Expanded inside the network-device workload.
@@ -532,6 +589,7 @@ fi
 rootless_command='set -eu; test "$(/bin/busybox id -u)" = 0; test "$(/bin/busybox id -g)" = 0; test "$(/bin/busybox cat /proc/self/setgroups)" = deny; test "$(/bin/busybox stat -c "%u:%g" /.a3s-oci-rootless-subordinate)" = 1:1; for spec in null:1:3 zero:1:5 full:1:7 random:1:8 urandom:1:9 tty:5:0; do name=${spec%%:*}; rest=${spec#*:}; major=${rest%%:*}; minor=${rest#*:}; test "$(/bin/busybox stat -c %t:%T /dev/$name)" = "$(printf %x $major):$(printf %x $minor)"; test "$(/bin/busybox stat -c %a /dev/$name)" = 666; done; printf probe > /dev/null; /bin/busybox head -c 1 /dev/zero > /dev/null; test "$(/bin/busybox head -c 1 /dev/full | /bin/busybox wc -c)" = 1; /bin/busybox head -c 1 /dev/random > /dev/null; /bin/busybox head -c 1 /dev/urandom > /dev/null; printf "a3s-oci-rootless-mapping-v1\n" > /.a3s-oci-rootless-smoke; progress=0; while :; do progress=$((progress + 1)); printf "%s\n" "$progress" > /.a3s-oci-rootless-progress.next; /bin/busybox mv /.a3s-oci-rootless-progress.next /.a3s-oci-rootless-progress; /bin/busybox sleep 0.05; done'
 jq \
   --arg command "$rootless_command" \
+  --arg native_focus "$native_focus" \
   --argjson uid "$rootless_uid" \
   --argjson gid "$rootless_gid" \
   '
@@ -557,6 +615,14 @@ jq \
         {"containerID": 1, "hostID": 400000, "size": 65535}
       ]
     | .process.args = ["/bin/sh", "-c", $command]
+    | if $native_focus == "rootless-device-boundary"
+      then del(
+        .linux.cgroupsPath,
+        .linux.personality,
+        .linux.memoryPolicy
+      )
+      else .
+      end
   ' \
   "$rootless_bundle/config.json" >"$rootless_bundle/config.json.tmp"
 mv "$rootless_bundle/config.json.tmp" "$rootless_bundle/config.json"
@@ -1995,6 +2061,16 @@ if [[ "$native_focus" == terminal-init ]]; then
     'a3s-preexisting-console-v1'
   test ! -e "$terminal_existing_bundle/rootfs/run/a3s/device-fifo"
   exit 0
+elif [[ "$native_focus" == device-boundary ]]; then
+  run_smoke false "$device_boundary_bundle" "$device_boundary_hook_trace"
+  test ! -e "$device_boundary_bundle/rootfs/declared-null"
+  test ! -e "$device_boundary_bundle/rootfs/undeclared-device"
+  test ! -e "$device_boundary_bundle/rootfs/late-device-error"
+  exit 0
+elif [[ "$native_focus" == rootless-device-boundary ]]; then
+  run_rootless_smoke
+  run_rootless_device_policy_smoke
+  exit 0
 elif [[ -n "$native_focus" ]]; then
   printf 'unsupported A3S_OCI_NATIVE_FOCUS value: %s\n' "$native_focus" >&2
   exit 2
@@ -2128,6 +2204,7 @@ run_smoke \
 verify_host_network_device_absent "$network_device_success_source"
 
 run_smoke false
+run_smoke false "$device_boundary_bundle" "$device_boundary_hook_trace"
 run_smoke false "$terminal_bundle" "$terminal_hook_trace"
 test ! -e "$terminal_bundle/rootfs/dev/console"
 test ! -e "$terminal_bundle/rootfs/run/a3s/device-fifo"

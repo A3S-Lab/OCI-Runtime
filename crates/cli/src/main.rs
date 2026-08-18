@@ -51,7 +51,7 @@ enum Command {
         /// Existing user-owned directory beneath which smoke state is created.
         #[arg(long, value_name = "DIR")]
         work_parent: PathBuf,
-        /// Explicit user-owned cgroup-v2 delegation for bundles with cgroupsPath.
+        /// User-owned cgroup-v2 delegation for an explicit path or device isolation.
         #[arg(long, value_name = "DIR")]
         delegated_cgroup_root: Option<PathBuf>,
         /// Bootstrap the bounded helper required for rootless default devices.

@@ -156,6 +156,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.linux.cpu.realtime-controls.rejected", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.device-access.ordered", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.device.default-nodes", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.device.inventory.closed", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.device.nodes.exact", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.device.target-conflict", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.memory.cgroup-v2-controls", "linux-executor"),
