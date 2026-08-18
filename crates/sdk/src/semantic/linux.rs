@@ -443,23 +443,19 @@ fn validate_net_devices(
                         "network device target names must be unique unless they use an appended `%d` template",
                     );
                 }
-            } else {
-                if !exact_targets.insert(host_name.as_str()) {
-                    collector.invalid(
-                        format!("/linux/netDevices/{}", escape_pointer(host_name)),
-                        rules::NET_DEVICE_TARGET_UNIQUE,
-                        "network device target names must be unique",
-                    );
-                }
-            }
-        } else {
-            if !exact_targets.insert(host_name.as_str()) {
+            } else if !exact_targets.insert(host_name.as_str()) {
                 collector.invalid(
                     format!("/linux/netDevices/{}", escape_pointer(host_name)),
                     rules::NET_DEVICE_TARGET_UNIQUE,
                     "network device target names must be unique",
                 );
             }
+        } else if !exact_targets.insert(host_name.as_str()) {
+            collector.invalid(
+                format!("/linux/netDevices/{}", escape_pointer(host_name)),
+                rules::NET_DEVICE_TARGET_UNIQUE,
+                "network device target names must be unique",
+            );
         }
     }
 }
@@ -649,21 +645,43 @@ fn validate_cpu(resources: &Map<String, Value>, collector: &mut ViolationCollect
 }
 
 fn validate_block_io(resources: &Map<String, Value>, collector: &mut ViolationCollector) {
-    let Some(devices) = resources
-        .get("blockIO")
-        .and_then(Value::as_object)
-        .and_then(|block_io| block_io.get("weightDevice"))
-        .and_then(Value::as_array)
-    else {
+    let Some(block_io) = resources.get("blockIO").and_then(Value::as_object) else {
         return;
     };
-    for (index, device) in devices.iter().filter_map(Value::as_object).enumerate() {
-        if !device.contains_key("weight") && !device.contains_key("leafWeight") {
-            collector.invalid(
-                format!("/linux/resources/blockIO/weightDevice/{index}"),
-                rules::BLOCK_IO_WEIGHT_DEVICE_WEIGHT_REQUIRED,
-                "weightDevice entries require weight, leafWeight, or both",
-            );
+    if let Some(devices) = block_io.get("weightDevice").and_then(Value::as_array) {
+        for (index, device) in devices.iter().enumerate() {
+            let Some(device) = device.as_object() else {
+                continue;
+            };
+            if !device.contains_key("weight") && !device.contains_key("leafWeight") {
+                collector.invalid(
+                    format!("/linux/resources/blockIO/weightDevice/{index}"),
+                    rules::BLOCK_IO_WEIGHT_DEVICE_WEIGHT_REQUIRED,
+                    "weightDevice entries require weight, leafWeight, or both",
+                );
+            }
+        }
+    }
+    for field in [
+        "throttleReadBpsDevice",
+        "throttleWriteBpsDevice",
+        "throttleReadIOPSDevice",
+        "throttleWriteIOPSDevice",
+    ] {
+        let Some(devices) = block_io.get(field).and_then(Value::as_array) else {
+            continue;
+        };
+        for (index, device) in devices.iter().enumerate() {
+            if device
+                .as_object()
+                .is_some_and(|device| !device.contains_key("rate"))
+            {
+                collector.invalid(
+                    format!("/linux/resources/blockIO/{field}/{index}/rate"),
+                    rules::BLOCK_IO_THROTTLE_RATE_REQUIRED,
+                    "block I/O throttle entries require rate",
+                );
+            }
         }
     }
 }

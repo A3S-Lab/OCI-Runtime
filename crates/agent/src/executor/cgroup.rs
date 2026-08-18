@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io as std_io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,6 +13,7 @@ use a3s_oci_sdk::{
 use super::device::DevicePlan;
 use super::device_policy::DevicePolicyAuthority;
 
+mod io;
 mod manager;
 mod plan;
 mod stats;
@@ -28,7 +29,8 @@ use plan::{
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
 const CGROUP_PROCS: &str = "cgroup.procs";
-const SUPPORTED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
+const REQUIRED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
+const SUPPORTED_CONTROLLERS: [&str; 5] = ["cpu", "cpuset", "io", "memory", "pids"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
@@ -118,7 +120,7 @@ impl CgroupHandle {
                         created.push(current.clone());
                         manager.register_owned_path(&current)?;
                     }
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists && !is_leaf => {
+                    Err(error) if error.kind() == std_io::ErrorKind::AlreadyExists && !is_leaf => {
                         ensure_real_directory(&current)?;
                         if manager.owns_path(&current)? {
                             created.push(current.clone());
@@ -126,7 +128,7 @@ impl CgroupHandle {
                     }
                     Err(error) => {
                         return Err(cgroup_error(
-                            if error.kind() == io::ErrorKind::AlreadyExists {
+                            if error.kind() == std_io::ErrorKind::AlreadyExists {
                                 ErrorCode::Conflict
                             } else {
                                 ErrorCode::PermissionDenied
@@ -148,6 +150,7 @@ impl CgroupHandle {
                 install_device_filter(devices, &current, manager)?;
             let Some(headroom) = plan.control_headroom() else {
                 apply_settings(&current, &plan.settings())?;
+                plan.block_io().apply_create(&current)?;
                 let init_procs = open_cgroup_procs(&current)?;
                 return Ok((
                     current.clone(),
@@ -164,6 +167,7 @@ impl CgroupHandle {
             // the management envelope is empty again.
             let management = plan.management_plan(headroom)?;
             apply_settings(&current, &management.settings())?;
+            management.block_io().apply_create(&current)?;
 
             let control = current.join(CONTROL_CGROUP_NAME);
             create_cgroup_directory(&control, &mut created)?;
@@ -250,7 +254,8 @@ impl CgroupHandle {
         let workload = layout.management.join(WORKLOAD_CGROUP_NAME);
         initialize_cpuset(&control)?;
         initialize_cpuset(&workload)?;
-        apply_settings(&workload, &plan.settings_with_oom_group(false))
+        apply_settings(&workload, &plan.settings_with_oom_group(false))?;
+        plan.block_io().apply_create(&workload)
     }
 
     pub(super) fn init_procs_descriptor(&self) -> RawFd {
@@ -283,7 +288,7 @@ impl CgroupHandle {
             .await
             .map_err(|error| {
                 cgroup_error(
-                    if error.kind() == io::ErrorKind::NotFound {
+                    if error.kind() == std_io::ErrorKind::NotFound {
                         ErrorCode::Unsupported
                     } else {
                         ErrorCode::PermissionDenied
@@ -371,7 +376,7 @@ fn install_device_filter(
     ))
 }
 
-pub(super) fn join_current_process(descriptor: RawFd) -> io::Result<()> {
+pub(super) fn join_current_process(descriptor: RawFd) -> std_io::Result<()> {
     let payload = b"0";
     // SAFETY: the descriptor is a live cgroup.procs file inherited across
     // fork, and writing `0` moves only the calling process. This stays valid
@@ -380,10 +385,10 @@ pub(super) fn join_current_process(descriptor: RawFd) -> io::Result<()> {
     if written == payload.len() as isize {
         Ok(())
     } else if written < 0 {
-        Err(io::Error::last_os_error())
+        Err(std_io::Error::last_os_error())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::WriteZero,
+        Err(std_io::Error::new(
+            std_io::ErrorKind::WriteZero,
             "partial write to cgroup.procs",
         ))
     }
@@ -392,26 +397,26 @@ pub(super) fn join_current_process(descriptor: RawFd) -> io::Result<()> {
 pub(super) fn install_control_workload_descriptors_from_pre_exec(
     control_source: RawFd,
     workload_source: RawFd,
-) -> io::Result<()> {
+) -> std_io::Result<()> {
     install_inherited_descriptor(control_source, CONTROL_CGROUP_PROCS_FD)?;
     install_inherited_descriptor(workload_source, WORKLOAD_CGROUP_PROCS_FD)
 }
 
-fn install_inherited_descriptor(source: RawFd, target: RawFd) -> io::Result<()> {
+fn install_inherited_descriptor(source: RawFd, target: RawFd) -> std_io::Result<()> {
     if source != target && unsafe { libc::dup2(source, target) } < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(std_io::Error::last_os_error());
     }
     // dup2 clears FD_CLOEXEC for a distinct target. Clear it explicitly as
     // well so the helper remains correct if a future source already occupies
     // its fixed target.
     let flags = unsafe { libc::fcntl(target, libc::F_GETFD) };
     if flags < 0 {
-        return Err(io::Error::last_os_error());
+        return Err(std_io::Error::last_os_error());
     }
     if flags & libc::FD_CLOEXEC != 0
         && unsafe { libc::fcntl(target, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0
     {
-        return Err(io::Error::last_os_error());
+        return Err(std_io::Error::last_os_error());
     }
     Ok(())
 }
@@ -419,7 +424,7 @@ fn install_inherited_descriptor(source: RawFd, target: RawFd) -> io::Result<()> 
 fn create_cgroup_directory(path: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
     std::fs::create_dir(path).map_err(|error| {
         cgroup_error(
-            if error.kind() == io::ErrorKind::AlreadyExists {
+            if error.kind() == std_io::ErrorKind::AlreadyExists {
                 ErrorCode::Conflict
             } else {
                 ErrorCode::PermissionDenied
@@ -471,7 +476,7 @@ fn open_cgroup_procs(path: &Path) -> Result<File> {
             format!(
                 "failed to protect cgroup.procs descriptor at {}: {}",
                 path.display(),
-                io::Error::last_os_error()
+                std_io::Error::last_os_error()
             ),
         ));
     }
@@ -484,7 +489,7 @@ fn apply_settings(path: &Path, settings: &[(&'static str, String)]) -> Result<()
         let destination = path.join(file);
         std::fs::write(&destination, value.as_bytes()).map_err(|error| {
             cgroup_error(
-                if error.kind() == io::ErrorKind::NotFound {
+                if error.kind() == std_io::ErrorKind::NotFound {
                     ErrorCode::Unsupported
                 } else {
                     ErrorCode::PermissionDenied
@@ -642,7 +647,7 @@ fn normalize_cgroup_value(value: &str) -> String {
 async fn read_required(path: &Path, file: &str, operation: &str) -> Result<String> {
     let source = path.join(file);
     tokio::fs::read_to_string(&source).await.map_err(|error| {
-        let code = if error.kind() == io::ErrorKind::NotFound {
+        let code = if error.kind() == std_io::ErrorKind::NotFound {
             ErrorCode::Unsupported
         } else {
             ErrorCode::FailedPrecondition
@@ -706,7 +711,7 @@ fn cleanup_directories(paths: &[PathBuf]) {
 }
 
 fn cleanup_cgroup_tree(root: &Path) -> Result<()> {
-    fn remove_children(path: &Path) -> io::Result<()> {
+    fn remove_children(path: &Path) -> std_io::Result<()> {
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let file_type = entry.file_type()?;

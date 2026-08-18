@@ -973,6 +973,79 @@
     },
     {
       "requirementIds": [
+        "sha256:477691657f896fe1f6d886d87de2905037814931b9cf859d071bc75781b3aa30",
+        "sha256:f4235b06adc4a4fd7bace1b901a142fc713451cbce73a27189d815805ce1b796",
+        "sha256:99c66611265ba819a43ca05fe7c1a95ecc10d4373bc48f94be8216d0f3c1b56e",
+        "sha256:7cab3653815548b579ad966ca3f348b702071cfed79bb584c81a6e3b63fe689f",
+        "sha256:c8d031a07af3310cf393fab472945b546d33fa5d07e300157a59c6e1389023a7",
+        "sha256:8de996e522e61e4c40d99e752d3654a2cee7ec75c90a3a060613f6c563681e7b"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::parses_flat_and_nested_keyed_kernel_state",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "executor::cgroup::plan::tests::plans_block_io_as_an_independent_keyed_controller",
+        "executor::cgroup::update::tests::plans_block_io_updates_only_for_the_workload_leaf"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:325bb263412e1b7c77ea439b5b538b18c0eeeee2b0620cde8a83e6dd0aeafb7d",
+        "sha256:f36edd64bcf955e827dd00879ac0677cd27200c0cbcfe5d082acb56f50ba249b",
+        "sha256:31b63cea15642d288ff4773da60e617317842a633e4ce78b678fa3eb2affe995"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.block-io.leaf-weight.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:0e46d8d7ae27ce83cb66692d075c83e48055689482c510773fb81d882c7e4908",
+        "sha256:d302c0fd817308827e44b693944e0482207bcbededaef505e8ce7cb926e0d9d8",
+        "sha256:4434926fb5e9c5aa5c4ef35f81c94e91851431c53b33ecf2b651a26a91049b7f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.block-io.device-identity"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "schema::tests::requires_block_io_device_identity"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:163fd525c606c51bc15c11ed466ea762da2fe3a76498a4a211a4240a989ab4e4",
+        "sha256:9734d0282cd3da5530df482471db8b3cc2bbce13833712caf8c907fdcfa8ed9a"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls",
+        "oci.linux.block-io.throttle.rate-required"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "semantic::tests::requires_rates_for_every_block_io_throttle_list"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:740ac90fb12eb528d2f9f993405048707294bf8d931d3d1f6b3cccea4c900970"
       ],
       "disposition": "validated",

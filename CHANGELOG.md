@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete OCI Block I/O enforcement for cgroup v2. The shared Linux executor
+  maps default and per-device weights through BFQ or generic `io.weight`,
+  combines read/write BPS and IOPS throttles by device in `io.max`, reads every
+  requested value back, preserves omitted keyed fields during live Update, and
+  reverses prior writes if a later mutation fails. The optional `io`
+  controller is required only when Block I/O is requested and is propagated
+  through rootless delegation only when the delegator enabled it. Device
+  identities and throttle rates are required; invalid or duplicate devices,
+  zero rates, and cgroup v1-only leaf weights fail before mutation. Three
+  owner-bound executor rules and one semantic rule promote 14 requirements,
+  leaving 435 enforced, 51 validated, two conformant, and 167 pending entries.
 - OCI 1.3 `linux.netDevices` support in the shared Linux executor. The SDK and
   executor validate bounded interface names, appended `%d` templates, exact
   target uniqueness, deterministic source order, and a distinct network

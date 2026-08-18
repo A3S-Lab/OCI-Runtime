@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 181-entry pending normative evidence backlog.
+- [ ] Close the remaining 167-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -506,6 +506,15 @@ driver implements.
     and Update behavior or pre-mutation rejection. Preserve zero, encode `-1`
     as `max`, validate finite total swap against a finite hard limit, allow
     `memory.low` above `memory.max`, and reject cgroup v1-only controls.
+  - [x] Bind the 14 previously pending OCI Block I/O entries to cgroup v2
+    Create and Update behavior or explicit pre-mutation rejection. Together
+    with the existing validated weight/leaf-weight relationship, all 15 Block
+    I/O occurrences are owner-bound. Map default and per-device weights through
+    BFQ or generic `io.weight`, merge all four per-device throttle lists into
+    `io.max`, preserve omitted keyed values during partial updates, and reverse
+    applied mutations on failure. Require device identity and throttle rates,
+    reject duplicate devices and zero rates, and report `leafWeight` as
+    unavailable on cgroup v2.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1476,13 +1485,14 @@ leak. Only then may KVM become `experimental`.
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, and extensibility
-  review plus the PIDs and memory controller promotions leaves 421 enforced,
-  51 validated, and 181 pending entries.
+  review plus the PIDs, memory, and Block I/O controller promotions leaves 435
+  enforced, 51 validated, and 167 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
 - [x] Apply and read back cgroup v2 memory limit/reservation/swap, CPU
-  shares/quota/burst/period/cpuset/idle, and PID limits. Preserve zero and map
+  shares/quota/burst/period/cpuset/idle, PID limits, and Block I/O default and
+  per-device weight plus read/write BPS/IOPS limits. Preserve zero and map
   the OCI memory and PIDs `-1` sentinel to cgroup v2 `max` for Create and
   Update, reject values below `-1`, keep reservation independent of the hard
   limit, require finite total swap to have a compatible finite memory limit,
@@ -1493,7 +1503,9 @@ leak. Only then may KVM become `experimental`.
   controls, and order live quota/burst changes without a transient invalid
   state. Join init and exec to the same owned leaf; freeze and thaw that leaf
   through `cgroup.freeze` and verify the exact transition through
-  `cgroup.events`.
+  `cgroup.events`. Keep Block I/O on the workload leaf, preserve omitted keyed
+  values during partial updates, verify every write, and roll back in reverse
+  order if a later resource or device-policy mutation fails.
 - [x] Create a private controller-enabled cgroup-v2 manager, apply
   generation-fenced partial resource updates with exact read-back and
   reverse-order rollback, and expose normalized CPU, memory, PID, and event
@@ -1532,8 +1544,11 @@ leak. Only then may KVM become `experimental`.
     `Unsupported` for unavailable burst or idle controls, and keep burst and
     idle on the exact workload leaf rather than the derived
     `control-workload-v1` management envelope.
-  - [x] Enforce or explicitly reject I/O, hugepage, RDMA, and unified resource
-    requests with exact read-back and rollback.
+  - [x] Enforce cgroup v2 Block I/O default and per-device weights plus all
+    four throttle lists with exact keyed read-back and rollback; reject the
+    cgroup v1-only leaf-weight model before mutation.
+  - [x] Explicitly reject unsupported hugepage, RDMA, and unified resource
+    requests before mutation.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
   - [x] Qualify the rootless delegation model and device support for every
