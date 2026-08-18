@@ -116,13 +116,6 @@ fn rejects_unrepresentable_and_ambiguous_block_io_values() {
         ),
         (
             serde_json::json!({
-                "throttleReadBpsDevice": [{"major": 8, "minor": 0, "rate": 0}]
-            }),
-            ErrorCode::InvalidArgument,
-            "rate must be positive",
-        ),
-        (
-            serde_json::json!({
                 "throttleWriteIOPSDevice": [
                     {"major": 8, "minor": 0, "rate": 10},
                     {"major": 8, "minor": 0, "rate": 20}
@@ -137,6 +130,30 @@ fn rejects_unrepresentable_and_ambiguous_block_io_values() {
         assert_eq!(error.code, code);
         assert!(error.message.contains(fragment), "{}", error.message);
     }
+}
+
+#[test]
+fn maps_zero_throttle_rates_to_unlimited_cgroup_v2_values() {
+    let value = block_io(serde_json::json!({
+        "throttleReadBpsDevice": [{"major": 8, "minor": 0, "rate": 0}],
+        "throttleWriteBpsDevice": [{"major": 8, "minor": 0, "rate": 0}],
+        "throttleReadIOPSDevice": [{"major": 8, "minor": 0, "rate": 0}],
+        "throttleWriteIOPSDevice": [{"major": 8, "minor": 0, "rate": 0}]
+    }));
+    let plan = BlockIoPlan::from_oci(Some(&value)).expect("zero-rate block I/O plan");
+    let commands = plan
+        .mutations(None)
+        .iter()
+        .map(|mutation| (mutation.file(), mutation.write_value().expect("command")))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        commands,
+        [(
+            "io.max",
+            "8:0 rbps=max wbps=max riops=max wiops=max".to_string()
+        )]
+    );
 }
 
 #[test]
@@ -206,8 +223,8 @@ fn prepares_exact_keyed_rollback_commands() {
     );
 
     let mut desired = IoMaxValues::default();
-    desired.insert(IoMaxField::ReadBytes, 1_048_576);
-    desired.insert(IoMaxField::WriteOperations, 200);
+    desired.insert(IoMaxField::ReadBytes, IoLimit::Value(1_048_576));
+    desired.insert(IoMaxField::WriteOperations, IoLimit::Value(200));
     let max = PreparedIoMutation {
         mutation: IoMutation::Max {
             device,
@@ -268,7 +285,7 @@ async fn applies_reads_back_and_rolls_back_real_io_max_when_requested() {
         "throttleReadBpsDevice": [{
             "major": device.major,
             "minor": device.minor,
-            "rate": 2097152
+            "rate": 0
         }],
         "throttleReadIOPSDevice": [{
             "major": device.major,
@@ -288,7 +305,8 @@ async fn applies_reads_back_and_rolls_back_real_io_max_when_requested() {
         .expect("read updated real io.max profile");
     assert_eq!(
         state.value(device, IoMaxField::ReadBytes),
-        IoLimit::Value(2_097_152)
+        IoLimit::Max,
+        "OCI rate zero must remove the cgroup v2 limit"
     );
     assert_eq!(
         state.value(device, IoMaxField::WriteBytes),

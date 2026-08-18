@@ -161,9 +161,9 @@ optional cgroup v2 controller, maps default and per-device weights through BFQ
 or generic `io.weight`, and merges the four throttle lists into keyed `io.max`
 writes. Create and live Update verify every requested value; partial updates
 preserve omitted fields, and failures reverse applied mutations. Device
-identities and throttle rates are required, duplicate devices and zero rates
-fail before mutation, and the cgroup v1-only `leafWeight` model returns a typed
-`Unsupported` error.
+identities and throttle rates are required, OCI zero rates map to cgroup v2
+`max`, duplicate devices fail before mutation, and the cgroup v1-only
+`leafWeight` model returns a typed `Unsupported` error.
 
 Read-only rootfs handling is bound to planning, namespace-safety rejection,
 and real workload write rejection. The same planning boundary proves that OCI

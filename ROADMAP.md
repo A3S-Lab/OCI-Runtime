@@ -513,8 +513,8 @@ driver implements.
     BFQ or generic `io.weight`, merge all four per-device throttle lists into
     `io.max`, preserve omitted keyed values during partial updates, and reverse
     applied mutations on failure. Require device identity and throttle rates,
-    reject duplicate devices and zero rates, and report `leafWeight` as
-    unavailable on cgroup v2.
+    map OCI zero rates to cgroup v2 `max`, reject duplicate devices, and report
+    `leafWeight` as unavailable on cgroup v2.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,

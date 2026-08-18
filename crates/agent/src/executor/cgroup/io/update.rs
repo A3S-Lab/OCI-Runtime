@@ -264,9 +264,7 @@ fn verify_mutation(path: &Path, mutation: &IoMutation, operation: &'static str) 
             verify_max_values(
                 &state,
                 *device,
-                values
-                    .iter()
-                    .map(|(field, value)| (*field, IoLimit::Value(*value))),
+                values.iter().map(|(field, value)| (*field, *value)),
                 operation,
             )
         }
@@ -309,9 +307,7 @@ async fn verify_mutation_async(
             verify_max_values(
                 &state,
                 *device,
-                values
-                    .iter()
-                    .map(|(field, value)| (*field, IoLimit::Value(*value))),
+                values.iter().map(|(field, value)| (*field, *value)),
                 operation,
             )
         }

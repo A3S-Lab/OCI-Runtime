@@ -13,8 +13,9 @@ All notable changes to A3S OCI Runtime are documented in this file.
   reverses prior writes if a later mutation fails. The optional `io`
   controller is required only when Block I/O is requested and is propagated
   through rootless delegation only when the delegator enabled it. Device
-  identities and throttle rates are required; invalid or duplicate devices,
-  zero rates, and cgroup v1-only leaf weights fail before mutation. Three
+  identities and throttle rates are required; zero rates remove the matching
+  cgroup v2 limit through `max`, while invalid or duplicate devices and cgroup
+  v1-only leaf weights fail before mutation. Three
   owner-bound executor rules and one semantic rule promote 14 requirements,
   leaving 435 enforced, 51 validated, two conformant, and 167 pending entries.
 - OCI 1.3 `linux.netDevices` support in the shared Linux executor. The SDK and

@@ -155,7 +155,7 @@ impl PreparedIoMutation {
             }
             (IoMutation::Max { values, .. }, PreviousValue::Max(previous)) => values
                 .iter()
-                .all(|(field, value)| previous.get(field) == Some(&IoLimit::Value(*value))),
+                .all(|(field, value)| previous.get(field) == Some(value)),
             _ => false,
         }
     }
@@ -347,14 +347,14 @@ impl IoMaxField {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct IoMaxValues(BTreeMap<IoMaxField, u64>);
+struct IoMaxValues(BTreeMap<IoMaxField, IoLimit>);
 
 impl IoMaxValues {
-    fn insert(&mut self, field: IoMaxField, value: u64) -> Option<u64> {
+    fn insert(&mut self, field: IoMaxField, value: IoLimit) -> Option<IoLimit> {
         self.0.insert(field, value)
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&IoMaxField, &u64)> {
+    fn iter(&self) -> impl Iterator<Item = (&IoMaxField, &IoLimit)> {
         self.0.iter()
     }
 
@@ -394,13 +394,16 @@ fn collect_throttles(
     for (index, device) in devices.iter().enumerate() {
         let entry = format!("linux.resources.blockIO.{field}[{index}]");
         let key = BlockDevice::from_oci(&entry, device.major(), device.minor())?;
-        if device.rate() == 0 {
-            return Err(invalid(format!("{entry}.rate must be positive")));
-        }
+        // OCI retains the cgroup v1 numeric interface, where zero removes a
+        // throttle. Cgroup v2 rejects numeric zero and uses `max` instead.
+        let value = match device.rate() {
+            0 => IoLimit::Max,
+            value => IoLimit::Value(value),
+        };
         if max
             .entry(key)
             .or_default()
-            .insert(max_field, device.rate())
+            .insert(max_field, value)
             .is_some()
         {
             return Err(invalid(format!(
