@@ -183,16 +183,16 @@ pub(super) struct InitPlan {
 
 impl InitPlan {
     pub(super) fn from_bundle(bundle: &OciBundle, io: &ProcessIo) -> Result<Self> {
-        let raw: Value = serde_json::from_str(bundle.config_json()).map_err(|error| {
+        let spec = bundle.spec();
+        let projection = serde_json::to_value(spec).map_err(|error| {
             Error::new(
                 ErrorCode::Internal,
-                format!("validated OCI configuration could not be decoded: {error}"),
+                format!("validated OCI configuration could not be projected: {error}"),
             )
             .for_operation("plan-guest-init")
         })?;
-        validate_profile(&raw)?;
+        validate_profile(&projection)?;
 
-        let spec = bundle.spec();
         let root = spec.root().as_ref().ok_or_else(|| {
             invalid("OCI bootstrap executor requires a root filesystem configuration")
         })?;

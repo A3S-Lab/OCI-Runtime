@@ -710,22 +710,30 @@ fn plans_current_intel_rdt_fields_and_preserves_omission() {
 }
 
 #[test]
-fn rejects_deprecated_intel_rdt_monitoring_fields() {
+fn ignores_deprecated_intel_rdt_monitoring_properties() {
     for field in ["enableCMT", "enableMBM"] {
         let mut config: serde_json::Value =
             serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
         config["linux"] = serde_json::json!({"intelRdt": {}});
         config["linux"]["intelRdt"][field] = serde_json::json!(true);
         let config = serde_json::to_string(&config).expect("encode legacy Intel RDT config");
-        let error = OciBundle::from_json(
+        let bundle = OciBundle::from_json(
             std::env::current_dir()
                 .expect("current directory")
                 .join("bootstrap-test-bundle"),
             &config,
         )
-        .expect_err("deprecated Intel RDT fields must fail closed");
-        assert_eq!(error.code, ErrorCode::InvalidArgument);
-        assert!(error.message.contains(field));
+        .expect("deprecated Intel RDT properties are ignored as unknown properties");
+        assert!(bundle.config_json().contains(field));
+        let typed = serde_json::to_value(bundle.spec()).expect("encode typed OCI projection");
+        assert!(typed["linux"]["intelRdt"].get(field).is_none());
+
+        let plan = InitPlan::from_bundle(&bundle, &null_io())
+            .expect("deprecated Intel RDT properties must not prevent planning");
+        assert!(
+            plan.intel_rdt.is_some(),
+            "the known intelRdt object remains configured after ignoring {field}"
+        );
     }
 }
 
