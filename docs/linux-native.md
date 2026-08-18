@@ -489,7 +489,9 @@ create barrier and requires:
    default devices bound at their exact type, number, mode, and namespace-root
    ownership;
 3. a second workload to join the donor mount namespace and execute through the
-   rootfs descriptor retained before `setns`;
+   rootfs descriptor retained before `setns`; its qualification-owned default
+   devices are staged from the executor's fixed inventory, verified without
+   injecting mounts into the donor namespace, and removed after joiner delete;
 4. PID/time joins to cross `exec` and remain running for a bounded observation
    window;
 5. both joiners to complete without changing the donor's created state;

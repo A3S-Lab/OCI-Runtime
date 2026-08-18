@@ -2,22 +2,15 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use a3s_oci_sdk::{ErrorCode, Result};
 
+use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
+
 use super::{last_policy_error, policy_error, ROOTLESS_DEVICE_MOUNT_COUNT};
 
-const ROOTLESS_DEVICE_SOURCES: [(&str, u32, u32, u32); ROOTLESS_DEVICE_MOUNT_COUNT] = [
-    ("/dev/null", 1, 3, 0o666),
-    ("/dev/zero", 1, 5, 0o666),
-    ("/dev/full", 1, 7, 0o666),
-    ("/dev/random", 1, 8, 0o666),
-    ("/dev/urandom", 1, 9, 0o666),
-    ("/dev/tty", 5, 0, 0o666),
-];
-
 pub(super) fn open_rootless_device_sources() -> Result<Vec<OwnedFd>> {
-    ROOTLESS_DEVICE_SOURCES
+    OCI_LINUX_DEFAULT_DEVICE_NODES
         .iter()
-        .map(|(path, major, minor, mode)| {
-            let path = std::ffi::CString::new(*path).map_err(|error| {
+        .map(|device| {
+            let path = std::ffi::CString::new(device.path).map_err(|error| {
                 policy_error(
                     ErrorCode::Internal,
                     format!("fixed rootless device path contains NUL: {error}"),
@@ -39,7 +32,12 @@ pub(super) fn open_rootless_device_sources() -> Result<Vec<OwnedFd>> {
             }
             // SAFETY: open returned a fresh owned descriptor.
             let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
-            verify_rootless_device_descriptor(&descriptor, *major, *minor, *mode)?;
+            verify_rootless_device_descriptor(
+                &descriptor,
+                device.major,
+                device.minor,
+                device.mode,
+            )?;
             Ok(descriptor)
         })
         .collect()
@@ -96,18 +94,18 @@ fn clone_device_mount(source: &OwnedFd, index: usize) -> Result<OwnedFd> {
 }
 
 pub(super) fn verify_prepared_device_mounts(mounts: &[OwnedFd]) -> Result<()> {
-    if mounts.len() != ROOTLESS_DEVICE_SOURCES.len() {
+    if mounts.len() != OCI_LINUX_DEFAULT_DEVICE_NODES.len() {
         return Err(policy_error(
             ErrorCode::PermissionDenied,
             format!(
                 "received {} rootless device mounts; expected {}",
                 mounts.len(),
-                ROOTLESS_DEVICE_SOURCES.len()
+                OCI_LINUX_DEFAULT_DEVICE_NODES.len()
             ),
         ));
     }
-    for (mount, (_, major, minor, mode)) in mounts.iter().zip(ROOTLESS_DEVICE_SOURCES) {
-        verify_rootless_device_descriptor(mount, major, minor, mode)?;
+    for (mount, device) in mounts.iter().zip(OCI_LINUX_DEFAULT_DEVICE_NODES) {
+        verify_rootless_device_descriptor(mount, device.major, device.minor, device.mode)?;
         verify_close_on_exec(mount)?;
     }
     Ok(())

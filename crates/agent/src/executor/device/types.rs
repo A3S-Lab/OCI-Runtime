@@ -7,16 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::access::DeviceAccessPolicy;
 
-pub(in crate::executor) const ROOTLESS_DEVICE_MOUNT_COUNT: usize = 6;
-pub(super) const ROOTLESS_SAFE_DEVICES: [(&str, DeviceKind, u32, u32);
-    ROOTLESS_DEVICE_MOUNT_COUNT] = [
-    ("/dev/null", DeviceKind::Character, 1, 3),
-    ("/dev/zero", DeviceKind::Character, 1, 5),
-    ("/dev/full", DeviceKind::Character, 1, 7),
-    ("/dev/random", DeviceKind::Character, 1, 8),
-    ("/dev/urandom", DeviceKind::Character, 1, 9),
-    ("/dev/tty", DeviceKind::Character, 5, 0),
-];
+pub(in crate::executor) const ROOTLESS_DEVICE_MOUNT_COUNT: usize =
+    crate::OCI_LINUX_DEFAULT_DEVICE_NODES.len();
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

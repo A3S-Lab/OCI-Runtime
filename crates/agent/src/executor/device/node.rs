@@ -8,6 +8,7 @@ use a3s_oci_sdk::oci_spec::runtime::{LinuxDevice, LinuxDeviceType};
 use a3s_oci_sdk::{ErrorCode, Result};
 
 use crate::executor::namespace::NamespacePlan;
+use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
 
 use super::access::DeviceAccessKind;
 use super::mount_source::{
@@ -15,21 +16,18 @@ use super::mount_source::{
 };
 use super::types::{
     DeviceKind, DeviceNode, PreparedDeviceSource, PreparedDeviceSources, TargetMetadata,
-    ROOTLESS_SAFE_DEVICES,
 };
 use super::{device_error, invalid, last_os_error, unsupported};
 
-const DEFAULT_DEVICE_MODE: u32 = 0o666;
-
 pub(super) fn default_device_nodes() -> Vec<DeviceNode> {
-    ROOTLESS_SAFE_DEVICES
+    OCI_LINUX_DEFAULT_DEVICE_NODES
         .iter()
-        .map(|(path, kind, major, minor)| DeviceNode {
-            path: PathBuf::from(path),
-            kind: *kind,
-            major: *major,
-            minor: *minor,
-            mode: DEFAULT_DEVICE_MODE,
+        .map(|device| DeviceNode {
+            path: PathBuf::from(device.path),
+            kind: DeviceKind::Character,
+            major: device.major,
+            minor: device.minor,
+            mode: device.mode,
             uid: 0,
             gid: 0,
         })
@@ -424,17 +422,15 @@ impl DeviceNode {
 }
 
 fn is_rootless_safe_device(node: &DeviceNode) -> bool {
-    node.mode == 0o666
-        && node.uid == 0
+    node.uid == 0
         && node.gid == 0
-        && ROOTLESS_SAFE_DEVICES
-            .iter()
-            .any(|(path, kind, major, minor)| {
-                node.path == Path::new(path)
-                    && node.kind == *kind
-                    && node.major == *major
-                    && node.minor == *minor
-            })
+        && OCI_LINUX_DEFAULT_DEVICE_NODES.iter().any(|device| {
+            node.path == Path::new(device.path)
+                && node.kind == DeviceKind::Character
+                && node.major == device.major
+                && node.minor == device.minor
+                && node.mode == device.mode
+        })
 }
 
 impl DeviceKind {

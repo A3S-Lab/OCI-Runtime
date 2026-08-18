@@ -176,6 +176,15 @@ cgroup-device BPF operations. Ordered rootful rules preserve wildcard, reset,
 and access-subset behavior. An omitted or empty access string is an ordered
 no-op, and a list containing only no-ops does not load BPF.
 
+When configuration joins or inherits a mount namespace, the executor does not
+inject mounts into that shared or separately owned namespace. It instead
+retains the declared rootfs before `setns` and verifies every configured and
+default device plus `/dev/ptmx` beneath that exact descriptor. Missing,
+substituted, or incorrectly owned nodes fail Create. The Native Linux
+namespace-join gate stages the six defaults from the same fixed inventory used
+by the executor, proves this descriptor-only admission path, and removes only
+the qualification-owned nodes after the joiner is deleted.
+
 The v2 device-target manifest remains in the durable runtime directory. It
 pins the canonical rootfs device/inode and records only regular placeholders
 created by the runtime, including a new console target. Every record is

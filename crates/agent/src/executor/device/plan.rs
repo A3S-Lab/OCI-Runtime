@@ -10,6 +10,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use crate::executor::mount::MountPlan;
 use crate::executor::namespace::NamespacePlan;
+use crate::OCI_LINUX_DEFAULT_DEVICE_NODES;
 
 use super::access::{self, DeviceAccessPolicy, LoadedDeviceProgram};
 use super::console::{
@@ -22,8 +23,8 @@ use super::mount_source::{
 };
 use super::node::default_device_nodes;
 use super::types::{
-    DeviceNode, DevicePlan, PreparedDeviceSource, PreparedDeviceSources,
-    ROOTLESS_DEVICE_MOUNT_COUNT, ROOTLESS_SAFE_DEVICES,
+    DeviceKind, DeviceNode, DevicePlan, PreparedDeviceSource, PreparedDeviceSources,
+    ROOTLESS_DEVICE_MOUNT_COUNT,
 };
 use super::{device_error, invalid, unsupported};
 
@@ -416,18 +417,20 @@ impl DevicePlan {
     }
 
     fn has_rootless_safe_nodes(&self) -> bool {
-        self.nodes.len() == ROOTLESS_SAFE_DEVICES.len()
-            && self.nodes.iter().zip(ROOTLESS_SAFE_DEVICES).all(
-                |(node, (path, kind, major, minor))| {
-                    node.path == Path::new(path)
-                        && node.kind == kind
-                        && node.major == major
-                        && node.minor == minor
-                        && node.mode == 0o666
+        self.nodes.len() == OCI_LINUX_DEFAULT_DEVICE_NODES.len()
+            && self
+                .nodes
+                .iter()
+                .zip(OCI_LINUX_DEFAULT_DEVICE_NODES)
+                .all(|(node, device)| {
+                    node.path == Path::new(device.path)
+                        && node.kind == DeviceKind::Character
+                        && node.major == device.major
+                        && node.minor == device.minor
+                        && node.mode == device.mode
                         && node.uid == 0
                         && node.gid == 0
-                },
-            )
+                })
     }
 
     fn validate_serialized_policy(&self) -> Result<()> {
@@ -532,8 +535,14 @@ impl DevicePlan {
     }
 
     fn has_rootless_safe_access_policy(&self) -> bool {
-        let expected = ROOTLESS_SAFE_DEVICES.map(|(_, kind, major, minor)| {
-            (kind.access_kind().expect("safe device kind"), major, minor)
+        let expected = OCI_LINUX_DEFAULT_DEVICE_NODES.map(|device| {
+            (
+                DeviceKind::Character
+                    .access_kind()
+                    .expect("safe device kind"),
+                device.major,
+                device.minor,
+            )
         });
         self.access_policy
             .as_ref()

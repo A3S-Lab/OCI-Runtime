@@ -14,8 +14,11 @@ All notable changes to A3S OCI Runtime are documented in this file.
   required `/dev/ptmx`; and binds the configured PTY slave to `/dev/console`.
   A rootfs-identity-bound manifest removes only runtime-created placeholders
   after Delete, shutdown, owner death, or failed Create while preserving
-  caller-owned files. Device-access rules retain list order, treat omitted or
-  empty access masks as no-ops, and avoid loading BPF for an all-no-op list.
+  caller-owned files. Joined or inherited mount namespaces reject device
+  injection and instead verify the exact pre-existing rootfs devices through
+  the descriptor retained before namespace entry. Device-access rules retain
+  list order, treat omitted or empty access masks as no-ops, and avoid loading
+  BPF for an all-no-op list.
   The rootful Native Linux gate proves a 120x40 configured-init PTY, console
   identity, a mapped FIFO outside `/dev`, new-target cleanup, and preservation
   of a pre-existing console file. Four owner-bound executor rules and four

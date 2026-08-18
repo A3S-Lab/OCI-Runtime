@@ -34,6 +34,7 @@ use zeroize::Zeroizing;
 
 #[cfg(target_os = "linux")]
 mod executor;
+mod linux_device;
 mod transport_qualification;
 #[cfg(target_os = "linux")]
 mod vsock;
@@ -42,6 +43,7 @@ mod vsock;
 pub use executor::{
     InheritedDescriptorPlan, LinuxExecutor, LinuxExecutorTombstone, RootlessDevicePolicyBootstrap,
 };
+pub use linux_device::{OciLinuxDefaultDeviceNode, OCI_LINUX_DEFAULT_DEVICE_NODES};
 
 /// Verify that the Linux kernel supports PID-reuse-safe pidfd signaling.
 #[cfg(target_os = "linux")]
