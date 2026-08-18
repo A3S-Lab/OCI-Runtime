@@ -859,6 +859,11 @@ jobs:
         name: Real macOS operation reopen and owner replacement with HVF
         run: bash .github/scripts/macos-reopen-replacement.sh
       - if: runner.os == 'Linux'
+        name: Rootless generated-cgroup device boundary
+        env:
+          A3S_OCI_NATIVE_FOCUS: rootless-device-boundary
+        run: bash .github/scripts/native-linux-smoke.sh
+      - if: runner.os == 'Linux'
         name: Native Linux SDK lifecycle without KVM
         env:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json
@@ -973,6 +978,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Rootless generated-cgroup device boundary
+        env:
+          A3S_OCI_NATIVE_FOCUS: rootless-device-boundary
+        run: bash .github/scripts/native-linux-smoke.sh
       - name: Native Linux SDK lifecycle without KVM
         env:
           A3S_OCI_NATIVE_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-native-soak.json

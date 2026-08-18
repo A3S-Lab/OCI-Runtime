@@ -26,7 +26,7 @@ mod config;
 
 use config::{
     cgroup_requirement, read_mapping_file, sorted_mappings, validate_mapping_plan,
-    validate_rootfs_ownership, CgroupRequirement, MappingPlan,
+    validate_rootfs_ownership, MappingPlan,
 };
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -60,7 +60,7 @@ struct RootlessExercise<'a> {
     client: &'a RuntimeClient,
     bundle: &'a OciBundle,
     mappings: &'a MappingPlan,
-    cgroup_requirement: CgroupRequirement,
+    cgroup_control_required: bool,
     nonce: &'a str,
     workload_files: &'a WorkloadFiles,
     device_policy: bool,
@@ -147,17 +147,17 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
         Ok(requirement) => requirement,
         Err(reason) => return failed(report, reason),
     };
-    report.cgroup_delegation_requested =
-        matches!(cgroup_requirement, CgroupRequirement::ExplicitPath);
-    if matches!(cgroup_requirement, CgroupRequirement::ExplicitPath)
-        && delegated_cgroup_root.is_none()
-    {
-        return failed(
-            report,
-            "rootless smoke linux.cgroupsPath requires --delegated-cgroup-root",
-        );
+    let cgroup_control_required = cgroup_requirement.requires_delegation(device_bootstrap);
+    report.cgroup_delegation_requested = cgroup_control_required;
+    if cgroup_control_required && delegated_cgroup_root.is_none() {
+        let reason = if device_bootstrap {
+            "rootless smoke device isolation requires --delegated-cgroup-root"
+        } else {
+            "rootless smoke linux.cgroupsPath requires --delegated-cgroup-root"
+        };
+        return failed(report, reason);
     }
-    if matches!(cgroup_requirement, CgroupRequirement::None) && delegated_cgroup_root.is_some() {
+    if !cgroup_control_required && delegated_cgroup_root.is_some() {
         return failed(
             report,
             "rootless smoke delegated cgroup root requires linux.cgroupsPath",
@@ -278,7 +278,7 @@ async fn run_inner(run: RootlessRun<'_>) -> NativeLinuxRootlessSmokeReport {
             client: &client,
             bundle: &bundle,
             mappings: &mappings,
-            cgroup_requirement,
+            cgroup_control_required,
             nonce: &nonce,
             workload_files: &workload_files,
             device_policy: exercise_device_policy,
@@ -427,7 +427,7 @@ async fn exercise(
         client,
         bundle,
         mappings,
-        cgroup_requirement,
+        cgroup_control_required,
         nonce,
         workload_files,
         device_policy,
@@ -517,7 +517,7 @@ async fn exercise(
         report.device_nodes_verified = true;
     }
 
-    if matches!(cgroup_requirement, CgroupRequirement::ExplicitPath) {
+    if cgroup_control_required {
         exercise_cgroup_control(
             client,
             &target,
@@ -578,13 +578,7 @@ async fn exercise(
     call("rootless delete", client.delete(delete.clone())).await?;
     call("replayed rootless delete", client.delete(delete)).await?;
     report.delete_replayed = true;
-    verify_events(
-        client,
-        &target,
-        matches!(cgroup_requirement, CgroupRequirement::ExplicitPath),
-        device_policy,
-    )
-    .await?;
+    verify_events(client, &target, cgroup_control_required, device_policy).await?;
     report.events_verified = true;
     report.durable_state_removed = state_is_missing(client, target).await?
         && call(
@@ -832,20 +826,19 @@ async fn exercise_cgroup_control(
         let old_policy_retained =
             run_device_write_probe(client, target, nonce, "rollback", false).await?;
 
-        let disabled: LinuxResources =
-            serde_json::from_value(serde_json::json!({"devices": []}))
-                .map_err(|error| format!("failed to construct disabled device update: {error}"))?;
+        let cleared: LinuxResources = serde_json::from_value(serde_json::json!({"devices": []}))
+            .map_err(|error| format!("failed to construct cleared device update: {error}"))?;
         call(
-            "disable rootless device policy",
+            "clear rootless device resource rules",
             client.update(UpdateRequest {
-                context: operation(nonce, "update-device-disable")?,
+                context: operation(nonce, "update-device-clear")?,
                 target: target.clone(),
-                resources: disabled,
+                resources: cleared,
             }),
         )
         .await?;
-        let disabled_allows_write =
-            run_device_write_probe(client, target, nonce, "disabled", true).await?;
+        let cleared_allows_declared_write =
+            run_device_write_probe(client, target, nonce, "cleared", true).await?;
 
         let restored: LinuxResources = serde_json::from_value(serde_json::json!({
             "devices": [
@@ -873,7 +866,7 @@ async fn exercise_cgroup_control(
         report.device_policy_updates_verified = readonly_denied
             && invalid_rejected
             && old_policy_retained
-            && disabled_allows_write
+            && cleared_allows_declared_write
             && restored_allows_write;
         if !report.device_policy_updates_verified {
             return Err("rootless device policy state-machine evidence was incomplete".into());

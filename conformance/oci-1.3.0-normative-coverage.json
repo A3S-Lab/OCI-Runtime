@@ -8440,10 +8440,22 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Containers MAY NOT access any device node that is not either explicitly",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.device.inventory.closed"
+      ],
+      "testIds": [
+        "executor::device::access::tests::oci_inventory_is_a_fail_closed_upper_bound_for_every_device_operation",
+        "executor::device::access::tests::oci_inventory_includes_only_the_normative_ptmx_and_pty_family",
+        "executor::device::access::tests::maximum_planned_inventory_includes_defaults_and_dynamic_ptys",
+        "executor::device::access::tests::ordered_resource_rules_can_only_narrow_the_oci_inventory",
+        "executor::device::tests::all_no_op_device_rules_keep_the_oci_inventory_filter_active",
+        "executor::device::tests::clearing_resource_rules_preserves_the_oci_inventory_filter",
+        "executor::cgroup::plan::tests::assigns_a_private_runtime_path_without_overwriting_an_oci_path",
+        ".github/scripts/native-linux-smoke.sh::undeclared-device-cap-mknod-and-late-source-denial",
+        ".github/scripts/native-linux-smoke.sh::rootless-device-boundary-generated-cgroup"
+      ]
     },
     {
       "id": "sha256:de386fbdbbdbf7dd1c9f09724c5a78cc53ec58030ce620691b62912ab0eb1ef2",

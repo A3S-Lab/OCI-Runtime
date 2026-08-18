@@ -24,6 +24,12 @@ pub(super) enum CgroupRequirement {
     ExplicitPath,
 }
 
+impl CgroupRequirement {
+    pub(super) const fn requires_delegation(self, device_bootstrap: bool) -> bool {
+        device_bootstrap || matches!(self, Self::ExplicitPath)
+    }
+}
+
 pub(super) fn validate_mapping_plan(
     bundle: &OciBundle,
     effective_uid: u32,
@@ -241,5 +247,13 @@ mod tests {
         assert_eq!(mapped_host_id(&mappings, 1), Some(300_000));
         assert_eq!(mapped_host_id(&mappings, 65_535), Some(365_534));
         assert_eq!(mapped_host_id(&mappings, 65_536), None);
+    }
+
+    #[test]
+    fn device_bootstrap_requires_delegation_for_an_omitted_cgroup_path() {
+        assert!(!CgroupRequirement::None.requires_delegation(false));
+        assert!(CgroupRequirement::None.requires_delegation(true));
+        assert!(CgroupRequirement::ExplicitPath.requires_delegation(false));
+        assert!(CgroupRequirement::ExplicitPath.requires_delegation(true));
     }
 }

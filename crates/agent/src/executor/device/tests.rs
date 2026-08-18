@@ -813,8 +813,9 @@ fn replans_device_access_masks_for_live_updates() {
 }
 
 #[test]
-fn replans_to_disable_device_enforcement_when_rules_are_cleared() {
-    let current = DevicePlan::default();
+fn clearing_resource_rules_preserves_the_oci_inventory_filter() {
+    let current = DevicePlan::from_linux(Some(&Linux::default()), &[], false, true)
+        .expect("default OCI device plan");
     let resources: LinuxResources = serde_json::from_value(serde_json::json!({
         "devices": []
     }))
@@ -825,10 +826,12 @@ fn replans_to_disable_device_enforcement_when_rules_are_cleared() {
         .expect("cleared device policy should produce a new plan");
     assert_eq!(updated.access_policy, None);
     assert_eq!(updated.nodes, current.nodes);
+    assert!(updated.has_device_filter());
+    assert!(updated.requires_setup());
 }
 
 #[test]
-fn all_no_op_device_rules_do_not_load_a_bpf_program() {
+fn all_no_op_device_rules_keep_the_oci_inventory_filter_active() {
     let linux: Linux = serde_json::from_value(serde_json::json!({
         "resources": {
             "devices": [
@@ -842,37 +845,35 @@ fn all_no_op_device_rules_do_not_load_a_bpf_program() {
         .expect("no-op rules are valid ordered entries");
 
     assert!(!plan.has_access_policy());
-    assert!(plan
-        .load_cgroup_device_program()
-        .expect("no-op policy must not issue BPF_PROG_LOAD")
-        .is_none());
+    assert!(plan.has_device_filter());
 }
 
 #[test]
-fn fixed_device_nodes_survive_disable_for_later_reenable() {
+fn fixed_device_nodes_and_inventory_survive_rule_clear_for_restore() {
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../../../../../fixtures/a3s-box/config.json"))
             .expect("decode fixture");
     let linux: Linux =
         serde_json::from_value(config["linux"].clone()).expect("decode Linux config");
     let current = DevicePlan::from_linux(Some(&linux), &[], false, true).expect("device plan");
-    let disabled: LinuxResources =
-        serde_json::from_value(serde_json::json!({"devices": []})).expect("disabled policy");
-    let disabled = current
-        .update_from_resources(&disabled)
-        .expect("disable policy")
+    let cleared: LinuxResources =
+        serde_json::from_value(serde_json::json!({"devices": []})).expect("cleared rules");
+    let cleared = current
+        .update_from_resources(&cleared)
+        .expect("clear resource rules")
         .expect("updated policy");
-    assert_eq!(disabled.nodes, current.nodes);
-    assert!(disabled.requires_setup());
+    assert_eq!(cleared.nodes, current.nodes);
+    assert!(cleared.has_device_filter());
+    assert!(cleared.requires_setup());
 
     let resources = linux.resources().clone().expect("fixture resources");
-    let reenabled = disabled
+    let restored = cleared
         .update_from_resources(&resources)
-        .expect("reenable policy")
+        .expect("restore resource rules")
         .expect("updated policy");
-    assert_eq!(reenabled.nodes, current.nodes);
-    assert_eq!(reenabled.access_policy, current.access_policy);
-    assert!(reenabled.requires_setup());
+    assert_eq!(restored.nodes, current.nodes);
+    assert_eq!(restored.access_policy, current.access_policy);
+    assert!(restored.requires_setup());
 }
 
 #[test]

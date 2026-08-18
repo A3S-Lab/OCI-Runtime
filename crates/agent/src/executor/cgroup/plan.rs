@@ -98,12 +98,6 @@ impl CgroupPlan {
             block_io,
         };
         plan.validate()?;
-        if plan.has_limits() && plan.path.is_none() {
-            return Err(unsupported(
-                "linux.cgroupsPath",
-                "resource limits require an explicit normalized cgroup v2 path",
-            ));
-        }
         Ok(plan)
     }
 
@@ -331,12 +325,26 @@ impl CgroupPlan {
         controllers
     }
 
-    fn has_limits(&self) -> bool {
-        !self.settings().is_empty() || !self.block_io.is_empty()
-    }
-
     pub(in crate::executor) fn has_cgroup(&self) -> bool {
         self.path.is_some()
+    }
+
+    pub(in crate::executor) fn ensure_runtime_path(
+        &mut self,
+        container_id: &str,
+        generation: u64,
+    ) -> Result<()> {
+        if self.path.is_some() {
+            return Ok(());
+        }
+        let generated = format!("containers/{container_id}-g{generation:016x}");
+        self.path = Some(OciLinuxCgroupPath::parse(&generated).map_err(|error| {
+            cgroup_error(
+                ErrorCode::Internal,
+                format!("failed to construct the private runtime cgroup path: {error}"),
+            )
+        })?);
+        Ok(())
     }
 
     pub(in crate::executor) fn uses_control_workload_layout(&self) -> bool {
@@ -617,6 +625,40 @@ mod tests {
         assert_eq!(
             absolute.path.as_ref().expect("absolute path").relative(),
             relative.path.as_ref().expect("relative path").relative()
+        );
+    }
+
+    #[test]
+    fn assigns_a_private_runtime_path_without_overwriting_an_oci_path() {
+        let generated_linux: Linux = serde_json::from_value(serde_json::json!({
+            "resources": {"pids": {"limit": 64}}
+        }))
+        .expect("decode generated-path resources");
+        let mut generated = CgroupPlan::from_linux(Some(&generated_linux), &BTreeMap::new())
+            .expect("resource plan without an explicit cgroup path");
+        assert!(!generated.has_cgroup());
+        assert_eq!(generated.settings(), vec![("pids.max", "64".to_string())]);
+        generated
+            .ensure_runtime_path("container_01", 7)
+            .expect("private runtime path");
+        let generated = generated.path.as_ref().expect("generated path");
+        assert!(!generated.is_absolute());
+        assert_eq!(
+            generated.relative(),
+            "containers/container_01-g0000000000000007"
+        );
+
+        let mut explicit = CgroupPlan::from_linux(
+            Some(&linux_with_cgroup_path("tenant/explicit")),
+            &BTreeMap::new(),
+        )
+        .expect("explicit cgroup plan");
+        explicit
+            .ensure_runtime_path("ignored", 9)
+            .expect("retain explicit path");
+        assert_eq!(
+            explicit.path.as_ref().expect("explicit path").relative(),
+            "tenant/explicit"
         );
     }
 

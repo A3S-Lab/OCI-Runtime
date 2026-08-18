@@ -1,9 +1,9 @@
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 
 use super::{
-    BpfInsn, DeviceAccessKind, DeviceAccessPolicy, BPF_ALU64, BPF_AND, BPF_DEVCG_ACC_MKNOD,
-    BPF_DEVCG_ACC_READ, BPF_DEVCG_ACC_WRITE, BPF_DEVCG_DEV_BLOCK, BPF_DEVCG_DEV_CHAR, BPF_EXIT,
-    BPF_JNE, BPF_MOV, BPF_OR, BPF_REG_0, BPF_REG_1, BPF_RSH,
+    BpfInsn, DeviceAccessBoundary, DeviceAccessKind, DeviceAccessPolicy, BPF_ALU64, BPF_AND,
+    BPF_DEVCG_ACC_MKNOD, BPF_DEVCG_ACC_READ, BPF_DEVCG_ACC_WRITE, BPF_DEVCG_DEV_BLOCK,
+    BPF_DEVCG_DEV_CHAR, BPF_EXIT, BPF_JNE, BPF_MOV, BPF_OR, BPF_REG_0, BPF_REG_1, BPF_RSH,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -42,6 +42,107 @@ fn request(kind: DeviceAccessKind, major: u32, minor: u32, access: &str) -> Acce
 fn evaluate(policy: &DeviceAccessPolicy, request: AccessRequest) -> bool {
     let program = policy.build_program().expect("build program");
     run_program(&program, request) != 0
+}
+
+fn evaluate_boundary(boundary: &DeviceAccessBoundary, request: AccessRequest) -> bool {
+    let program = boundary.build_program().expect("build bounded program");
+    run_program(&program, request) != 0
+}
+
+#[test]
+fn oci_inventory_is_a_fail_closed_upper_bound_for_every_device_operation() {
+    let boundary = DeviceAccessBoundary::for_oci_nodes(
+        [
+            (DeviceAccessKind::Character, 1, 3),
+            (DeviceAccessKind::Block, 8, 0),
+        ],
+        None,
+    )
+    .expect("bounded OCI device inventory");
+
+    for access in ["r", "w", "m", "rwm"] {
+        assert!(evaluate_boundary(
+            &boundary,
+            request(DeviceAccessKind::Character, 1, 3, access),
+        ));
+        assert!(evaluate_boundary(
+            &boundary,
+            request(DeviceAccessKind::Block, 8, 0, access),
+        ));
+        assert!(!evaluate_boundary(
+            &boundary,
+            request(DeviceAccessKind::Character, 10, 229, access),
+        ));
+    }
+}
+
+#[test]
+fn oci_inventory_includes_only_the_normative_ptmx_and_pty_family() {
+    let boundary = DeviceAccessBoundary::for_oci_nodes([(DeviceAccessKind::Character, 1, 3)], None)
+        .expect("bounded OCI device inventory");
+
+    assert!(evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 5, 2, "rwm"),
+    ));
+    assert!(evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 136, 42, "rw"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 5, 1, "r"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Block, 136, 42, "r"),
+    ));
+}
+
+#[test]
+fn maximum_planned_inventory_includes_defaults_and_dynamic_ptys() {
+    let maximum_planned_nodes = (0..262_u32)
+        .map(|major| (DeviceAccessKind::Block, major + 1_000, 0))
+        .collect::<Vec<_>>();
+    DeviceAccessBoundary::for_oci_nodes(maximum_planned_nodes.clone(), None)
+        .expect("256 explicit devices, six defaults, PTMX, and PTYs fit the boundary");
+
+    let mut oversized = maximum_planned_nodes;
+    oversized.push((DeviceAccessKind::Block, 2_000, 0));
+    let error = DeviceAccessBoundary::for_oci_nodes(oversized, None)
+        .expect_err("an inventory above the planner limit must fail closed");
+    assert_eq!(error.code, a3s_oci_sdk::ErrorCode::PermissionDenied);
+    assert!(error.message.contains("invalid identity count"));
+}
+
+#[test]
+fn ordered_resource_rules_can_only_narrow_the_oci_inventory() {
+    let access = policy(serde_json::json!({
+        "devices": [
+            {"allow": true, "type": "a", "access": "rwm"},
+            {"allow": false, "type": "c", "major": 1, "minor": 3, "access": "wm"}
+        ]
+    }));
+    let boundary =
+        DeviceAccessBoundary::for_oci_nodes([(DeviceAccessKind::Character, 1, 3)], Some(access))
+            .expect("bounded OCI device policy");
+
+    assert!(evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 1, 3, "r"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 1, 3, "w"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 1, 3, "m"),
+    ));
+    assert!(!evaluate_boundary(
+        &boundary,
+        request(DeviceAccessKind::Character, 10, 229, "r"),
+    ));
 }
 
 #[test]

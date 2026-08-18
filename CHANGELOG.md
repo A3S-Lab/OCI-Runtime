@@ -17,14 +17,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
   caller-owned files. Joined or inherited mount namespaces reject device
   injection and instead verify the exact pre-existing rootfs devices through
   the descriptor retained before namespace entry. Device-access rules retain
-  list order, treat omitted or empty access masks as no-ops, and avoid loading
-  BPF for an all-no-op list.
+  list order and treat omitted or empty access masks as no-ops beneath an
+  immutable cgroup-v2 BPF upper bound containing only declared and default
+  device identities. Clearing rules and allow-all updates cannot widen that
+  inventory. When `linux.cgroupsPath` is omitted, the runtime creates a private
+  generation-fenced path so rootful and delegated-rootless launches retain the
+  same boundary.
   The rootful Native Linux gate proves a 120x40 configured-init PTY, console
   identity, a mapped FIFO outside `/dev`, new-target cleanup, and preservation
-  of a pre-existing console file. Four owner-bound executor rules and four
-  semantic rules promote 19 requirements, leaving 454 enforced, 51 validated,
-  two conformant, and 148 pending entries. The separate prohibition on access
-  to undeclared device nodes remains open.
+  of a pre-existing console file. Its device-boundary profile grants
+  `CAP_MKNOD`, permits a declared node, rejects an undeclared node, remounts a
+  `nodev` device source with `dev`, and still rejects access with `EPERM`. Five
+  owner-bound executor rules and four semantic rules promote all 20 device
+  requirements, leaving 455 enforced, 51 validated, two conformant, and 147
+  pending entries.
 - Complete OCI Block I/O enforcement for cgroup v2. The shared Linux executor
   maps default and per-device weights through BFQ or generic `io.weight`,
   combines read/write BPS and IOPS throttles by device in `io.max`, reads every
