@@ -178,6 +178,12 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.network.cgroup-v1-controls-rejected",
         "linux-executor",
     ),
+    OciNonSemanticRule::new("oci.linux.seccomp.policy.enforced", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.seccomp.unsupported-controls.rejected",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new("oci.linux.seccomp.notification.rejected", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.pids.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.rdma.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.unified.cgroup-v2-controls", "linux-executor"),

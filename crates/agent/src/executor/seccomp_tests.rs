@@ -20,7 +20,7 @@ fn plan(seccomp: serde_json::Value) -> a3s_oci_sdk::Result<SeccompPlan> {
 }
 
 #[test]
-fn rejects_seccomp_features_that_cannot_be_enforced() {
+fn rejects_every_unadvertised_seccomp_control_before_mutation() {
     let error = plan(json!({
         "defaultAction": "SCMP_ACT_ALLOW",
         "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"]
@@ -39,11 +39,36 @@ fn rejects_seccomp_features_that_cannot_be_enforced() {
 
     let error = plan(json!({
         "defaultAction": "SCMP_ACT_ALLOW",
+        "listenerMetadata": "opaque"
+    }))
+    .expect_err("listener metadata without notification support must fail");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("listener"));
+
+    let error = plan(json!({
+        "defaultAction": "SCMP_ACT_ALLOW",
         "flags": ["SECCOMP_FILTER_FLAG_LOG"]
     }))
     .expect_err("filter flags are not implemented");
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert!(error.message.contains("flags"));
+}
+
+#[test]
+fn plans_omitted_and_empty_optional_seccomp_fields() {
+    let omitted = SeccompPlan::from_linux(None).expect("omitted seccomp policy");
+    assert!(!omitted.is_enabled());
+    assert_eq!(omitted.filter_count(), 0);
+
+    let empty = plan(json!({
+        "defaultAction": "SCMP_ACT_ALLOW",
+        "architectures": [],
+        "flags": [],
+        "syscalls": []
+    }))
+    .expect("empty optional seccomp fields");
+    assert!(empty.is_enabled());
+    assert_eq!(empty.filter_count(), 0);
 }
 
 #[test]
@@ -147,6 +172,26 @@ fn rejects_unsupported_seccomp_architectures_and_notify_actions() {
 #[test]
 fn rejects_invalid_seccomp_argument_profiles() {
     let error = plan(json!({
+        "defaultAction": "SCMP_ACT_ALLOW",
+        "defaultErrnoRet": 1
+    }))
+    .expect_err("default errno data requires a supporting action");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("defaultAction"));
+
+    let error = plan(json!({
+        "defaultAction": "SCMP_ACT_ALLOW",
+        "syscalls": [{
+            "names": ["read"],
+            "action": "SCMP_ACT_KILL",
+            "errnoRet": 1
+        }]
+    }))
+    .expect_err("syscall errno data requires a supporting action");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("syscalls[0].action"));
+
+    let error = plan(json!({
         "defaultAction": "SCMP_ACT_ERRNO",
         "syscalls": [{
             "names": ["clone"],
@@ -175,6 +220,23 @@ fn rejects_invalid_seccomp_argument_profiles() {
         }]
     }))
     .expect_err("masked comparison requires valueTwo");
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
+    assert!(error.message.contains("valueTwo"));
+
+    let error = plan(json!({
+        "defaultAction": "SCMP_ACT_ERRNO",
+        "syscalls": [{
+            "names": ["clone"],
+            "action": "SCMP_ACT_ALLOW",
+            "args": [{
+                "index": 0,
+                "value": 0,
+                "valueTwo": 1,
+                "op": "SCMP_CMP_EQ"
+            }]
+        }]
+    }))
+    .expect_err("valueTwo is reserved for masked comparisons");
     assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert!(error.message.contains("valueTwo"));
 }

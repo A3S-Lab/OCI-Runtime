@@ -71,6 +71,27 @@ fn namespace_mapping_and_time_requirements_are_all_owner_bound() {
 }
 
 #[test]
+fn seccomp_requirements_are_all_owner_bound() {
+    let manifest = checked_in_manifest();
+    let headings = ["Seccomp", "The Container Process State"];
+    let requirements = manifest
+        .items
+        .iter()
+        .filter(|item| {
+            item.requirement.document == "config-linux.md"
+                && headings.contains(&item.requirement.heading.as_str())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(requirements.len(), 36);
+    assert!(requirements.iter().all(|item| {
+        item.disposition != OciNormativeDisposition::PendingReview
+            && !item.rule_ids.is_empty()
+            && !item.test_ids.is_empty()
+    }));
+}
+
+#[test]
 fn coverage_verifier_rejects_unknown_rule_ids() {
     let inventory = OciNormativeInventory::new();
     let mut manifest = checked_in_manifest();

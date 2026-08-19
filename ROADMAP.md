@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 104-entry pending normative evidence backlog.
+- [ ] Close the remaining 68-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -565,6 +565,15 @@ driver implements.
     boottime offsets are written and read back. Seventeen previously pending
     requirements are now enforced alongside the two existing validation
     rules.
+  - [x] Bind all 36 OCI Seccomp and notification-state entries to exact
+    schema, semantic, executor, feature-report, and fail-closed evidence.
+    Supported x86_64/AArch64 policies retain every advertised action and
+    argument operator through pure-Rust BPF installation. Empty and omitted
+    optional fields remain valid; invalid errno and argument relationships
+    fail deterministically; and unadvertised flags, architecture sets, and
+    userspace notification requests fail during immutable init planning before
+    runtime mutation. Notification transport and process-state requirements
+    therefore remain unreachable instead of being silently ignored.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1536,8 +1545,8 @@ leak. Only then may KVM become `experimental`.
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, extensibility,
   namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
-  HugeTLB, RDMA, Unified, and network-controller promotions leave 499
-  enforced, 50 validated, and 104 pending entries.
+  HugeTLB, RDMA, Unified, network-controller, and Seccomp promotions leave 535
+  enforced, 50 validated, and 68 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
