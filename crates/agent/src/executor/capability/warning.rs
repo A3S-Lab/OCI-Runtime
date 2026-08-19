@@ -92,6 +92,12 @@ impl CapabilityWarning {
     }
 }
 
+pub(in crate::executor) fn report_capability_warnings(warnings: &[CapabilityWarning]) {
+    for warning in warnings {
+        eprintln!("a3s-oci-agent: capability warning: {}", warning.message());
+    }
+}
+
 pub(super) fn capability_warnings(
     requested: CapabilityPlan,
     applied: CapabilityPlan,

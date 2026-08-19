@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 mod warning;
 
 use warning::capability_warnings;
+pub(super) use warning::report_capability_warnings;
 #[cfg(test)]
 pub(super) use warning::CapabilitySet;
 pub(super) use warning::CapabilityWarning;

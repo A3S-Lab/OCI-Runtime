@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
+use super::capability::report_capability_warnings;
 use super::control::{read_outcome, read_start_result, InitOutcome, START_BYTE};
 use super::io::ProcessIoHandle;
 use super::namespace::RetainedNamespaceArgument;
@@ -256,10 +257,14 @@ impl ExecProcess {
         };
         drop(control);
         drop(listener);
-        if let Err(error) = started {
-            terminate(&mut child).await;
-            return Err(error);
-        }
+        let warnings = match started {
+            Ok(warnings) => warnings,
+            Err(error) => {
+                terminate(&mut child).await;
+                return Err(error);
+            }
+        };
+        report_capability_warnings(&warnings);
 
         Ok(Self {
             child,

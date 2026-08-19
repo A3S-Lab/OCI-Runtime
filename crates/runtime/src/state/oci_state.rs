@@ -172,6 +172,12 @@ mod tests {
         OciSchemaValidator::new()
             .and_then(|validator| validator.validate_state(&created))
             .expect("created state schema");
+        let encoded = serde_json::to_value(&created).expect("encode created state");
+        let properties = encoded.as_object().expect("created state object");
+        assert_eq!(properties.len(), 6);
+        for required in ["ociVersion", "id", "status", "pid", "bundle", "annotations"] {
+            assert!(properties.contains_key(required), "missing {required}");
+        }
 
         let running =
             rebuild_state(&created, ContainerState::Running, Some(43)).expect("running OCI state");

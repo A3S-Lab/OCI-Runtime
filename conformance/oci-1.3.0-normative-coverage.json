@@ -495,10 +495,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "The value MAY be one of:",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.standard-domain"
+      ],
+      "testIds": [
+        "schema::tests::invalid_state_returns_stable_sdk_error",
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract"
+      ]
     },
     {
       "id": "sha256:c210fe8777f84563feee9bbb6f996516ec485b2558f986a2ff552037464b0329",
@@ -509,10 +514,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Additional values MAY be defined by the runtime, however, they MUST be used to represent new runtime states not defined above.",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.standard-domain"
+      ],
+      "testIds": [
+        "schema::tests::invalid_state_returns_stable_sdk_error",
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract"
+      ]
     },
     {
       "id": "sha256:73554899c1a718b0c59ccae427b349f8647c0a00ceebd943ef99c0fac3cfa98c",
@@ -523,10 +533,15 @@
       "keyword": "must",
       "occurrence": 2,
       "source": "Additional values MAY be defined by the runtime, however, they MUST be used to represent new runtime states not defined above.",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.standard-domain"
+      ],
+      "testIds": [
+        "schema::tests::invalid_state_returns_stable_sdk_error",
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract"
+      ]
     },
     {
       "id": "sha256:25a8917014ecaf23ecabb142a893aaeaf720a90bb2bd300a635e86ddfe1e6574",
@@ -557,10 +572,15 @@
       "keyword": "optional",
       "occurrence": 2,
       "source": "* **`pid`** (int, REQUIRED when `status` is `created` or `running` on Linux, OPTIONAL on other platforms) is the ID of the container process.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.pid.lifecycle"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::tests::expired_deadline_and_invalid_pid_do_not_commit_state"
+      ]
     },
     {
       "id": "sha256:99f0429e88af67230532e47fac5a3b9ac190bd93decb50796934a96d1be1df08",
@@ -628,10 +648,14 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "The state MAY include additional properties.",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.state.extensions.omitted"
+      ],
+      "testIds": [
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract"
+      ]
     },
     {
       "id": "sha256:25b74040e96ee0a2a236e1255c9cbeeb160d196f6f9d6989c574b0fec756f8c3",
@@ -661,10 +685,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "2. The container's runtime environment MUST be created according to the configuration in [`config.json`](config.md).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.configuration-applied"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.direct_argv_verified",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.exact_evidence",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:fec21409ec683a91928b1cf922d4761e054ced3f1d9c4cd2279d0eab0af1a9c2",
@@ -675,10 +705,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If the runtime is unable to create the environment specified in the [`config.json`](config.md), it MUST [generate an error](#errors).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.failure-no-container"
+      ],
+      "testIds": [
+        "service::tests::launch_and_isolation_checks_fail_before_state_or_driver_mutation",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch",
+        "service::tests::terminal_driver_failures_replay_and_release_container_claims",
+        "state::tests::failed_create_replays_its_exact_error_and_finishes_quarantine"
+      ]
     },
     {
       "id": "sha256:1caf93f8afb4e4171123e294fb182c31de94ee2e293e981607d66debce633ffe",
@@ -689,10 +726,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "While the resources requested in the [`config.json`](config.md) MUST be created, the user-specified program (from [`process`](config.md#process)) MUST NOT be run at this time.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.create.process.deferred-until-start"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::marker_absent_after_create",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:3611f977ed6a97376d86b1408d08c707ec00b070ff779eb049bc4bcbec06fb3a",
@@ -1063,10 +1105,19 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Unless otherwise stated, generating an error MUST leave the state of the environment as if the operation were never attempted - modulo any possible trivial ancillary changes such as logging.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.errors.rollback"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.create_container_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.create_runtime_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.poststart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.prestart_failure_rolled_back",
+        ".github/scripts/native-linux-smoke.sh::initialization.start_container_failure_rolled_back",
+        "state::tests::fault_matrix::every_registered_durable_commit_stage_recovers_after_reopen"
+      ]
     },
     {
       "id": "sha256:c1f2b07ef49e2b809bc7f1b5990f8946e6b1a21f5b8f1cb0fad511d27804fe49",
@@ -1077,10 +1128,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Unless otherwise stated, logging a warning does not change the flow of the operation; it MUST continue as if the warning had not been logged.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.warning.continues"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.poststop_failure_warning_only",
+        "executor::capability::tests::kernel_unsupported_capabilities_become_structured_warnings",
+        "executor::control::tests::start_result_retains_capability_warnings_before_exec_close",
+        "executor::hook::tests::poststop_failure_does_not_skip_remaining_hooks"
+      ]
     },
     {
       "id": "sha256:a0715ec0c7f5cbe12a41ded9eb34e5cc7bc0d99cdb03d63cc2aa31ac7d65e4fa",
@@ -1239,10 +1297,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "All of the properties configured in [`config.json`](config.md) except for [`process`](config.md#process) MUST be applied.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.configuration-applied"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::initialization.direct_argv_verified",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.exact_evidence",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:7b567573604a2146308360f6fae6bb4818dc5a1fae3824e1d18c88c3e27926ab",
@@ -1272,10 +1336,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "The remaining `process` properties MAY be applied by this operation.",
-      "disposition": "pending-review",
-      "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "conformant",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.runtime.create.process.deferred-until-start"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::marker_absent_after_create",
+        "service::tests::rust_sdk_lifecycle_is_durable_and_exactly_replayed"
+      ]
     },
     {
       "id": "sha256:f0e56eb3840bf0279d6773e77702e9da40b9f5a104d65506359f4a83d5ba394e",
@@ -1286,10 +1355,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If the runtime cannot apply a property as specified in the [configuration](config.md), it MUST [generate an error](#errors) and a new container MUST NOT be created.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.failure-no-container"
+      ],
+      "testIds": [
+        "service::tests::launch_and_isolation_checks_fail_before_state_or_driver_mutation",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch",
+        "service::tests::terminal_driver_failures_replay_and_release_container_claims",
+        "state::tests::failed_create_replays_its_exact_error_and_finishes_quarantine"
+      ]
     },
     {
       "id": "sha256:e79e48b46d744b28770a8cde79e2b3e54cabf00a4f91df8277ccd671b272f604",
@@ -1300,10 +1376,17 @@
       "keyword": "must-not",
       "occurrence": 2,
       "source": "If the runtime cannot apply a property as specified in the [configuration](config.md), it MUST [generate an error](#errors) and a new container MUST NOT be created.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.failure-no-container"
+      ],
+      "testIds": [
+        "service::tests::launch_and_isolation_checks_fail_before_state_or_driver_mutation",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch",
+        "service::tests::terminal_driver_failures_replay_and_release_container_claims",
+        "state::tests::failed_create_replays_its_exact_error_and_finishes_quarantine"
+      ]
     },
     {
       "id": "sha256:babe4b20e05225853683db238d0e5cacddabea0d13fc8009fbe9efaa8fcadcd4",
@@ -1314,10 +1397,17 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "The runtime MAY validate `config.json` against this spec, either generically or with respect to the local system capabilities, before creating the container ([step 2](#lifecycle)).",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "runtime-lifecycle",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.create.preflight-validation"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "service::tests::launch_and_isolation_checks_fail_before_state_or_driver_mutation",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:d983dfad355a3b4255f5294f9ef36abe5563b4ac88cc03258efa912411720877",

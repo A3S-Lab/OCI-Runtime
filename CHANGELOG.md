@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete owner binding for all 66 OCI 1.3 runtime lifecycle requirements.
+  The runtime now binds the exact four-state domain, Linux PID shape, complete
+  preflight and Create application, the create-to-start process barrier,
+  failure rollback, and no-container-on-error behavior to durable and real
+  Native Linux evidence. It deliberately defines no nonstandard State values
+  or properties and continues to defer optional process application until
+  Start. Capability warnings returned by init and exec are now actually logged
+  by their parent paths while the successful operation continues; poststop
+  warnings retain the same non-blocking policy. Seven owner-bound rules promote
+  eleven entries to enforced and four to conformant, leaving 566 enforced, 50
+  validated, seven conformant, and 32 pending entries.
 - OCI Linux default filesystem provisioning. For a newly created mount
   namespace, the executor now supplies `/proc`, `/dev/pts`, and writable
   `/dev/shm` when the OCI mount list omits an exact destination. It also
