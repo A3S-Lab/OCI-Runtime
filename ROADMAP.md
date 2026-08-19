@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 109-entry pending normative evidence backlog.
+- [ ] Close the remaining 104-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -506,6 +506,10 @@ driver implements.
     and Update behavior or pre-mutation rejection. Preserve zero, encode `-1`
     as `max`, validate finite total swap against a finite hard limit, allow
     `memory.low` above `memory.max`, and reject cgroup v1-only controls.
+  - [x] Bind all five OCI network-controller entries to an explicit cgroup v2
+    rejection boundary. Create and live Update identify `net_cls` and
+    `net_prio` as cgroup v1-only controls and fail before cgroup or
+    device-policy mutation for both class IDs and interface priorities.
   - [x] Bind the 14 previously pending OCI Block I/O entries to cgroup v2
     Create and Update behavior or explicit pre-mutation rejection. Together
     with the existing validated weight/leaf-weight relationship, all 15 Block
@@ -1532,8 +1536,8 @@ leak. Only then may KVM become `experimental`.
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, extensibility,
   namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
-  HugeTLB, RDMA, and Unified promotions leave 494 enforced, 50 validated, and
-  109 pending entries.
+  HugeTLB, RDMA, Unified, and network-controller promotions leave 499
+  enforced, 50 validated, and 104 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
@@ -1546,7 +1550,8 @@ leak. Only then may KVM become `experimental`.
   the OCI memory and PIDs `-1` sentinel to cgroup v2 `max` for Create and
   Update, reject values below `-1`, keep reservation independent of the hard
   limit, require finite total swap to have a compatible finite memory limit,
-  and reject cgroup v1-only memory controls before mutation. Keep
+  and reject cgroup v1-only memory and `net_cls`/`net_prio` network controls
+  before mutation. Keep
   `control-workload-v1` finite while accepting zero for the exact workload
   leaf and adding only its configured headroom to the management envelope.
   Allow independent CPU quota and period requests, reject cgroup v1 realtime

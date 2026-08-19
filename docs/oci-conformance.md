@@ -100,8 +100,9 @@ accurate discovery.
 | File transfer and filesystem sessions | SDK contract | Protocol-v4 SDK transport, protocol-v10 Guest replay-record acknowledgement, v3 Host journal recovery, exact request-shape, size/depth, capability, target-correlation, generation-fence, driver-boundary tests, and 18/18 real-HVF File/Filesystem owner-replacement paths | The shared executor confines paths to a retained rootfs descriptor with `openat2` and descriptor-relative syscalls, maps container users through the retained namespace, bounds payloads and listings, and journals upload/mkdir/move/remove by `OperationId`; the Host retains each exact mutating request and typed response, commits before Guest acknowledgement, replays without redispatch, and permanently fences changed reuse | No |
 | Checkpoint and restore | SDK contract | Typed requests | No | No |
 
-The Linux cgroup-resource boundary now includes OCI 1.3 HugeTLB, RDMA, and
-Unified. Both
+The Linux cgroup-resource boundary now explicitly rejects OCI cgroup v1
+`net_cls` and `net_prio` network controls before Create or Update mutation. It
+also includes OCI 1.3 HugeTLB, RDMA, and Unified. Both
 HugeTLB fields are schema-checked, limits retain the complete `uint64` range, and the
 executor resolves canonical page sizes against live `hugetlb.<size>.max`
 controls before mutation. It also writes `hugetlb.<size>.rsvd.max` when the
@@ -192,7 +193,7 @@ Remaining evidence includes:
 
 1. positive decode/round-trip fixtures for every applicable property;
 2. negative cross-field and semantic fixtures;
-3. promotion of all 109 pending common, Linux, and VM normative entries to
+3. promotion of all 104 pending common, Linux, and VM normative entries to
    exact rule IDs, enforcement owners, and test IDs;
 4. hook crash-recovery, security-negative, and adversarial hook-soak traces
    beyond the retained native six-phase failure matrix and bounded

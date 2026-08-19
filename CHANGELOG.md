@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Fail-closed handling for OCI `linux.resources.network` on the cgroup v2
+  execution boundary. The shared Create and live Update planner now reports
+  that the cgroup v1 `net_cls` and `net_prio` controls are unsupported before
+  any cgroup or device-policy mutation, instead of relying on the generic
+  unknown-resource error. Dedicated tests cover both `classID` and interface
+  priorities on both paths. One owner-bound executor rule promotes all five
+  Network requirements, leaving 499 enforced, 50 validated, two conformant,
+  and 104 pending entries.
 - OCI 1.3 `linux.resources.unified` enforcement for cgroup v2. The shared
   Linux executor accepts bounded, deterministic control-file maps, preserves
   controller names discovered from the running kernel, and enables every

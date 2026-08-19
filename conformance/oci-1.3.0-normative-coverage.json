@@ -10491,10 +10491,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`network`** (object, OPTIONAL) represents the cgroup subsystems `net_cls` and `net_prio`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.network.cgroup-v1-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
+        "executor::cgroup::update::tests::rejects_cgroup_v1_network_controls_during_update_planning"
+      ]
     },
     {
       "id": "sha256:b528ce39bb131a10de2996f9cf9134a09667b4fd6c4696e95e8284ef6ed5de69",
@@ -10505,10 +10510,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`classID`** *(uint32, OPTIONAL)* - is the network class identifier the cgroup's network packets will be tagged with",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.network.cgroup-v1-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
+        "executor::cgroup::update::tests::rejects_cgroup_v1_network_controls_during_update_planning"
+      ]
     },
     {
       "id": "sha256:05d2492cdd8c14e54e9f1cecdcc235af12d0c33dc35a6fc1e96e0e3cb8e22224",
@@ -10519,10 +10529,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`priorities`** *(array of objects, OPTIONAL)* - specifies a list of objects of the priorities assigned to traffic originating from processes in the group and egressing the system on various interfaces.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.network.cgroup-v1-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
+        "executor::cgroup::update::tests::rejects_cgroup_v1_network_controls_during_update_planning"
+      ]
     },
     {
       "id": "sha256:b901fcfb801dd7fe1c607e2b01ea3de62ba82993c4403f536c0bd538e8d61ea3",
@@ -10533,10 +10548,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`name`** *(string, REQUIRED)* - interface name in [runtime network namespace](glossary.md#runtime-namespace)",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.network.cgroup-v1-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
+        "executor::cgroup::update::tests::rejects_cgroup_v1_network_controls_during_update_planning"
+      ]
     },
     {
       "id": "sha256:c64d8a1607b4c364500d2341abe77ee6de1739e2bb6009399473305275ff00eb",
@@ -10547,10 +10567,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`priority`** *(uint32, REQUIRED)* - priority applied to the interface",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.network.cgroup-v1-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
+        "executor::cgroup::update::tests::rejects_cgroup_v1_network_controls_during_update_planning"
+      ]
     },
     {
       "id": "sha256:1d5c01ffffac2480a4ee5229e97002c2162c4ffb4601d128e9fa6f3915f3879e",

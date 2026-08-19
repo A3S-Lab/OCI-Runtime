@@ -951,6 +951,24 @@
     },
     {
       "requirementIds": [
+        "sha256:96a29e679d30774c5c0c43b287ed3273ef92e7c2c714e43b486d9ea12d7322de",
+        "sha256:b528ce39bb131a10de2996f9cf9134a09667b4fd6c4696e95e8284ef6ed5de69",
+        "sha256:05d2492cdd8c14e54e9f1cecdcc235af12d0c33dc35a6fc1e96e0e3cb8e22224",
+        "sha256:b901fcfb801dd7fe1c607e2b01ea3de62ba82993c4403f536c0bd538e8d61ea3",
+        "sha256:c64d8a1607b4c364500d2341abe77ee6de1739e2bb6009399473305275ff00eb"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.network.cgroup-v1-controls-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
+        "executor::cgroup::update::tests::rejects_cgroup_v1_network_controls_during_update_planning"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:1d5c01ffffac2480a4ee5229e97002c2162c4ffb4601d128e9fa6f3915f3879e",
         "sha256:0a16a7718f20b2a37b5659d894e5913057f06d89b205e5b5da7a3a19b1538635",
         "sha256:8a2962ed06f320230159567a68d3a97bda9250edc0a5f98b6c5eb97f073ce60f"
