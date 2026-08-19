@@ -111,7 +111,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Install guest build dependencies
+        timeout-minutes: 20
+        run: .github/scripts/install-guest-build-dependencies.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
