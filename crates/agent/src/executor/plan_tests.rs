@@ -766,11 +766,6 @@ fn plans_exec_cpu_affinity_and_ignores_it_for_init() {
 #[test]
 fn rejects_unimplemented_cgroup_v2_resource_families() {
     for (field, value) in [
-        ("blockIO", serde_json::json!({})),
-        (
-            "hugepageLimits",
-            serde_json::json!([{"pageSize": "2MB", "limit": 1}]),
-        ),
         ("rdma", serde_json::json!({"mlx5_0": {"hcaHandles": 1}})),
         ("unified", serde_json::json!({"memory.max": "1"})),
     ] {
@@ -784,6 +779,24 @@ fn rejects_unimplemented_cgroup_v2_resource_families() {
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error.message.contains(&format!("linux.resources.{field}")));
     }
+}
+
+#[test]
+fn accepts_hugetlb_resources_for_runtime_controller_resolution() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["linux"] = serde_json::json!({
+        "resources": {
+            "hugepageLimits": [
+                {"pageSize": "2MB", "limit": 209715200},
+                {"pageSize": "1GB", "limit": 1073741824}
+            ]
+        }
+    });
+    let config = serde_json::to_string(&config).expect("encode HugeTLB config");
+
+    let _plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("HugeTLB resources must survive init planning");
 }
 
 #[test]

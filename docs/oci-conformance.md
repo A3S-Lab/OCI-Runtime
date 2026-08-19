@@ -100,6 +100,17 @@ accurate discovery.
 | File transfer and filesystem sessions | SDK contract | Protocol-v4 SDK transport, protocol-v10 Guest replay-record acknowledgement, v3 Host journal recovery, exact request-shape, size/depth, capability, target-correlation, generation-fence, driver-boundary tests, and 18/18 real-HVF File/Filesystem owner-replacement paths | The shared executor confines paths to a retained rootfs descriptor with `openat2` and descriptor-relative syscalls, maps container users through the retained namespace, bounds payloads and listings, and journals upload/mkdir/move/remove by `OperationId`; the Host retains each exact mutating request and typed response, commits before Guest acknowledgement, replays without redispatch, and permanently fences changed reuse | No |
 | Checkpoint and restore | SDK contract | Typed requests | No | No |
 
+The Linux cgroup-resource boundary now includes OCI 1.3 HugeTLB. Both required
+fields are schema-checked, limits retain the complete `uint64` range, and the
+executor resolves canonical page sizes against live `hugetlb.<size>.max`
+controls before mutation. It also writes `hugetlb.<size>.rsvd.max` when the
+kernel exposes reservation accounting, preserves omitted page sizes on Update,
+rolls back earlier dynamic writes, and keeps HugeTLB on the workload leaf in
+`control-workload-v1`. The `hugetlb` controller remains optional unless a
+bundle requests it; Native Linux qualification performs real read-back when a
+runner exposes a usable controller and page size. RDMA and arbitrary
+`linux.resources.unified` remain explicitly unsupported.
+
 The current runtime must therefore remain `probe-only`.
 
 ## SDK Preservation Boundary
@@ -171,7 +182,7 @@ Remaining evidence includes:
 
 1. positive decode/round-trip fixtures for every applicable property;
 2. negative cross-field and semantic fixtures;
-3. promotion of all 120 pending common, Linux, and VM normative entries to
+3. promotion of all 117 pending common, Linux, and VM normative entries to
    exact rule IDs, enforcement owners, and test IDs;
 4. hook crash-recovery, security-negative, and adversarial hook-soak traces
    beyond the retained native six-phase failure matrix and bounded

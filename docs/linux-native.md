@@ -289,6 +289,20 @@ A3S_OCI_NATIVE_FOCUS=cgroup-ownership \
   bash .github/scripts/native-linux-smoke.sh
 ```
 
+### Control/workload HugeTLB gate
+
+The default matrix also runs the opt-in `control-workload-v1` topology. When
+the host exposes the `hugetlb` controller, a kernel hugepage inventory entry,
+and its matching cgroup-v2 control, the wrapper selects the smallest available
+canonical page size and adds a zero-byte HugeTLB limit to the workload profile.
+The trusted init reads `hugetlb.<size>.max` as `max` on `a3s-control` and exactly
+`0` on `a3s-workload`; when reservation accounting exists it makes the same
+assertions for `hugetlb.<size>.rsvd.max`. This proves workload-only placement
+without requiring preallocated huge pages. Hosts without that controller or a
+matching page-size control skip only this positive real-kernel assertion; the
+portable unsupported-controller, unavailable-page-size, update, read-back, and
+rollback tests still run.
+
 The delegated-rootless counterpart omits `linux.cgroupsPath` and removes the
 unrelated personality and memory-policy profiles from its temporary fixture.
 It then runs both the core lifecycle with its six-device bootstrap and the live

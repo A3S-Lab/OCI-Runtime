@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 
+use super::hugetlb::HugeTlbPlan;
 use super::io::{AppliedBlockIoUpdate, BlockIoPlan};
 use super::{
     cgroup_v2_limit_value, normalize_cgroup_value, parse_max_value, parse_u64_value, read_required,
     shares_to_weight, validate_cpuset, validate_memory_value, validate_pids_limit,
-    validate_supported_resource_fields, CgroupHandle, ControlHeadroom,
+    validate_supported_resource_fields, CgroupHandle, CgroupSetting, ControlHeadroom,
 };
 
 const UPDATE_OPERATION: &str = "update-container-cgroup";
@@ -102,6 +103,7 @@ struct CgroupUpdatePlan {
     cpuset_mems: Option<String>,
     pids_limit: Option<i64>,
     block_io: BlockIoPlan,
+    huge_tlb: HugeTlbPlan,
 }
 
 impl CgroupUpdatePlan {
@@ -112,6 +114,8 @@ impl CgroupUpdatePlan {
         let pids = resources.pids().as_ref();
         let block_io =
             BlockIoPlan::from_oci(resources.block_io().as_ref()).map_err(as_update_error)?;
+        let huge_tlb = HugeTlbPlan::from_oci(resources.hugepage_limits().as_deref())
+            .map_err(as_update_error)?;
         let plan = Self {
             memory_limit: memory.and_then(|memory| memory.limit()),
             memory_reservation: memory.and_then(|memory| memory.reservation()),
@@ -125,6 +129,7 @@ impl CgroupUpdatePlan {
             cpuset_mems: cpu.and_then(|cpu| cpu.mems().clone()),
             pids_limit: pids.map(|pids| pids.limit()),
             block_io,
+            huge_tlb,
         };
         plan.validate()?;
         Ok(plan)
@@ -206,6 +211,7 @@ impl CgroupUpdatePlan {
             .transpose()?;
         management.memory_reservation = None;
         management.block_io = BlockIoPlan::default();
+        management.huge_tlb = HugeTlbPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -249,13 +255,13 @@ impl CgroupUpdatePlan {
         Ok(management)
     }
 
-    async fn settings(&self, path: &Path, oom_group: bool) -> Result<Vec<(&'static str, String)>> {
+    async fn settings(&self, path: &Path, oom_group: bool) -> Result<Vec<CgroupSetting>> {
         let mut settings = Vec::new();
         if let Some(value) = &self.cpuset_mems {
-            settings.push(("cpuset.mems", value.clone()));
+            settings.push(CgroupSetting::new("cpuset.mems", value.clone()));
         }
         if let Some(value) = &self.cpuset_cpus {
-            settings.push(("cpuset.cpus", value.clone()));
+            settings.push(CgroupSetting::new("cpuset.cpus", value.clone()));
         }
 
         let changes_memory = self.memory_limit.is_some()
@@ -282,19 +288,19 @@ impl CgroupUpdatePlan {
                         (Some(current), Some(next)) => next < current,
                     };
                     if lowers_finite_limit {
-                        settings.push(("memory.low", low));
-                        settings.push(("memory.max", max));
+                        settings.push(CgroupSetting::new("memory.low", low));
+                        settings.push(CgroupSetting::new("memory.max", max));
                     } else {
-                        settings.push(("memory.max", max));
-                        settings.push(("memory.low", low));
+                        settings.push(CgroupSetting::new("memory.max", max));
+                        settings.push(CgroupSetting::new("memory.low", low));
                     }
                 }
-                (Some(max), None) => settings.push(("memory.max", max)),
-                (None, Some(low)) => settings.push(("memory.low", low)),
+                (Some(max), None) => settings.push(CgroupSetting::new("memory.max", max)),
+                (None, Some(low)) => settings.push(CgroupSetting::new("memory.low", low)),
                 (None, None) => {}
             }
             if self.memory_limit.is_some() {
-                settings.push((
+                settings.push(CgroupSetting::new(
                     "memory.oom.group",
                     if oom_group { "1" } else { "0" }.to_string(),
                 ));
@@ -320,7 +326,7 @@ impl CgroupUpdatePlan {
                         })?
                         .to_string()
                 };
-                settings.push(("memory.swap.max", swap_only));
+                settings.push(CgroupSetting::new("memory.swap.max", swap_only));
             }
         }
 
@@ -368,10 +374,10 @@ impl CgroupUpdatePlan {
                 None => current_quota,
             };
             let period = self.cpu_period.unwrap_or(current_period);
-            let max = ("cpu.max", format!("{quota} {period}"));
+            let max = CgroupSetting::new("cpu.max", format!("{quota} {period}"));
             let burst = self
                 .cpu_burst
-                .map(|value| ("cpu.max.burst", value.to_string()));
+                .map(|value| CgroupSetting::new("cpu.max.burst", value.to_string()));
             if effective_quota.is_some_and(|quota| current_burst > quota) {
                 if let Some(burst) = burst {
                     settings.push(burst);
@@ -389,20 +395,29 @@ impl CgroupUpdatePlan {
             }
         }
         if let Some(shares) = self.cpu_shares {
-            settings.push(("cpu.weight", shares_to_weight(shares).to_string()));
+            settings.push(CgroupSetting::new(
+                "cpu.weight",
+                shares_to_weight(shares).to_string(),
+            ));
         }
         if let Some(idle) = self.cpu_idle {
-            settings.push(("cpu.idle", idle.to_string()));
+            settings.push(CgroupSetting::new("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
-            settings.push(("pids.max", cgroup_v2_limit_value(value)));
+            settings.push(CgroupSetting::new("pids.max", cgroup_v2_limit_value(value)));
         }
+        settings.extend(
+            self.huge_tlb
+                .settings_async(path)
+                .await
+                .map_err(as_update_error)?,
+        );
         Ok(settings)
     }
 }
 
 #[cfg(test)]
-async fn apply_update_settings(path: &Path, settings: Vec<(&'static str, String)>) -> Result<()> {
+async fn apply_update_settings(path: &Path, settings: Vec<CgroupSetting>) -> Result<()> {
     let prepared = prepare_update_settings(path, settings).await?;
     apply_prepared_update_settings(prepared).await.map(|_| ())
 }
@@ -410,38 +425,44 @@ async fn apply_update_settings(path: &Path, settings: Vec<(&'static str, String)
 #[derive(Debug)]
 struct PreparedUpdateSetting {
     path: PathBuf,
-    file: &'static str,
+    setting: CgroupSetting,
     old: String,
-    value: String,
 }
 
 async fn prepare_update_settings(
     path: &Path,
-    settings: Vec<(&'static str, String)>,
+    settings: Vec<CgroupSetting>,
 ) -> Result<Vec<PreparedUpdateSetting>> {
     let mut prepared = Vec::with_capacity(settings.len());
-    for (file, value) in settings {
-        let old = read_required(path, file, UPDATE_OPERATION).await?;
+    for setting in settings {
+        let old = read_required(path, setting.file(), UPDATE_OPERATION).await?;
         prepared.push(PreparedUpdateSetting {
             path: path.to_path_buf(),
-            file,
+            setting,
             old: normalize_cgroup_value(&old),
-            value,
         });
     }
     Ok(prepared)
 }
 
+#[derive(Debug)]
+struct AppliedUpdateSetting {
+    path: PathBuf,
+    file: String,
+    old: String,
+}
+
 async fn apply_prepared_update_settings(
     prepared: Vec<PreparedUpdateSetting>,
-) -> Result<Vec<(PathBuf, &'static str, String)>> {
+) -> Result<Vec<AppliedUpdateSetting>> {
     let mut applied = Vec::new();
     for setting in prepared {
-        if normalize_cgroup_value(&setting.value) == setting.old {
+        if normalize_cgroup_value(setting.setting.value()) == setting.old {
             continue;
         }
-        let destination = setting.path.join(setting.file);
-        if let Err(error) = tokio::fs::write(&destination, setting.value.as_bytes()).await {
+        let destination = setting.path.join(setting.setting.file());
+        let expected = setting.setting.value().to_string();
+        if let Err(error) = tokio::fs::write(&destination, expected.as_bytes()).await {
             return rollback_update(
                 &applied,
                 None,
@@ -450,14 +471,19 @@ async fn apply_prepared_update_settings(
                     format!(
                         "failed to apply cgroup setting {}={}: {error}",
                         destination.display(),
-                        setting.value,
+                        setting.setting.value(),
                     ),
                 ),
             )
             .await
             .map(|()| applied);
         }
-        applied.push((setting.path, setting.file, setting.old));
+        let (file, _) = setting.setting.into_parts();
+        applied.push(AppliedUpdateSetting {
+            path: setting.path,
+            file,
+            old: setting.old,
+        });
         let actual = match tokio::fs::read_to_string(&destination).await {
             Ok(actual) => actual,
             Err(error) => {
@@ -476,7 +502,7 @@ async fn apply_prepared_update_settings(
                 .map(|()| applied);
             }
         };
-        if normalize_cgroup_value(&actual) != normalize_cgroup_value(&setting.value) {
+        if normalize_cgroup_value(&actual) != normalize_cgroup_value(&expected) {
             return rollback_update(
                 &applied,
                 None,
@@ -496,7 +522,7 @@ async fn apply_prepared_update_settings(
 }
 
 async fn rollback_update(
-    applied: &[(PathBuf, &'static str, String)],
+    applied: &[AppliedUpdateSetting],
     block_io: Option<&AppliedBlockIoUpdate>,
     original: Error,
 ) -> Result<()> {
@@ -504,14 +530,14 @@ async fn rollback_update(
         Some(block_io) => block_io.rollback().await,
         None => Vec::new(),
     };
-    for (path, file, value) in applied.iter().rev() {
-        let destination = path.join(file);
-        if let Err(error) = tokio::fs::write(&destination, value.as_bytes()).await {
+    for setting in applied.iter().rev() {
+        let destination = setting.path.join(&setting.file);
+        if let Err(error) = tokio::fs::write(&destination, setting.old.as_bytes()).await {
             failures.push(format!("{}: {error}", destination.display()));
             continue;
         }
         match tokio::fs::read_to_string(&destination).await {
-            Ok(actual) if normalize_cgroup_value(&actual) == *value => {}
+            Ok(actual) if normalize_cgroup_value(&actual) == setting.old => {}
             Ok(_) => failures.push(format!(
                 "{}: rollback read-back mismatch",
                 destination.display()
@@ -581,9 +607,15 @@ fn update_error(code: ErrorCode, message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
+    use a3s_oci_sdk::ErrorCode;
 
-    use super::{apply_update_settings, CgroupUpdatePlan};
-    use crate::executor::cgroup::{CgroupHandle, ControlHeadroom, ControlWorkloadCgroup};
+    use super::{
+        apply_update_settings, rollback_update, update_error, AppliedUpdateSetting,
+        CgroupUpdatePlan,
+    };
+    use crate::executor::cgroup::{
+        CgroupHandle, CgroupSetting, ControlHeadroom, ControlWorkloadCgroup,
+    };
 
     #[tokio::test]
     async fn resolves_partial_updates_against_current_cgroup_values() {
@@ -638,10 +670,10 @@ mod tests {
                 .settings(directory.path(), true)
                 .await
                 .expect("memory update settings");
-            assert!(settings.contains(&("memory.max", expected.to_string())));
-            assert!(settings.contains(&("memory.low", expected.to_string())));
-            assert!(settings.contains(&("memory.swap.max", expected.to_string())));
-            assert!(settings.contains(&("memory.oom.group", "1".to_string())));
+            assert!(settings.contains(&CgroupSetting::new("memory.max", expected)));
+            assert!(settings.contains(&CgroupSetting::new("memory.low", expected)));
+            assert!(settings.contains(&CgroupSetting::new("memory.swap.max", expected)));
+            assert!(settings.contains(&CgroupSetting::new("memory.oom.group", "1")));
         }
     }
 
@@ -849,6 +881,82 @@ mod tests {
         assert!(management.block_io.is_empty());
     }
 
+    #[tokio::test]
+    async fn updates_only_requested_hugetlb_page_sizes_and_reservation_controls() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        for (file, value) in [
+            ("hugetlb.2MB.max", "104857600\n"),
+            ("hugetlb.2MB.rsvd.max", "104857600\n"),
+            ("hugetlb.1GB.max", "2147483648\n"),
+            ("hugetlb.1GB.rsvd.max", "2147483648\n"),
+        ] {
+            std::fs::write(directory.path().join(file), value).expect("HugeTLB control");
+        }
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "hugepageLimits": [
+                {"pageSize": "2MB", "limit": 209715200}
+            ]
+        }))
+        .expect("HugeTLB update");
+        let plan = CgroupUpdatePlan::from_resources(&resources).expect("HugeTLB update plan");
+        let settings = plan
+            .settings(directory.path(), true)
+            .await
+            .expect("HugeTLB update settings");
+        assert_eq!(
+            settings,
+            [
+                CgroupSetting::new("hugetlb.2MB.max", "209715200"),
+                CgroupSetting::new("hugetlb.2MB.rsvd.max", "209715200"),
+            ]
+        );
+
+        apply_update_settings(directory.path(), settings)
+            .await
+            .expect("apply HugeTLB update");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("hugetlb.2MB.max"))
+                .expect("updated usage limit"),
+            "209715200"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("hugetlb.2MB.rsvd.max"))
+                .expect("updated reservation limit"),
+            "209715200"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("hugetlb.1GB.max"))
+                .expect("preserved omitted usage limit"),
+            "2147483648\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("hugetlb.1GB.rsvd.max"))
+                .expect("preserved omitted reservation limit"),
+            "2147483648\n"
+        );
+    }
+
+    #[test]
+    fn plans_hugetlb_updates_only_for_the_workload_leaf() {
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "hugepageLimits": [
+                {"pageSize": "2MB", "limit": 209715200}
+            ]
+        }))
+        .expect("HugeTLB update");
+        let plan = CgroupUpdatePlan::from_resources(&resources).expect("HugeTLB update plan");
+        let management = plan
+            .management_plan(&ControlHeadroom {
+                memory_bytes: 64 * 1024 * 1024,
+                cpu_quota_micros: 25_000,
+                pids: 16,
+            })
+            .expect("management plan");
+
+        assert!(!plan.huge_tlb.is_empty());
+        assert!(management.huge_tlb.is_empty());
+    }
+
     #[test]
     fn rejects_pids_updates_below_the_unlimited_sentinel() {
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
@@ -1014,8 +1122,8 @@ mod tests {
         apply_update_settings(
             directory.path(),
             vec![
-                ("cpu.weight", "39".to_string()),
-                ("pids.max", "32".to_string()),
+                CgroupSetting::new("cpu.weight", "39"),
+                CgroupSetting::new("pids.max", "32"),
             ],
         )
         .await
@@ -1027,6 +1135,39 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(directory.path().join("pids.max")).expect("read pids max"),
             "32"
+        );
+    }
+
+    #[tokio::test]
+    async fn rolls_back_owned_dynamic_cgroup_settings_in_reverse_order() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        let file = "hugetlb.2MB.rsvd.max";
+        std::fs::write(directory.path().join(file), "30").expect("current HugeTLB limit");
+        let applied = vec![
+            AppliedUpdateSetting {
+                path: directory.path().to_path_buf(),
+                file: file.to_string(),
+                old: "10".to_string(),
+            },
+            AppliedUpdateSetting {
+                path: directory.path().to_path_buf(),
+                file: file.to_string(),
+                old: "20".to_string(),
+            },
+        ];
+        let error = rollback_update(
+            &applied,
+            None,
+            update_error(ErrorCode::PermissionDenied, "synthetic update failure"),
+        )
+        .await
+        .expect_err("rollback returns the original update failure");
+
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join(file)).expect("rolled-back limit"),
+            "10",
+            "reverse rollback must restore the oldest retained value last"
         );
     }
 

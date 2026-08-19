@@ -515,6 +515,13 @@ driver implements.
     applied mutations on failure. Require device identity and throttle rates,
     map OCI zero rates to cgroup v2 `max`, reject duplicate devices, and report
     `leafWeight` as unavailable on cgroup v2.
+  - [x] Bind all three OCI HugeTLB entries to schema validation and exact
+    cgroup-v2 Create and Update behavior. Preserve the full `uint64` input
+    range, require canonical page-size names that match live controls, apply
+    reservation and usage limits together when supported, preserve omitted
+    page sizes, reverse partial writes, and keep the controller optional until
+    requested. Retain conditional real-kernel workload read-back on both Native
+    Linux CI architectures.
   - [x] Bind all 20 OCI Linux device entries to exact schema, planning, rootful
     enforcement, cleanup, and ordered cgroup-device evidence. Cover all four
     node types, paths outside `/dev`, conditional major/minor values, mode and
@@ -1510,14 +1517,15 @@ leak. Only then may KVM become `experimental`.
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, extensibility,
-  namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, and Linux-device
-  promotions leave 482 enforced, 51 validated, and 120 pending entries.
+  namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device, and
+  HugeTLB promotions leave 485 enforced, 51 validated, and 117 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
 - [x] Apply and read back cgroup v2 memory limit/reservation/swap, CPU
-  shares/quota/burst/period/cpuset/idle, PID limits, and Block I/O default and
-  per-device weight plus read/write BPS/IOPS limits. Preserve zero and map
+  shares/quota/burst/period/cpuset/idle, PID limits, Block I/O default and
+  per-device weight plus read/write BPS/IOPS limits, and HugeTLB usage plus
+  optional reservation limits for every requested live page size. Preserve zero and map
   the OCI memory and PIDs `-1` sentinel to cgroup v2 `max` for Create and
   Update, reject values below `-1`, keep reservation independent of the hard
   limit, require finite total swap to have a compatible finite memory limit,
@@ -1530,7 +1538,9 @@ leak. Only then may KVM become `experimental`.
   through `cgroup.freeze` and verify the exact transition through
   `cgroup.events`. Keep Block I/O on the workload leaf, preserve omitted keyed
   values during partial updates, verify every write, and roll back in reverse
-  order if a later resource or device-policy mutation fails.
+  order if a later resource or device-policy mutation fails. Keep HugeTLB on
+  the workload leaf as well, preserve omitted page sizes, and preflight every
+  dynamic control before device-policy mutation.
 - [x] Create a private controller-enabled cgroup-v2 manager, apply
   generation-fenced partial resource updates with exact read-back and
   reverse-order rollback, and expose normalized CPU, memory, PID, and event
@@ -1582,8 +1592,12 @@ leak. Only then may KVM become `experimental`.
   - [x] Enforce cgroup v2 Block I/O default and per-device weights plus all
     four throttle lists with exact keyed read-back and rollback; reject the
     cgroup v1-only leaf-weight model before mutation.
-  - [x] Explicitly reject unsupported hugepage, RDMA, and unified resource
-    requests before mutation.
+  - [x] Enforce HugeTLB usage and reservation controls for canonical live page
+    sizes, including full-range `uint64` decoding, kernel-aligned read-back,
+    partial Update preservation, reverse rollback, optional-controller
+    propagation, and workload-only control/workload placement.
+  - [x] Explicitly reject unsupported RDMA and unified resource requests before
+    mutation.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
   - [x] Make the OCI declared/default device inventory an immutable cgroup-v2

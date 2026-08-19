@@ -6,6 +6,19 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI 1.3 HugeTLB enforcement for cgroup v2. `hugepageLimits` now retains the
+  complete normative `uint64` limit range, requires both `pageSize` and `limit`,
+  rejects unsafe, overflowing, duplicate, or unavailable page-size controls,
+  and enables the optional `hugetlb` controller only when requested. Create and
+  live Update apply kernel-representable limits to `hugetlb.<size>.max` and, when
+  present, `hugetlb.<size>.rsvd.max`; every write is read back, omitted page
+  sizes survive partial updates, and failures roll prior dynamic controls back
+  in reverse order. The control/workload topology keeps HugeTLB on the workload
+  leaf, and Native Linux qualification verifies a real host page size when the
+  runner exposes the controller. A version-local `oci-spec` 0.10 patch corrects
+  its HugeTLB limit wire type from `i64` to OCI's `uint64` until upstream ships
+  the fix. One owner-bound rule promotes all three HugeTLB requirements, leaving
+  485 enforced, 51 validated, two conformant, and 117 pending entries.
 - Owner-bound OCI Linux namespace, user-mapping, and time-offset evidence.
   Pinned schema tests require namespace types and every UID/GID mapping member.
   The executor now has one table-driven contract test covering inherit,

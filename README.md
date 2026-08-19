@@ -119,6 +119,17 @@ network-device authority. The Native Linux gate uses real dummy interfaces to
 exercise move, rename, address/MTU/MAC preservation, target conflict, partial
 rollback, rootless rejection, and cleanup.
 
+OCI 1.3 `linux.resources.hugepageLimits` is also implemented by the shared
+executor. The SDK preserves the complete normative `uint64` range, while the
+executor validates each canonical page-size name against the live cgroup-v2
+inventory, enables `hugetlb` only when requested, and applies both usage and
+reservation limits when the kernel exposes reservation accounting. Create and
+live Update use kernel-representable values with read-back and reverse rollback;
+partial updates leave omitted page sizes unchanged. In `control-workload-v1`,
+HugeTLB remains an exact workload-only limit rather than being copied into the
+management envelope. Native Linux CI reads the selected host page-size controls
+back on x86_64 and aarch64 whenever the runner exposes `hugetlb`.
+
 The current Box adapter at `A3S-Lab/Box@a16772c3` rechecks every read against
 the exact runtime binding. File upload/download and filesystem
 stat/mkdir/move/list/remove now use the same cross-platform session facade;
@@ -502,8 +513,8 @@ The repository turns release claims into checked inventories:
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 94 |
-| Owner-bound non-semantic rules | 119 |
-| OCI normative dispositions | 482 enforced · 51 validated · 2 conformant · 120 pending review |
+| Owner-bound non-semantic rules | 120 |
+| OCI normative dispositions | 485 enforced · 51 validated · 2 conformant · 117 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |

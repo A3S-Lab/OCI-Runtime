@@ -13,10 +13,12 @@ use a3s_oci_sdk::{
 use super::device::DevicePlan;
 use super::device_policy::DevicePolicyAuthority;
 
+mod hugetlb;
 mod io;
 mod manager;
 mod ownership;
 mod plan;
+mod setting;
 mod stats;
 mod update;
 
@@ -27,12 +29,13 @@ use plan::{
     cgroup_v2_limit_value, shares_to_weight, validate_cpuset, validate_memory_value,
     validate_pids_limit, validate_supported_resource_fields, ControlHeadroom,
 };
+use setting::CgroupSetting;
 
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
 const CGROUP_PROCS: &str = "cgroup.procs";
 const REQUIRED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
-const SUPPORTED_CONTROLLERS: [&str; 5] = ["cpu", "cpuset", "io", "memory", "pids"];
+const SUPPORTED_CONTROLLERS: [&str; 6] = ["cpu", "cpuset", "hugetlb", "io", "memory", "pids"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
@@ -149,10 +152,13 @@ impl CgroupHandle {
         }
         let configured = (|| {
             initialize_cpuset(&current)?;
+            let huge_tlb_settings = plan.huge_tlb().settings(&current)?;
             let (device_filter, delegated_device_filter) =
                 install_device_filter(devices, &current, manager)?;
             let Some(headroom) = plan.control_headroom() else {
-                apply_settings(&current, &plan.settings())?;
+                let mut settings = plan.settings();
+                settings.extend(huge_tlb_settings);
+                apply_settings(&current, &settings)?;
                 plan.block_io().apply_create(&current)?;
                 let init_procs = open_cgroup_procs(&current)?;
                 ownership.apply(&current)?;
@@ -259,7 +265,9 @@ impl CgroupHandle {
         let workload = layout.management.join(WORKLOAD_CGROUP_NAME);
         initialize_cpuset(&control)?;
         initialize_cpuset(&workload)?;
-        apply_settings(&workload, &plan.settings_with_oom_group(false))?;
+        let mut settings = plan.settings_with_oom_group(false);
+        settings.extend(plan.huge_tlb().settings(&workload)?);
+        apply_settings(&workload, &settings)?;
         plan.block_io().apply_create(&workload)
     }
 
@@ -489,10 +497,10 @@ fn open_cgroup_procs(path: &Path) -> Result<File> {
     Ok(unsafe { File::from_raw_fd(descriptor) })
 }
 
-fn apply_settings(path: &Path, settings: &[(&'static str, String)]) -> Result<()> {
-    for (file, value) in settings {
-        let destination = path.join(file);
-        std::fs::write(&destination, value.as_bytes()).map_err(|error| {
+fn apply_settings(path: &Path, settings: &[CgroupSetting]) -> Result<()> {
+    for setting in settings {
+        let destination = path.join(setting.file());
+        std::fs::write(&destination, setting.value().as_bytes()).map_err(|error| {
             cgroup_error(
                 if error.kind() == std_io::ErrorKind::NotFound {
                     ErrorCode::Unsupported
@@ -500,8 +508,9 @@ fn apply_settings(path: &Path, settings: &[(&'static str, String)]) -> Result<()
                     ErrorCode::PermissionDenied
                 },
                 format!(
-                    "failed to apply cgroup setting {}={value}: {error}",
-                    destination.display()
+                    "failed to apply cgroup setting {}={}: {error}",
+                    destination.display(),
+                    setting.value()
                 ),
             )
         })?;
@@ -514,7 +523,7 @@ fn apply_settings(path: &Path, settings: &[(&'static str, String)]) -> Result<()
                 ),
             )
         })?;
-        if normalize_cgroup_value(&actual) != normalize_cgroup_value(value) {
+        if normalize_cgroup_value(&actual) != normalize_cgroup_value(setting.value()) {
             return Err(cgroup_error(
                 ErrorCode::FailedPrecondition,
                 format!(
@@ -761,14 +770,14 @@ mod tests {
     use super::{
         apply_settings, cgroup_event_value, enable_controllers,
         install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
-        open_control_workload_membership,
+        open_control_workload_membership, CgroupSetting,
     };
 
     #[test]
     fn reports_an_unavailable_cgroup_control_as_unsupported() {
         let directory = tempfile::tempdir().expect("temporary cgroup parent");
         let missing_cgroup = directory.path().join("missing");
-        let error = apply_settings(&missing_cgroup, &[("cpu.idle", "1".to_string())])
+        let error = apply_settings(&missing_cgroup, &[CgroupSetting::new("cpu.idle", "1")])
             .expect_err("an unavailable cgroup control must fail");
 
         assert_eq!(error.code, ErrorCode::Unsupported);

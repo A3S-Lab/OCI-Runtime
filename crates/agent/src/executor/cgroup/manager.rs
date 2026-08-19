@@ -228,10 +228,14 @@ impl CgroupManager {
         }
         let required = REQUIRED_CONTROLLERS.into_iter().collect::<BTreeSet<_>>();
         enable_controllers(&mountpoint, &required)?;
-        if controllers.contains("io")
-            && enable_controllers(&mountpoint, &BTreeSet::from(["io"])).is_err()
-        {
-            controllers.remove("io");
+        let optional = controllers
+            .difference(&required)
+            .copied()
+            .collect::<Vec<_>>();
+        for controller in optional {
+            if enable_controllers(&mountpoint, &BTreeSet::from([controller])).is_err() {
+                controllers.remove(controller);
+            }
         }
 
         Self::create_below(mountpoint.clone(), mountpoint, controllers, None)
@@ -982,26 +986,26 @@ mod tests {
 
         std::fs::write(
             directory.path().join("cgroup.controllers"),
-            "cpu cpuset io memory pids",
+            "cpu cpuset hugetlb io memory pids",
         )
-        .expect("optional I/O controller");
+        .expect("optional controllers");
         assert_eq!(
             required_delegated_controllers(directory.path())
                 .expect("delegation with an unenabled optional I/O controller"),
             BTreeSet::from(["cpu", "cpuset", "memory", "pids"]),
-            "an optional I/O controller is unusable until the delegator enables it"
+            "optional controllers are unusable until the delegator enables them"
         );
 
         std::fs::write(
             directory.path().join("cgroup.subtree_control"),
-            "cpu cpuset io memory pids",
+            "cpu cpuset hugetlb io memory pids",
         )
-        .expect("enabled optional I/O controller");
+        .expect("enabled optional controllers");
         assert_eq!(
             required_delegated_controllers(directory.path())
-                .expect("delegation with an enabled optional I/O controller"),
-            BTreeSet::from(["cpu", "cpuset", "io", "memory", "pids"]),
-            "an enabled optional I/O controller is propagated without becoming a baseline requirement"
+                .expect("delegation with enabled optional controllers"),
+            BTreeSet::from(["cpu", "cpuset", "hugetlb", "io", "memory", "pids"]),
+            "enabled optional controllers are propagated without becoming baseline requirements"
         );
     }
 }

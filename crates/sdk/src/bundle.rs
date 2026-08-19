@@ -550,6 +550,69 @@ mod tests {
         assert!(bundle.directory().is_absolute());
     }
 
+    #[test]
+    fn preserves_the_full_normative_hugetlb_uint64_range() {
+        let mut config = complete_v1_3_fixture();
+        config["linux"]["resources"]["hugepageLimits"] = json!([{
+            "pageSize": "64KB",
+            "limit": u64::MAX
+        }]);
+        let directory = std::env::current_dir()
+            .expect("current directory")
+            .join("hugetlb-uint64-bundle");
+        let bundle = OciBundle::from_json(
+            directory,
+            serde_json::to_string(&config).expect("encode HugeTLB fixture"),
+        )
+        .expect("the complete OCI uint64 limit must decode");
+        let limit = bundle
+            .spec()
+            .linux()
+            .as_ref()
+            .and_then(|linux| linux.resources().as_ref())
+            .and_then(|resources| resources.hugepage_limits().as_deref())
+            .and_then(|limits| limits.first())
+            .expect("typed HugeTLB limit");
+
+        assert_eq!(limit.limit(), u64::MAX);
+        assert_eq!(
+            serde_json::to_value(bundle.spec()).expect("encode typed OCI spec")["linux"]
+                ["resources"]["hugepageLimits"][0]["limit"],
+            json!(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn requires_both_normative_hugetlb_fields() {
+        for (missing, hugepage_limit) in [
+            ("pageSize", json!({"limit": 209715200})),
+            ("limit", json!({"pageSize": "2MB"})),
+        ] {
+            let mut config = complete_v1_3_fixture();
+            config["linux"]["resources"]["hugepageLimits"] = json!([hugepage_limit]);
+            let directory = std::env::current_dir()
+                .expect("current directory")
+                .join("hugetlb-required-fields-bundle");
+            let error = OciBundle::from_json(
+                directory,
+                serde_json::to_string(&config).expect("encode invalid HugeTLB fixture"),
+            )
+            .expect_err("each normative HugeTLB field must be present");
+
+            assert_eq!(error.code, ErrorCode::InvalidArgument);
+            assert_eq!(
+                error.operation.as_deref(),
+                Some("validate-oci-configuration")
+            );
+            assert!(error.message.contains(missing));
+            assert!(
+                error.message.contains("/linux/resources/hugepageLimits/0"),
+                "unexpected schema error: {}",
+                error.message
+            );
+        }
+    }
+
     #[tokio::test]
     async fn requires_config_json_at_bundle_root() {
         let temporary = tempfile::tempdir().expect("create temporary bundle");

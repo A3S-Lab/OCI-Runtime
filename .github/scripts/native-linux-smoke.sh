@@ -39,6 +39,45 @@ network_device_conflict_source="a3snc$$"
 network_device_rollback_first="a3snr0$$"
 network_device_rollback_second="a3snr1$$"
 network_device_rootless_source="a3snl$$"
+hugetlb_page_size=""
+hugetlb_reservation_control=false
+
+detect_hugetlb_page_size() {
+  local candidate
+  local candidate_kbytes
+  local candidate_page_size
+  local selected_kbytes=""
+  local selected_page_size=""
+
+  if ! grep -qw hugetlb /sys/fs/cgroup/cgroup.controllers; then
+    return 0
+  fi
+
+  for candidate in /sys/kernel/mm/hugepages/hugepages-*kB; do
+    [[ -d "$candidate" ]] || continue
+    if [[ "${candidate##*/}" =~ ^hugepages-([0-9]+)kB$ ]]; then
+      candidate_kbytes="${BASH_REMATCH[1]}"
+    else
+      continue
+    fi
+    if ((candidate_kbytes % 1048576 == 0)); then
+      candidate_page_size="$((candidate_kbytes / 1048576))GB"
+    elif ((candidate_kbytes % 1024 == 0)); then
+      candidate_page_size="$((candidate_kbytes / 1024))MB"
+    else
+      candidate_page_size="${candidate_kbytes}KB"
+    fi
+    if [[ ! -f "/sys/fs/cgroup/hugetlb.${candidate_page_size}.max" ]]; then
+      continue
+    fi
+    if [[ -z "$selected_kbytes" ]] || ((candidate_kbytes < selected_kbytes)); then
+      selected_kbytes="$candidate_kbytes"
+      selected_page_size="$candidate_page_size"
+    fi
+  done
+
+  printf '%s' "$selected_page_size"
+}
 
 restore_host() {
   local command_status=$?
@@ -192,6 +231,18 @@ sudo apt-get update
 sudo apt-get install --yes busybox-static iproute2 jq uidmap util-linux
 cargo build -p a3s-oci-agent -p a3s-oci-cli
 
+hugetlb_page_size="$(detect_hugetlb_page_size)"
+if [[ -n "$hugetlb_page_size" ]]; then
+  if [[ -f "/sys/fs/cgroup/hugetlb.${hugetlb_page_size}.rsvd.max" ]]; then
+    hugetlb_reservation_control=true
+  fi
+  printf 'Native HugeTLB evidence enabled for page size %s (reservation=%s)\n' \
+    "$hugetlb_page_size" "$hugetlb_reservation_control"
+else
+  printf '%s\n' \
+    'Native HugeTLB evidence skipped: no usable host cgroup-v2 HugeTLB page size'
+fi
+
 features="$("$PWD/target/debug/a3s-oci" features)"
 printf '%s\n' "$features"
 jq --exit-status \
@@ -286,10 +337,20 @@ jq \
 mv "$bundle/config.json.tmp" "$bundle/config.json"
 control_hook_trace="$control_bundle/rootfs/.a3s-oci-hook-trace"
 # shellcheck disable=SC2016 # Expanded by the trusted configured init.
-control_command_prefix='test "$A3S_CONTROL_CGROUP_PROCS_FD" = 6; test "$A3S_WORKLOAD_CGROUP_PROCS_FD" = 7; test -d /sys/fs/cgroup/a3s-control; test -d /sys/fs/cgroup/a3s-workload; test -z "$(/bin/busybox cat /sys/fs/cgroup/cgroup.procs)"; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-control"; printf 0 >&7; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-workload"; exec 6>&- 7>&-; '
+control_command_prefix='test "$A3S_CONTROL_CGROUP_PROCS_FD" = 6; test "$A3S_WORKLOAD_CGROUP_PROCS_FD" = 7; test -d /sys/fs/cgroup/a3s-control; test -d /sys/fs/cgroup/a3s-workload; test -z "$(/bin/busybox cat /sys/fs/cgroup/cgroup.procs)"; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-control"; printf 0 >&7; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-workload"; '
+if [[ -n "$hugetlb_page_size" ]]; then
+  control_command_prefix+="test \"\$(/bin/busybox cat /sys/fs/cgroup/a3s-control/hugetlb.${hugetlb_page_size}.max)\" = max; "
+  control_command_prefix+="test \"\$(/bin/busybox cat /sys/fs/cgroup/a3s-workload/hugetlb.${hugetlb_page_size}.max)\" = 0; "
+  if [[ "$hugetlb_reservation_control" == true ]]; then
+    control_command_prefix+="test \"\$(/bin/busybox cat /sys/fs/cgroup/a3s-control/hugetlb.${hugetlb_page_size}.rsvd.max)\" = max; "
+    control_command_prefix+="test \"\$(/bin/busybox cat /sys/fs/cgroup/a3s-workload/hugetlb.${hugetlb_page_size}.rsvd.max)\" = 0; "
+  fi
+fi
+control_command_prefix+='exec 6>&- 7>&-; '
 jq \
   --arg command_prefix "$control_command_prefix" \
   --arg hook_trace "$control_hook_trace" \
+  --arg hugetlb_page_size "$hugetlb_page_size" \
   '
     .process.args[2] = ($command_prefix + .process.args[2])
     | .mounts += [{
@@ -308,6 +369,13 @@ jq \
         cpu: {shares: 512, quota: 50000, period: 100000},
         pids: {limit: 64}
       }
+    | if $hugetlb_page_size == ""
+      then .
+      else .linux.resources.hugepageLimits = [{
+        pageSize: $hugetlb_page_size,
+        limit: 0
+      }]
+      end
     | .annotations["dev.a3s.oci.cgroup.layout"] = "control-workload-v1"
     | .annotations["dev.a3s.oci.cgroup.control-memory-headroom-bytes"] = "67108864"
     | .annotations["dev.a3s.oci.cgroup.control-cpu-headroom-micros"] = "25000"
