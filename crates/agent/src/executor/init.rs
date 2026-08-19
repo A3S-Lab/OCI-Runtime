@@ -604,7 +604,11 @@ fn prepare_create_environment_before_pivot(
     if plan.namespaces.new_mount() {
         plan.devices.validate_rootfs(rootfs)?;
         rootfs::prepare_pivot(rootfs, plan.rootfs_propagation)?;
+        plan.default_filesystems
+            .apply_early(bundle_directory, rootfs, detached_sources)?;
         mount::apply_all(&plan.mounts, bundle_directory, rootfs, detached_sources)?;
+        plan.default_filesystems
+            .apply_late(bundle_directory, rootfs, detached_sources)?;
         plan.devices
             .bind_prepared_sources(rootfs, prepared_devices)?;
     }

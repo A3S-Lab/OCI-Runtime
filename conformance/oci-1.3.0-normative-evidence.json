@@ -2986,6 +2986,24 @@
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
         "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:90fa7d9296a529d162fda071d83473999ad3e38818bbd9a4b917d720c8beaa32"
+      ],
+      "disposition": "conformant",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.default-filesystems.provisioned"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations",
+        "executor::mount_tests::accepts_omitted_mount_list_and_optional_mount_fields",
+        "executor::mount_tests::does_not_expose_host_sysfs_to_a_user_namespace_with_inherited_networking",
+        "executor::mount_tests::preserves_explicit_default_filesystems_without_duplicate_mounts",
+        "fixtures/native-linux/config.json::synthesized-default-filesystem-readback",
+        "native-linux-smoke.sh::rootless-synthesized-default-filesystem-readback"
+      ]
     }
   ]
 }

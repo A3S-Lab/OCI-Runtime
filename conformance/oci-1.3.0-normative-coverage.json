@@ -7903,10 +7903,19 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "The following filesystems SHOULD be made available in each container's filesystem:",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.default-filesystems.provisioned"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations",
+        "executor::mount_tests::accepts_omitted_mount_list_and_optional_mount_fields",
+        "executor::mount_tests::does_not_expose_host_sysfs_to_a_user_namespace_with_inherited_networking",
+        "executor::mount_tests::preserves_explicit_default_filesystems_without_duplicate_mounts",
+        "fixtures/native-linux/config.json::synthesized-default-filesystem-readback",
+        "native-linux-smoke.sh::rootless-synthesized-default-filesystem-readback"
+      ]
     },
     {
       "id": "sha256:82e67ad70c707857d56abb9423b05642f793a1c94cc8b130787f0d7d84fd4b81",
