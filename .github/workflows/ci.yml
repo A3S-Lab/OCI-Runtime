@@ -1006,27 +1006,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install guest build dependencies
-        timeout-minutes: 20
-        run: .github/scripts/install-guest-build-dependencies.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
-      - run: >-
-          cargo build -p a3s-oci-agent --release
-          --target x86_64-unknown-linux-musl
-      - name: Build static aarch64 guest agent
-        shell: bash
-        run: |
-          host_triple="$(rustc -vV | sed -n 's/^host: //p')"
-          rust_lld="$(
-            rustc --print sysroot
-          )/lib/rustlib/$host_triple/bin/rust-lld"
-          test -x "$rust_lld"
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$rust_lld" \
-            cargo build -p a3s-oci-agent --release \
-              --target aarch64-unknown-linux-musl
+      - name: Build static guest agents
+        run: .github/scripts/build-static-guest-agents.sh
       - name: Verify static guest artifact
         shell: bash
         run: |
