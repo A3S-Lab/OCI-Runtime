@@ -882,9 +882,10 @@ if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
 fi
 
 # shellcheck disable=SC2016 # Expanded inside the rootless workload.
+rootless_default_filesystem_command='test "$(/bin/busybox stat -f -c %T /proc)" = proc; test ! -e /sys; test "$(/bin/busybox stat -f -c %T /dev/pts)" = devpts; test "$(/bin/busybox stat -f -c %T /dev/shm)" = tmpfs; printf rootless-default-filesystem > /dev/shm/.a3s-oci-default-filesystem; test "$(/bin/busybox cat /dev/shm/.a3s-oci-default-filesystem)" = rootless-default-filesystem; /bin/busybox rm /dev/shm/.a3s-oci-default-filesystem; '
 rootless_command='set -eu; test "$(/bin/busybox id -u)" = 0; test "$(/bin/busybox id -g)" = 0; test "$(/bin/busybox cat /proc/self/setgroups)" = deny; test "$(/bin/busybox stat -c "%u:%g" /.a3s-oci-rootless-subordinate)" = 1:1; for spec in null:1:3 zero:1:5 full:1:7 random:1:8 urandom:1:9 tty:5:0; do name=${spec%%:*}; rest=${spec#*:}; major=${rest%%:*}; minor=${rest#*:}; test "$(/bin/busybox stat -c %t:%T /dev/$name)" = "$(printf %x $major):$(printf %x $minor)"; test "$(/bin/busybox stat -c %a /dev/$name)" = 666; done; printf probe > /dev/null; /bin/busybox head -c 1 /dev/zero > /dev/null; test "$(/bin/busybox head -c 1 /dev/full | /bin/busybox wc -c)" = 1; /bin/busybox head -c 1 /dev/random > /dev/null; /bin/busybox head -c 1 /dev/urandom > /dev/null; printf "a3s-oci-rootless-mapping-v1\n" > /.a3s-oci-rootless-smoke; progress=0; while :; do progress=$((progress + 1)); printf "%s\n" "$progress" > /.a3s-oci-rootless-progress.next; /bin/busybox mv /.a3s-oci-rootless-progress.next /.a3s-oci-rootless-progress; /bin/busybox sleep 0.05; done'
 jq \
-  --arg command "$rootless_command" \
+  --arg command "${rootless_default_filesystem_command}${rootless_command}" \
   --arg native_focus "$native_focus" \
   --argjson uid "$rootless_uid" \
   --argjson gid "$rootless_gid" \

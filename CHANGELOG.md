@@ -6,6 +6,21 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI Linux default filesystem provisioning. For a newly created mount
+  namespace, the executor now supplies `/proc`, `/dev/pts`, and writable
+  `/dev/shm` when the OCI mount list omits an exact destination. It also
+  supplies read-only `/sys` when the execution context owns a compatible
+  network namespace.
+  `/proc` and `/sys` are installed before configured child mounts, while the
+  two `/dev` filesystems are installed after a configured parent, so defaults
+  do not hide `/sys/fs/cgroup` and cannot be hidden by a caller-provided
+  `/dev`. Exact configured destinations remain authoritative. A non-initial
+  user namespace that inherits networking deliberately receives no host
+  sysfs: Linux rejects a fresh mount there, while exposing the host mount would
+  cross the isolation boundary. Unit and Native Linux coverage prove the
+  omission, override, phase-ordering, rootful, new-network, and rootless
+  security paths. One owner-bound rule resolves this recommended requirement,
+  leaving 555 enforced, 50 validated, three conformant, and 47 pending entries.
 - Complete owner binding for all 24 OCI 1.3 VM configuration requirements.
   Pinned-schema tests cover every hypervisor, kernel, image, and hardware
   member, all five image formats, optional forms, required relationships, and

@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 48-entry pending normative evidence backlog.
+- [ ] Close the remaining 47-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -1463,6 +1463,13 @@ leak. Only then may KVM become `experimental`.
   masked paths, read-only paths, and read-only rootfs enforcement; prove the
   same create/start barrier and exact cleanup through native Linux and the
   macOS utility VM.
+- [x] Supply OCI's Linux ABI default filesystems in newly created mount
+  namespaces when their exact destinations are omitted. Mount `/proc` and an
+  eligible read-only `/sys` before configured child mounts, mount `/dev/pts`
+  and writable `/dev/shm` after a configured `/dev`, and preserve exact caller
+  destinations. Do not expose host sysfs when a non-initial user namespace
+  inherits networking; Linux rejects a fresh sysfs there. Prove the rootful,
+  new-network, and rootless security paths through Native Linux.
 - [x] Apply all OCI recursive VFS mount attributes with `mount_setattr`,
   descriptor-pin each destination, and prove top-level and nested submount
   enforcement through native Linux and the macOS utility VM.
@@ -1554,7 +1561,8 @@ leak. Only then may KVM become `experimental`.
   owner-bound. Subsequent common-configuration, platform, extensibility,
   namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
   HugeTLB, RDMA, Unified, network-controller, Seccomp, and VM-configuration
-  promotions leave 555 enforced, 50 validated, and 48 pending entries.
+  promotions plus Linux default-filesystem conformance leave 555 enforced,
+  50 validated, three conformant, and 47 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

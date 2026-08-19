@@ -17,7 +17,7 @@ use super::hook::HookSet;
 use super::intel_rdt::IntelRdtPlan;
 use super::io_priority::IoPriorityPlan;
 use super::memory_policy::MemoryPolicyPlan;
-use super::mount::{self, MountPlan};
+use super::mount::{self, DefaultFilesystemPlan, MountPlan};
 use super::namespace::NamespacePlan;
 use super::network_device::NetworkDevicePlan;
 use super::personality::PersonalityPlan;
@@ -172,6 +172,7 @@ pub(super) struct InitPlan {
     pub(super) namespaces: NamespacePlan,
     pub(super) sysctls: SysctlPlan,
     pub(super) mounts: Vec<MountPlan>,
+    pub(super) default_filesystems: DefaultFilesystemPlan,
     pub(super) root_readonly: bool,
     pub(super) rootfs_propagation: Option<RootfsPropagation>,
     pub(super) masked_paths: Vec<PathBuf>,
@@ -286,6 +287,12 @@ impl InitPlan {
             "linux.readonlyPaths",
         )?;
         let mounts = mount::plan_all(spec.mounts().as_deref(), &namespaces)?;
+        let sysfs_mount_allowed = !namespaces.has_user() || namespaces.new_network();
+        let default_filesystems = DefaultFilesystemPlan::from_configured(
+            &mounts,
+            namespaces.new_mount(),
+            sysfs_mount_allowed,
+        );
         let cgroup_ownership = CgroupOwnershipPlan::from_mounts(&mounts, &namespaces);
         if cgroup.uses_control_workload_layout() {
             mount::validate_control_workload_cgroup_mount(&mounts)?;
@@ -350,6 +357,7 @@ impl InitPlan {
             namespaces,
             sysctls,
             mounts,
+            default_filesystems,
             root_readonly,
             rootfs_propagation,
             masked_paths,

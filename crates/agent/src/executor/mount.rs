@@ -1,4 +1,5 @@
 mod attributes;
+mod default_filesystem;
 mod idmap;
 mod target;
 
@@ -12,6 +13,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::namespace::{collect_mappings, IdmapPlan, NamespacePlan};
 
+pub(super) use default_filesystem::DefaultFilesystemPlan;
 pub(super) use idmap::DetachedMountSources;
 
 const MAX_MOUNTS: usize = 1_024;

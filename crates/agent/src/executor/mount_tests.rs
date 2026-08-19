@@ -92,6 +92,14 @@ fn preserves_mount_order_and_normalizes_relative_destinations() {
     assert_eq!(plan.mounts[1].destination, Path::new("/tmp"));
     assert_eq!(plan.mounts[1].filesystem_type.as_deref(), Some("tmpfs"));
     assert_eq!(plan.mounts[1].data, ["mode=1777", "size=16m"]);
+    assert_eq!(
+        plan.default_filesystems.early_destinations(),
+        [Path::new("/sys")]
+    );
+    assert_eq!(
+        plan.default_filesystems.late_destinations(),
+        [Path::new("/dev/pts"), Path::new("/dev/shm")]
+    );
 }
 
 #[test]
@@ -107,6 +115,14 @@ fn accepts_omitted_mount_list_and_optional_mount_fields() {
     let plan = InitPlan::from_bundle(&bundle(&without_mounts), &null_io())
         .expect("the optional mount list may be omitted");
     assert!(plan.mounts.is_empty());
+    assert_eq!(
+        plan.default_filesystems.early_destinations(),
+        [Path::new("/proc"), Path::new("/sys")]
+    );
+    assert_eq!(
+        plan.default_filesystems.late_destinations(),
+        [Path::new("/dev/pts"), Path::new("/dev/shm")]
+    );
 
     let mut without_source: serde_json::Value =
         serde_json::from_str(MOUNT_CONFIG).expect("decode mount configuration");
@@ -154,6 +170,69 @@ fn accepts_omitted_mount_list_and_optional_mount_fields() {
     assert_eq!(plan.mounts[1].source.as_deref(), Some(Path::new("rootfs")));
     assert!(plan.mounts[1].filesystem_type.is_none());
     assert!(plan.mounts[1].data.is_empty());
+}
+
+#[test]
+fn preserves_explicit_default_filesystems_without_duplicate_mounts() {
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(MOUNT_CONFIG).expect("decode mount configuration");
+    let mounts = configuration["mounts"].as_array_mut().expect("mount list");
+    mounts.extend([
+        serde_json::json!({
+            "destination": "/sys",
+            "type": "sysfs",
+            "source": "sysfs",
+            "options": ["ro", "nosuid", "noexec", "nodev"]
+        }),
+        serde_json::json!({
+            "destination": "/dev/pts",
+            "type": "devpts",
+            "source": "devpts",
+            "options": ["nosuid", "noexec", "newinstance", "ptmxmode=0666"]
+        }),
+        serde_json::json!({
+            "destination": "/dev/shm",
+            "type": "tmpfs",
+            "source": "shm",
+            "options": ["nosuid", "noexec", "nodev", "mode=1777"]
+        }),
+    ]);
+    let configuration =
+        serde_json::to_string(&configuration).expect("encode complete mount configuration");
+    let plan = InitPlan::from_bundle(&bundle(&configuration), &null_io())
+        .expect("explicit default filesystems");
+
+    assert!(plan.default_filesystems.is_empty());
+}
+
+#[test]
+fn leaves_default_filesystems_to_a_joined_or_inherited_mount_namespace() {
+    let mut configuration: serde_json::Value =
+        serde_json::from_str(MOUNT_CONFIG).expect("decode mount configuration");
+    configuration
+        .as_object_mut()
+        .expect("configuration object")
+        .remove("mounts");
+    configuration["linux"]["namespaces"] = serde_json::json!([]);
+    let configuration =
+        serde_json::to_string(&configuration).expect("encode inherited mount namespace");
+    let plan = InitPlan::from_bundle(&bundle(&configuration), &null_io())
+        .expect("inherited mount namespace");
+
+    assert!(plan.default_filesystems.is_empty());
+}
+
+#[test]
+fn does_not_expose_host_sysfs_to_a_user_namespace_with_inherited_networking() {
+    let configuration = with_user_namespace(MOUNT_CONFIG);
+    let plan = InitPlan::from_bundle(&bundle(&configuration), &null_io())
+        .expect("new user namespace with inherited networking");
+
+    assert!(plan.default_filesystems.early_destinations().is_empty());
+    assert_eq!(
+        plan.default_filesystems.late_destinations(),
+        [Path::new("/dev/pts"), Path::new("/dev/shm")]
+    );
 }
 
 #[test]

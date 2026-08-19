@@ -163,6 +163,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.linux.block-io.leaf-weight.rejected", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.cpu.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.cpu.realtime-controls.rejected", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.default-filesystems.provisioned",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new("oci.linux.device-access.ordered", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.device.default-nodes", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.device.inventory.closed", "linux-executor"),
