@@ -6,6 +6,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete owner binding for all 36 OCI 1.3 Seccomp configuration and
+  notification-state requirements. New pinned-schema fixtures cover required,
+  optional, empty, and invalid nested fields plus action, architecture, flag,
+  and operator registries. The shared executor retains real x86_64/AArch64 BPF
+  installation for every advertised action and operator, checks errno and
+  argument relationships, and rejects unadvertised flags, architecture sets,
+  listener fields, and `SCMP_ACT_NOTIFY` during immutable init planning before
+  runtime mutation. Because userspace notification is not advertised, its
+  socket, `SCM_RIGHTS`, and process-state transport requirements are bound to
+  that explicit rejection boundary rather than treated as implemented. Three
+  owner-bound rules promote the 36 entries, leaving 535 enforced, 50
+  validated, two conformant, and 68 pending entries.
 - Fail-closed handling for OCI `linux.resources.network` on the cgroup v2
   execution boundary. The shared Create and live Update planner now reports
   that the cgroup v1 `net_cls` and `net_prio` controls are unsupported before

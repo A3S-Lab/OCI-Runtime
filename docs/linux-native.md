@@ -810,8 +810,8 @@ following pass:
   restart recovery beyond the retained wrong-type pre-state rejection;
 - mount security-negative and kernel-compatibility profiles, remaining
   credential controls, broader cgroup v2 policies,
-  multi-architecture/notification seccomp, and wider sysctl kernel-compatibility
-  and security-negative profiles;
+  optional multi-architecture/notification seccomp profiles, and wider sysctl
+  kernel-compatibility and security-negative profiles;
 - live real-driver reattachment after runtime-process restart, plus generic SDK
   inherited process-I/O modes beyond the fixed A3S Box init-control profile;
 - Hook crash-recovery, security-negative, and adversarial soak beyond the

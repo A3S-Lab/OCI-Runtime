@@ -2852,6 +2852,107 @@
         "fixtures/native-linux/config.json::exact-monotonic-and-boottime-offset-readback",
         "fixtures/utility-vm/config.json::exact-monotonic-and-boottime-offset-readback"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:43bc36d0ec1bccc440d3add246f084730a8f109a9577b967fa5552a11c33f4a2",
+        "sha256:53312246d00cf4c379c402c02dd0f87a7baf77a6857afb03a07ebf7bdac0bb96",
+        "sha256:ae63a96ed4885dc3a569e6a3206b1f1fe37b82b7f87871ee24883e9680bf4ba5",
+        "sha256:19498e7b855a02606840f5fdb88b0c109c73fc5dad301af3f17c2fa68bb42fed",
+        "sha256:6926ce531911a62df6df624dd7ed67b855557dca3f89193eba41215c53391159",
+        "sha256:66f9feed1a2c88eb84cad67b844a9aba63268eca382579b0665d79a302324d5e",
+        "sha256:b4ff73e53fc917bc950d4733f0f1c6325daebe2129a8f21c2a683b9aac5a688e",
+        "sha256:4fa4090e6f88f5c9d08d57041e5abe63266abf7cf7185c80b38b7b3731eae785",
+        "sha256:cbc9e12eb9adbcf32a979f94ae51425dc291ce35fbf565069ac63877500d7c22",
+        "sha256:16c75e254efa5dbaee2261bdab73f67ef3581483f21a66b41f4e876b77e4dbef",
+        "sha256:f1c837e4184df934546a75d8ccd3bb31bc96cac8e1ce00cc0951dfea09b15a67",
+        "sha256:48b53e8d9d7be75827a147cfd4b31ff9f3648efe08524aeebaf908fa594b65f5",
+        "sha256:95c7d2b34478f4c26b8f1a5692a4bb3a70428746b115be92e55329f68318d2c5",
+        "sha256:4b4712ef9cf713bbf274a375d2c6c2b8d5ddd220f9e5081ce5cf807c468b15db",
+        "sha256:318b45271b80bd94b2117c302c458a8b6ed0877bd8c0d5ef9f177c76b30eb000"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.seccomp.policy.enforced"
+      ],
+      "testIds": [
+        "linux_seccomp_contract::schema_requires_complete_seccomp_members",
+        "linux_seccomp_contract::schema_preserves_optional_seccomp_members",
+        "linux_seccomp_contract::schema_rejects_unknown_seccomp_registry_values",
+        "executor::seccomp_tests::plans_omitted_and_empty_optional_seccomp_fields",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::rejects_invalid_seccomp_argument_profiles",
+        "executor::seccomp_tests::installs_stacked_seccomp_filters_in_helper"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:a216ac328c03033b8326f65743b2ae68d990be5216bcdbe2137e11063a42900e",
+        "sha256:d66c9fc025d18be9c9d7626ce3981f58123e9336c272440e1899a685434ef29d"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.seccomp.policy.enforced",
+        "oci.linux.seccomp.errno-action"
+      ],
+      "testIds": [
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "executor::seccomp_tests::rejects_invalid_seccomp_argument_profiles"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:91152348db52952869e494b5d34e25d4b6e0c9b8510113c28ca8cf00671affc4",
+        "sha256:13a0ab32588ae0eb0812f45fb18731b70352a4e60ff3c9a30e6b1140ac557488",
+        "sha256:5aff63d1615fc7c88889f259c8521b63305086c117501fb141a41c5828808ac3",
+        "sha256:395e49c97d99fc5008dd7c80783533674beb7960c03d840f86f1e3a4b5398127"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.seccomp.unsupported-controls.rejected",
+        "oci.linux.seccomp.listener-metadata.requires-path"
+      ],
+      "testIds": [
+        "linux_seccomp_contract::schema_preserves_optional_seccomp_members",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
+        "executor::seccomp_tests::recognizes_but_does_not_advertise_unsupported_seccomp_flags"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:442fe6744dfce741c3cfce749a1f1c048261cd151b7041a2e9fb10066409e0a6",
+        "sha256:71f8356c230864ee60c8195e0fdff9d99404b13d3f5a2084cd75337ba877b6e8",
+        "sha256:6a41a9af236a7a9c7549c9a3db5ba8eb5312a32d081e73a203886dc8088e45ef",
+        "sha256:7d056b1a0bdcded45c010e7a2994a367861fc976d435f797304fdc6e65cb51c8",
+        "sha256:a32b858752f3e0a6db20acae751aafee438ca133ae6f06d63824c73dba282ce6",
+        "sha256:352839037399ae9b70d4b7300f43aef1bd06aa52c6ea2b8f57e8625f9b532046",
+        "sha256:7366664bcc0b02c1e1a8a697d6d304456c10685e28e9252bc1b0a9c882e11609",
+        "sha256:790ea1dc01f26d41dad7287cdc196431e490411097ff487cf68d3b222768f6e7",
+        "sha256:d155040f2f3a5c9630b00faa4b7c91823b7ed4345d4af9db513aa0cbe1775737",
+        "sha256:9e38079d36175599b6634e3146c7954ed93be4b5d38b7e1153722c63fe736f49",
+        "sha256:25cb5051f83722a994e838ce1490f30814ccc93ee8106c3b3592f95c999d0a9a",
+        "sha256:950be94f8c575ea4e825feb5cd0be583a5488da8c0b3e5bf06a8c644284b9e49",
+        "sha256:2311f6d632c2c7526ca15819903f28064ba1b623c2088f3b0e4d6adc8540ab12",
+        "sha256:c14a4a488b9f1be2f008d0853ac4d6e75fa9c8572fc79a5949e0c28b8e3c2935",
+        "sha256:61d356276d9373be58e4b1cc0c72682385d11ce3c6a77a934b53c9e9ed4f4cca"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.seccomp.notification.rejected"
+      ],
+      "testIds": [
+        "linux_seccomp::tests::registries_are_exact_and_unique",
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ]
     }
   ]
 }
