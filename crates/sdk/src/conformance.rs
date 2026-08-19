@@ -218,6 +218,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.linux.user-mapping.bounded", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.user-mapping.exact", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.user-mapping.no-chown", "linux-executor"),
+    OciNonSemanticRule::new("oci.vm.configuration.runtime-owned", "vm-driver"),
     OciNonSemanticRule::new(
         "oci.runtime.config.immutable-after-create",
         "runtime-lifecycle",

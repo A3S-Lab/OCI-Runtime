@@ -1641,6 +1641,75 @@ async fn advertised_oci_version_boundaries_are_accepted_as_bundle_versions() {
 }
 
 #[tokio::test]
+async fn rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle = OciBundle::from_json(
+        temporary.path().join("bundle"),
+        serde_json::json!({
+            "ociVersion": "1.3.0",
+            "process": {
+                "terminal": false,
+                "user": {"uid": 0, "gid": 0},
+                "args": ["/bin/true"],
+                "cwd": "/"
+            },
+            "root": {"path": "rootfs", "readonly": true},
+            "vm": {
+                "hypervisor": {
+                    "path": "/untrusted/a3s-vmm",
+                    "parameters": ["--untrusted-option"]
+                },
+                "kernel": {
+                    "path": "/untrusted/vmlinux",
+                    "parameters": ["init=/untrusted"],
+                    "initrd": "/untrusted/initrd.img"
+                },
+                "image": {"path": "/untrusted/root.raw", "format": "raw"},
+                "hwConfig": {
+                    "deviceTree": "/untrusted/hardware.dtb",
+                    "vcpus": 2,
+                    "memory": 536870912,
+                    "dtdevs": ["/soc/untrusted"],
+                    "iomems": [{"firstGFN": 1, "firstMFN": 2, "nrMFNs": 3}],
+                    "irqs": [11]
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("schema-valid OCI VM bundle");
+    let request = CreateRequest {
+        context: OperationContext::new(operation_id("caller-vm-create")),
+        id: container_id("caller-vm"),
+        attachments: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("valid attachment contract"),
+        bundle,
+        isolation: IsolationRequest::DedicatedVm,
+    };
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+
+    let error = service
+        .create(request)
+        .await
+        .expect_err("runtime-owned VM launch configuration must reject caller VM fields");
+
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error
+        .message
+        .contains("caller-provided OCI vm configuration"));
+    assert!(
+        driver.calls().is_empty(),
+        "driver must not observe a mutating create dispatch"
+    );
+    assert!(service
+        .list(ListRequest::default())
+        .await
+        .expect("list durable records")
+        .is_empty());
+}
+
+#[tokio::test]
 async fn reports_builtin_and_driver_unsafe_config_annotations_for_configured_services() {
     const DRIVER_EXTENSION: &str = "dev.a3s.network.tsi";
 

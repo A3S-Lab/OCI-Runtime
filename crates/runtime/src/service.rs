@@ -280,6 +280,9 @@ impl HostRuntimeService {
             .drivers
             .select(request.isolation.class(), "create")?;
         registered
+            .driver()
+            .validate_create_bundle(&request.bundle)?;
+        registered
             .attachment_capabilities()
             .require(&request.attachments)?;
         lifecycle.ensure_attachments(registered, &attachments)?;

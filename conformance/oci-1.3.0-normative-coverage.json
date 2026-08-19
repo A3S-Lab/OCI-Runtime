@@ -13644,10 +13644,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`hypervisor`** (object, OPTIONAL) specifies details of the hypervisor that manages the container virtual machine.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:0aa46f0f45a68ab955bcf5cd074b3a694407a994ff3ca31a05658645c28cb968",
@@ -13658,10 +13663,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`path`** (string, REQUIRED) path to the hypervisor binary that manages the container virtual machine.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:d3b3bf7d5a3b2803391f9073450ddd732faad448e5d24f513057a880d2380faa",
@@ -13691,10 +13701,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`parameters`** (array of strings, OPTIONAL) specifies an array of parameters to pass to the hypervisor.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:c8d16d0437b41a2c5fac4a0e1b3815dfb9223c0798256b4c7bfd490595edd93a",
@@ -13705,10 +13720,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "**`kernel`** (object, REQUIRED) specifies details of the kernel to boot the container virtual machine with.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:2a590293524357db089a9814c4b6eae4009284b89a211963948d9de895cf6d23",
@@ -13719,10 +13739,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`path`** (string, REQUIRED) path to the kernel used to boot the container virtual machine.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:fb4c7f06a3184dc6bdec28d8456c44776484c56307a8321d6e5d202e1799022f",
@@ -13752,10 +13777,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`parameters`** (array of strings, OPTIONAL) specifies an array of parameters to pass to the kernel.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:34a939eb155edc70d934c0f372abcfc1f4f03c443417073ba9fcad34090cb182",
@@ -13766,10 +13796,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`initrd`** (string, OPTIONAL) path to an initial ramdisk to be used by the container virtual machine.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:678aade3513e7385c84d39cf95341c610269f98dec7ff8f3be4e9fb8db7bcfcb",
@@ -13799,10 +13834,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`image`** (object, OPTIONAL) specifies details of the image that contains the root filesystem for the container virtual machine.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:bf2b142d6b4c24a90a7cc20c97a392f158142a47c6c53dcb466606902137e8bc",
@@ -13813,10 +13853,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`path`** (string, REQUIRED) path to the container virtual machine root image.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:84e17d4e9a43b1084e85b6742d1eeadf64efa9680f92f67f1afdac062d832562",
@@ -13846,10 +13891,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`format`** (string, REQUIRED) format of the container virtual machine root image. Commonly supported formats are:",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:136682b7104d6cc0b44c4f72b9dddf038d4eaef206726c066ef7073da229183a",
@@ -13860,10 +13910,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`hwConfig`** (object OPTIONAL) Specifies the hardware configuration that should be passed to the VM.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:6a3564ce5e855bb2387b1a75e474b1c09fa4d611ce49bad197857606fdb9a839",
@@ -13874,10 +13929,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`deviceTree`** (string OPTIONAL) Path to the container device-tree file that should be passed to the VM.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:8924bec7f76715293e3270ac91ea1f7bf367f385f431d11510fd2fcc6a8bd34d",
@@ -13888,10 +13948,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`vcpus`** (int OPTIONAL) Number of virtual cpus for the VM.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:32a2dedf6d115caf17e25c9939b2ab9fc2a009ecd884d9bb6d882da997a3e289",
@@ -13902,10 +13967,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`memory`** (int OPTIONAL) Maximum memory in bytes allocated to the VM.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:bc1d6af6143863a83e83ea978f2359d9e58113cfb9ad77a8eeb72548518666da",
@@ -13916,10 +13986,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`dtdevs`** (array OPTIONAL) Host device tree nodes to passthrough to the VM, see [Xen Config][xl-config-format] for the details.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:252339af4248b6a5cfba4dc400d41f7b8e53c117ec571a201920f793372d38df",
@@ -13930,10 +14005,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`iomems`** (array OPTIONAL) Allow auto-translated domains to access specific hardware I/O memory pages, see [Xen Config][xl-config-format].",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:694c0d07c311aac5570d730e86d3f8438c7380970a0579db7174f3a0bb440595",
@@ -13944,10 +14024,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`firstGFN`** (int OPTIONAL) Guest Frame Number to map the iomem range.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:e67a31b9fd77fe5533bb08370c5226fc9702c390c56e385bc1efe1b7f6586e1e",
@@ -13958,10 +14043,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`firstMFN`** (int REQUIRED) Physical page number of iomem regions, see [Xen Config][xl-config-format] for the details.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:ac46a5b9f2194292b964098a382a1e111f6175f1649f25a0bf26890c6415a4de",
@@ -13972,10 +14062,15 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`nrMFNs`** (int REQUIRED) Number of pages to be mapped, see [Xen Config][xl-config-format] for the details.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:cf314bb370acafd421614c599f68f818619e9bf8a8142df7c9e368f3c289aa81",
@@ -13986,10 +14081,15 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`irqs`** (array OPTIONAL) Allows VM to access specific physical IRQs, see [Xen Config][xl-config-format] for the details.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "vm-driver",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:8bb5b8328265856a5a0908f414beda28f28341d9c7a3af46de44f1c923443930",
