@@ -233,10 +233,22 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     ),
     OciNonSemanticRule::new("oci.runtime.create.arguments.required", "sdk-transport"),
     OciNonSemanticRule::new(
+        "oci.runtime.create.configuration-applied",
+        "runtime-lifecycle",
+    ),
+    OciNonSemanticRule::new(
+        "oci.runtime.create.failure-no-container",
+        "runtime-lifecycle",
+    ),
+    OciNonSemanticRule::new(
         "oci.runtime.create.id.valid-and-unique",
         "runtime-lifecycle",
     ),
     OciNonSemanticRule::new("oci.runtime.create.new-container", "runtime-lifecycle"),
+    OciNonSemanticRule::new(
+        "oci.runtime.create.preflight-validation",
+        "runtime-lifecycle",
+    ),
     OciNonSemanticRule::new(
         "oci.runtime.create.process.deferred-until-start",
         "linux-executor",
@@ -253,6 +265,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.runtime.kill.id.required", "sdk-transport"),
     OciNonSemanticRule::new("oci.runtime.kill.signal.exact-exit", "linux-executor"),
     OciNonSemanticRule::new("oci.runtime.operations.required-set", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.errors.rollback", "runtime-lifecycle"),
     OciNonSemanticRule::new(
         "oci.runtime.query-state.existing-container",
         "runtime-lifecycle",
@@ -263,10 +276,13 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.runtime.start.id.required", "sdk-transport"),
     OciNonSemanticRule::new("oci.runtime.start.process.executed", "linux-executor"),
     OciNonSemanticRule::new("oci.runtime.state.annotations", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.state.extensions.omitted", "runtime-lifecycle"),
     OciNonSemanticRule::new("oci.runtime.state.id.unique", "runtime-lifecycle"),
     OciNonSemanticRule::new("oci.runtime.state.pid.lifecycle", "runtime-lifecycle"),
     OciNonSemanticRule::new("oci.runtime.state.required-fields", "runtime-lifecycle"),
     OciNonSemanticRule::new("oci.runtime.state.schema", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.state.standard-domain", "runtime-lifecycle"),
+    OciNonSemanticRule::new("oci.runtime.warning.continues", "linux-executor"),
 ];
 
 const SPECIFICATION_DOCUMENTS: &[EmbeddedSpecificationDocument] = &[

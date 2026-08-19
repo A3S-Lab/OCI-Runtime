@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 47-entry pending normative evidence backlog.
+- [ ] Close the remaining 32-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -582,6 +582,15 @@ driver implements.
     reservation, bundle handoff, hypervisor launch, or mutating driver
     dispatch. A future driver must explicitly override this fail-closed policy
     and enforce every field it accepts.
+  - [x] Bind all 66 OCI runtime lifecycle entries to exact state, preflight,
+    Create, rollback, warning, and process-barrier evidence. The runtime emits
+    only the four standard states, preserves the Linux PID contract, applies
+    or rejects every accepted configuration before committing Create, leaves
+    no live container after failure, and durably recovers every injected
+    mutation stage. Optional nonstandard states and properties remain omitted,
+    while init and exec capability warnings are logged without changing the
+    successful operation flow. Eleven entries move to enforced and four to
+    conformant.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1561,8 +1570,8 @@ leak. Only then may KVM become `experimental`.
   owner-bound. Subsequent common-configuration, platform, extensibility,
   namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
   HugeTLB, RDMA, Unified, network-controller, Seccomp, and VM-configuration
-  promotions plus Linux default-filesystem conformance leave 555 enforced,
-  50 validated, three conformant, and 47 pending entries.
+  promotions plus Linux default-filesystem and runtime-lifecycle conformance
+  leave 566 enforced, 50 validated, seven conformant, and 32 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

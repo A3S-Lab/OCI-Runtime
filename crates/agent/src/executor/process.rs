@@ -19,7 +19,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
-use super::capability::CapabilityPlan;
+use super::capability::{report_capability_warnings, CapabilityPlan};
 use super::cgroup::{self, CgroupHandle, CgroupManager};
 use super::control::{
     acknowledge_user_mapping, continue_create, read_outcome, read_start_result, send_device_mounts,
@@ -571,10 +571,14 @@ impl PreparedProcess {
             )),
         };
         drop(self.control.take());
-        if let Err(error) = started {
-            let _ = self.force_stop().await;
-            return Err(error);
-        }
+        let warnings = match started {
+            Ok(warnings) => warnings,
+            Err(error) => {
+                let _ = self.force_stop().await;
+                return Err(error);
+            }
+        };
+        report_capability_warnings(&warnings);
         let state = self.hook_state.encode(
             a3s_oci_sdk::oci_spec::runtime::ContainerState::Running,
             Some(self.pid),

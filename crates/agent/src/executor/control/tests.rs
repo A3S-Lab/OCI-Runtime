@@ -194,6 +194,9 @@ async fn start_result_retains_capability_warnings_before_exec_close() {
         vec![CapabilitySet::Effective, CapabilitySet::Permitted],
     )
     .expect("valid warning");
+    assert!(expected
+        .message()
+        .contains("continuing with the remaining requested capabilities"));
     let reported = expected.clone();
     let writer = tokio::task::spawn_blocking(move || {
         write_capability_warning(&mut writer, &reported).expect("write warning");

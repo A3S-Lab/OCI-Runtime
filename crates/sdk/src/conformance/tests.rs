@@ -109,6 +109,23 @@ fn vm_requirements_are_all_owner_bound() {
 }
 
 #[test]
+fn runtime_lifecycle_requirements_are_all_owner_bound() {
+    let manifest = checked_in_manifest();
+    let requirements = manifest
+        .items
+        .iter()
+        .filter(|item| item.requirement.document == "runtime.md")
+        .collect::<Vec<_>>();
+
+    assert_eq!(requirements.len(), 66);
+    assert!(requirements.iter().all(|item| {
+        item.disposition != OciNormativeDisposition::PendingReview
+            && !item.rule_ids.is_empty()
+            && !item.test_ids.is_empty()
+    }));
+}
+
+#[test]
 fn coverage_verifier_rejects_unknown_rule_ids() {
     let inventory = OciNormativeInventory::new();
     let mut manifest = checked_in_manifest();
