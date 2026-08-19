@@ -500,6 +500,7 @@ fn report_image_annotation_violation(
     let rule = match violation.kind {
         OciImageAnnotationValueKind::String => rules::ANNOTATION_IMAGE_CONFIG_STRING_VALUE,
         OciImageAnnotationValueKind::Created => rules::ANNOTATION_IMAGE_CONFIG_CREATED,
+        OciImageAnnotationValueKind::OsFeatures => rules::ANNOTATION_IMAGE_CONFIG_OS_FEATURES,
         OciImageAnnotationValueKind::StopSignal => rules::ANNOTATION_IMAGE_CONFIG_STOP_SIGNAL,
     };
     collector.invalid(

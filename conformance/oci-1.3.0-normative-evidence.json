@@ -3159,6 +3159,120 @@
         "fixtures/native-linux/config.json::synthesized-default-filesystem-readback",
         "native-linux-smoke.sh::rootless-synthesized-default-filesystem-readback"
       ]
+    },
+    {
+      "requirementIds": [
+        "sha256:ff44d4af7f856a623de0f423fa1f37b4b45ed1c8cabf69d3cd9442bce14c99b8"
+      ],
+      "disposition": "reviewed-external",
+      "owner": "bundle-packager",
+      "ruleIds": [
+        "oci.bundle.archive.top-level-artifacts"
+      ],
+      "testIds": [
+        "bundle::tests::requires_config_json_at_bundle_root",
+        "bundle::tests::treats_the_supplied_directory_as_the_bundle_root"
+      ],
+      "rationale": "Archive nesting is a bundle-packager responsibility. The runtime treats the supplied directory as the bundle root and requires config.json directly beneath it."
+    },
+    {
+      "requirementIds": [
+        "sha256:0daa79b5f0f5ff5238ad72e28800a5d0699114c6643fccfa5c267a233a51d568"
+      ],
+      "disposition": "reviewed-external",
+      "owner": "bundle-author",
+      "ruleIds": [
+        "oci.common.root.conventional-authoring"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_bundle_author_root_names_without_rewriting",
+        "executor::plan_tests::accepts_the_exact_bootstrap_profile"
+      ],
+      "rationale": "The conventional rootfs basename is bundle-author guidance. The runtime accepts that name and preserves every other valid POSIX root path without rewriting it."
+    },
+    {
+      "requirementIds": [
+        "sha256:185ef1cbecc6097d381abc609393b3b86c9b3b790c690175c0c28f0709d49613",
+        "sha256:bf6aadbd6f06c40ee9eaed84409bcf9cb83d3c5df80b4e82e3409cd72a9f6fd4"
+      ],
+      "disposition": "reviewed-external",
+      "owner": "oci-configuration-author",
+      "ruleIds": [
+        "oci.common.annotation.author-contract"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_external_annotation_authoring_choices",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ],
+      "rationale": "Annotation naming and use of reserved keys are configuration-author responsibilities. The runtime validates known standard values and preserves other non-empty keys as required by the separate extensibility contract."
+    },
+    {
+      "requirementIds": [
+        "sha256:291bd1c0b0a8c9bf61f94903186a7a1ed1080b58eb75bf787e77536988ce13b0",
+        "sha256:929c9e9bac12b3f52bdac25701066305af951324a9370505ed97f7c88f94e46f",
+        "sha256:0675c713c8df47d3108324bca60ee9ed0714918225c18a1d7819495f2022ff68",
+        "sha256:e141e022e29de4b179f36ad7b4212a53fc5d97c289bbc8be30bf66d388053c16",
+        "sha256:1f9ffbaec4f5e47d1e9960591b672b7d5d3496fa6ab4eb7856b2cb929ab46f7c",
+        "sha256:27b43b6c04a83b25ca95b6bb32eeced9b7c38da5506f2bd21de273c55101c3db",
+        "sha256:60726ec6e2e9079b30ad20e530a93b17e7ac418851c1527858288ef0c2737497",
+        "sha256:9094cf3c981b0240935d6afb4bc8f49310eaa2e900a97d6ddf4ca899b9a9fd9a"
+      ],
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
+    },
+    {
+      "requirementIds": [
+        "sha256:24342207ecd289bd60f7f85a48607420f73fa0ca1abd278603169279ffe64a9a"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.os-features"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
+    },
+    {
+      "requirementIds": [
+        "sha256:820c9c1f5055c590dbec2da49f58252fb60030270cef2ea7a2acf2ff44f4ce5d"
+      ],
+      "disposition": "reviewed-external",
+      "owner": "runtime-caller",
+      "ruleIds": [
+        "oci.common.annotation.stop-signal.caller-default"
+      ],
+      "testIds": [
+        "bundle::tests::resolves_validated_image_stop_signal",
+        "image_annotation::tests::parses_portable_linux_stop_signal_forms"
+      ],
+      "rationale": "The OCI kill operation carries an explicit signal, so default stop orchestration belongs to the runtime caller. The SDK exposes the validated annotation as a portable Linux signal for that caller."
+    },
+    {
+      "requirementIds": [
+        "sha256:b455c5dd8669c609f0f9a223a51daca14ff1a5b73a0867b31cb8a2ea9508f138"
+      ],
+      "disposition": "reviewed-external",
+      "owner": "oci-specification-author",
+      "ruleIds": [
+        "oci.common.annotation.reserved-namespace.specification-author"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_external_annotation_authoring_choices",
+        "bundle::tests::ignores_unknown_configuration_properties_without_losing_exact_bundle"
+      ],
+      "rationale": "Reservation of future org.opencontainers keys constrains subsequent specification authors. Runtime extensibility separately requires unknown keys to remain accepted and preserved."
     }
   ]
 }

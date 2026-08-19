@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Explicit review boundaries for normative requirements owned by roles outside
+  the runtime. The coverage model now has a `reviewed-external` disposition
+  that requires a non-empty rationale, stable rule, and test evidence; it
+  cannot be used as an implementation claim. Fourteen bundle-packager,
+  bundle-author, configuration-author, image-converter, runtime-caller, and
+  subsequent-specification entries are classified through that path. The SDK
+  also validates `org.opencontainers.image.os.features` as the JSON string
+  representation of the OCI Image Specification array, matching established
+  converter output while rejecting malformed or non-string members. This
+  leaves 566 enforced, 51 validated, seven conformant, 14 reviewed external,
+  and 17 pending entries.
 - Complete owner binding for all 66 OCI 1.3 runtime lifecycle requirements.
   The runtime now binds the exact four-state domain, Linux PID shape, complete
   preflight and Create application, the create-to-start process barrier,

@@ -20,7 +20,7 @@ fn rules(value: &Value, phase: OciSemanticPhase) -> BTreeSet<String> {
 #[test]
 fn semantic_rule_registry_is_complete_and_unique() {
     let registry = OciSemanticValidator::rules();
-    assert_eq!(registry.len(), 94);
+    assert_eq!(registry.len(), 95);
     assert_eq!(
         registry
             .iter()
@@ -394,6 +394,7 @@ fn validates_pinned_oci_image_annotation_values() {
         "annotations": {
             "org.opencontainers.image.os": "linux",
             "org.opencontainers.image.os.version": "6.8.0",
+            "org.opencontainers.image.os.features": r#"["sse4","aes"]"#,
             "org.opencontainers.image.architecture": "arm64",
             "org.opencontainers.image.variant": "v8",
             "org.opencontainers.image.author": "A3S Lab <dev@a3s.dev>",
@@ -411,11 +412,13 @@ fn validates_pinned_oci_image_annotation_values() {
         "root": {"path": "rootfs"},
         "annotations": {
             "org.opencontainers.image.created": "2026-02-30 10:11:12",
+            "org.opencontainers.image.os.features": "not-a-json-array",
             "org.opencontainers.image.stopSignal": "SIGUNKNOWN"
         }
     });
     let reported = rules(&invalid, OciSemanticPhase::Configuration);
     assert!(reported.contains("oci.common.annotation.image-config.created"));
+    assert!(reported.contains("oci.common.annotation.image-config.os-features"));
     assert!(reported.contains("oci.common.annotation.image-config.stop-signal"));
 }
 

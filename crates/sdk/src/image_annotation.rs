@@ -74,6 +74,7 @@ const LINUX_NAMED_SIGNALS: &[(&str, i32)] = &[
 pub(crate) enum OciImageAnnotationValueKind {
     String,
     Created,
+    OsFeatures,
     StopSignal,
 }
 
@@ -98,12 +99,12 @@ pub(crate) fn validate_value(
         OCI_IMAGE_VARIANT_ANNOTATION => ("variant", OciImageAnnotationValueKind::String),
         OCI_IMAGE_AUTHOR_ANNOTATION => ("author", OciImageAnnotationValueKind::String),
         OCI_IMAGE_CREATED_ANNOTATION => ("created", OciImageAnnotationValueKind::Created),
+        OCI_IMAGE_OS_FEATURES_ANNOTATION => {
+            ("os.features", OciImageAnnotationValueKind::OsFeatures)
+        }
         OCI_IMAGE_STOP_SIGNAL_ANNOTATION => {
             ("config.StopSignal", OciImageAnnotationValueKind::StopSignal)
         }
-        // The referenced conversion document does not define how the image
-        // array of strings is represented by one runtime annotation string.
-        OCI_IMAGE_OS_FEATURES_ANNOTATION => return Ok(None),
         _ => return Ok(None),
     };
 
@@ -113,6 +114,20 @@ pub(crate) fn validate_value(
         "rootfs": {"type": "layers", "diff_ids": []}
     });
     match key {
+        OCI_IMAGE_OS_FEATURES_ANNOTATION => {
+            let features = match serde_json::from_str::<Value>(value) {
+                Ok(features) => features,
+                Err(error) => {
+                    return Ok(Some(OciImageAnnotationViolation {
+                        kind,
+                        message: format!(
+                            "annotation {key} must contain the JSON serialization of the OCI Image Specification os.features array: {error}"
+                        ),
+                    }));
+                }
+            };
+            image[property] = features;
+        }
         OCI_IMAGE_STOP_SIGNAL_ANNOTATION => {
             image["config"] = json!({"StopSignal": value});
         }

@@ -35,14 +35,70 @@ fn inventory_covers_every_pinned_rfc_2119_occurrence() {
 #[test]
 fn checked_in_normative_manifest_matches_the_pinned_corpus() {
     let manifest = checked_in_manifest();
-    let evidence: OciNormativeEvidenceManifest = serde_json::from_str(include_str!(
-        "../../../../conformance/oci-1.3.0-normative-evidence.json"
-    ))
-    .expect("decode checked-in normative evidence");
+    let evidence = checked_in_evidence();
     let generated = OciNormativeInventory::new()
         .coverage_with_evidence(&evidence)
         .expect("checked-in normative evidence must be complete and current");
     assert_eq!(manifest, generated);
+}
+
+#[test]
+fn reviewed_external_evidence_requires_a_nonempty_rationale() {
+    let mut evidence = checked_in_evidence();
+    let binding = evidence
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.disposition == OciNormativeDisposition::ReviewedExternal)
+        .expect("reviewed external evidence binding");
+    binding.rationale = Some("  ".to_string());
+
+    let error = OciNormativeInventory::new()
+        .coverage_with_evidence(&evidence)
+        .expect_err("external responsibility cannot be asserted without a rationale");
+    assert!(error.message.contains("requires a rationale"));
+}
+
+#[test]
+fn common_external_requirements_retain_reviewed_boundaries() {
+    let manifest = checked_in_manifest();
+    let external = manifest
+        .items
+        .iter()
+        .filter(|item| item.disposition == OciNormativeDisposition::ReviewedExternal)
+        .collect::<Vec<_>>();
+
+    assert_eq!(external.len(), 14);
+    assert!(external.iter().all(|item| {
+        item.rationale
+            .as_deref()
+            .is_some_and(|rationale| !rationale.trim().is_empty())
+            && !item.rule_ids.is_empty()
+            && !item.test_ids.is_empty()
+    }));
+}
+
+#[test]
+fn common_and_bundle_review_leaves_only_generic_value_policy() {
+    let pending = checked_in_manifest()
+        .items
+        .into_iter()
+        .filter(|item| {
+            item.disposition == OciNormativeDisposition::PendingReview
+                && matches!(
+                    item.requirement.document.as_str(),
+                    "bundle.md" | "config.md"
+                )
+        })
+        .map(|item| item.requirement.id)
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        pending,
+        BTreeSet::from([
+            "sha256:4e2d24b19c710d6df50058598845974215bbe29749f2e5b9d7c64f41250aea2c".to_string(),
+            "sha256:e898efc5fe335d806e25bd18da630c1f93cb0d8a938e0c032fadea8664400241".to_string(),
+        ])
+    );
 }
 
 #[test]
@@ -200,4 +256,11 @@ fn checked_in_manifest() -> OciNormativeCoverageManifest {
         "../../../../conformance/oci-1.3.0-normative-coverage.json"
     ))
     .expect("decode checked-in normative coverage")
+}
+
+fn checked_in_evidence() -> OciNormativeEvidenceManifest {
+    serde_json::from_str(include_str!(
+        "../../../../conformance/oci-1.3.0-normative-evidence.json"
+    ))
+    .expect("decode checked-in normative evidence")
 }
