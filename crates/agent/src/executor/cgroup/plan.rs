@@ -476,6 +476,12 @@ fn parse_cgroup_path(path: &Path) -> Result<OciLinuxCgroupPath> {
 }
 
 pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> Result<()> {
+    if resources.network().is_some() {
+        return Err(unsupported(
+            "linux.resources.network",
+            "cgroup v1 net_cls and net_prio controls are not supported by the cgroup v2 executor",
+        ));
+    }
     let value = serde_json::to_value(resources).map_err(|error| {
         cgroup_error(
             ErrorCode::Internal,
@@ -651,6 +657,14 @@ mod tests {
             "resources": {"memory": memory}
         }))
         .expect("decode Linux memory controls")
+    }
+
+    fn linux_with_network(network: serde_json::Value) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "network/controls",
+            "resources": {"network": network}
+        }))
+        .expect("decode Linux network controls")
     }
 
     fn linux_with_block_io(block_io: serde_json::Value) -> Linux {
@@ -1129,6 +1143,26 @@ mod tests {
             assert!(error
                 .message
                 .contains(&format!("linux.resources.memory.{field}")));
+        }
+    }
+
+    #[test]
+    fn rejects_cgroup_v1_network_controls_during_create_planning() {
+        for network in [
+            serde_json::json!({"classID": 1_048_577}),
+            serde_json::json!({
+                "priorities": [{"name": "eth0", "priority": 500}]
+            }),
+        ] {
+            let error =
+                CgroupPlan::from_linux(Some(&linux_with_network(network)), &BTreeMap::new())
+                    .expect_err("cgroup v1 network controls must fail before create mutation");
+
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Unsupported);
+            assert!(error.message.contains("linux.resources.network"));
+            assert!(error.message.contains("net_cls"));
+            assert!(error.message.contains("net_prio"));
+            assert!(error.message.contains("cgroup v1"));
         }
     }
 

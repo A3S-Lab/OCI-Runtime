@@ -886,6 +886,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_cgroup_v1_network_controls_during_update_planning() {
+        for network in [
+            serde_json::json!({"classID": 1_048_577}),
+            serde_json::json!({
+                "priorities": [{"name": "eth0", "priority": 500}]
+            }),
+        ] {
+            let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+                "network": network
+            }))
+            .expect("decode cgroup v1 network update");
+            let error = CgroupUpdatePlan::from_resources(&resources)
+                .expect_err("cgroup v1 network controls must fail before update mutation");
+
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::Unsupported);
+            assert!(error.message.contains("linux.resources.network"));
+            assert!(error.message.contains("net_cls"));
+            assert!(error.message.contains("net_prio"));
+            assert!(error.message.contains("cgroup v1"));
+        }
+    }
+
+    #[test]
     fn control_workload_updates_accept_zero_but_reject_unlimited_memory() {
         let headroom = ControlHeadroom {
             memory_bytes: 67_108_864,
