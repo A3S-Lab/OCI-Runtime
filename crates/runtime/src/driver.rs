@@ -619,6 +619,24 @@ pub trait RuntimeDriver: Send + Sync {
         AttachmentCapabilities::base_v1()
     }
 
+    /// Validate driver-specific OCI configuration before durable create state
+    /// or platform resources are allocated.
+    ///
+    /// In-tree drivers boot runtime-pinned utility VMs or share an existing
+    /// Linux kernel, so caller-provided `vm` launch configuration is rejected
+    /// by default. A future driver may override this only when it validates
+    /// and enforces every accepted OCI VM field itself.
+    fn validate_create_bundle(&self, bundle: &OciBundle) -> Result<()> {
+        if bundle.spec().vm().is_some() {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "selected runtime driver does not support caller-provided OCI vm configuration; hypervisor, kernel, image, and hardware configuration remain runtime-owned",
+            )
+            .for_operation("create"));
+        }
+        Ok(())
+    }
+
     /// Release driver replay evidence after the Host has durably committed an outcome.
     ///
     /// The Host never invokes this hook for a prepared or retryable operation. Unknown

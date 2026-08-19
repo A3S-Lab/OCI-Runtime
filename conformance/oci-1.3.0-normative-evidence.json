@@ -1256,6 +1256,39 @@
     },
     {
       "requirementIds": [
+        "sha256:bbc5c8491e52f4f7a0c1015bb765983fd060b361bbb1630013f0582a733d649a",
+        "sha256:0aa46f0f45a68ab955bcf5cd074b3a694407a994ff3ca31a05658645c28cb968",
+        "sha256:509788e0e8482f454f0d851993bec2a8d3fb3c1f8bac5a10dcaef0484db24c69",
+        "sha256:c8d16d0437b41a2c5fac4a0e1b3815dfb9223c0798256b4c7bfd490595edd93a",
+        "sha256:2a590293524357db089a9814c4b6eae4009284b89a211963948d9de895cf6d23",
+        "sha256:d3b871baba551b934b0b915b898b239df51cf459ec1d2b118dc02834ad54636b",
+        "sha256:34a939eb155edc70d934c0f372abcfc1f4f03c443417073ba9fcad34090cb182",
+        "sha256:add77c5040d7c155b9d392efadb2cfe7193f20e37bb84ef7dd8e8b37d21282ed",
+        "sha256:bf2b142d6b4c24a90a7cc20c97a392f158142a47c6c53dcb466606902137e8bc",
+        "sha256:c79728fb5f64089b055b2a432c02fc3680ae9671ee1c7549344d0a3335ea96c1",
+        "sha256:136682b7104d6cc0b44c4f72b9dddf038d4eaef206726c066ef7073da229183a",
+        "sha256:6a3564ce5e855bb2387b1a75e474b1c09fa4d611ce49bad197857606fdb9a839",
+        "sha256:8924bec7f76715293e3270ac91ea1f7bf367f385f431d11510fd2fcc6a8bd34d",
+        "sha256:32a2dedf6d115caf17e25c9939b2ab9fc2a009ecd884d9bb6d882da997a3e289",
+        "sha256:bc1d6af6143863a83e83ea978f2359d9e58113cfb9ad77a8eeb72548518666da",
+        "sha256:252339af4248b6a5cfba4dc400d41f7b8e53c117ec571a201920f793372d38df",
+        "sha256:694c0d07c311aac5570d730e86d3f8438c7380970a0579db7174f3a0bb440595",
+        "sha256:e67a31b9fd77fe5533bb08370c5226fc9702c390c56e385bc1efe1b7f6586e1e",
+        "sha256:ac46a5b9f2194292b964098a382a1e111f6175f1649f25a0bf26890c6415a4de",
+        "sha256:cf314bb370acafd421614c599f68f818619e9bf8a8142df7c9e368f3c289aa81"
+      ],
+      "disposition": "enforced",
+      "owner": "vm-driver",
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:d9b6ef48f299b8fc62b11a59e4e1ab29329f21732f71f315ce41d21bc238bf12",
         "sha256:7606d3c4076a5894bd2c9676007c4472bb5d090ca6a6a3557dc6c26eb6e3f771",
         "sha256:61f4901c6e5be7243ce8eacf7c18df07353fcb1d952aabb9f2a14677a8dfaf5d",

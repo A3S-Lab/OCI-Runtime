@@ -752,6 +752,106 @@ mod tests {
     }
 
     #[test]
+    fn validates_complete_vm_schema_shapes() {
+        let validator = OciSchemaValidator::new().expect("compile pinned schemas");
+        validator
+            .validate(
+                OciSchemaDocument::Configuration,
+                &json!({
+                    "ociVersion": "1.3.0",
+                    "vm": {
+                        "hypervisor": {
+                            "path": "/runtime/a3s-vmm",
+                            "parameters": ["--machine", "a3s"]
+                        },
+                        "kernel": {
+                            "path": "/runtime/vmlinux",
+                            "parameters": ["console=hvc0"],
+                            "initrd": "/runtime/initrd.img"
+                        },
+                        "image": {
+                            "path": "/runtime/root.vmdk",
+                            "format": "vmdk"
+                        },
+                        "hwConfig": {
+                            "deviceTree": "/runtime/a3s.dtb",
+                            "vcpus": 2,
+                            "memory": 536870912,
+                            "dtdevs": ["/soc/virtio@1000"],
+                            "iomems": [
+                                {"firstMFN": 12288, "nrMFNs": 1},
+                                {"firstGFN": 12544, "firstMFN": 33024, "nrMFNs": 2}
+                            ],
+                            "irqs": [11, 22]
+                        }
+                    }
+                }),
+            )
+            .expect("all OCI VM fields and optional forms are schema-valid");
+        validator
+            .validate(
+                OciSchemaDocument::Configuration,
+                &json!({
+                    "ociVersion": "1.3.0",
+                    "vm": {"kernel": {"path": "/runtime/vmlinux"}}
+                }),
+            )
+            .expect("optional OCI VM fields may be absent");
+
+        for format in ["raw", "qcow2", "vdi", "vmdk", "vhd"] {
+            validator
+                .validate(
+                    OciSchemaDocument::Configuration,
+                    &json!({
+                        "ociVersion": "1.3.0",
+                        "vm": {
+                            "kernel": {"path": "/runtime/vmlinux"},
+                            "image": {"path": "/runtime/root.img", "format": format}
+                        }
+                    }),
+                )
+                .unwrap_or_else(|error| panic!("OCI VM image format {format} is valid: {error}"));
+        }
+
+        for invalid_vm in [
+            json!({}),
+            json!({"kernel": {}}),
+            json!({"kernel": {"path": "/runtime/vmlinux"}, "hypervisor": {}}),
+            json!({
+                "kernel": {"path": "/runtime/vmlinux"},
+                "image": {"path": "/runtime/root.img"}
+            }),
+            json!({
+                "kernel": {"path": "/runtime/vmlinux"},
+                "image": {"path": "/runtime/root.img", "format": "iso"}
+            }),
+            json!({
+                "kernel": {"path": "/runtime/vmlinux"},
+                "hwConfig": {"iomems": [{"nrMFNs": 1}]}
+            }),
+            json!({
+                "kernel": {"path": "/runtime/vmlinux"},
+                "hwConfig": {"iomems": [{"firstMFN": 12288}]}
+            }),
+            json!({
+                "kernel": {"path": "/runtime/vmlinux"},
+                "hwConfig": {"vcpus": -1}
+            }),
+            json!({
+                "kernel": {"path": "/runtime/vmlinux"},
+                "hwConfig": {"memory": "512MiB", "dtdevs": [1], "irqs": ["11"]}
+            }),
+        ] {
+            validator
+                .validate(
+                    OciSchemaDocument::Configuration,
+                    &json!({"ociVersion": "1.3.0", "vm": invalid_vm}),
+                )
+                .expect_err("required OCI VM fields and types must follow the pinned schema");
+        }
+    }
+
+    #[test]
     fn accepts_runtime_spec_image_annotation_keys() {
         OciSchemaValidator::new()
             .expect("compile pinned schemas")

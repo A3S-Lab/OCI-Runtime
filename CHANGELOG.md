@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete owner binding for all 24 OCI 1.3 VM configuration requirements.
+  Pinned-schema tests cover every hypervisor, kernel, image, and hardware
+  member, all five image formats, optional forms, required relationships, and
+  invalid field types. The generic SDK retains valid VM configuration for a
+  future enforcing driver, while every current A3S driver rejects caller-owned
+  VM launch configuration before durable generation reservation, bundle
+  handoff, hypervisor launch, or mutating driver dispatch. Runtime-pinned
+  hypervisor, kernel, image, and hardware policy therefore cannot be silently
+  replaced by untrusted bundle paths or parameters. One owner-bound VM-driver
+  rule promotes the remaining 20 entries, leaving 555 enforced, 50 validated,
+  two conformant, and 48 pending entries.
 - Complete owner binding for all 36 OCI 1.3 Seccomp configuration and
   notification-state requirements. New pinned-schema fixtures cover required,
   optional, empty, and invalid nested fields plus action, architecture, flag,
