@@ -7917,10 +7917,18 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`type`** *(string, REQUIRED)* - namespace type. The following namespace types SHOULD be supported:",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.namespace.type.required",
+        "oci.linux.namespace.supported-types"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_requires_namespace_and_id_mapping_members",
+        "executor::namespace::tests::namespace_plan_preserves_inherit_create_and_join_for_every_type",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:4f2fab2fde2e0cad95d4e7dd58511c752c1cf39ce6e36a7f4210b79d2f0d940c",
@@ -7931,10 +7939,18 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "* **`type`** *(string, REQUIRED)* - namespace type. The following namespace types SHOULD be supported:",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.namespace.type.required",
+        "oci.linux.namespace.supported-types"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_requires_namespace_and_id_mapping_members",
+        "executor::namespace::tests::namespace_plan_preserves_inherit_create_and_join_for_every_type",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
     },
     {
       "id": "sha256:601ad33da461760639da2d7c13fffcbfee730a703c747e286b8b98d50a2b3d63",
@@ -7945,10 +7961,17 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`path`** *(string, OPTIONAL)* - namespace file.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.namespace.create-join-inherit"
+      ],
+      "testIds": [
+        "executor::namespace::tests::namespace_plan_preserves_inherit_create_and_join_for_every_type",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths",
+        ".github/scripts/native-linux-smoke.sh::network_modes.private_namespace_verified-and-host_namespace_verified"
+      ]
     },
     {
       "id": "sha256:aad4531adb0d9808b8430e1999e9361c9e0f8532c9db4a6aaddb031c08ea46f0",
@@ -7978,10 +8001,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST place the container process in the namespace associated with that `path`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.namespace.join.exact"
+      ],
+      "testIds": [
+        "executor::namespace::tests::namespace_plan_preserves_inherit_create_and_join_for_every_type",
+        "executor::namespace::join::tests::namespace_identity_uses_the_open_descriptor_not_a_re_resolved_target",
+        ".github/scripts/native-linux-smoke.sh::namespace_join.joined_non_mount_namespaces"
+      ]
     },
     {
       "id": "sha256:793a142369d4af72f3cb9f4dbb6be06c6e67d63a80ea69f32fd887745e390a14",
@@ -7992,10 +8021,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The runtime MUST [generate an error](runtime.md#errors) if `path` is not associated with a namespace of type `type`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.namespace.join.type-checked"
+      ],
+      "testIds": [
+        "executor::namespace::join::tests::namespace_descriptors_are_type_checked_before_setns",
+        "executor::namespace::join::tests::regular_files_are_rejected_as_namespace_targets",
+        ".github/scripts/native-linux-smoke.sh::namespace_join.wrong_type_rejected_before_state"
+      ]
     },
     {
       "id": "sha256:f63ba7ae91dcfb1a8a49f53400664f9ecea6d0c2ca268647822f55cd25d67d11",
@@ -8006,10 +8041,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If `path` is not specified, the runtime MUST create a new [container namespace](glossary.md#container-namespace) of type `type`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.namespace.create-join-inherit"
+      ],
+      "testIds": [
+        "executor::namespace::tests::namespace_plan_preserves_inherit_create_and_join_for_every_type",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths",
+        ".github/scripts/native-linux-smoke.sh::network_modes.private_namespace_verified-and-host_namespace_verified"
+      ]
     },
     {
       "id": "sha256:7b632d5bf8d6a06467d2450bde04b538937a0644b59dcf2ffd406615773018d1",
@@ -8020,10 +8062,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If a namespace type is not specified in the `namespaces` array, the container MUST inherit the [runtime namespace](glossary.md#runtime-namespace) of that type.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.namespace.create-join-inherit"
+      ],
+      "testIds": [
+        "executor::namespace::tests::namespace_plan_preserves_inherit_create_and_join_for_every_type",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::accepts_all_joined_namespace_types_and_retains_their_absolute_paths",
+        ".github/scripts/native-linux-smoke.sh::network_modes.private_namespace_verified-and-host_namespace_verified"
+      ]
     },
     {
       "id": "sha256:2ce888418c337578e8544eba2afa32fc89eb5dad4156481bfebc6200484b0025",
@@ -8053,10 +8102,26 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`uidMappings`** (array of objects, OPTIONAL) describes the user namespace uid mappings from the host to the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.user-mapping.exact",
+        "oci.linux.id-mapping.requires-new-user-namespace",
+        "oci.linux.id-mapping.size.nonzero",
+        "oci.linux.id-mapping.container-range",
+        "oci.linux.id-mapping.host-range",
+        "oci.linux.id-mapping.container-range.unique",
+        "oci.linux.id-mapping.host-range.unique"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_requires_namespace_and_id_mapping_members",
+        "executor::namespace::tests::configured_user_mappings_preserve_exact_ranges_and_host_translation",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_incomplete_or_unusable_user_namespace_mappings",
+        "executor::namespace::user::tests::helper_arguments_preserve_oci_mapping_order",
+        "fixtures/native-linux/config.json::exact-uid-gid-map-readback",
+        "fixtures/utility-vm/config.json::exact-uid-gid-map-readback"
+      ]
     },
     {
       "id": "sha256:76898e27f9bf8b90e305d0008aac8dc0eb7c89b3e85f6b7158de16edbd472687",
@@ -8067,10 +8132,26 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`gidMappings`** (array of objects, OPTIONAL) describes the user namespace gid mappings from the host to the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.user-mapping.exact",
+        "oci.linux.id-mapping.requires-new-user-namespace",
+        "oci.linux.id-mapping.size.nonzero",
+        "oci.linux.id-mapping.container-range",
+        "oci.linux.id-mapping.host-range",
+        "oci.linux.id-mapping.container-range.unique",
+        "oci.linux.id-mapping.host-range.unique"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_requires_namespace_and_id_mapping_members",
+        "executor::namespace::tests::configured_user_mappings_preserve_exact_ranges_and_host_translation",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_incomplete_or_unusable_user_namespace_mappings",
+        "executor::namespace::user::tests::helper_arguments_preserve_oci_mapping_order",
+        "fixtures/native-linux/config.json::exact-uid-gid-map-readback",
+        "fixtures/utility-vm/config.json::exact-uid-gid-map-readback"
+      ]
     },
     {
       "id": "sha256:f36155eecb18faf29ddc203a2bdc40e476a6ffe2a9b1e3cb8c097f4ae31b76c1",
@@ -8081,10 +8162,26 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`containerID`** *(uint32, REQUIRED)* - is the starting uid/gid in the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.user-mapping.exact",
+        "oci.linux.id-mapping.requires-new-user-namespace",
+        "oci.linux.id-mapping.size.nonzero",
+        "oci.linux.id-mapping.container-range",
+        "oci.linux.id-mapping.host-range",
+        "oci.linux.id-mapping.container-range.unique",
+        "oci.linux.id-mapping.host-range.unique"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_requires_namespace_and_id_mapping_members",
+        "executor::namespace::tests::configured_user_mappings_preserve_exact_ranges_and_host_translation",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_incomplete_or_unusable_user_namespace_mappings",
+        "executor::namespace::user::tests::helper_arguments_preserve_oci_mapping_order",
+        "fixtures/native-linux/config.json::exact-uid-gid-map-readback",
+        "fixtures/utility-vm/config.json::exact-uid-gid-map-readback"
+      ]
     },
     {
       "id": "sha256:b087f7594f50f35f15e31e6d9715cbb4428bb32308ecca98eab9f6ec71e13981",
@@ -8095,10 +8192,26 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`hostID`** *(uint32, REQUIRED)* - is the starting uid/gid on the host to be mapped to *containerID*.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.user-mapping.exact",
+        "oci.linux.id-mapping.requires-new-user-namespace",
+        "oci.linux.id-mapping.size.nonzero",
+        "oci.linux.id-mapping.container-range",
+        "oci.linux.id-mapping.host-range",
+        "oci.linux.id-mapping.container-range.unique",
+        "oci.linux.id-mapping.host-range.unique"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_requires_namespace_and_id_mapping_members",
+        "executor::namespace::tests::configured_user_mappings_preserve_exact_ranges_and_host_translation",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_incomplete_or_unusable_user_namespace_mappings",
+        "executor::namespace::user::tests::helper_arguments_preserve_oci_mapping_order",
+        "fixtures/native-linux/config.json::exact-uid-gid-map-readback",
+        "fixtures/utility-vm/config.json::exact-uid-gid-map-readback"
+      ]
     },
     {
       "id": "sha256:8f941b1cbbeb3ad836cfb391ab08ef621edd0120f381cc47f6ce241a57ad439d",
@@ -8109,10 +8222,26 @@
       "keyword": "required",
       "occurrence": 1,
       "source": "* **`size`** *(uint32, REQUIRED)* - is the number of ids to be mapped.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.user-mapping.exact",
+        "oci.linux.id-mapping.requires-new-user-namespace",
+        "oci.linux.id-mapping.size.nonzero",
+        "oci.linux.id-mapping.container-range",
+        "oci.linux.id-mapping.host-range",
+        "oci.linux.id-mapping.container-range.unique",
+        "oci.linux.id-mapping.host-range.unique"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_requires_namespace_and_id_mapping_members",
+        "executor::namespace::tests::configured_user_mappings_preserve_exact_ranges_and_host_translation",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_incomplete_or_unusable_user_namespace_mappings",
+        "executor::namespace::user::tests::helper_arguments_preserve_oci_mapping_order",
+        "fixtures/native-linux/config.json::exact-uid-gid-map-readback",
+        "fixtures/utility-vm/config.json::exact-uid-gid-map-readback"
+      ]
     },
     {
       "id": "sha256:184aa1bfb3affa86815850c721fa718dcb2fd2e832f29f6831518890726be524",
@@ -8123,10 +8252,16 @@
       "keyword": "should-not",
       "occurrence": 1,
       "source": "The runtime SHOULD NOT modify the ownership of referenced filesystems to realize the mapping.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.user-mapping.no-chown"
+      ],
+      "testIds": [
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "executor::mount_tests::idmap_and_ridmap_select_non_recursive_and_recursive_enforcement",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.idmap_source_ownership_unchanged"
+      ]
     },
     {
       "id": "sha256:d2e0a1e1b429ce4c4af250dc9e8b671c135ffa5f1daa4178c46bf321b30852cd",
@@ -8137,10 +8272,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Note that the number of mapping entries MAY be limited by the [kernel][user-namespaces].",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.user-mapping.bounded"
+      ],
+      "testIds": [
+        "executor::plan_tests::bounds_user_namespace_mapping_count",
+        "executor::namespace::tests::observed_joined_user_mappings_reject_unusable_kernel_rows"
+      ]
     },
     {
       "id": "sha256:ead01018d9f2fb72dab28c39c22e4ffff30eb2bd20ad5b35ecf10b24e415bb7b",
@@ -8151,10 +8291,20 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`timeOffsets`** (object, OPTIONAL) sets the offset for Time Namespace. For more information",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.time-offset.exact",
+        "oci.linux.time-offset.requires-new-time-namespace"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_preserves_optional_time_offset_members",
+        "executor::namespace::tests::time_offset_plan_defaults_omitted_members_without_losing_signed_seconds",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_noncanonical_time_namespace_nanoseconds",
+        "fixtures/native-linux/config.json::exact-monotonic-and-boottime-offset-readback",
+        "fixtures/utility-vm/config.json::exact-monotonic-and-boottime-offset-readback"
+      ]
     },
     {
       "id": "sha256:78ca45bec211de5c0fa86098456eec94f22425afd4739ea77ddb6466f0b3cf37",
@@ -8165,10 +8315,20 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`secs`** *(int64, OPTIONAL)* - is the offset of clock (in seconds) in the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.time-offset.exact",
+        "oci.linux.time-offset.requires-new-time-namespace"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_preserves_optional_time_offset_members",
+        "executor::namespace::tests::time_offset_plan_defaults_omitted_members_without_losing_signed_seconds",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_noncanonical_time_namespace_nanoseconds",
+        "fixtures/native-linux/config.json::exact-monotonic-and-boottime-offset-readback",
+        "fixtures/utility-vm/config.json::exact-monotonic-and-boottime-offset-readback"
+      ]
     },
     {
       "id": "sha256:519c0bd60359ea563a4367bd3218425a65dc8bcf900d07d7069cb1b8535913ff",
@@ -8179,10 +8339,20 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`nanosecs`** *(uint32, OPTIONAL)* - is the offset of clock (in nanoseconds) in the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.time-offset.exact",
+        "oci.linux.time-offset.requires-new-time-namespace"
+      ],
+      "testIds": [
+        "linux_namespace_contract::schema_preserves_optional_time_offset_members",
+        "executor::namespace::tests::time_offset_plan_defaults_omitted_members_without_losing_signed_seconds",
+        "executor::plan_tests::accepts_new_user_and_time_namespaces_with_exact_mappings_and_offsets",
+        "executor::plan_tests::rejects_noncanonical_time_namespace_nanoseconds",
+        "fixtures/native-linux/config.json::exact-monotonic-and-boottime-offset-readback",
+        "fixtures/utility-vm/config.json::exact-monotonic-and-boottime-offset-readback"
+      ]
     },
     {
       "id": "sha256:8664cf3a63b2c06fb63a3939e6bad724245259ece94d579c418b43f3f1513d8c",

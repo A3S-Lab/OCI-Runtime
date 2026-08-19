@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 137-entry pending normative evidence backlog.
+- [ ] Close the remaining 120-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -531,6 +531,15 @@ driver implements.
     files that are absent, use the normative fallback when the inventory is
     missing, and leave every unlisted file untouched. Retain positive and
     read-only Native Linux lifecycle evidence with complete cleanup.
+  - [x] Bind all 19 OCI namespace, user-mapping, and time-offset entries.
+    Schema tests require every namespace and mapping member; executor tests
+    distinguish inherit, create, and join for all eight namespace types;
+    descriptor-relative joins verify the requested namespace type and exact
+    identity; UID/GID mappings retain bounded non-overlapping ranges without
+    changing referenced filesystem ownership; and normalized monotonic and
+    boottime offsets are written and read back. Seventeen previously pending
+    requirements are now enforced alongside the two existing validation
+    rules.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1500,9 +1509,9 @@ leak. Only then may KVM become `experimental`.
   its accepted specification range and seccomp values from SDK-owned
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
-  owner-bound. Subsequent common-configuration, platform, and extensibility
-  review plus the PIDs, memory, Block I/O, and Linux-device promotions leaves
-  465 enforced, 51 validated, and 137 pending entries.
+  owner-bound. Subsequent common-configuration, platform, extensibility,
+  namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, and Linux-device
+  promotions leave 482 enforced, 51 validated, and 120 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
