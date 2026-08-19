@@ -59,8 +59,8 @@ The initial rule set covers:
 - explicit rejection of native Windows, FreeBSD, Solaris, and z/OS workload
   sections because A3S runs Linux workloads on every host.
 
-All 94 rule identifiers come from one typed registry. Thirty-one are
-classified as direct OCI normative validators and are currently bound to 58
+All 95 rule identifiers come from one typed registry. Thirty-two are
+classified as direct OCI normative validators and are currently bound to 59
 exact source entries in the normative evidence manifest. Linux
 `oomScoreAdj`, scheduler, I/O-priority, device, and resource runtime
 constraints plus executor and real-host tests promote their applicable

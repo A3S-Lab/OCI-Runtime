@@ -387,10 +387,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "When supplied, while these artifacts MUST all be present in a single directory on the local filesystem, that directory itself is not part of the bundle.",
-      "disposition": "pending-review",
-      "owner": "runtime-bundle",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "bundle-packager",
+      "ruleIds": [
+        "oci.bundle.archive.top-level-artifacts"
+      ],
+      "testIds": [
+        "bundle::tests::requires_config_json_at_bundle_root",
+        "bundle::tests::treats_the_supplied_directory_as_the_bundle_root"
+      ],
+      "rationale": "Archive nesting is a bundle-packager responsibility. The runtime treats the supplied directory as the bundle root and requires config.json directly beneath it."
     },
     {
       "id": "sha256:259c418034dd3d597e824dc6a2cc17ddc1c28ecf6ee9c987f42bdd7ab8f2c1ce",
@@ -1893,10 +1899,16 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "The value SHOULD be the conventional `rootfs`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "bundle-author",
+      "ruleIds": [
+        "oci.common.root.conventional-authoring"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_bundle_author_root_names_without_rewriting",
+        "executor::plan_tests::accepts_the_exact_bootstrap_profile"
+      ],
+      "rationale": "The conventional rootfs basename is bundle-author guidance. The runtime accepts that name and preserves every other valid POSIX root path without rewriting it."
     },
     {
       "id": "sha256:1637a9a802756a9958372525793c3c45803cb184a7e7eb1dbee825530167cb1f",
@@ -6955,10 +6967,17 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "Keys SHOULD be named using a reverse domain notation - e.g. `com.example.myKey`.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-configuration-author",
+      "ruleIds": [
+        "oci.common.annotation.author-contract"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_external_annotation_authoring_choices",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ],
+      "rationale": "Annotation naming and use of reserved keys are configuration-author responsibilities. The runtime validates known standard values and preserves other non-empty keys as required by the separate extensibility contract."
     },
     {
       "id": "sha256:bf6aadbd6f06c40ee9eaed84409bcf9cb83d3c5df80b4e82e3409cd72a9f6fd4",
@@ -6969,10 +6988,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "The `org.opencontainers` namespace for keys is reserved for use by this specification, annotations using keys in this namespace MUST be as described in this section.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-configuration-author",
+      "ruleIds": [
+        "oci.common.annotation.author-contract"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_external_annotation_authoring_choices",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ],
+      "rationale": "Annotation naming and use of reserved keys are configuration-author responsibilities. The runtime validates known standard values and preserves other non-empty keys as required by the separate extensibility contract."
     },
     {
       "id": "sha256:8742bebdcd90656f6f2a59d33c971ea8cb4f00ebe0d846d7804e3c6aa5a98b79",
@@ -7021,10 +7047,17 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.os` | Indicates the operating system the container image was built to run on. The annotation value MUST have a valid value for the `os` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:66b9c972fa9d2c2fb75a8da57120ead817537f96f5a0ea14c70a6da2c9225667",
@@ -7055,10 +7088,17 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.os.version` | Indicates the operating system version targeted by the container image. The annotation value MUST have a valid value for the `os.version` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:24342207ecd289bd60f7f85a48607420f73fa0ca1abd278603169279ffe64a9a",
@@ -7069,10 +7109,15 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.os.features` | Indicates mandatory operating system features required by the container image. The annotation value MUST have a valid value for the `os.features` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "validated",
+      "owner": "sdk-image-annotation-validation",
+      "ruleIds": [
+        "oci.common.annotation.image-config.os-features"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values"
+      ]
     },
     {
       "id": "sha256:0675c713c8df47d3108324bca60ee9ed0714918225c18a1d7819495f2022ff68",
@@ -7083,10 +7128,17 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.os.features` | Indicates mandatory operating system features required by the container image. The annotation value MUST have a valid value for the `os.features` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:61a80d2cfd5ff5001b24e562e31b047ad4831ed66e8872d5767120bbf5b4f41e",
@@ -7117,10 +7169,17 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.architecture` | Indicates the architecture that binaries in the container image are built to run on. The annotation value MUST have a valid value for the `architecture` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:3831d0fdd3b307b28ab15455e192ece07b32e1d2055ff9501647e23cb801061c",
@@ -7151,10 +7210,17 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.variant` | Indicates the variant of the architecture that binaries in the container image are built to run on. The annotation value MUST have a valid value for the `variant` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:111c5c8db778cd23bec493c088795ec00b10f92e5ad017d0de576f28efd0c611",
@@ -7185,10 +7251,17 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.author` | Indicates the author of the container image. The annotation value MUST have a valid value for the `author` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:a121e703e714fe25368922f3ec18e237facd0ccfc54a1c7d3fac09e5db7dca39",
@@ -7218,10 +7291,17 @@
       "keyword": "should",
       "occurrence": 2,
       "source": "| `org.opencontainers.image.created` | Indicates the date and time when the container image was created. The annotation value MUST have a valid value for the `created` property as defined in [the OCIimage specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:820c9c1f5055c590dbec2da49f58252fb60030270cef2ea7a2acf2ff44f4ce5d",
@@ -7232,10 +7312,16 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "| `org.opencontainers.image.stopSignal` | Indicates signal that SHOULD be sent by the container runtimes to [kill the container](runtime.md#kill). The annotation value MUST have a valid value for the `config.StopSignal` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "runtime-caller",
+      "ruleIds": [
+        "oci.common.annotation.stop-signal.caller-default"
+      ],
+      "testIds": [
+        "bundle::tests::resolves_validated_image_stop_signal",
+        "image_annotation::tests::parses_portable_linux_stop_signal_forms"
+      ],
+      "rationale": "The OCI kill operation carries an explicit signal, so default stop orchestration belongs to the runtime caller. The SDK exposes the validated annotation as a portable Linux signal for that caller."
     },
     {
       "id": "sha256:939f0fef055221250893b28bb48c0f6e568cfb7818b4373345fce1ac3b149bd8",
@@ -7267,10 +7353,17 @@
       "keyword": "should",
       "occurrence": 3,
       "source": "| `org.opencontainers.image.stopSignal` | Indicates signal that SHOULD be sent by the container runtimes to [kill the container](runtime.md#kill). The annotation value MUST have a valid value for the `config.StopSignal` property as defined in [the OCI image specification][oci-image-config-properties]. This annotation SHOULD only be used in accordance with the [OCI image specification's runtime conversion specification][oci-image-conversion]. |",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-image-converter",
+      "ruleIds": [
+        "oci.common.annotation.image-conversion.provenance"
+      ],
+      "testIds": [
+        "image_annotation::tests::pins_runtime_referenced_image_spec_sources",
+        "semantic::tests::validates_pinned_oci_image_annotation_values",
+        "bundle::tests::loads_v1_3_fields_without_losing_them"
+      ],
+      "rationale": "Image-to-runtime conversion provenance is owned by the converter and is not observable at runtime. The SDK pins the referenced conversion document, validates the resulting standard values, and preserves them exactly."
     },
     {
       "id": "sha256:b455c5dd8669c609f0f9a223a51daca14ff1a5b73a0867b31cb8a2ea9508f138",
@@ -7281,10 +7374,16 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "All other keys in the `org.opencontainers` namespace not specified in this above table are reserved and MUST NOT be used by subsequent specifications.",
-      "disposition": "pending-review",
-      "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "reviewed-external",
+      "owner": "oci-specification-author",
+      "ruleIds": [
+        "oci.common.annotation.reserved-namespace.specification-author"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_external_annotation_authoring_choices",
+        "bundle::tests::ignores_unknown_configuration_properties_without_losing_exact_bundle"
+      ],
+      "rationale": "Reservation of future org.opencontainers keys constrains subsequent specification authors. Runtime extensibility separately requires unknown keys to remain accepted and preserved."
     },
     {
       "id": "sha256:ea9638d96fae91db229c7291a8480bf9f760ad72e82f8a76e01b00820924a5d8",

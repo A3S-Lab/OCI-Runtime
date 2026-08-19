@@ -638,6 +638,73 @@ mod tests {
         assert!(error.message.contains("not a plain file"));
     }
 
+    #[tokio::test]
+    async fn treats_the_supplied_directory_as_the_bundle_root() {
+        let temporary = tempfile::tempdir().expect("create temporary bundle parent");
+        let bundle_root = temporary.path().join("portable-bundle");
+        std::fs::create_dir(&bundle_root).expect("create bundle root");
+        std::fs::write(
+            bundle_root.join("config.json"),
+            serde_json::to_vec(&complete_v1_3_fixture()).expect("encode fixture"),
+        )
+        .expect("write root configuration");
+
+        let bundle = OciBundle::load(&bundle_root)
+            .await
+            .expect("the supplied directory is the bundle root");
+        assert_eq!(
+            bundle.directory(),
+            bundle_root
+                .canonicalize()
+                .expect("canonical bundle root")
+                .as_path()
+        );
+        OciBundle::load(temporary.path())
+            .await
+            .expect_err("a containing directory is not implicitly part of the bundle");
+    }
+
+    #[test]
+    fn preserves_bundle_author_root_names_without_rewriting() {
+        let directory = std::env::current_dir()
+            .expect("current directory")
+            .join("root-name-bundle");
+        for root_name in ["rootfs", "custom-root"] {
+            let bundle = OciBundle::from_json(
+                &directory,
+                format!(r#"{{"ociVersion":"1.3.0","root":{{"path":"{root_name}"}}}}"#),
+            )
+            .expect("valid relative root name");
+            assert_eq!(
+                bundle.spec().root().as_ref().expect("root").path(),
+                Path::new(root_name)
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_external_annotation_authoring_choices() {
+        let directory = std::env::current_dir()
+            .expect("current directory")
+            .join("annotation-authoring-bundle");
+        let bundle = OciBundle::from_json(
+            directory,
+            r#"{"ociVersion":"1.3.0","root":{"path":"rootfs"},"annotations":{"local-key":"opaque","org.opencontainers.future.example":"retained"}}"#,
+        )
+        .expect("runtime must not enforce producer naming policy");
+        let annotations = bundle.spec().annotations().as_ref().expect("annotations");
+        assert_eq!(
+            annotations.get("local-key").map(String::as_str),
+            Some("opaque")
+        );
+        assert_eq!(
+            annotations
+                .get("org.opencontainers.future.example")
+                .map(String::as_str),
+            Some("retained")
+        );
+    }
+
     #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn rejects_symlinked_config_json() {

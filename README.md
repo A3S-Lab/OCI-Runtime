@@ -536,9 +536,9 @@ The repository turns release claims into checked inventories:
 | --- | ---: |
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
-| Typed semantic validation rules | 94 |
-| Owner-bound non-semantic rules | 135 |
-| OCI normative dispositions | 566 enforced · 50 validated · 7 conformant · 32 pending review |
+| Typed semantic validation rules | 95 |
+| Owner-bound non-semantic rules | 141 |
+| OCI normative dispositions | 566 enforced · 51 validated · 7 conformant · 14 reviewed external · 17 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |

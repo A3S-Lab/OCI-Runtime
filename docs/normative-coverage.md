@@ -33,15 +33,22 @@ The v1.3.0 corpus currently contains 764 entries:
 | --- | ---: | --- |
 | `specification-definition` | 19 | Notational or glossary definitions |
 | `rejected-inapplicable-platform` | 90 | Native FreeBSD, Solaris, Windows, or z/OS workload requirements rejected by the Linux-only workload boundary |
-| `validated` | 50 | Exact semantic, bundle, annotation-map, pinned OCI Image annotation-value, process/root phase, Linux/utility-VM platform-section, and CPU burst/idle relationship rules with positive and negative SDK tests |
+| `reviewed-external` | 14 | Bundle-packager, configuration-author, image-converter, runtime-caller, or subsequent-specification responsibilities with a mandatory reviewed rationale and tested runtime boundary |
+| `validated` | 51 | Exact semantic, bundle, annotation-map, pinned OCI Image annotation-value including serialized `os.features`, process/root phase, Linux/utility-VM platform-section, and CPU burst/idle relationship rules with positive and negative SDK tests |
 | `enforced` | 566 | Root `config.json` placement, declared-root directory admission, read-only-root enforcement, and OCI-required unknown-property ignore semantics with exact raw-document retention; Linux-only platform applicability; all eight Linux namespace types with exact inherit/create/join behavior, type-checked retained join descriptors, bounded exact UID/GID mappings without source-ownership mutation, and normalized monotonic/boottime offsets; ordered common mounts, root-relative destination normalization, optional mount fields, and ID-mapped mounts; exact hostname/domainname and init/exec argv, environment, cwd, terminal default, UID/GID, supplementary groups, and umask; required lifecycle arguments and operation set; valid, unique, and reusable container IDs; exact Query State results; post-create configuration immutability; the create-to-start process barrier; non-terminal `consoleSize` ignore semantics and terminal `consoleSize` PTY initialization; exact process launch and signal exit; scoped delete that removes owned resources while preserving external storage; start, kill, and delete state gates; required OCI State fields, Linux PID lifecycle, annotations, and schema; unknown configuration annotation preservation; all six POSIX Hook phases with exact command, namespace, order, state-stdin, timeout, and failure policy; the four conditional Linux `/dev` links; all required and recommended OCI 1.3 Linux mount options, unknown filesystem-option pass-through, and accurate mount-option feature reporting; exact absolute, stable relative, and omission-generated private Linux cgroup paths with invalid-path rejection and cleanup; exact cgroup-v2 ownership delegation for the mapped process UID, with a new cgroup namespace, an exact writable mount, bounded kernel-listed files, normative fallback, and unlisted-file preservation; complete cgroup v2 CPU shares/quota/burst/period/cpuset/idle enforcement with explicit cgroup v1 realtime rejection; exact memory limit/reservation/swap and PIDs create/update mapping for finite, zero, and unlimited values with cgroup v1-only memory plus `net_cls`/`net_prio` network controls rejected before mutation; cgroup v2 Block I/O default/per-device weights and read/write BPS/IOPS limits with keyed read-back, partial-update preservation, reverse rollback, and explicit leaf-weight rejection; cgroup v2 HugeTLB usage and reservation limits with full-range input, dynamic page-size checks, partial-update preservation, exact effective read-back, and reverse rollback; cgroup v2 RDMA HCA handle/object limits with device preflight, partial-update preservation, kernel-effective read-back, and reverse rollback; bounded cgroup v2 Unified control-file writes with dynamic controller enablement, runtime-unknown and write-only file support, kernel-defined formatting, and readable no-op/rollback snapshots; exact OCI Linux static nodes, default devices, `/dev/ptmx`, terminal `/dev/console`, target cleanup, and immutable declared/default device-inventory BPF with ordered resource-rule narrowing; exact Seccomp schema and policy handling with real x86_64/AArch64 BPF installation plus pre-mutation rejection of unadvertised flags, architecture sets, listener fields, and notification actions; complete VM schema admission plus selected-driver rejection of caller-owned hypervisor, kernel, image, and hardware launch configuration before durable or platform mutation; all five process capability sets, structured warning-and-continue handling for recognized capabilities the kernel cannot grant, and `noNewPrivileges` with kernel and workload read-back; the 41-name capability feature registry; all 16 OCI rlimit mappings with exact soft/hard kernel read-back; OCI `oomScoreAdj`, scheduler, I/O-priority, init personality, init NUMA memory-policy, Intel RDT, and exec CPU-affinity semantics; schema-valid feature documents whose version, hooks, Linux platform, namespace, cgroup, seccomp, LSM, and ID-mapped-mount claims match the implementation; accurate unsafe-annotation, memory-policy, and Intel RDT feature reporting; and bounded transactional application of namespaced Linux sysctls enforced by the SDK transport, bundle loader, runtime lifecycle, and Linux executor |
 | `conformant` | 7 | The optional `tmpcopyup` entries are satisfied by typed rejection and exclusion from feature reporting. The recommended Linux default filesystems are supplied where the executor owns the required namespace resources, with host sysfs deliberately withheld from a user namespace that inherits host networking. Runtime defines no nonstandard State values or extra State properties and defers the optional remaining process properties until Start. These are explicit reviewed omissions, not unconditional implementation claims |
-| `pending-review` | 32 | Common or Linux entries awaiting exact evidence binding |
+| `pending-review` | 17 | Common or Linux entries awaiting exact evidence binding |
 
 An occurrence is an inventory unit, not an assertion that the surrounding
 sentence has already been implemented. Some common documents contain
 platform-specific clauses; each pending entry still requires human
 applicability review.
+
+`reviewed-external` is deliberately separate from implementation status. It
+is used only when the normative subject is outside the runtime role, and each
+binding must retain a non-empty rationale plus rule and test evidence for the
+runtime boundary. It cannot be used to turn missing runtime behavior into a
+conformance claim.
 
 All 66 `runtime.md` entries are owner-bound. The runtime emits only the four
 standard State values, preserves the exact Linux PID contract, validates and
@@ -96,10 +103,9 @@ retain the exact argv, environment, cwd, terminal default, UID/GID,
 supplementary groups, and umask. Native Linux rechecks those process values
 inside an executable-script workload. Common-document clauses that only
 describe native Windows, Solaris, FreeBSD, or z/OS workloads are tied to the
-pre-mutation Linux-only rejection boundary. The only pending entry in these
-five headings is the authoring recommendation to use the conventional
-`rootfs` name; the runtime accepts that name but does not rewrite bundle
-authors' valid alternatives.
+pre-mutation Linux-only rejection boundary. The conventional `rootfs`
+basename is explicitly classified as bundle-author guidance: the runtime
+accepts that name and preserves valid alternatives without rewriting them.
 
 The common extensibility review promoted two entries. Bundle admission checks
 all known schema and semantic constraints, retains the exact source document
@@ -126,13 +132,14 @@ by Runtime Specification 1.3.0 is pinned at
 `v1.1.0-rc2@19a74bcb54ba211005a68d85c6b359c2947721ce`, with its configuration,
 conversion, schema, definitions, and license sources retained verbatim. The
 SDK accepts all eight standard Runtime Specification image keys and validates
-the seven values with an unambiguous image-property mapping. Creation times
-must satisfy RFC 3339, and stop signals resolve to a bounded Linux signal name,
-real-time expression, or number on every host platform. The remaining 13
-annotation entries cover reverse-domain guidance, reserved-namespace authoring
-constraints, the unresolved array-to-string representation of `os.features`,
-conversion provenance, and default stop-signal behavior; they remain pending
-until those distinct contracts have direct evidence.
+each value against its image-property mapping. Creation times must satisfy RFC
+3339, stop signals resolve to a bounded Linux signal name, real-time
+expression, or number on every host platform, and `os.features` must contain a
+JSON serialization of the Image Specification array of strings. Converter
+provenance, reverse-domain and reserved-namespace authoring policy, default
+stop orchestration, and future specification-key reservation are classified
+as external responsibilities with explicit rationales. Unknown annotation
+keys remain preserved under the separate runtime extensibility requirement.
 
 The runtime feature report now derives `potentiallyUnsafeConfigAnnotations`
 from one SDK-owned registry of exact built-in keys and the active drivers'
@@ -310,14 +317,16 @@ the workload.
 ## Promotion
 
 Each coverage item has an owner, disposition, rule IDs, and test IDs.
-`validated`, `enforced`, `conformant`, and rejected-inapplicable claims require
-non-empty rule and test evidence. The verifier rejects:
+`reviewed-external`, `validated`, `enforced`, `conformant`, and
+rejected-inapplicable claims require non-empty rule and test evidence. External
+bindings additionally require a non-empty rationale. The verifier rejects:
 
 - a missing, extra, duplicate, or stale requirement;
 - a changed document name, scope, or digest;
 - an empty owner;
 - empty or duplicate rule and test IDs;
-- an implementation claim without both rule and test evidence.
+- an implementation claim without both rule and test evidence;
+- an external-role classification without a reviewed rationale.
 
 Reviewed promotions live in
 `conformance/oci-1.3.0-normative-evidence.json`. The generator applies that
@@ -328,10 +337,13 @@ directions: an evidence rule must exist, every non-semantic rule must retain
 its declared owner, and every directly normative rule must have at least one
 requirement binding.
 
-Promotion is monotonic in reviewed commits:
+Runtime implementation promotion is monotonic in reviewed commits, while a
+requirement whose normative subject is outside the runtime takes a separate
+reviewed branch:
 
 ```text
 pending-review -> validated -> enforced -> conformant
+              \-> reviewed-external
 ```
 
 `validated` means static schema or semantic checks exist. `enforced` means the
@@ -339,7 +351,9 @@ selected executor or driver applies the behavior or fails. `conformant` means
 the reviewed result satisfies the requirement: an optional behavior may be
 intentionally omitted with typed rejection and honest discovery, while an
 implemented mandatory behavior additionally requires lifecycle, negative,
-recovery, and retained upstream evidence.
+recovery, and retained upstream evidence. `reviewed-external` never means
+implemented; it records why a producer, caller, or specification-author
+requirement is not owned by the runtime and how that boundary is tested.
 
 ## Update Workflow
 

@@ -466,15 +466,16 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 32-entry pending normative evidence backlog.
+- [ ] Close the remaining 17-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
   - [x] Pin the OCI Image Specification reference used by Runtime
-    Specification 1.3.0 and validate the seven unambiguous image annotation
-    values, including RFC 3339 creation times and portable Linux stop signals.
-    Keep `os.features`, conversion provenance, and default stop behavior open
-    until their distinct contracts have direct evidence.
+    Specification 1.3.0 and validate all eight standard image annotation
+    values, including RFC 3339 creation times, portable Linux stop signals,
+    and the JSON-array string representation used by converters for
+    `os.features`. Classify conversion provenance and default stop
+    orchestration under their external converter and caller responsibilities.
   - [x] Report the exact built-in behavior-changing configuration annotations
     and merge annotation-backed extensions from the active driver capability
     inventory, while keeping probe-only discovery empty.
@@ -489,8 +490,9 @@ driver implements.
     directory checks, mount order and root-relative destinations, optional
     mount fields, ID-mapped mounts, argv, environment, cwd, terminal default,
     UID/GID, supplementary groups, umask, and the Linux-only rejection of
-    native non-Linux clauses. Keep only the bundle-author recommendation to
-    use the conventional `rootfs` name open in these headings.
+    native non-Linux clauses. The conventional `rootfs` basename is recorded
+    as reviewed bundle-author guidance while the runtime preserves every valid
+    alternative.
   - [x] Honor OCI configuration extensibility by retaining the exact raw
     document and digest while excluding unknown top-level and nested
     properties from the typed execution projection. Treat the dependency's
@@ -591,6 +593,12 @@ driver implements.
     while init and exec capability warnings are logged without changing the
     successful operation flow. Eleven entries move to enforced and four to
     conformant.
+  - [x] Separate external normative roles from runtime implementation claims.
+    Fourteen bundle-packager, bundle-author, configuration-author,
+    image-converter, runtime-caller, and specification-author entries now use
+    a dedicated `reviewed-external` disposition with a mandatory rationale,
+    stable boundary rule, and retained test evidence. Runtime validation adds
+    the previously ambiguous OCI image `os.features` array mapping.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1571,7 +1579,8 @@ leak. Only then may KVM become `experimental`.
   namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
   HugeTLB, RDMA, Unified, network-controller, Seccomp, and VM-configuration
   promotions plus Linux default-filesystem and runtime-lifecycle conformance
-  leave 566 enforced, 50 validated, seven conformant, and 32 pending entries.
+  leave 566 enforced, 51 validated, seven conformant, 14 reviewed-external,
+  and 17 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.

@@ -26,6 +26,7 @@ impl OciNonSemanticRule {
 
 const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.annotations.schema", "sdk-schema-validation"),
+    OciNonSemanticRule::new("oci.bundle.archive.top-level-artifacts", "bundle-packager"),
     OciNonSemanticRule::new("oci.bundle.config.root-file", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.required", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.semver", "runtime-bundle"),
@@ -60,6 +61,22 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.common.mount.listed-order", "linux-executor"),
     OciNonSemanticRule::new("oci.common.mount.optional-fields", "linux-executor"),
     OciNonSemanticRule::new("oci.common.annotations.unknown-preserved", "runtime-bundle"),
+    OciNonSemanticRule::new(
+        "oci.common.annotation.author-contract",
+        "oci-configuration-author",
+    ),
+    OciNonSemanticRule::new(
+        "oci.common.annotation.image-conversion.provenance",
+        "oci-image-converter",
+    ),
+    OciNonSemanticRule::new(
+        "oci.common.annotation.reserved-namespace.specification-author",
+        "oci-specification-author",
+    ),
+    OciNonSemanticRule::new(
+        "oci.common.annotation.stop-signal.caller-default",
+        "runtime-caller",
+    ),
     OciNonSemanticRule::new("oci.common.process.arguments.exact", "linux-executor"),
     OciNonSemanticRule::new("oci.common.process.credentials.exact", "linux-executor"),
     OciNonSemanticRule::new("oci.common.process.cwd.applied", "linux-executor"),
@@ -74,6 +91,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.common.rlimit.exact-values", "linux-executor"),
     OciNonSemanticRule::new("oci.common.rlimit.kernel-mapping", "linux-executor"),
     OciNonSemanticRule::new("oci.common.root.directory", "linux-executor"),
+    OciNonSemanticRule::new("oci.common.root.conventional-authoring", "bundle-author"),
     OciNonSemanticRule::new("oci.common.root.readonly", "linux-executor"),
     OciNonSemanticRule::new("oci.common.uts-names.exact", "linux-executor"),
     OciNonSemanticRule::new("oci.features.document.schema", "runtime-feature-report"),
@@ -490,6 +508,9 @@ pub enum OciNormativeDisposition {
     SpecificationDefinition,
     /// The entire native workload platform is rejected before state mutation.
     RejectedInapplicablePlatform,
+    /// The entry governs an external producer, caller, or specification role.
+    /// Its reviewed rationale and the runtime boundary evidence are retained.
+    ReviewedExternal,
     /// Static validation is implemented and has positive and negative evidence.
     Validated,
     /// Runtime or driver enforcement is implemented and tested.
@@ -508,6 +529,8 @@ pub struct OciNormativeCoverageItem {
     pub owner: String,
     pub rule_ids: Vec<String>,
     pub test_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
 }
 
 /// Machine-readable lock for the pinned normative specification corpus.
@@ -540,6 +563,8 @@ pub struct OciNormativeEvidenceBinding {
     pub owner: String,
     pub rule_ids: Vec<String>,
     pub test_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
 }
 
 /// Offline inventory for the normative OCI Runtime Specification 1.3.0 text.
@@ -646,6 +671,7 @@ impl OciNormativeInventory {
                 item.owner.clone_from(&binding.owner);
                 item.rule_ids.clone_from(&binding.rule_ids);
                 item.test_ids.clone_from(&binding.test_ids);
+                item.rationale.clone_from(&binding.rationale);
             }
         }
         self.verify_coverage(&manifest)?;
@@ -876,6 +902,7 @@ fn baseline_coverage(requirement: OciNormativeRequirement) -> OciNormativeCovera
             owner: "specification-corpus".to_string(),
             rule_ids: Vec::new(),
             test_ids: Vec::new(),
+            rationale: None,
         };
     }
 
@@ -889,6 +916,7 @@ fn baseline_coverage(requirement: OciNormativeRequirement) -> OciNormativeCovera
                 "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
                     .to_string(),
             ],
+            rationale: None,
         };
     }
 
@@ -907,6 +935,7 @@ fn baseline_coverage(requirement: OciNormativeRequirement) -> OciNormativeCovera
         owner: owner.to_string(),
         rule_ids: Vec::new(),
         test_ids: Vec::new(),
+        rationale: None,
     }
 }
 
@@ -944,6 +973,7 @@ fn verify_coverage_item(item: &OciNormativeCoverageItem) -> Result<()> {
     let evidence_required = matches!(
         item.disposition,
         OciNormativeDisposition::RejectedInapplicablePlatform
+            | OciNormativeDisposition::ReviewedExternal
             | OciNormativeDisposition::Validated
             | OciNormativeDisposition::Enforced
             | OciNormativeDisposition::Conformant
@@ -951,6 +981,17 @@ fn verify_coverage_item(item: &OciNormativeCoverageItem) -> Result<()> {
     if evidence_required && (item.rule_ids.is_empty() || item.test_ids.is_empty()) {
         return Err(coverage_error(format!(
             "normative coverage {} claims implementation without rule and test evidence",
+            item.requirement.id
+        )));
+    }
+    if item.disposition == OciNormativeDisposition::ReviewedExternal
+        && item
+            .rationale
+            .as_deref()
+            .is_none_or(|rationale| rationale.trim().is_empty())
+    {
+        return Err(coverage_error(format!(
+            "reviewed external normative coverage {} has no rationale",
             item.requirement.id
         )));
     }
@@ -965,18 +1006,29 @@ fn verify_evidence_binding(binding: &OciNormativeEvidenceBinding) -> Result<()> 
     }
     if !matches!(
         binding.disposition,
-        OciNormativeDisposition::Validated
+        OciNormativeDisposition::ReviewedExternal
+            | OciNormativeDisposition::Validated
             | OciNormativeDisposition::Enforced
             | OciNormativeDisposition::Conformant
     ) {
         return Err(coverage_error(
-            "reviewed normative evidence may only promote to validated, enforced, or conformant",
+            "reviewed normative evidence may only promote to reviewed-external, validated, enforced, or conformant",
         ));
     }
     if binding.owner.trim().is_empty() || binding.rule_ids.is_empty() || binding.test_ids.is_empty()
     {
         return Err(coverage_error(
             "normative evidence requires an owner, rule IDs, and test IDs",
+        ));
+    }
+    if binding.disposition == OciNormativeDisposition::ReviewedExternal
+        && binding
+            .rationale
+            .as_deref()
+            .is_none_or(|rationale| rationale.trim().is_empty())
+    {
+        return Err(coverage_error(
+            "reviewed external normative evidence requires a rationale",
         ));
     }
     Ok(())
