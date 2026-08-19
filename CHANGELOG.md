@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Owner-bound OCI Linux namespace, user-mapping, and time-offset evidence.
+  Pinned schema tests require namespace types and every UID/GID mapping member.
+  The executor now has one table-driven contract test covering inherit,
+  create, and join planning for all eight namespace types, exact mapping range
+  preservation and host-ID translation, and optional signed time-offset
+  members. Existing descriptor type/identity checks, real Native Linux and
+  utility-VM UID/GID map and time-offset read-back, unchanged ID-mapped mount
+  source ownership, and mapping-count bounds are tied to nine owner-bound
+  rules. Seventeen requirements move from pending to enforced, leaving 482
+  enforced, 51 validated, two conformant, and 120 pending entries.
 - OCI 1.3 cgroup-v2 ownership delegation. The shared Linux executor now
   changes ownership only when the bundle requests a newly created cgroup
   namespace and an exact writable `cgroup` mount at `/sys/fs/cgroup`. It maps

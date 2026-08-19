@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use super::{
     canonical_text_sha256, keyword_occurrences, OciNormativeCoverageManifest,
-    OciNormativeEvidenceManifest, OciNormativeInventory, OciNormativeKeyword,
-    SPECIFICATION_DOCUMENTS,
+    OciNormativeDisposition, OciNormativeEvidenceManifest, OciNormativeInventory,
+    OciNormativeKeyword, SPECIFICATION_DOCUMENTS,
 };
 
 #[test]
@@ -43,6 +43,31 @@ fn checked_in_normative_manifest_matches_the_pinned_corpus() {
         .coverage_with_evidence(&evidence)
         .expect("checked-in normative evidence must be complete and current");
     assert_eq!(manifest, generated);
+}
+
+#[test]
+fn namespace_mapping_and_time_requirements_are_all_owner_bound() {
+    let manifest = checked_in_manifest();
+    let headings = [
+        "Namespaces",
+        "User namespace mappings",
+        "Offset for Time Namespace",
+    ];
+    let requirements = manifest
+        .items
+        .iter()
+        .filter(|item| {
+            item.requirement.document == "config-linux.md"
+                && headings.contains(&item.requirement.heading.as_str())
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(requirements.len(), 19);
+    assert!(requirements.iter().all(|item| {
+        item.disposition != OciNormativeDisposition::PendingReview
+            && !item.rule_ids.is_empty()
+            && !item.test_ids.is_empty()
+    }));
 }
 
 #[test]
