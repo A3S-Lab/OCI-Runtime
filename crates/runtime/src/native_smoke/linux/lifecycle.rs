@@ -625,7 +625,8 @@ fn resource_profile() -> Result<LinuxResources, String> {
             "cpus": "0",
             "mems": "0"
         },
-        "pids": {"limit": 64}
+        "pids": {"limit": 64},
+        "unified": {"memory.high": (384 * 1024 * 1024).to_string()}
     }))
     .map_err(|error| format!("failed to construct native resource profile: {error}"))
 }

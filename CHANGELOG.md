@@ -6,6 +6,23 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI 1.3 `linux.resources.unified` enforcement for cgroup v2. The shared
+  Linux executor accepts bounded, deterministic control-file maps, preserves
+  controller names discovered from the running kernel, and enables every
+  requested controller before creating the leaf. Unsafe paths, runtime-owned
+  `cgroup.*` state, typed/unified ownership conflicts, unavailable controllers,
+  missing files, and unwritable controls fail with typed errors before
+  device-policy mutation. Create and live Update write each value without
+  assuming how an unknown kernel control formats its state. Update snapshots
+  readable controls for no-op suppression and rollback, while still accepting
+  write-only controls. `control-workload-v1` keeps unified settings on the
+  workload leaf. Native Linux qualification reads `memory.high` from both
+  children, verifies kernel-normalized partial `io.max` writes when a usable
+  device exists, and exercises rootful and delegated-rootless updates. The
+  stats reader also accepts legal device-only `io.stat` entries emitted for
+  devices with no published counters. One owner-bound executor rule promotes
+  all four Unified requirements, leaving 494 enforced, 50 validated, two
+  conformant, and 109 pending entries.
 - OCI 1.3 RDMA enforcement for cgroup v2. The shared Linux executor validates
   bounded device names, requires at least one HCA handle or object limit per
   entry, checks the optional `rdma` controller and live device inventory before
@@ -17,9 +34,7 @@ All notable changes to A3S OCI Runtime are documented in this file.
   reports the implemented capability, and Native Linux qualification performs
   real control/workload read-back when the host exposes a usable RDMA device.
   One owner-bound executor rule plus the existing semantic rule promote all five
-  RDMA requirements, leaving 490 enforced, 50 validated, two conformant, and 113
-  pending entries. Arbitrary `linux.resources.unified` writes remain explicitly
-  unsupported.
+  RDMA requirements.
 - OCI 1.3 HugeTLB enforcement for cgroup v2. `hugepageLimits` now retains the
   complete normative `uint64` limit range, requires both `pageSize` and `limit`,
   rejects unsafe, overflowing, duplicate, or unavailable page-size controls,

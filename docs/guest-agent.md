@@ -410,6 +410,17 @@ The executor creates one private controller-enabled cgroup-v2 root. The
 default layout places init and exec in one owned leaf, which permits a later
 update even when create supplied no initial limits.
 
+OCI 1.3 `linux.resources.unified` is enforced as a bounded, key-sorted map of
+cgroup-v2 file writes. Keys must name one control file, may carry a controller
+unknown to the runtime, and cannot target `cgroup.*` state or a file already
+owned by a typed resource in the same request. The manager retains every
+controller exposed by the kernel, enables usable optional controllers through
+the private hierarchy, and returns `Unsupported` when a requested controller or
+file is unavailable. Create preflights writable controls before device-policy
+mutation. Create and Update write values in stable order without assuming the
+format of an unknown kernel control. Update snapshots readable controls for
+no-op suppression and reverse rollback while still accepting write-only files.
+
 `linux.cgroupsPath` keeps its OCI path class through validation. An absolute
 value is resolved from the visible cgroup v2 mount point; a relative value is
 resolved from the executor's stable private manager. The same value is reused
@@ -435,9 +446,11 @@ open time. The root must be a canonical empty cgroup-v2 directory owned by the
 executor's effective UID/GID with `cpu`, `cpuset`, `memory`, and `pids`
 already enabled. The executor pins its filesystem device and inode, rechecks
 ownership and controller state before first use, and creates the same private
-manager layout beneath that root. A rootless `linux.cgroupsPath` without this
-authority fails before container state or filesystem mutation. An absolute
-rootless value must also resolve inside that exact delegation.
+manager layout beneath that root. Every additional controller that is both
+exposed and enabled is propagated without a runtime name allowlist. A rootless
+`linux.cgroupsPath` without this authority fails before container state or
+filesystem mutation. An absolute rootless value must also resolve inside that
+exact delegation.
 
 If a rootless plan also needs the six default device nodes, the CLI must start
 the synchronous bounded helper before Tokio and consume that bootstrap when it
@@ -481,19 +494,25 @@ runtime-opened files.
 runtime applies it to `a3s-workload` with `memory.oom.group=0`, derives the
 outer memory, CPU, and PID envelope from the declared headroom, and sends all
 later OCI exec processes directly to the workload child. Live updates modify
-the derived outer envelope and exact workload settings in one rollback-safe
-transaction. CPU burst and idle are leaf scheduling controls and are never
-copied into the derived outer envelope. Stats and freeze/thaw observe only the workload child, so memory
-pressure cannot kill or freeze the trusted control transport. Cleanup removes
-both children and the complete owned topology.
+the derived outer envelope and workload settings only after preflight. Typed
+settings and readable Unified controls participate in reverse rollback;
+write-only Unified controls are accepted but inherently have no prior state to
+restore. CPU burst, idle, Block I/O, HugeTLB, RDMA, and Unified settings are
+workload-only controls and are never copied into the derived outer envelope.
+Stats and freeze/thaw observe only the workload child, so memory pressure
+cannot kill or freeze the trusted control transport. Cleanup removes both
+children and the complete owned topology.
 
-For either layout, update preserves omitted fields, applies supported memory,
-CPU, cpuset, and PID changes with exact read-back, and rolls earlier writes
+For either layout, update preserves omitted fields and applies supported memory,
+CPU, cpuset, PID, Block I/O, HugeTLB, and RDMA changes with exact read-back.
+Unified controls retain kernel-defined formatting and use readable prior state
+for no-op suppression and best-effort rollback. Earlier reversible writes roll
 back in reverse order if a later write fails. Stats normalizes CPU counters to
 nanoseconds, memory counters to bytes, and includes PID plus memory/PID event
 counters. It also sums `io.stat` read and write bytes across every workload
-block device into `io.read_bytes` and `io.write_bytes`; an unavailable I/O
-controller leaves those optional metrics absent. Pause writes `1` to
+block device into `io.read_bytes` and `io.write_bytes`, ignoring legal
+device-only entries with no published counters; an unavailable I/O controller
+leaves those optional metrics absent. Pause writes `1` to
 `cgroup.freeze`, resume writes `0`, and neither operation returns until
 `cgroup.events` reports the exact `frozen` state. The process inventory
 refreshes the init and exec supervisors, excludes terminal processes, and
@@ -770,9 +789,9 @@ placeholder cleanup between owners.
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,
-Block I/O, HugeTLB, or RDMA requests whose required cgroup-v2 controller,
-dynamic control, or device is unavailable, arbitrary unified resources, and
-every other unimplemented OCI property. Rootless cgroup-v2 real-host
+Block I/O, HugeTLB, RDMA, or Unified requests whose required cgroup-v2
+controller, dynamic control, or device is unavailable, and every other
+unimplemented OCI property. Rootless cgroup-v2 real-host
 qualification and device-policy delegation, hook
 rollback/recovery, security-negative, and soak certification remain release
 blockers rather than silently accepted compatibility gaps.

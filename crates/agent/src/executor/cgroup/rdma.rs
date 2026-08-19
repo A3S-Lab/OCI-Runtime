@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -37,6 +37,14 @@ impl RdmaPlan {
 
     pub(super) fn is_empty(&self) -> bool {
         self.limits.is_empty()
+    }
+
+    pub(super) fn owned_files(&self) -> BTreeSet<String> {
+        if self.is_empty() {
+            BTreeSet::new()
+        } else {
+            BTreeSet::from([MAX_FILE.to_string()])
+        }
     }
 
     fn mutations(&self) -> Vec<RdmaMutation> {

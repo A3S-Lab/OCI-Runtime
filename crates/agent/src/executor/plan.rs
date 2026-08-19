@@ -504,6 +504,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
                 "blockIO",
                 "hugepageLimits",
                 "rdma",
+                "unified",
             ],
         )?;
     }

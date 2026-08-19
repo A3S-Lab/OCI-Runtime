@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
@@ -6,6 +8,8 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 use super::hugetlb::HugeTlbPlan;
 use super::io::{AppliedBlockIoUpdate, BlockIoPlan};
 use super::rdma::{AppliedRdmaUpdate, RdmaPlan};
+use super::setting::CgroupSettingReadback;
+use super::unified::UnifiedPlan;
 use super::{
     cgroup_v2_limit_value, normalize_cgroup_value, parse_max_value, parse_u64_value, read_required,
     shares_to_weight, validate_cpuset, validate_memory_value, validate_pids_limit,
@@ -125,6 +129,7 @@ struct CgroupUpdatePlan {
     block_io: BlockIoPlan,
     huge_tlb: HugeTlbPlan,
     rdma: RdmaPlan,
+    unified: UnifiedPlan,
 }
 
 impl CgroupUpdatePlan {
@@ -138,6 +143,8 @@ impl CgroupUpdatePlan {
         let huge_tlb = HugeTlbPlan::from_oci(resources.hugepage_limits().as_deref())
             .map_err(as_update_error)?;
         let rdma = RdmaPlan::from_oci(resources.rdma().as_ref()).map_err(as_update_error)?;
+        let unified =
+            UnifiedPlan::from_oci(resources.unified().as_ref()).map_err(as_update_error)?;
         let plan = Self {
             memory_limit: memory.and_then(|memory| memory.limit()),
             memory_reservation: memory.and_then(|memory| memory.reservation()),
@@ -153,6 +160,7 @@ impl CgroupUpdatePlan {
             block_io,
             huge_tlb,
             rdma,
+            unified,
         };
         plan.validate()?;
         Ok(plan)
@@ -214,7 +222,49 @@ impl CgroupUpdatePlan {
         if let Some(value) = self.pids_limit {
             validate_pids_limit(value).map_err(as_update_error)?;
         }
+        self.unified
+            .validate_conflicts(&self.typed_owned_files())
+            .map_err(as_update_error)?;
         Ok(())
+    }
+
+    fn typed_owned_files(&self) -> BTreeSet<String> {
+        let mut files = BTreeSet::new();
+        if self.cpuset_mems.is_some() {
+            files.insert("cpuset.mems".to_string());
+        }
+        if self.cpuset_cpus.is_some() {
+            files.insert("cpuset.cpus".to_string());
+        }
+        if self.memory_limit.is_some() {
+            files.insert("memory.max".to_string());
+            files.insert("memory.oom.group".to_string());
+        }
+        if self.memory_reservation.is_some() {
+            files.insert("memory.low".to_string());
+        }
+        if self.memory_swap.is_some() {
+            files.insert("memory.swap.max".to_string());
+        }
+        if self.cpu_quota.is_some() || self.cpu_period.is_some() {
+            files.insert("cpu.max".to_string());
+        }
+        if self.cpu_burst.is_some() {
+            files.insert("cpu.max.burst".to_string());
+        }
+        if self.cpu_shares.is_some() {
+            files.insert("cpu.weight".to_string());
+        }
+        if self.cpu_idle.is_some() {
+            files.insert("cpu.idle".to_string());
+        }
+        if self.pids_limit.is_some() {
+            files.insert("pids.max".to_string());
+        }
+        files.extend(self.block_io.owned_files());
+        files.extend(self.huge_tlb.owned_files());
+        files.extend(self.rdma.owned_files());
+        files
     }
 
     fn management_plan(&self, headroom: &ControlHeadroom) -> Result<Self> {
@@ -236,6 +286,7 @@ impl CgroupUpdatePlan {
         management.block_io = BlockIoPlan::default();
         management.huge_tlb = HugeTlbPlan::default();
         management.rdma = RdmaPlan::default();
+        management.unified = UnifiedPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -436,6 +487,7 @@ impl CgroupUpdatePlan {
                 .await
                 .map_err(as_update_error)?,
         );
+        settings.extend(self.unified.settings());
         Ok(settings)
     }
 }
@@ -450,7 +502,7 @@ async fn apply_update_settings(path: &Path, settings: Vec<CgroupSetting>) -> Res
 struct PreparedUpdateSetting {
     path: PathBuf,
     setting: CgroupSetting,
-    old: String,
+    old: Option<String>,
 }
 
 async fn prepare_update_settings(
@@ -459,21 +511,70 @@ async fn prepare_update_settings(
 ) -> Result<Vec<PreparedUpdateSetting>> {
     let mut prepared = Vec::with_capacity(settings.len());
     for setting in settings {
-        let old = read_required(path, setting.file(), UPDATE_OPERATION).await?;
+        let old = match setting.readback() {
+            CgroupSettingReadback::Exact => Some(normalize_cgroup_value(
+                &read_required(path, setting.file(), UPDATE_OPERATION).await?,
+            )),
+            CgroupSettingReadback::KernelDefined => {
+                read_kernel_defined_current(path, setting.file()).await?
+            }
+        };
         prepared.push(PreparedUpdateSetting {
             path: path.to_path_buf(),
             setting,
-            old: normalize_cgroup_value(&old),
+            old,
         });
     }
     Ok(prepared)
+}
+
+async fn read_kernel_defined_current(path: &Path, file: &str) -> Result<Option<String>> {
+    let destination = path.join(file);
+    let metadata = tokio::fs::symlink_metadata(&destination)
+        .await
+        .map_err(|error| {
+            update_error(
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    ErrorCode::Unsupported
+                } else {
+                    ErrorCode::FailedPrecondition
+                },
+                format!(
+                    "failed to inspect unified cgroup control {}: {error}",
+                    destination.display()
+                ),
+            )
+        })?;
+    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o222 == 0 {
+        return Err(update_error(
+            ErrorCode::Unsupported,
+            format!(
+                "unified cgroup control {} is not a writable control file",
+                destination.display()
+            ),
+        ));
+    }
+    if metadata.permissions().mode() & 0o444 == 0 {
+        return Ok(None);
+    }
+    match tokio::fs::read_to_string(&destination).await {
+        Ok(value) => Ok(Some(normalize_cgroup_value(&value))),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok(None),
+        Err(error) => Err(update_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to read unified cgroup control {} before update: {error}",
+                destination.display()
+            ),
+        )),
+    }
 }
 
 #[derive(Debug)]
 struct AppliedUpdateSetting {
     path: PathBuf,
     file: String,
-    old: String,
+    old: Option<String>,
 }
 
 async fn apply_prepared_update_settings(
@@ -481,7 +582,11 @@ async fn apply_prepared_update_settings(
 ) -> Result<Vec<AppliedUpdateSetting>> {
     let mut applied = Vec::new();
     for setting in prepared {
-        if normalize_cgroup_value(setting.setting.value()) == setting.old {
+        if setting
+            .old
+            .as_deref()
+            .is_some_and(|old| normalize_cgroup_value(setting.setting.value()) == old)
+        {
             continue;
         }
         let destination = setting.path.join(setting.setting.file());
@@ -503,12 +608,15 @@ async fn apply_prepared_update_settings(
             .await
             .map(|()| applied);
         }
-        let (file, _) = setting.setting.into_parts();
+        let (file, _, readback) = setting.setting.into_parts();
         applied.push(AppliedUpdateSetting {
             path: setting.path,
             file,
             old: setting.old,
         });
+        if readback == CgroupSettingReadback::KernelDefined {
+            continue;
+        }
         let actual = match tokio::fs::read_to_string(&destination).await {
             Ok(actual) => actual,
             Err(error) => {
@@ -564,12 +672,19 @@ async fn rollback_update(
     });
     for setting in applied.iter().rev() {
         let destination = setting.path.join(&setting.file);
-        if let Err(error) = tokio::fs::write(&destination, setting.old.as_bytes()).await {
+        let Some(old) = setting.old.as_deref() else {
+            failures.push(format!(
+                "{}: unified control had no readable rollback state",
+                destination.display()
+            ));
+            continue;
+        };
+        if let Err(error) = tokio::fs::write(&destination, old.as_bytes()).await {
             failures.push(format!("{}: {error}", destination.display()));
             continue;
         }
         match tokio::fs::read_to_string(&destination).await {
-            Ok(actual) if normalize_cgroup_value(&actual) == setting.old => {}
+            Ok(actual) if normalize_cgroup_value(&actual) == old => {}
             Ok(_) => failures.push(format!(
                 "{}: rollback read-back mismatch",
                 destination.display()
@@ -638,12 +753,14 @@ fn update_error(code: ErrorCode, message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
     use a3s_oci_sdk::ErrorCode;
 
     use super::{
-        apply_update_settings, rollback_update, update_error, AppliedUpdateSetting,
-        CgroupUpdatePlan,
+        apply_prepared_update_settings, apply_update_settings, prepare_update_settings,
+        rollback_update, update_error, AppliedUpdateSetting, CgroupUpdatePlan,
     };
     use crate::executor::cgroup::{
         CgroupHandle, CgroupSetting, ControlHeadroom, ControlWorkloadCgroup,
@@ -1010,6 +1127,176 @@ mod tests {
         assert!(management.rdma.is_empty());
     }
 
+    #[tokio::test]
+    async fn applies_partial_unified_updates_and_skips_readable_noops() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        std::fs::write(directory.path().join("memory.high"), "max\n")
+            .expect("current unified control");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "unified": {"memory.high": "201326592"}
+        }))
+        .expect("unified resource update");
+        let plan = CgroupUpdatePlan::from_resources(&resources).expect("unified update plan");
+        let settings = plan
+            .settings(directory.path(), true)
+            .await
+            .expect("unified settings");
+        assert_eq!(
+            settings,
+            [CgroupSetting::kernel_defined("memory.high", "201326592")]
+        );
+
+        let prepared = prepare_update_settings(directory.path(), settings.clone())
+            .await
+            .expect("prepare unified update");
+        let applied = apply_prepared_update_settings(prepared)
+            .await
+            .expect("apply unified update");
+        assert_eq!(applied.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("memory.high"))
+                .expect("updated unified control"),
+            "201326592"
+        );
+
+        let prepared = prepare_update_settings(directory.path(), settings)
+            .await
+            .expect("prepare unified noop");
+        let applied = apply_prepared_update_settings(prepared)
+            .await
+            .expect("skip unified noop");
+        assert!(applied.is_empty());
+    }
+
+    #[tokio::test]
+    async fn applies_write_only_unified_updates_without_read_back() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        let control = directory.path().join("memory.reclaim");
+        std::fs::write(&control, "0").expect("current unified control");
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o200))
+            .expect("write-only unified control");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "unified": {"memory.reclaim": "1048576"}
+        }))
+        .expect("write-only unified resource update");
+        let settings = CgroupUpdatePlan::from_resources(&resources)
+            .expect("write-only unified update plan")
+            .settings(directory.path(), true)
+            .await
+            .expect("write-only unified settings");
+        let prepared = prepare_update_settings(directory.path(), settings)
+            .await
+            .expect("prepare write-only unified update");
+        assert!(prepared[0].old.is_none());
+
+        let applied = apply_prepared_update_settings(prepared)
+            .await
+            .expect("apply write-only unified update");
+        assert_eq!(applied.len(), 1);
+        assert!(applied[0].old.is_none());
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o400))
+            .expect("inspect write-only unified control");
+        assert_eq!(
+            std::fs::read_to_string(&control).expect("read written unified control"),
+            "1048576"
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_a_missing_unified_update_control_as_unsupported() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "unified": {"misc.example.limit": "7"}
+        }))
+        .expect("unified resource update");
+        let settings = CgroupUpdatePlan::from_resources(&resources)
+            .expect("unified update plan")
+            .settings(directory.path(), true)
+            .await
+            .expect("unified update settings");
+
+        let error = prepare_update_settings(directory.path(), settings)
+            .await
+            .expect_err("missing unified control must fail preparation");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains("misc.example.limit"));
+    }
+
+    #[tokio::test]
+    async fn rolls_back_readable_unified_settings_after_a_later_policy_failure() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        std::fs::write(directory.path().join("memory.high"), "max")
+            .expect("current unified control");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "unified": {"memory.high": "201326592"}
+        }))
+        .expect("unified resource update");
+        let settings = CgroupUpdatePlan::from_resources(&resources)
+            .expect("unified update plan")
+            .settings(directory.path(), true)
+            .await
+            .expect("unified update settings");
+        let prepared = prepare_update_settings(directory.path(), settings)
+            .await
+            .expect("prepare unified update");
+        let applied = apply_prepared_update_settings(prepared)
+            .await
+            .expect("apply unified update");
+
+        let error = rollback_update(
+            &applied,
+            None,
+            None,
+            update_error(
+                ErrorCode::PermissionDenied,
+                "synthetic device-policy failure",
+            ),
+        )
+        .await
+        .expect_err("rollback returns the later policy failure");
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("memory.high"))
+                .expect("rolled-back unified control"),
+            "max"
+        );
+    }
+
+    #[test]
+    fn plans_unified_updates_only_for_the_workload_leaf() {
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "unified": {"memory.high": "201326592"}
+        }))
+        .expect("unified resource update");
+        let plan = CgroupUpdatePlan::from_resources(&resources).expect("unified update plan");
+        let management = plan
+            .management_plan(&ControlHeadroom {
+                memory_bytes: 64 * 1024 * 1024,
+                cpu_quota_micros: 25_000,
+                pids: 16,
+            })
+            .expect("management plan");
+
+        assert!(!plan.unified.is_empty());
+        assert!(management.unified.is_empty());
+    }
+
+    #[test]
+    fn rejects_typed_and_unified_update_ownership_conflicts() {
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "memory": {"limit": 536870912},
+            "unified": {"memory.max": "268435456"}
+        }))
+        .expect("conflicting resource update");
+        let error = CgroupUpdatePlan::from_resources(&resources)
+            .expect_err("typed/unified update conflict must fail planning");
+
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert!(error
+            .message
+            .contains("conflicts with a typed OCI resource"));
+    }
+
     #[test]
     fn rejects_pids_updates_below_the_unlimited_sentinel() {
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
@@ -1207,12 +1494,12 @@ mod tests {
             AppliedUpdateSetting {
                 path: directory.path().to_path_buf(),
                 file: file.to_string(),
-                old: "10".to_string(),
+                old: Some("10".to_string()),
             },
             AppliedUpdateSetting {
                 path: directory.path().to_path_buf(),
                 file: file.to_string(),
-                old: "20".to_string(),
+                old: Some("20".to_string()),
             },
         ];
         let error = rollback_update(
@@ -1259,7 +1546,7 @@ mod tests {
         let applied = [AppliedUpdateSetting {
             path: directory.path().to_path_buf(),
             file: "cpu.weight".to_string(),
-            old: "100".to_string(),
+            old: Some("100".to_string()),
         }];
 
         let error = rollback_update(

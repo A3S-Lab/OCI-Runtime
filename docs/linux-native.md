@@ -289,10 +289,27 @@ A3S_OCI_NATIVE_FOCUS=cgroup-ownership \
   bash .github/scripts/native-linux-smoke.sh
 ```
 
-### Control/workload HugeTLB and RDMA gate
+### Control/workload Unified, HugeTLB, and RDMA gate
 
-The default matrix also runs the opt-in `control-workload-v1` topology. When
-the host exposes the `hugetlb` controller, a kernel hugepage inventory entry,
+The default matrix also runs the opt-in `control-workload-v1` topology with
+`linux.resources.unified["memory.high"]=201326592`. Trusted init requires
+`memory.high=max` on `a3s-control` and the exact configured value on
+`a3s-workload`, proving that unified files remain workload-only. When a usable
+block device exists, it also writes a partial `io.max` value and requires the
+kernel-normalized line from `a3s-workload`, without requiring the omitted fields
+to remain absent. The rootful live Update profile then writes
+`memory.high=402653184`; the delegated-rootless profile writes `134217728`.
+Both updates use the normal durable, idempotent replay path on x86_64 and
+aarch64.
+
+Run this gate without the broader recovery and network matrix with:
+
+```bash
+A3S_OCI_NATIVE_FOCUS=control-workload \
+  bash .github/scripts/native-linux-smoke.sh
+```
+
+When the host exposes the `hugetlb` controller, a kernel hugepage inventory entry,
 and its matching cgroup-v2 control, the wrapper selects the smallest available
 canonical page size and adds a zero-byte HugeTLB limit to the workload profile.
 The trusted init reads `hugetlb.<size>.max` as `max` on `a3s-control` and exactly
@@ -324,8 +341,9 @@ A3S_OCI_NATIVE_FOCUS=rootless-device-boundary \
 ```
 
 The accepted focus values are `terminal-init`, `device-boundary`,
-`cgroup-ownership`, and `rootless-device-boundary`; any other nonempty value is
-rejected. The default remains the complete Native Linux matrix.
+`cgroup-ownership`, `control-workload`, and `rootless-device-boundary`; any
+other nonempty value is rejected. The default remains the complete Native Linux
+matrix.
 
 The qualification wrapper also runs four OCI 1.3 `linux.netDevices` profiles.
 For the positive profile it creates a down dummy interface with MTU 1450, a

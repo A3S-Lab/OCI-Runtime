@@ -213,7 +213,9 @@ fn parse_io_stat_bytes(value: &str) -> Result<Option<(u64, u64)>> {
 
         let mut device_read_bytes = None;
         let mut device_write_bytes = None;
+        let mut saw_counter = false;
         for field in fields {
+            saw_counter = true;
             let Some((name, raw)) = field.split_once('=') else {
                 return Err(stats_error(format!(
                     "io.stat line {line_number} contains invalid counter {field:?}"
@@ -231,6 +233,9 @@ fn parse_io_stat_bytes(value: &str) -> Result<Option<(u64, u64)>> {
                 }
                 _ => {}
             }
+        }
+        if !saw_counter {
+            continue;
         }
 
         let device_read_bytes = device_read_bytes
@@ -383,5 +388,24 @@ mod tests {
         let error = parse_io_stat_bytes("8:0 rbytes=7 wbytes=invalid")
             .expect_err("invalid counters must fail closed");
         assert!(error.to_string().contains("io.stat wbytes"));
+    }
+
+    #[test]
+    fn ignores_io_stat_devices_without_published_counters() {
+        assert_eq!(
+            parse_io_stat_bytes(
+                "7:0\n253:0 rbytes=4096 wbytes=1024 rios=4 wios=1 dbytes=0 dios=0\n"
+            )
+            .expect("kernel io.stat may include an empty device entry"),
+            Some((4_096, 1_024))
+        );
+        assert_eq!(
+            parse_io_stat_bytes("7:0\n").expect("an empty device entry is valid"),
+            None
+        );
+
+        let error = parse_io_stat_bytes("7:0 rios=1")
+            .expect_err("a populated device entry must publish byte counters");
+        assert!(error.to_string().contains("missing rbytes"));
     }
 }

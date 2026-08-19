@@ -764,19 +764,39 @@ fn plans_exec_cpu_affinity_and_ignores_it_for_init() {
 }
 
 #[test]
-fn rejects_arbitrary_unified_cgroup_v2_resources() {
+fn accepts_safe_unified_cgroup_v2_resources_for_runtime_resolution() {
     let mut config: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
     config["linux"] = serde_json::json!({
         "resources": {
-            "unified": {"memory.max": "1"}
+            "unified": {
+                "memory.high": "201326592",
+                "misc.example.limit": "7"
+            }
         }
     });
-    let config = serde_json::to_string(&config).expect("encode unsupported unified resources");
-    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
-        .expect_err("arbitrary unified resources must fail closed");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(error.message.contains("linux.resources.unified"));
+    let config = serde_json::to_string(&config).expect("encode unified resources");
+
+    let _plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("safe unified resources must survive init planning");
+}
+
+#[test]
+fn rejects_unsafe_or_runtime_owned_unified_cgroup_files() {
+    for file in ["../memory.max", "memory/max", "cgroup.freeze"] {
+        let mut config: serde_json::Value =
+            serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+        config["linux"] = serde_json::json!({
+            "resources": {
+                "unified": {(file): "1"}
+            }
+        });
+        let config = serde_json::to_string(&config).expect("encode unsafe unified resources");
+        let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+            .expect_err("unsafe unified resources must fail closed");
+        assert_eq!(error.code, ErrorCode::InvalidArgument, "{file:?}");
+        assert!(error.message.contains("linux.resources.unified"));
+    }
 }
 
 #[test]

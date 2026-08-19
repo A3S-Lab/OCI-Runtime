@@ -1,7 +1,14 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CgroupSettingReadback {
+    Exact,
+    KernelDefined,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CgroupSetting {
     file: String,
     value: String,
+    readback: CgroupSettingReadback,
 }
 
 impl CgroupSetting {
@@ -9,6 +16,15 @@ impl CgroupSetting {
         Self {
             file: file.into(),
             value: value.into(),
+            readback: CgroupSettingReadback::Exact,
+        }
+    }
+
+    pub(super) fn kernel_defined(file: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            value: value.into(),
+            readback: CgroupSettingReadback::KernelDefined,
         }
     }
 
@@ -20,8 +36,12 @@ impl CgroupSetting {
         &self.value
     }
 
-    pub(super) fn into_parts(self) -> (String, String) {
-        (self.file, self.value)
+    pub(super) fn readback(&self) -> CgroupSettingReadback {
+        self.readback
+    }
+
+    pub(super) fn into_parts(self) -> (String, String, CgroupSettingReadback) {
+        (self.file, self.value, self.readback)
     }
 }
 
