@@ -31,6 +31,14 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.bundle.config.version.required", "runtime-bundle"),
     OciNonSemanticRule::new("oci.bundle.config.version.semver", "runtime-bundle"),
     OciNonSemanticRule::new(
+        "oci.config.values.invalid-or-unsupported-rejected",
+        "sdk-semantic-and-runtime",
+    ),
+    OciNonSemanticRule::new(
+        "oci.config.values.supported-subset-explicit",
+        "sdk-semantic-and-runtime",
+    ),
+    OciNonSemanticRule::new(
         "oci.common.extensibility.unknown-properties-ignored",
         "runtime-bundle",
     ),
@@ -99,6 +107,10 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.features.linux.available", "runtime-feature-report"),
     OciNonSemanticRule::new(
         "oci.features.potentially-unsafe-config-annotations.accurate",
+        "runtime-feature-report",
+    ),
+    OciNonSemanticRule::new(
+        "oci.features.service-stable-capabilities",
         "runtime-feature-report",
     ),
     OciNonSemanticRule::new("oci.features.version-range", "runtime-feature-report"),
@@ -176,6 +188,16 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.cgroup-ownership.delegated-files",
         "linux-executor",
     ),
+    OciNonSemanticRule::new(
+        "oci.linux.cgroup.additional-controllers.unrequested",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new("oci.linux.cgroup.fit-check", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.cgroup.v1-to-v2-conversion", "linux-executor"),
+    OciNonSemanticRule::new(
+        "oci.linux.cgroup.v1-to-v2-unrepresentable-rejected",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new("oci.linux.block-io.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.block-io.device-identity", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.block-io.leaf-weight.rejected", "linux-executor"),
@@ -219,11 +241,17 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "oci.linux.mount-options.optional-tmpcopyup",
         "linux-executor",
     ),
+    OciNonSemanticRule::new("oci.linux.mount-label.unsupported", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.linux.net-device.attributes-preserved-and-up",
         "linux-executor",
     ),
+    OciNonSemanticRule::new(
+        "oci.linux.net-device.container-lifecycle-unmanaged",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new("oci.linux.net-device.move-and-rename", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.net-device.no-delete-move", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.net-device.target-conflict", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.linux.process.exec-cpu-affinity.applied-around-cgroup",
@@ -234,6 +262,9 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
         "linux-executor",
     ),
     OciNonSemanticRule::new("oci.linux.personality.exact-domain", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.masked-paths.enforced", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.readonly-paths.enforced", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.rootfs-propagation.exact", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.runtime.dev-symlinks.required", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.sysctl.namespaced-apply", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.time-offset.exact", "linux-executor"),
@@ -284,6 +315,14 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     OciNonSemanticRule::new("oci.runtime.kill.signal.exact-exit", "linux-executor"),
     OciNonSemanticRule::new("oci.runtime.operations.required-set", "runtime-lifecycle"),
     OciNonSemanticRule::new("oci.runtime.errors.rollback", "runtime-lifecycle"),
+    OciNonSemanticRule::new(
+        "oci.runtime.file-descriptors.additional-typed",
+        "linux-executor",
+    ),
+    OciNonSemanticRule::new(
+        "oci.runtime.file-descriptors.redirect-null-omitted",
+        "linux-executor",
+    ),
     OciNonSemanticRule::new(
         "oci.runtime.query-state.existing-container",
         "runtime-lifecycle",

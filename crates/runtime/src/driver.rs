@@ -634,6 +634,19 @@ pub trait RuntimeDriver: Send + Sync {
             )
             .for_operation("create"));
         }
+        if bundle
+            .spec()
+            .linux()
+            .as_ref()
+            .and_then(|linux| linux.mount_label().as_ref())
+            .is_some()
+        {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "selected runtime driver does not support linux.mountLabel; SELinux mount labeling is not advertised",
+            )
+            .for_operation("create"));
+        }
         Ok(())
     }
 

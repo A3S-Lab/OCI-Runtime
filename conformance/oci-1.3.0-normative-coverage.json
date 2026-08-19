@@ -1700,10 +1700,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "The runtime MAY pass additional file descriptors to the application to support features such as [socket activation][socket-activated-containers].",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.file-descriptors.additional-typed"
+      ],
+      "testIds": [
+        "executor::inherited_descriptor::tests::native_control_sources_are_type_checked_and_duplicated_above_targets",
+        "executor::inherited_descriptor::tests::descriptor_plan_rejects_wrong_types_duplicate_roles_targets_and_bounds",
+        "executor::inherited_descriptor::tests::child_dup2_overwrites_occupied_targets_and_preserves_exact_roles"
+      ]
     },
     {
       "id": "sha256:733c622782589c576688c13c6d366b1e45f30420dde6c88462146a1407d22ae0",
@@ -1714,10 +1720,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Some of the file descriptors MAY be redirected to `/dev/null` even though they are open.",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.runtime.file-descriptors.redirect-null-omitted"
+      ],
+      "testIds": [
+        "executor::inherited_descriptor::tests::native_control_sources_are_type_checked_and_duplicated_above_targets",
+        "executor::inherited_descriptor::tests::child_dup2_overwrites_occupied_targets_and_preserves_exact_roles"
+      ],
+      "rationale": "The runtime does not silently redirect typed inherited workload descriptors to /dev/null. It installs only the exact validated targets requested by the bounded descriptor profile."
     },
     {
       "id": "sha256:36ce94be7f08fa1efd234375f6c2ed578975d1da34e9682026a00d800d93167a",
@@ -7488,10 +7500,17 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "Runtimes MUST generate an error when invalid or unsupported values are encountered.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.config.values.invalid-or-unsupported-rejected"
+      ],
+      "testIds": [
+        "schema::tests::matches_upstream_v1_3_fixture_expectations",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "service::tests::rejects_unsupported_mount_labels_before_durable_reservation_and_create_dispatch"
+      ]
     },
     {
       "id": "sha256:e898efc5fe335d806e25bd18da630c1f93cb0d8a938e0c032fadea8664400241",
@@ -7502,10 +7521,17 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Unless support for a valid value is explicitly required, runtimes MAY choose which subset of the valid values it will support.",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "sdk-semantic-and-runtime",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.config.values.supported-subset-explicit"
+      ],
+      "testIds": [
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "service::tests::rejects_unsupported_mount_labels_before_durable_reservation_and_create_dispatch",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ],
+      "rationale": "The runtime accepts the schema-defined subset that its selected driver advertises and enforces. A valid but unsupported control fails explicitly before durable or platform mutation instead of being ignored."
     },
     {
       "id": "sha256:1d3b3f43f95499d800a1b1a46f3e76548371afd6df19eae8c26b084f85210931",
@@ -9034,10 +9060,16 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "The runtime MUST NOT actively manage the interface's lifecycle and configuration",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.container-lifecycle-unmanaged",
+        "oci.linux.net-device.no-delete-move"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup",
+        ".github/scripts/native-linux-smoke.sh::net-devices-partial-failure-rollback"
+      ]
     },
     {
       "id": "sha256:2464dfcaafd537cc56b042853e39b2506c00d3d49621b6d23c7ebd06ffb07c03",
@@ -9048,10 +9080,16 @@
       "keyword": "must-not",
       "occurrence": 1,
       "source": "The runtime **MUST NOT** attempt to move the interface out of the namespace",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.net-device.container-lifecycle-unmanaged",
+        "oci.linux.net-device.no-delete-move"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::net-devices-template-move-attribute-address-up-and-cleanup",
+        ".github/scripts/native-linux-smoke.sh::net-devices-partial-failure-rollback"
+      ]
     },
     {
       "id": "sha256:b43566124b85000eae47e7c36ee6d2abf386cc73f13d6154faf4b52161a19c45",
@@ -9062,10 +9100,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "A runtime MAY, during a particular [container operation](runtime.md#operation),",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup.fit-check"
+      ],
+      "testIds": [
+        "executor::cgroup::tests::reports_an_unavailable_cgroup_control_as_unsupported",
+        ".github/scripts/native-linux-smoke.sh::populated-delegation",
+        ".github/scripts/native-linux-smoke.sh::disabled-delegated-controller"
+      ]
     },
     {
       "id": "sha256:8249e4a15c4ceea7c811843d3cf019842785b4619973e132d656e0d69a8a5a8d",
@@ -9076,10 +9120,16 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "and MUST [generate an error](runtime.md#errors) if such a check fails.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup.fit-check"
+      ],
+      "testIds": [
+        "executor::cgroup::tests::reports_an_unavailable_cgroup_control_as_unsupported",
+        ".github/scripts/native-linux-smoke.sh::populated-delegation",
+        ".github/scripts/native-linux-smoke.sh::disabled-delegated-controller"
+      ]
     },
     {
       "id": "sha256:536474a59f7b55d1fa3557e9795249ffe11767b15ea9b7801ee96a8e76bd904e",
@@ -9199,10 +9249,15 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "If the value is not specified, the runtime MAY define the default cgroups path.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroups-path.stable-location"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::assigns_a_private_runtime_path_without_overwriting_an_oci_path",
+        ".github/scripts/native-linux-smoke.sh::rootless-device-boundary-generated-cgroup"
+      ]
     },
     {
       "id": "sha256:0b38556dc4beed8ab7b145ebab46ef95e015363d2470f26782e390699f6c6025",
@@ -9255,10 +9310,16 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "Runtimes MAY attach the container process to additional cgroup controllers beyond those necessary to fulfill the `resources` settings.",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup.additional-controllers.unrequested"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_exact_a3s_box_cgroup_v2_settings",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ],
+      "rationale": "The runtime uses one unified cgroup v2 leaf and attaches the process only where the requested resources and owned lifecycle require it. It does not add unrelated cgroup hierarchies or controller memberships."
     },
     {
       "id": "sha256:1a9e14d80107998e3d42997e9bb0be530f0043d2cc1ea79ea18c8db10c1b4b46",
@@ -11153,10 +11214,20 @@
       "keyword": "may",
       "occurrence": 1,
       "source": "If a controller is enabled on the cgroup v2 hierarchy but the configuration is provided for the cgroup v1 equivalent controller, the runtime MAY attempt a conversion.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup.v1-to-v2-conversion",
+        "oci.linux.cgroup.v1-to-v2-unrepresentable-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::uses_the_runc_cpu_shares_conversion",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls",
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning"
+      ]
     },
     {
       "id": "sha256:31649fa7b399abb79b312919fd34ffb0b19b2c1f0bc84b06cc4e9c34874d61ff",
@@ -11167,10 +11238,20 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "If the conversion is not possible the runtime MUST generate an error.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.cgroup.v1-to-v2-conversion",
+        "oci.linux.cgroup.v1-to-v2-unrepresentable-rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::uses_the_runc_cpu_shares_conversion",
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls",
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning"
+      ]
     },
     {
       "id": "sha256:bc280c0edafb6a6498856f17f2a865e925674dc0f17fd25e5b5fd115cbe49b1f",
@@ -12800,10 +12881,22 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`rootfsPropagation`** (string, OPTIONAL) sets the rootfs's mount propagation.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.rootfs-propagation.exact",
+        "oci.linux.masked-paths.enforced",
+        "oci.linux.readonly-paths.enforced"
+      ],
+      "testIds": [
+        "executor::rootfs_tests::accepts_complete_rootfs_enforcement_in_a_new_mount_namespace",
+        "executor::rootfs_tests::accepts_every_oci_rootfs_propagation_mode",
+        "executor::rootfs_tests::rejects_rootfs_mount_mutation_outside_a_new_mount_namespace",
+        "rootfs_enforcement::tests::derives_and_cleans_a_complete_rootfs_enforcement_fixture",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.rootfs-propagation-shared",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.readonly-path-enforced",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.masked-path-enforced"
+      ]
     },
     {
       "id": "sha256:cbed8f8a789e6bf52e9f26484f623da2574f342d869aca728a3ff3880b063370",
@@ -12814,10 +12907,22 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`maskedPaths`** (array of strings, OPTIONAL) will mask over the provided paths inside the container so that they cannot be read.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.rootfs-propagation.exact",
+        "oci.linux.masked-paths.enforced",
+        "oci.linux.readonly-paths.enforced"
+      ],
+      "testIds": [
+        "executor::rootfs_tests::accepts_complete_rootfs_enforcement_in_a_new_mount_namespace",
+        "executor::rootfs_tests::accepts_every_oci_rootfs_propagation_mode",
+        "executor::rootfs_tests::rejects_rootfs_mount_mutation_outside_a_new_mount_namespace",
+        "rootfs_enforcement::tests::derives_and_cleans_a_complete_rootfs_enforcement_fixture",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.rootfs-propagation-shared",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.readonly-path-enforced",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.masked-path-enforced"
+      ]
     },
     {
       "id": "sha256:687a2720881b633c508a91042d1518b94fa0e55e39803e284ed0e9b0f32178d5",
@@ -12847,10 +12952,22 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`readonlyPaths`** (array of strings, OPTIONAL) will set the provided paths as readonly inside the container.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.rootfs-propagation.exact",
+        "oci.linux.masked-paths.enforced",
+        "oci.linux.readonly-paths.enforced"
+      ],
+      "testIds": [
+        "executor::rootfs_tests::accepts_complete_rootfs_enforcement_in_a_new_mount_namespace",
+        "executor::rootfs_tests::accepts_every_oci_rootfs_propagation_mode",
+        "executor::rootfs_tests::rejects_rootfs_mount_mutation_outside_a_new_mount_namespace",
+        "rootfs_enforcement::tests::derives_and_cleans_a_complete_rootfs_enforcement_fixture",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.rootfs-propagation-shared",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.readonly-path-enforced",
+        ".github/scripts/native-linux-smoke.sh::rootfs_mount.masked-path-enforced"
+      ]
     },
     {
       "id": "sha256:77a9af483847153520b1685497e7dd44efc984f82e68ae401765838032d24845",
@@ -12880,10 +12997,17 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`mountLabel`** (string, OPTIONAL) will set the Selinux context for the mounts in the container.",
-      "disposition": "pending-review",
+      "disposition": "conformant",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.mount-label.unsupported"
+      ],
+      "testIds": [
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "service::tests::rejects_unsupported_mount_labels_before_durable_reservation_and_create_dispatch",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ],
+      "rationale": "SELinux mount labeling is not advertised by the current drivers. A configured linux.mountLabel fails at selected-driver preflight before durable reservation, and the Agent retains the same fail-closed boundary."
     },
     {
       "id": "sha256:7f4af1486d6ea07dcdd434cb71554c745b759d4f724a77ff3f944142d26af716",
@@ -14498,10 +14622,17 @@
       "keyword": "should",
       "occurrence": 1,
       "source": "Hence, the content of the Features structure SHOULD be determined on the compilation time of the runtime, not on the execution time.",
-      "disposition": "pending-review",
-      "owner": "feature-report",
-      "ruleIds": [],
-      "testIds": []
+      "disposition": "conformant",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.service-stable-capabilities"
+      ],
+      "testIds": [
+        "service::tests::reports_only_operations_that_are_currently_implemented",
+        "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
+        "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures"
+      ],
+      "rationale": "Feature content is built from compile-time registries and the immutable driver set selected when a host service opens. It does not vary with an individual container operation or workload input."
     },
     {
       "id": "sha256:0c785b79390e3bf067ac3c05f527b7f9ad2e32d7ba3df9c719edfb0ff519a4e1",

@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Complete classification of the OCI 1.3 normative inventory. The final 17
+  common, Linux, and Features entries now bind invalid-value rejection,
+  explicit supported subsets, typed additional file descriptors, deliberate
+  null-descriptor omission, network-device termination ownership, cgroup fit
+  checks, private default paths, controller scope, v1-to-v2 conversion,
+  rootfs propagation, masked and read-only paths, unsupported SELinux mount
+  labels, and stable configured-service feature reports to exact owners and
+  retained tests. Selected drivers reject `linux.mountLabel` before durable
+  reservation or mutating dispatch. Fifteen owner-bound rules move 12 entries
+  to enforced and five to conformant, leaving 578 enforced, 51 validated, 12
+  conformant, 14 reviewed external, and zero pending entries.
 - Explicit review boundaries for normative requirements owned by roles outside
   the runtime. The coverage model now has a `reviewed-external` disposition
   that requires a non-empty rationale, stable rule, and test evidence; it

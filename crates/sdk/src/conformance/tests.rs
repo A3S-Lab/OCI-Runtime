@@ -78,27 +78,29 @@ fn common_external_requirements_retain_reviewed_boundaries() {
 }
 
 #[test]
-fn common_and_bundle_review_leaves_only_generic_value_policy() {
-    let pending = checked_in_manifest()
-        .items
-        .into_iter()
-        .filter(|item| {
-            item.disposition == OciNormativeDisposition::PendingReview
-                && matches!(
-                    item.requirement.document.as_str(),
-                    "bundle.md" | "config.md"
-                )
-        })
-        .map(|item| item.requirement.id)
-        .collect::<BTreeSet<_>>();
-
+fn normative_manifest_has_no_pending_review() {
+    let manifest = checked_in_manifest();
+    assert_eq!(manifest.items.len(), 764);
     assert_eq!(
-        pending,
-        BTreeSet::from([
-            "sha256:4e2d24b19c710d6df50058598845974215bbe29749f2e5b9d7c64f41250aea2c".to_string(),
-            "sha256:e898efc5fe335d806e25bd18da630c1f93cb0d8a938e0c032fadea8664400241".to_string(),
-        ])
+        manifest
+            .items
+            .iter()
+            .filter(|item| item.disposition == OciNormativeDisposition::Enforced)
+            .count(),
+        578
     );
+    assert_eq!(
+        manifest
+            .items
+            .iter()
+            .filter(|item| item.disposition == OciNormativeDisposition::Conformant)
+            .count(),
+        12
+    );
+    assert!(manifest
+        .items
+        .iter()
+        .all(|item| item.disposition != OciNormativeDisposition::PendingReview));
 }
 
 #[test]
