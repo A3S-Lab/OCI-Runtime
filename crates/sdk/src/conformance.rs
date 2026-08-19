@@ -176,6 +176,7 @@ const NON_SEMANTIC_RULES: &[OciNonSemanticRule] = &[
     ),
     OciNonSemanticRule::new("oci.linux.pids.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.rdma.cgroup-v2-controls", "linux-executor"),
+    OciNonSemanticRule::new("oci.linux.unified.cgroup-v2-controls", "linux-executor"),
     OciNonSemanticRule::new("oci.linux.mount-options.control", "linux-executor"),
     OciNonSemanticRule::new(
         "oci.linux.mount-options.filesystem-specific-pass-through",

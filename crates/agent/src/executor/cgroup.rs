@@ -21,6 +21,7 @@ mod plan;
 mod rdma;
 mod setting;
 mod stats;
+mod unified;
 mod update;
 
 pub(super) use manager::{CgroupManager, RootlessCgroupDelegation};
@@ -30,14 +31,12 @@ use plan::{
     cgroup_v2_limit_value, shares_to_weight, validate_cpuset, validate_memory_value,
     validate_pids_limit, validate_supported_resource_fields, ControlHeadroom,
 };
-use setting::CgroupSetting;
+use setting::{CgroupSetting, CgroupSettingReadback};
 
 const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
 const CGROUP_PROCS: &str = "cgroup.procs";
 const REQUIRED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
-const SUPPORTED_CONTROLLERS: [&str; 7] =
-    ["cpu", "cpuset", "hugetlb", "io", "memory", "pids", "rdma"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
@@ -105,7 +104,7 @@ impl CgroupHandle {
         let required = plan.required_controllers();
         if let Some(missing) = required
             .iter()
-            .find(|controller| !manager.controllers().contains(**controller))
+            .find(|controller| !manager.controllers().contains(controller.as_str()))
         {
             return Err(cgroup_error(
                 ErrorCode::Unsupported,
@@ -156,6 +155,7 @@ impl CgroupHandle {
             initialize_cpuset(&current)?;
             let huge_tlb_settings = plan.huge_tlb().settings(&current)?;
             plan.rdma().preflight_create(&current)?;
+            plan.unified().preflight_create(&current)?;
             let (device_filter, delegated_device_filter) =
                 install_device_filter(devices, &current, manager)?;
             let Some(headroom) = plan.control_headroom() else {
@@ -269,6 +269,7 @@ impl CgroupHandle {
         let workload = layout.management.join(WORKLOAD_CGROUP_NAME);
         initialize_cpuset(&control)?;
         initialize_cpuset(&workload)?;
+        plan.unified().preflight_create(&workload)?;
         let mut settings = plan.settings_with_oom_group(false);
         settings.extend(plan.huge_tlb().settings(&workload)?);
         apply_settings(&workload, &settings)?;
@@ -519,6 +520,9 @@ fn apply_settings(path: &Path, settings: &[CgroupSetting]) -> Result<()> {
                 ),
             )
         })?;
+        if setting.readback() == CgroupSettingReadback::KernelDefined {
+            continue;
+        }
         let actual = std::fs::read_to_string(&destination).map_err(|error| {
             cgroup_error(
                 ErrorCode::FailedPrecondition,
@@ -541,7 +545,7 @@ fn apply_settings(path: &Path, settings: &[CgroupSetting]) -> Result<()> {
     Ok(())
 }
 
-fn enable_controllers(path: &Path, required: &BTreeSet<&str>) -> Result<()> {
+fn enable_controllers(path: &Path, required: &BTreeSet<String>) -> Result<()> {
     if required.is_empty() {
         return Ok(());
     }
@@ -558,7 +562,7 @@ fn enable_controllers(path: &Path, required: &BTreeSet<&str>) -> Result<()> {
     let available = available.split_ascii_whitespace().collect::<BTreeSet<_>>();
     if let Some(missing) = required
         .iter()
-        .find(|controller| !available.contains(**controller))
+        .find(|controller| !available.contains(controller.as_str()))
     {
         return Err(cgroup_error(
             ErrorCode::Unsupported,
@@ -578,8 +582,8 @@ fn enable_controllers(path: &Path, required: &BTreeSet<&str>) -> Result<()> {
     let current = current.split_ascii_whitespace().collect::<BTreeSet<_>>();
     let missing = required
         .iter()
-        .filter(|controller| !current.contains(**controller))
-        .copied()
+        .filter(|controller| !current.contains(controller.as_str()))
+        .cloned()
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return Ok(());
@@ -600,7 +604,7 @@ fn enable_controllers(path: &Path, required: &BTreeSet<&str>) -> Result<()> {
     })
 }
 
-fn available_supported_controllers(path: &Path) -> Result<BTreeSet<&'static str>> {
+fn available_controllers(path: &Path) -> Result<BTreeSet<String>> {
     let available_path = path.join("cgroup.controllers");
     let available = std::fs::read_to_string(&available_path).map_err(|error| {
         cgroup_error(
@@ -611,13 +615,9 @@ fn available_supported_controllers(path: &Path) -> Result<BTreeSet<&'static str>
             ),
         )
     })?;
-    Ok(SUPPORTED_CONTROLLERS
-        .into_iter()
-        .filter(|controller| {
-            available
-                .split_ascii_whitespace()
-                .any(|candidate| candidate == *controller)
-        })
+    Ok(available
+        .split_ascii_whitespace()
+        .map(str::to_string)
         .collect())
 }
 
@@ -765,8 +765,9 @@ fn stats_error(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -775,7 +776,7 @@ mod tests {
     use super::{
         apply_settings, cgroup_event_value, enable_controllers,
         install_control_workload_descriptors_from_pre_exec, open_cgroup_procs,
-        open_control_workload_membership, CgroupSetting,
+        open_control_workload_membership, unified::UnifiedPlan, CgroupSetting,
     };
 
     #[test]
@@ -787,6 +788,30 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(error.message.contains("cpu.idle"));
+    }
+
+    #[test]
+    fn preflights_and_applies_unified_create_without_requiring_read_back() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        let control = directory.path().join("memory.reclaim");
+        std::fs::write(&control, "0").expect("unified control");
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o200))
+            .expect("write-only unified control");
+        let plan = UnifiedPlan::from_oci(Some(&HashMap::from([(
+            "memory.reclaim".to_string(),
+            "201326592".to_string(),
+        )])))
+        .expect("unified plan");
+
+        plan.preflight_create(directory.path())
+            .expect("unified create preflight");
+        apply_settings(directory.path(), &plan.settings()).expect("apply unified create setting");
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o400))
+            .expect("inspect written unified control");
+        assert_eq!(
+            std::fs::read_to_string(&control).expect("read unified control"),
+            "201326592"
+        );
     }
 
     #[test]
@@ -879,7 +904,7 @@ mod tests {
         std::fs::write(directory.path().join("cgroup.subtree_control"), "")
             .expect("subtree control");
 
-        let required = BTreeSet::from(["cpu", "memory"]);
+        let required = BTreeSet::from(["cpu".to_string(), "memory".to_string()]);
         enable_controllers(directory.path(), &required).expect("enable delegated controllers");
         assert_eq!(
             std::fs::read_to_string(directory.path().join("cgroup.subtree_control"))
@@ -887,7 +912,7 @@ mod tests {
             "+cpu +memory"
         );
 
-        let missing = BTreeSet::from(["cpu", "pids"]);
+        let missing = BTreeSet::from(["cpu".to_string(), "pids".to_string()]);
         let error = enable_controllers(directory.path(), &missing)
             .expect_err("missing delegated controller must fail");
         assert_eq!(error.code, ErrorCode::Unsupported);

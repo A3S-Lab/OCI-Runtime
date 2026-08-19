@@ -42,6 +42,9 @@ network_device_rootless_source="a3snl$$"
 hugetlb_page_size=""
 hugetlb_reservation_control=false
 rdma_device=""
+unified_io_device=""
+unified_io_rbps="1099511627776"
+unified_io_wiops="1000000000"
 
 detect_hugetlb_page_size() {
   local candidate
@@ -103,6 +106,34 @@ detect_rdma_device() {
       return 0
     fi
   done
+}
+
+detect_unified_io_device() {
+  local candidate
+  local candidate_device
+  local candidate_name
+  local probe="/sys/fs/cgroup/a3s-oci-unified-io-probe-$$"
+  local selected=""
+
+  if ! grep -qw io /sys/fs/cgroup/cgroup.controllers; then
+    return 0
+  fi
+  sudo mkdir "$probe"
+  for candidate in /sys/class/block/*; do
+    [[ -r "$candidate/dev" ]] || continue
+    candidate_name="${candidate##*/}"
+    case "$candidate_name" in
+      loop* | nbd* | ram* | zram*) continue ;;
+    esac
+    candidate_device="$(cat "$candidate/dev")"
+    if printf '%s rbps=max wbps=max riops=max wiops=max\n' \
+      "$candidate_device" | sudo tee "$probe/io.max" >/dev/null 2>&1; then
+      selected="$candidate_device"
+      break
+    fi
+  done
+  sudo rmdir "$probe"
+  printf '%s' "$selected"
 }
 
 restore_host() {
@@ -277,6 +308,15 @@ else
     'Native RDMA evidence skipped: no usable host cgroup-v2 RDMA device'
 fi
 
+unified_io_device="$(detect_unified_io_device)"
+if [[ -n "$unified_io_device" ]]; then
+  printf 'Native Unified io.max evidence enabled for device %s\n' \
+    "$unified_io_device"
+else
+  printf '%s\n' \
+    'Native Unified io.max evidence skipped: no usable host block device'
+fi
+
 features="$("$PWD/target/debug/a3s-oci" features)"
 printf '%s\n' "$features"
 jq --exit-status \
@@ -372,6 +412,11 @@ mv "$bundle/config.json.tmp" "$bundle/config.json"
 control_hook_trace="$control_bundle/rootfs/.a3s-oci-hook-trace"
 # shellcheck disable=SC2016 # Expanded by the trusted configured init.
 control_command_prefix='test "$A3S_CONTROL_CGROUP_PROCS_FD" = 6; test "$A3S_WORKLOAD_CGROUP_PROCS_FD" = 7; test -d /sys/fs/cgroup/a3s-control; test -d /sys/fs/cgroup/a3s-workload; test -z "$(/bin/busybox cat /sys/fs/cgroup/cgroup.procs)"; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-control"; printf 0 >&7; test "$(/bin/busybox cat /proc/self/cgroup)" = "0::/a3s-workload"; '
+control_command_prefix+='test "$(/bin/busybox cat /sys/fs/cgroup/a3s-control/memory.high)" = max; test "$(/bin/busybox cat /sys/fs/cgroup/a3s-workload/memory.high)" = 201326592; '
+if [[ -n "$unified_io_device" ]]; then
+  control_command_prefix+='test -z "$(/bin/busybox cat /sys/fs/cgroup/a3s-control/io.max)"; '
+  control_command_prefix+="/bin/busybox grep -Fxq '${unified_io_device} rbps=${unified_io_rbps} wbps=max riops=max wiops=${unified_io_wiops}' /sys/fs/cgroup/a3s-workload/io.max; "
+fi
 if [[ -n "$hugetlb_page_size" ]]; then
   control_command_prefix+="test \"\$(/bin/busybox cat /sys/fs/cgroup/a3s-control/hugetlb.${hugetlb_page_size}.max)\" = max; "
   control_command_prefix+="test \"\$(/bin/busybox cat /sys/fs/cgroup/a3s-workload/hugetlb.${hugetlb_page_size}.max)\" = 0; "
@@ -390,6 +435,9 @@ jq \
   --arg hook_trace "$control_hook_trace" \
   --arg hugetlb_page_size "$hugetlb_page_size" \
   --arg rdma_device "$rdma_device" \
+  --arg unified_io_device "$unified_io_device" \
+  --arg unified_io_rbps "$unified_io_rbps" \
+  --arg unified_io_wiops "$unified_io_wiops" \
   '
     .process.args[2] = ($command_prefix + .process.args[2])
     | .mounts += [{
@@ -406,7 +454,8 @@ jq \
           swap: 536870912
         },
         cpu: {shares: 512, quota: 50000, period: 100000},
-        pids: {limit: 64}
+        pids: {limit: 64},
+        unified: {"memory.high": "201326592"}
       }
     | if $hugetlb_page_size == ""
       then .
@@ -420,6 +469,13 @@ jq \
       else .linux.resources.rdma = {
         ($rdma_device): {hcaHandles: 0, hcaObjects: 0}
       }
+      end
+    | if $unified_io_device == ""
+      then .
+      else .linux.resources.unified["io.max"] =
+        ($unified_io_device
+          + " rbps=" + $unified_io_rbps
+          + " wiops=" + $unified_io_wiops)
       end
     | .annotations["dev.a3s.oci.cgroup.layout"] = "control-workload-v1"
     | .annotations["dev.a3s.oci.cgroup.control-memory-headroom-bytes"] = "67108864"
@@ -2313,6 +2369,9 @@ elif [[ "$native_focus" == cgroup-ownership ]]; then
     false \
     "$cgroup_ownership_readonly_bundle" \
     "$cgroup_ownership_readonly_hook_trace"
+  exit 0
+elif [[ "$native_focus" == control-workload ]]; then
+  run_smoke false "$control_bundle" "$control_hook_trace"
   exit 0
 elif [[ "$native_focus" == rootless-device-boundary ]]; then
   run_rootless_smoke

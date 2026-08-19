@@ -12,7 +12,7 @@ use a3s_oci_sdk::{ErrorCode, OciLinuxCgroupPath, Result};
 
 use super::super::device_policy::DevicePolicyAuthority;
 use super::{
-    available_supported_controllers, cgroup_error, cleanup_cgroup_tree, enable_controllers,
+    available_controllers, cgroup_error, cleanup_cgroup_tree, enable_controllers,
     ensure_real_directory, initialize_cpuset, CGROUP_PROCS, REQUIRED_CONTROLLERS,
 };
 
@@ -124,7 +124,7 @@ impl RootlessCgroupDelegation {
         Ok(())
     }
 
-    pub(in crate::executor) fn verify(&self) -> Result<BTreeSet<&'static str>> {
+    pub(in crate::executor) fn verify(&self) -> Result<BTreeSet<String>> {
         let metadata = verify_delegated_root(&self.root, self.effective_uid, self.effective_gid)?;
         if !self.identity_matches(&metadata) {
             return Err(cgroup_error(
@@ -193,7 +193,7 @@ pub(in crate::executor) struct CgroupManager {
     mountpoint: PathBuf,
     authority_root: PathBuf,
     root: PathBuf,
-    controllers: BTreeSet<&'static str>,
+    controllers: BTreeSet<String>,
     device_policy_authority: Option<DevicePolicyAuthority>,
     owned_paths: Mutex<BTreeMap<PathBuf, CgroupIdentity>>,
     removed: bool,
@@ -214,7 +214,7 @@ impl CgroupManager {
             )
         })?;
         ensure_real_directory(&mountpoint)?;
-        let mut controllers = available_supported_controllers(&mountpoint)?;
+        let mut controllers = available_controllers(&mountpoint)?;
         if let Some(missing) = REQUIRED_CONTROLLERS
             .iter()
             .find(|controller| !controllers.contains(**controller))
@@ -226,15 +226,18 @@ impl CgroupManager {
                 ),
             ));
         }
-        let required = REQUIRED_CONTROLLERS.into_iter().collect::<BTreeSet<_>>();
+        let required = REQUIRED_CONTROLLERS
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
         enable_controllers(&mountpoint, &required)?;
         let optional = controllers
             .difference(&required)
-            .copied()
+            .cloned()
             .collect::<Vec<_>>();
         for controller in optional {
-            if enable_controllers(&mountpoint, &BTreeSet::from([controller])).is_err() {
-                controllers.remove(controller);
+            if enable_controllers(&mountpoint, &BTreeSet::from([controller.clone()])).is_err() {
+                controllers.remove(&controller);
             }
         }
 
@@ -257,7 +260,7 @@ impl CgroupManager {
     fn create_below(
         mountpoint: PathBuf,
         authority_root: PathBuf,
-        controllers: BTreeSet<&'static str>,
+        controllers: BTreeSet<String>,
         device_policy_authority: Option<DevicePolicyAuthority>,
     ) -> Result<Self> {
         ensure_real_directory(&authority_root)?;
@@ -285,10 +288,10 @@ impl CgroupManager {
             )
         })?;
         if let Err(error) = initialize_cpuset(&root).and_then(|()| {
-            let delegated = available_supported_controllers(&root)?;
+            let delegated = available_controllers(&root)?;
             if let Some(missing) = controllers
                 .iter()
-                .find(|controller| !delegated.contains(**controller))
+                .find(|controller| !delegated.contains(controller.as_str()))
             {
                 return Err(cgroup_error(
                     ErrorCode::Unsupported,
@@ -333,7 +336,7 @@ impl CgroupManager {
         &self.authority_root
     }
 
-    pub(super) fn controllers(&self) -> &BTreeSet<&'static str> {
+    pub(super) fn controllers(&self) -> &BTreeSet<String> {
         &self.controllers
     }
 
@@ -760,8 +763,8 @@ fn unified_cgroup_membership(contents: &str) -> Result<&Path> {
     Ok(path)
 }
 
-fn required_delegated_controllers(root: &Path) -> Result<BTreeSet<&'static str>> {
-    let controllers = available_supported_controllers(root)?;
+fn required_delegated_controllers(root: &Path) -> Result<BTreeSet<String>> {
+    let controllers = available_controllers(root)?;
     if let Some(missing) = REQUIRED_CONTROLLERS
         .iter()
         .find(|controller| !controllers.contains(**controller))
@@ -793,7 +796,7 @@ fn required_delegated_controllers(root: &Path) -> Result<BTreeSet<&'static str>>
     }
     Ok(controllers
         .into_iter()
-        .filter(|controller| enabled.contains(controller))
+        .filter(|controller| enabled.contains(controller.as_str()))
         .collect())
 }
 
@@ -810,6 +813,10 @@ mod tests {
         cgroup2_mountpoint, cgroup2_mountpoint_for_path, required_delegated_controllers,
         validate_delegated_root_path, CgroupManager, RootlessCgroupDelegation,
     };
+
+    fn controllers(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
 
     fn manager_fixture(mountpoint: &str, authority_root: &str, root: &str) -> CgroupManager {
         CgroupManager {
@@ -981,31 +988,33 @@ mod tests {
         .expect("all enabled controllers");
         assert_eq!(
             required_delegated_controllers(directory.path()).expect("delegated controllers"),
-            BTreeSet::from(["cpu", "cpuset", "memory", "pids"])
+            controllers(&["cpu", "cpuset", "memory", "pids"])
         );
 
         std::fs::write(
             directory.path().join("cgroup.controllers"),
-            "cpu cpuset hugetlb io memory pids rdma",
+            "cpu cpuset hugetlb io memory misc pids rdma",
         )
         .expect("optional controllers");
         assert_eq!(
             required_delegated_controllers(directory.path())
                 .expect("delegation with an unenabled optional I/O controller"),
-            BTreeSet::from(["cpu", "cpuset", "memory", "pids"]),
+            controllers(&["cpu", "cpuset", "memory", "pids"]),
             "optional controllers are unusable until the delegator enables them"
         );
 
         std::fs::write(
             directory.path().join("cgroup.subtree_control"),
-            "cpu cpuset hugetlb io memory pids rdma",
+            "cpu cpuset hugetlb io memory misc pids rdma",
         )
         .expect("enabled optional controllers");
         assert_eq!(
             required_delegated_controllers(directory.path())
                 .expect("delegation with enabled optional controllers"),
-            BTreeSet::from(["cpu", "cpuset", "hugetlb", "io", "memory", "pids", "rdma"]),
-            "enabled optional controllers are propagated without becoming baseline requirements"
+            controllers(&[
+                "cpu", "cpuset", "hugetlb", "io", "memory", "misc", "pids", "rdma"
+            ]),
+            "enabled optional and runtime-unknown controllers are propagated without becoming baseline requirements"
         );
     }
 }

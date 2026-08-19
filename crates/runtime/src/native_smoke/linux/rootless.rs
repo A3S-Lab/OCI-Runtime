@@ -776,7 +776,8 @@ async fn exercise_cgroup_control(
             "period": 100000,
             "idle": 0
         },
-        "pids": {"limit": 48}
+        "pids": {"limit": 48},
+        "unified": {"memory.high": (128 * 1024 * 1024).to_string()}
     });
     if device_policy {
         resources["devices"] = serde_json::json!([

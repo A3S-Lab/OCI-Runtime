@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
 
@@ -44,6 +44,13 @@ impl HugeTlbPlan {
 
     pub(super) fn is_empty(&self) -> bool {
         self.limits.is_empty()
+    }
+
+    pub(super) fn owned_files(&self) -> BTreeSet<String> {
+        self.limits
+            .keys()
+            .flat_map(|page_size| [max_file(page_size), reservation_file(page_size)])
+            .collect()
     }
 
     pub(super) fn settings(&self, path: &Path) -> Result<Vec<CgroupSetting>> {

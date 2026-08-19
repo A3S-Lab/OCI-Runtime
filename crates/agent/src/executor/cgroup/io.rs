@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 
@@ -101,6 +101,20 @@ impl BlockIoPlan {
 
     pub(super) fn is_empty(&self) -> bool {
         self.default_weight.is_none() && self.device_weights.is_empty() && self.max.is_empty()
+    }
+
+    pub(super) fn owned_files(&self) -> BTreeSet<String> {
+        let mut files = BTreeSet::new();
+        if self.default_weight.is_some() || !self.device_weights.is_empty() {
+            // The live hierarchy selects BFQ or the generic weight backend.
+            // Reserve both names so unified cannot race that selection.
+            files.insert(BFQ_WEIGHT_FILE.to_string());
+            files.insert(GENERIC_WEIGHT_FILE.to_string());
+        }
+        if !self.max.is_empty() {
+            files.insert(MAX_FILE.to_string());
+        }
+        files
     }
 
     fn mutations(&self, backend: Option<WeightBackend>) -> Vec<IoMutation> {

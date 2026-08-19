@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 113-entry pending normative evidence backlog.
+- [ ] Close the remaining 109-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -528,6 +528,14 @@ driver implements.
     `max`, verify effective keyed state, reverse partial writes, keep `rdma`
     optional until requested, and retain workload-only control/workload
     placement with conditional real-kernel read-back.
+  - [x] Bind all four OCI Unified entries to bounded cgroup-v2 Create and
+    Update behavior. Preserve runtime-unknown controller files, enable each
+    controller through the private hierarchy, reject unsafe or runtime-owned
+    names and typed-file conflicts, preserve kernel-defined write formatting,
+    skip readable Update no-ops, snapshot readable controls for rollback,
+    accept write-only controls, and keep unified settings on the workload leaf.
+    Retain real `memory.high` and normalized partial `io.max` read-back plus
+    rootful/rootless live Update coverage on both Native Linux CI architectures.
   - [x] Bind all 20 OCI Linux device entries to exact schema, planning, rootful
     enforcement, cleanup, and ordered cgroup-device evidence. Cover all four
     node types, paths outside `/dev`, conditional major/minor values, mode and
@@ -1524,16 +1532,17 @@ leak. Only then may KVM become `experimental`.
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, extensibility,
   namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
-  HugeTLB, and RDMA promotions leave 490 enforced, 50 validated, and 113 pending
-  entries.
+  HugeTLB, RDMA, and Unified promotions leave 494 enforced, 50 validated, and
+  109 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
 - [x] Apply and read back cgroup v2 memory limit/reservation/swap, CPU
   shares/quota/burst/period/cpuset/idle, PID limits, Block I/O default and
   per-device weight plus read/write BPS/IOPS limits, HugeTLB usage plus optional
-  reservation limits for every requested live page size, and keyed RDMA HCA
-  handle/object limits. Preserve zero and map
+  reservation limits for every requested live page size, keyed RDMA HCA
+  handle/object limits, and bounded unified control-file settings whose
+  controllers are present and enableable. Preserve zero and map
   the OCI memory and PIDs `-1` sentinel to cgroup v2 `max` for Create and
   Update, reject values below `-1`, keep reservation independent of the hard
   limit, require finite total swap to have a compatible finite memory limit,
@@ -1546,13 +1555,14 @@ leak. Only then may KVM become `experimental`.
   through `cgroup.freeze` and verify the exact transition through
   `cgroup.events`. Keep Block I/O on the workload leaf, preserve omitted keyed
   values during partial updates, verify every write, and roll back in reverse
-  order if a later resource or device-policy mutation fails. Keep HugeTLB and
-  RDMA on the workload leaf as well, preserve omitted page sizes and HCA fields,
-  and preflight every dynamic control and RDMA device before device-policy
-  mutation.
+  order if a later resource or device-policy mutation fails. Keep HugeTLB,
+  RDMA, and Unified settings on the workload leaf as well, preserve omitted page
+  sizes and HCA fields, and preflight every dynamic control, unified file, and
+  RDMA device before device-policy mutation.
 - [x] Create a private controller-enabled cgroup-v2 manager, apply
-  generation-fenced partial resource updates with exact read-back and
-  reverse-order rollback, and expose normalized CPU, memory, PID, and event
+  generation-fenced typed resource updates with exact read-back and
+  reverse-order rollback, accept kernel-defined Unified writes with readable
+  no-op/rollback snapshots, and expose normalized CPU, memory, PID, and event
   statistics through native Linux and the shared utility-VM lifecycle harness.
 - [x] Preserve OCI `linux.cgroupsPath` identity in one SDK parser, resolve
   absolute values from the visible cgroup v2 mount, keep relative values stable
@@ -1592,7 +1602,7 @@ leak. Only then may KVM become `experimental`.
     generated support policy or reject broader OCI device requests without
     mutating the rootfs or cgroup by requiring an explicit cgroup path before
     any device-policy mutation.
-- [ ] Complete the remaining cgroup v2 resource boundary.
+- [x] Complete the remaining cgroup v2 resource boundary.
   - [x] Bind every OCI CPU field to cgroup v2 or an explicit pre-mutation
     rejection. Preserve omitted current values during partial updates, return
     `Unsupported` for unavailable burst or idle controls, and keep burst and
@@ -1607,8 +1617,12 @@ leak. Only then may KVM become `experimental`.
     propagation, and workload-only control/workload placement.
   - [x] Enforce keyed RDMA handle/object limits with controller and device
     preflight, partial-update preservation, exact read-back, reverse rollback,
-    and workload-only control/workload placement. Continue rejecting arbitrary
-    unified resource writes before mutation.
+    and workload-only control/workload placement.
+  - [x] Enforce bounded OCI Unified control-file maps with dynamic controller
+    propagation, runtime-unknown and write-only file support, safe-name and
+    typed-ownership validation, writable-file preflight, kernel-defined
+    read-back formatting, readable no-op/rollback snapshots, and workload-only
+    control/workload placement.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
   - [x] Make the OCI declared/default device inventory an immutable cgroup-v2

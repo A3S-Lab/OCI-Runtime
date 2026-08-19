@@ -1115,6 +1115,40 @@
     },
     {
       "requirementIds": [
+        "sha256:ba31b36554e187130b365dbf20d655c25ec49bbed6a932e2f21851babdec1e06",
+        "sha256:c0b465e3ee34fd505237a261226abb5020a4c65b8f632f95de6bf29e08cc7bb1",
+        "sha256:77207ba06516e900423585d2cfdc9653dd238877c850d8072412147d241d3c09",
+        "sha256:2b7cb329f7905a6bfc62b7f7500e044ddb40e6fdc4e267f7b3fa4b7f30af21eb"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.unified.cgroup-v2-controls"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-unified-kernel-normalized-io-readback",
+        ".github/scripts/native-linux-smoke.sh::control-workload-unified-readback",
+        "executor::cgroup::manager::tests::rootless_delegation_requires_baseline_and_filters_unenabled_optional_controllers",
+        "executor::cgroup::plan::tests::keeps_unified_controls_on_the_control_workload_leaf",
+        "executor::cgroup::plan::tests::plans_unified_files_in_stable_order_with_dynamic_controllers",
+        "executor::cgroup::tests::preflights_and_applies_unified_create_without_requiring_read_back",
+        "executor::cgroup::unified::tests::plans_unknown_controller_files_in_deterministic_order",
+        "executor::cgroup::unified::tests::preflights_readable_and_write_only_control_files",
+        "executor::cgroup::unified::tests::rejects_missing_or_non_file_controls_during_create_preflight",
+        "executor::cgroup::unified::tests::rejects_unsafe_or_runtime_owned_control_names",
+        "executor::cgroup::update::tests::applies_partial_unified_updates_and_skips_readable_noops",
+        "executor::cgroup::update::tests::applies_write_only_unified_updates_without_read_back",
+        "executor::cgroup::update::tests::plans_unified_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::reports_a_missing_unified_update_control_as_unsupported",
+        "executor::cgroup::update::tests::rolls_back_readable_unified_settings_after_a_later_policy_failure",
+        "executor::plan_tests::accepts_safe_unified_cgroup_v2_resources_for_runtime_resolution",
+        "executor::plan_tests::rejects_unsafe_or_runtime_owned_unified_cgroup_files",
+        "native_smoke::linux::lifecycle::exercise_control_plane",
+        "native_smoke::linux::rootless::exercise_cgroup_control"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:687a2720881b633c508a91042d1518b94fa0e55e39803e284ed0e9b0f32178d5",
         "sha256:77a9af483847153520b1685497e7dd44efc984f82e68ae401765838032d24845"
       ],

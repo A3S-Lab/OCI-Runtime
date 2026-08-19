@@ -8,7 +8,10 @@ use a3s_oci_sdk::{
     CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION, CONTROL_WORKLOAD_CGROUP_LAYOUT_V1,
 };
 
-use super::{cgroup_error, hugetlb::HugeTlbPlan, io::BlockIoPlan, rdma::RdmaPlan, CgroupSetting};
+use super::{
+    cgroup_error, hugetlb::HugeTlbPlan, io::BlockIoPlan, rdma::RdmaPlan, unified::UnifiedPlan,
+    CgroupSetting,
+};
 
 pub(super) const DEFAULT_CPU_PERIOD_MICROS: u64 = 100_000;
 
@@ -44,6 +47,7 @@ pub(in crate::executor) struct CgroupPlan {
     block_io: BlockIoPlan,
     huge_tlb: HugeTlbPlan,
     rdma: RdmaPlan,
+    unified: UnifiedPlan,
 }
 
 impl CgroupPlan {
@@ -85,6 +89,7 @@ impl CgroupPlan {
         let block_io = BlockIoPlan::from_oci(resources.block_io().as_ref())?;
         let huge_tlb = HugeTlbPlan::from_oci(resources.hugepage_limits().as_deref())?;
         let rdma = RdmaPlan::from_oci(resources.rdma().as_ref())?;
+        let unified = UnifiedPlan::from_oci(resources.unified().as_ref())?;
         let plan = Self {
             layout,
             path,
@@ -102,6 +107,7 @@ impl CgroupPlan {
             block_io,
             huge_tlb,
             rdma,
+            unified,
         };
         plan.validate()?;
         Ok(plan)
@@ -181,6 +187,7 @@ impl CgroupPlan {
                 "control/workload cgroup layout requires finite memory, CPU, and PID limits",
             ));
         }
+        self.unified.validate_conflicts(&self.typed_owned_files())?;
         Ok(())
     }
 
@@ -189,6 +196,12 @@ impl CgroupPlan {
     }
 
     pub(super) fn settings_with_oom_group(&self, oom_group: bool) -> Vec<CgroupSetting> {
+        let mut settings = self.typed_settings_with_oom_group(oom_group);
+        settings.extend(self.unified.settings());
+        settings
+    }
+
+    fn typed_settings_with_oom_group(&self, oom_group: bool) -> Vec<CgroupSetting> {
         let mut settings = Vec::new();
         if let Some(value) = &self.cpuset_mems {
             settings.push(CgroupSetting::new("cpuset.mems", value.clone()));
@@ -248,6 +261,18 @@ impl CgroupPlan {
         settings
     }
 
+    fn typed_owned_files(&self) -> BTreeSet<String> {
+        let mut files = self
+            .typed_settings_with_oom_group(true)
+            .into_iter()
+            .map(|setting| setting.file().to_string())
+            .collect::<BTreeSet<_>>();
+        files.extend(self.block_io.owned_files());
+        files.extend(self.huge_tlb.owned_files());
+        files.extend(self.rdma.owned_files());
+        files
+    }
+
     pub(super) fn management_plan(&self, headroom: &ControlHeadroom) -> Result<Self> {
         let mut management = self.clone();
         management.layout = CgroupLayout::Flat;
@@ -268,6 +293,7 @@ impl CgroupPlan {
         management.block_io = BlockIoPlan::default();
         management.huge_tlb = HugeTlbPlan::default();
         management.rdma = RdmaPlan::default();
+        management.unified = UnifiedPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -322,13 +348,17 @@ impl CgroupPlan {
         &self.rdma
     }
 
-    pub(super) fn required_controllers(&self) -> BTreeSet<&'static str> {
+    pub(super) fn unified(&self) -> &UnifiedPlan {
+        &self.unified
+    }
+
+    pub(super) fn required_controllers(&self) -> BTreeSet<String> {
         let mut controllers = BTreeSet::new();
         if self.memory_limit.is_some()
             || self.memory_reservation.is_some()
             || self.memory_swap.is_some()
         {
-            controllers.insert("memory");
+            controllers.insert("memory".to_string());
         }
         if self.cpu_shares.is_some()
             || self.cpu_quota.is_some()
@@ -336,22 +366,25 @@ impl CgroupPlan {
             || self.cpu_period.is_some()
             || self.cpu_idle.is_some()
         {
-            controllers.insert("cpu");
+            controllers.insert("cpu".to_string());
         }
         if self.cpuset_cpus.is_some() || self.cpuset_mems.is_some() {
-            controllers.insert("cpuset");
+            controllers.insert("cpuset".to_string());
         }
         if self.pids_limit.is_some() {
-            controllers.insert("pids");
+            controllers.insert("pids".to_string());
         }
         if !self.block_io.is_empty() {
-            controllers.insert("io");
+            controllers.insert("io".to_string());
         }
         if !self.huge_tlb.is_empty() {
-            controllers.insert("hugetlb");
+            controllers.insert("hugetlb".to_string());
         }
         if !self.rdma.is_empty() {
-            controllers.insert("rdma");
+            controllers.insert("rdma".to_string());
+        }
+        if !self.unified.is_empty() {
+            controllers.extend(self.unified.controllers().map(str::to_string));
         }
         controllers
     }
@@ -455,7 +488,14 @@ pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> 
     if let Some(field) = object.keys().find(|field| {
         !matches!(
             field.as_str(),
-            "devices" | "memory" | "cpu" | "pids" | "blockIO" | "hugepageLimits" | "rdma"
+            "devices"
+                | "memory"
+                | "cpu"
+                | "pids"
+                | "blockIO"
+                | "hugepageLimits"
+                | "rdma"
+                | "unified"
         )
     }) {
         return Err(unsupported(
@@ -562,7 +602,7 @@ fn unsupported(field: &str, reason: &str) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use a3s_oci_sdk::oci_spec::runtime::Linux;
     use a3s_oci_sdk::{
@@ -572,6 +612,10 @@ mod tests {
     };
 
     use super::{shares_to_weight, CgroupPlan, CgroupSetting};
+
+    fn controllers(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
 
     fn fixture_linux() -> Linux {
         let config: serde_json::Value =
@@ -631,6 +675,14 @@ mod tests {
             "resources": {"rdma": limits}
         }))
         .expect("decode Linux RDMA controls")
+    }
+
+    fn linux_with_unified(settings: serde_json::Value) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "unified/controls",
+            "resources": {"unified": settings}
+        }))
+        .expect("decode Linux unified controls")
     }
 
     fn control_workload_annotations() -> BTreeMap<String, String> {
@@ -775,7 +827,7 @@ mod tests {
                 ("cpu.idle", "1".to_string()),
             ]
         );
-        assert_eq!(plan.required_controllers(), ["cpu", "cpuset"].into());
+        assert_eq!(plan.required_controllers(), controllers(&["cpu", "cpuset"]));
     }
 
     #[test]
@@ -791,7 +843,7 @@ mod tests {
 
         assert!(plan.settings().is_empty());
         assert!(!plan.block_io().is_empty());
-        assert_eq!(plan.required_controllers(), ["io"].into());
+        assert_eq!(plan.required_controllers(), controllers(&["io"]));
     }
 
     #[test]
@@ -805,7 +857,7 @@ mod tests {
 
         assert!(plan.settings().is_empty());
         assert!(!plan.huge_tlb().is_empty());
-        assert_eq!(plan.required_controllers(), ["hugetlb"].into());
+        assert_eq!(plan.required_controllers(), controllers(&["hugetlb"]));
 
         let mut control_linux =
             serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
@@ -833,7 +885,7 @@ mod tests {
 
         assert!(plan.settings().is_empty());
         assert!(!plan.rdma().is_empty());
-        assert_eq!(plan.required_controllers(), ["rdma"].into());
+        assert_eq!(plan.required_controllers(), controllers(&["rdma"]));
 
         let mut control_linux =
             serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
@@ -849,6 +901,123 @@ mod tests {
             .expect("management envelope");
         assert!(!control.rdma().is_empty());
         assert!(management.rdma().is_empty());
+    }
+
+    #[test]
+    fn plans_unified_files_in_stable_order_with_dynamic_controllers() {
+        let plan = CgroupPlan::from_linux(
+            Some(&linux_with_unified(serde_json::json!({
+                "misc.example.limit": "7\n8",
+                "memory.high": "1048576"
+            }))),
+            &BTreeMap::new(),
+        )
+        .expect("unified cgroup plan");
+
+        assert_eq!(
+            plan.settings(),
+            [
+                ("memory.high", "1048576".to_string()),
+                ("misc.example.limit", "7\n8".to_string()),
+            ]
+        );
+        assert_eq!(
+            plan.required_controllers(),
+            controllers(&["memory", "misc"])
+        );
+    }
+
+    #[test]
+    fn keeps_unified_controls_on_the_control_workload_leaf() {
+        let mut linux = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        linux["resources"]["unified"] = serde_json::json!({
+            "memory.high": "201326592"
+        });
+        let linux = serde_json::from_value(linux).expect("decode unified Linux fixture");
+        let plan = CgroupPlan::from_linux(Some(&linux), &control_workload_annotations())
+            .expect("control/workload unified plan");
+        let management = plan
+            .management_plan(plan.control_headroom().expect("control headroom"))
+            .expect("management envelope");
+
+        assert!(!plan.unified().is_empty());
+        assert!(management.unified().is_empty());
+        assert!(plan
+            .settings()
+            .contains(&CgroupSetting::kernel_defined("memory.high", "201326592")));
+        assert!(!management
+            .settings()
+            .iter()
+            .any(|setting| setting.file() == "memory.high"));
+    }
+
+    #[test]
+    fn rejects_typed_and_unified_ownership_of_the_same_cgroup_file() {
+        for resources in [
+            serde_json::json!({
+                "memory": {"limit": 1048576},
+                "unified": {"memory.max": "2097152"}
+            }),
+            serde_json::json!({
+                "blockIO": {"weight": 500},
+                "unified": {"io.weight": "100"}
+            }),
+            serde_json::json!({
+                "blockIO": {"weight": 500},
+                "unified": {"io.bfq.weight": "100"}
+            }),
+            serde_json::json!({
+                "blockIO": {
+                    "throttleReadBpsDevice": [{"major": 8, "minor": 0, "rate": 1048576}]
+                },
+                "unified": {"io.max": "8:0 rbps=2097152"}
+            }),
+            serde_json::json!({
+                "hugepageLimits": [{"pageSize": "2MB", "limit": 209715200}],
+                "unified": {"hugetlb.2MB.max": "419430400"}
+            }),
+            serde_json::json!({
+                "hugepageLimits": [{"pageSize": "2MB", "limit": 209715200}],
+                "unified": {"hugetlb.2MB.rsvd.max": "419430400"}
+            }),
+            serde_json::json!({
+                "rdma": {"mlx5_0": {"hcaHandles": 3}},
+                "unified": {"rdma.max": "mlx5_0 hca_handle=4"}
+            }),
+        ] {
+            let linux: Linux = serde_json::from_value(serde_json::json!({
+                "cgroupsPath": "conflict/controls",
+                "resources": resources
+            }))
+            .expect("decode conflicting Linux resources");
+            let error = CgroupPlan::from_linux(Some(&linux), &BTreeMap::new())
+                .expect_err("typed/unified ownership conflict must fail");
+            assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
+            assert!(error
+                .message
+                .contains("conflicts with a typed OCI resource"));
+        }
+    }
+
+    #[test]
+    fn allows_typed_and_unified_controls_on_distinct_files() {
+        let linux: Linux = serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "memory/controls",
+            "resources": {
+                "memory": {"limit": 536870912},
+                "unified": {"memory.high": "268435456"}
+            }
+        }))
+        .expect("decode distinct Linux controls");
+        let plan = CgroupPlan::from_linux(Some(&linux), &BTreeMap::new())
+            .expect("distinct typed and unified files");
+
+        assert!(plan
+            .settings()
+            .contains(&CgroupSetting::new("memory.max", "536870912")));
+        assert!(plan
+            .settings()
+            .contains(&CgroupSetting::kernel_defined("memory.high", "268435456")));
     }
 
     #[test]
@@ -875,7 +1044,7 @@ mod tests {
                 .expect("valid PIDs plan");
 
             assert_eq!(plan.settings(), [("pids.max", expected.to_string())]);
-            assert_eq!(plan.required_controllers(), ["pids"].into());
+            assert_eq!(plan.required_controllers(), controllers(&["pids"]));
         }
     }
 
@@ -901,7 +1070,7 @@ mod tests {
                     ("memory.swap.max", expected.to_string()),
                 ]
             );
-            assert_eq!(plan.required_controllers(), ["memory"].into());
+            assert_eq!(plan.required_controllers(), controllers(&["memory"]));
         }
     }
 
