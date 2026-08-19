@@ -496,7 +496,14 @@ fn validate_profile(raw: &Value) -> Result<()> {
         reject_unimplemented_keys(
             resources,
             "linux.resources",
-            &["devices", "memory", "cpu", "pids"],
+            &[
+                "devices",
+                "memory",
+                "cpu",
+                "pids",
+                "blockIO",
+                "hugepageLimits",
+            ],
         )?;
     }
     if let Some(intel_rdt) = linux.get("intelRdt") {

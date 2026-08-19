@@ -8,7 +8,7 @@ use a3s_oci_sdk::{
     CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION, CONTROL_WORKLOAD_CGROUP_LAYOUT_V1,
 };
 
-use super::{cgroup_error, io::BlockIoPlan};
+use super::{cgroup_error, hugetlb::HugeTlbPlan, io::BlockIoPlan, CgroupSetting};
 
 pub(super) const DEFAULT_CPU_PERIOD_MICROS: u64 = 100_000;
 
@@ -42,6 +42,7 @@ pub(in crate::executor) struct CgroupPlan {
     cpuset_mems: Option<String>,
     pids_limit: Option<i64>,
     block_io: BlockIoPlan,
+    huge_tlb: HugeTlbPlan,
 }
 
 impl CgroupPlan {
@@ -81,6 +82,7 @@ impl CgroupPlan {
         let cpu = resources.cpu().as_ref();
         let pids = resources.pids().as_ref();
         let block_io = BlockIoPlan::from_oci(resources.block_io().as_ref())?;
+        let huge_tlb = HugeTlbPlan::from_oci(resources.hugepage_limits().as_deref())?;
         let plan = Self {
             layout,
             path,
@@ -96,6 +98,7 @@ impl CgroupPlan {
             cpuset_mems: cpu.and_then(|cpu| cpu.mems().clone()),
             pids_limit: pids.map(|pids| pids.limit()),
             block_io,
+            huge_tlb,
         };
         plan.validate()?;
         Ok(plan)
@@ -178,27 +181,33 @@ impl CgroupPlan {
         Ok(())
     }
 
-    pub(super) fn settings(&self) -> Vec<(&'static str, String)> {
+    pub(super) fn settings(&self) -> Vec<CgroupSetting> {
         self.settings_with_oom_group(true)
     }
 
-    pub(super) fn settings_with_oom_group(&self, oom_group: bool) -> Vec<(&'static str, String)> {
+    pub(super) fn settings_with_oom_group(&self, oom_group: bool) -> Vec<CgroupSetting> {
         let mut settings = Vec::new();
         if let Some(value) = &self.cpuset_mems {
-            settings.push(("cpuset.mems", value.clone()));
+            settings.push(CgroupSetting::new("cpuset.mems", value.clone()));
         }
         if let Some(value) = &self.cpuset_cpus {
-            settings.push(("cpuset.cpus", value.clone()));
+            settings.push(CgroupSetting::new("cpuset.cpus", value.clone()));
         }
         if let Some(value) = self.memory_limit {
-            settings.push(("memory.max", cgroup_v2_limit_value(value)));
-            settings.push((
+            settings.push(CgroupSetting::new(
+                "memory.max",
+                cgroup_v2_limit_value(value),
+            ));
+            settings.push(CgroupSetting::new(
                 "memory.oom.group",
                 if oom_group { "1" } else { "0" }.to_string(),
             ));
         }
         if let Some(value) = self.memory_reservation {
-            settings.push(("memory.low", cgroup_v2_limit_value(value)));
+            settings.push(CgroupSetting::new(
+                "memory.low",
+                cgroup_v2_limit_value(value),
+            ));
         }
         if let Some(value) = self.memory_swap {
             let value = if value == -1 {
@@ -206,7 +215,7 @@ impl CgroupPlan {
             } else {
                 (value - self.memory_limit.unwrap_or_default()).to_string()
             };
-            settings.push(("memory.swap.max", value));
+            settings.push(CgroupSetting::new("memory.swap.max", value));
         }
         if self.cpu_quota.is_some() || self.cpu_period.is_some() {
             let quota = self.cpu_quota.unwrap_or(-1);
@@ -216,19 +225,22 @@ impl CgroupPlan {
             } else {
                 quota.to_string()
             };
-            settings.push(("cpu.max", format!("{quota} {period}")));
+            settings.push(CgroupSetting::new("cpu.max", format!("{quota} {period}")));
         }
         if let Some(burst) = self.cpu_burst {
-            settings.push(("cpu.max.burst", burst.to_string()));
+            settings.push(CgroupSetting::new("cpu.max.burst", burst.to_string()));
         }
         if let Some(shares) = self.cpu_shares {
-            settings.push(("cpu.weight", shares_to_weight(shares).to_string()));
+            settings.push(CgroupSetting::new(
+                "cpu.weight",
+                shares_to_weight(shares).to_string(),
+            ));
         }
         if let Some(idle) = self.cpu_idle {
-            settings.push(("cpu.idle", idle.to_string()));
+            settings.push(CgroupSetting::new("cpu.idle", idle.to_string()));
         }
         if let Some(value) = self.pids_limit {
-            settings.push(("pids.max", cgroup_v2_limit_value(value)));
+            settings.push(CgroupSetting::new("pids.max", cgroup_v2_limit_value(value)));
         }
         settings
     }
@@ -251,6 +263,7 @@ impl CgroupPlan {
             .transpose()?;
         management.memory_reservation = None;
         management.block_io = BlockIoPlan::default();
+        management.huge_tlb = HugeTlbPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -297,6 +310,10 @@ impl CgroupPlan {
         &self.block_io
     }
 
+    pub(super) fn huge_tlb(&self) -> &HugeTlbPlan {
+        &self.huge_tlb
+    }
+
     pub(super) fn required_controllers(&self) -> BTreeSet<&'static str> {
         let mut controllers = BTreeSet::new();
         if self.memory_limit.is_some()
@@ -321,6 +338,9 @@ impl CgroupPlan {
         }
         if !self.block_io.is_empty() {
             controllers.insert("io");
+        }
+        if !self.huge_tlb.is_empty() {
+            controllers.insert("hugetlb");
         }
         controllers
     }
@@ -424,7 +444,7 @@ pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> 
     if let Some(field) = object.keys().find(|field| {
         !matches!(
             field.as_str(),
-            "devices" | "memory" | "cpu" | "pids" | "blockIO"
+            "devices" | "memory" | "cpu" | "pids" | "blockIO" | "hugepageLimits"
         )
     }) {
         return Err(unsupported(
@@ -540,7 +560,7 @@ mod tests {
         CONTROL_WORKLOAD_CGROUP_LAYOUT_V1,
     };
 
-    use super::{shares_to_weight, CgroupPlan};
+    use super::{shares_to_weight, CgroupPlan, CgroupSetting};
 
     fn fixture_linux() -> Linux {
         let config: serde_json::Value =
@@ -584,6 +604,14 @@ mod tests {
             "resources": {"blockIO": block_io}
         }))
         .expect("decode Linux block I/O controls")
+    }
+
+    fn linux_with_hugetlb(limits: serde_json::Value) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "hugetlb/controls",
+            "resources": {"hugepageLimits": limits}
+        }))
+        .expect("decode Linux HugeTLB controls")
     }
 
     fn control_workload_annotations() -> BTreeMap<String, String> {
@@ -748,6 +776,35 @@ mod tests {
     }
 
     #[test]
+    fn plans_hugetlb_as_a_dynamic_workload_only_controller() {
+        let linux = linux_with_hugetlb(serde_json::json!([
+            {"pageSize": "2MB", "limit": 209715200},
+            {"pageSize": "1GB", "limit": 1073741824}
+        ]));
+        let plan =
+            CgroupPlan::from_linux(Some(&linux), &BTreeMap::new()).expect("HugeTLB cgroup plan");
+
+        assert!(plan.settings().is_empty());
+        assert!(!plan.huge_tlb().is_empty());
+        assert_eq!(plan.required_controllers(), ["hugetlb"].into());
+
+        let mut control_linux =
+            serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        control_linux["resources"]["hugepageLimits"] = serde_json::json!([
+            {"pageSize": "2MB", "limit": 209715200}
+        ]);
+        let control_linux =
+            serde_json::from_value(control_linux).expect("decode control/workload HugeTLB fixture");
+        let control = CgroupPlan::from_linux(Some(&control_linux), &control_workload_annotations())
+            .expect("control/workload HugeTLB plan");
+        let management = control
+            .management_plan(control.control_headroom().expect("control headroom"))
+            .expect("management envelope");
+        assert!(!control.huge_tlb().is_empty());
+        assert!(management.huge_tlb().is_empty());
+    }
+
+    #[test]
     fn preserves_independent_cpu_quota_and_period_requests() {
         let quota = CgroupPlan::from_linux(
             Some(&linux_with_cpu(serde_json::json!({"quota": 50000}))),
@@ -891,12 +948,14 @@ mod tests {
         let zero = serde_json::from_value(zero).expect("decode zero-PIDs Linux fixture");
         let plan =
             CgroupPlan::from_linux(Some(&zero), &annotations).expect("zero is a finite PIDs limit");
-        assert!(plan.settings().contains(&("pids.max", "0".to_string())));
+        assert!(plan
+            .settings()
+            .contains(&CgroupSetting::new("pids.max", "0")));
         assert!(plan
             .management_plan(plan.control_headroom().expect("control headroom"))
             .expect("zero-PIDs management envelope")
             .settings()
-            .contains(&("pids.max", "16".to_string())));
+            .contains(&CgroupSetting::new("pids.max", "16")));
 
         let mut unlimited = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
         unlimited["resources"]["pids"]["limit"] = serde_json::json!(-1);
@@ -916,12 +975,14 @@ mod tests {
         let zero = serde_json::from_value(zero).expect("decode zero-memory Linux fixture");
         let plan = CgroupPlan::from_linux(Some(&zero), &annotations)
             .expect("zero is a finite memory limit");
-        assert!(plan.settings().contains(&("memory.max", "0".to_string())));
+        assert!(plan
+            .settings()
+            .contains(&CgroupSetting::new("memory.max", "0")));
         assert!(plan
             .management_plan(plan.control_headroom().expect("control headroom"))
             .expect("zero-memory management envelope")
             .settings()
-            .contains(&("memory.max", "67108864".to_string())));
+            .contains(&CgroupSetting::new("memory.max", "67108864")));
 
         let mut unlimited = serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
         unlimited["resources"]["memory"]["limit"] = serde_json::json!(-1);

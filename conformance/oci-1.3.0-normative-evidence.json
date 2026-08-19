@@ -973,6 +973,32 @@
     },
     {
       "requirementIds": [
+        "sha256:6e66cda19982d63863be2842cb39638f7336a9b324c8b32ad5ffbff727f74923",
+        "sha256:d934da8dc4ae75e840b1df8a242c34903c4a5786d5b203965906205cd772b9d7",
+        "sha256:f3c801f3d874cbd634ff2cdedfc9c4c9f6de3907afb54ae4b0950867a09b119f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.hugetlb.cgroup-v2-controls"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-hugetlb-readback",
+        "bundle::tests::preserves_the_full_normative_hugetlb_uint64_range",
+        "bundle::tests::requires_both_normative_hugetlb_fields",
+        "executor::cgroup::hugetlb::tests::applies_hugetlb_limits_with_exact_read_back",
+        "executor::cgroup::hugetlb::tests::normalizes_limits_to_the_kernel_hugepage_counter_representation",
+        "executor::cgroup::hugetlb::tests::plans_exact_fault_and_reservation_limits_for_available_page_sizes",
+        "executor::cgroup::hugetlb::tests::rejects_duplicate_unsafe_and_unrepresentable_hugetlb_values",
+        "executor::cgroup::hugetlb::tests::rejects_unknown_or_non_file_page_sizes_before_returning_settings",
+        "executor::cgroup::plan::tests::plans_hugetlb_as_a_dynamic_workload_only_controller",
+        "executor::cgroup::update::tests::plans_hugetlb_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::rolls_back_owned_dynamic_cgroup_settings_in_reverse_order",
+        "executor::cgroup::update::tests::updates_only_requested_hugetlb_page_sizes_and_reservation_controls"
+      ]
+    },
+    {
+      "requirementIds": [
         "sha256:477691657f896fe1f6d886d87de2905037814931b9cf859d071bc75781b3aa30",
         "sha256:f4235b06adc4a4fd7bace1b901a142fc713451cbce73a27189d815805ce1b796",
         "sha256:99c66611265ba819a43ca05fe7c1a95ecc10d4373bc48f94be8216d0f3c1b56e",

@@ -58,3 +58,9 @@ unsafe_op_in_unsafe_fn = "deny"
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
+
+[patch.crates-io]
+# oci-spec 0.10 models the normative HugeTLB uint64 limit as i64. Keep the
+# exact upstream release locally with only that wire-type correction until an
+# upstream release carries the fix.
+oci-spec = { path = "vendor/oci-spec-0.10.0" }
