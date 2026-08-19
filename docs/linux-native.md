@@ -269,6 +269,26 @@ A3S_OCI_NATIVE_FOCUS=device-boundary \
   bash .github/scripts/native-linux-smoke.sh
 ```
 
+### Cgroup ownership delegation gate
+
+The cgroup-ownership profile creates a new cgroup namespace and supplies the
+exact writable OCI cgroup mount. Its mapped-root workload requires the cgroup
+directory and every existing kernel-listed delegate file to appear as UID 0
+inside the user namespace while their groups remain unmapped and unchanged.
+It verifies that at least one delegated file exists, an unlisted cgroup-v2
+control keeps its original ownership, and the workload can create and remove
+a child cgroup. A second otherwise equivalent profile adds `ro`; it requires
+the original ownership and a failed write. Both profiles run the complete
+Create/Start/Kill/Wait/Delete lifecycle and require empty executor and session
+state afterward.
+
+Run only these positive and read-only real-kernel profiles with:
+
+```sh
+A3S_OCI_NATIVE_FOCUS=cgroup-ownership \
+  bash .github/scripts/native-linux-smoke.sh
+```
+
 The delegated-rootless counterpart omits `linux.cgroupsPath` and removes the
 unrelated personality and memory-policy profiles from its temporary fixture.
 It then runs both the core lifecycle with its six-device bootstrap and the live
@@ -281,9 +301,9 @@ A3S_OCI_NATIVE_FOCUS=rootless-device-boundary \
   bash .github/scripts/native-linux-smoke.sh
 ```
 
-The accepted focus values are `terminal-init`, `device-boundary`, and
-`rootless-device-boundary`; any other nonempty value is rejected. The default
-remains the complete Native Linux matrix.
+The accepted focus values are `terminal-init`, `device-boundary`,
+`cgroup-ownership`, and `rootless-device-boundary`; any other nonempty value is
+rejected. The default remains the complete Native Linux matrix.
 
 The qualification wrapper also runs four OCI 1.3 `linux.netDevices` profiles.
 For the positive profile it creates a down dummy interface with MTU 1450, a

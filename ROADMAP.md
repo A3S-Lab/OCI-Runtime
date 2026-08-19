@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 148-entry pending normative evidence backlog.
+- [ ] Close the remaining 137-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -524,6 +524,13 @@ driver implements.
     an immutable upper bound beneath ordered resource rules, including an
     omitted `cgroupsPath`, live allow-all updates, `CAP_MKNOD`, and a device
     source whose bind mount is later remounted with `dev`.
+  - [x] Bind all ten OCI cgroup-ownership entries to exact cgroup-v2
+    delegation. Require a newly created cgroup namespace and an exact writable
+    OCI cgroup mount, map `process.user.uid` to its host UID, preserve the
+    group, bound and validate the kernel delegate inventory, tolerate listed
+    files that are absent, use the normative fallback when the inventory is
+    missing, and leave every unlisted file untouched. Retain positive and
+    read-only Native Linux lifecycle evidence with complete cleanup.
   - [ ] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [ ] Bind every applicable entry to an exact validator, enforcement owner,
@@ -1495,7 +1502,7 @@ leak. Only then may KVM become `experimental`.
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, and extensibility
   review plus the PIDs, memory, Block I/O, and Linux-device promotions leaves
-  455 enforced, 51 validated, and 147 pending entries.
+  465 enforced, 51 validated, and 137 pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
@@ -1525,6 +1532,13 @@ leak. Only then may KVM become `experimental`.
   delegation, and retain exact normal and owner-death cleanup paths. Native
   x86_64/aarch64 gates read both host memberships, recreate the relative value
   at the same location, and require both leaves to disappear after delete.
+- [x] Delegate writable cgroup-v2 ownership only for the OCI 1.3 exact mount
+  and new-namespace profile. Resolve the configured process UID through the
+  container user mapping, forbid rootless transfer to subordinate identities,
+  preserve GID, and mutate only the retained cgroup directory plus existing
+  kernel-listed delegate files. Bound and validate the inventory, use the
+  normative fallback only when it is absent, and verify positive, read-only,
+  unlisted-file, and cleanup behavior on a real Linux kernel.
 - [x] Add the opt-in `control-workload-v1` topology for a trusted configured
   init: retain exact workload limits in `linux.resources`, derive a bounded
   outer management envelope, create fixed control/workload children, pass

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::capability::CapabilityPlan;
-use super::cgroup::CgroupPlan;
+use super::cgroup::{CgroupOwnershipPlan, CgroupPlan};
 use super::cpu_affinity::CpuAffinityPlan;
 use super::device::DevicePlan;
 use super::hook::HookSet;
@@ -165,6 +165,7 @@ pub(super) struct InitPlan {
     pub(super) capabilities: CapabilityPlan,
     pub(super) seccomp: SeccompPlan,
     pub(super) cgroup: CgroupPlan,
+    pub(super) cgroup_ownership: CgroupOwnershipPlan,
     pub(super) intel_rdt: Option<IntelRdtPlan>,
     pub(super) devices: DevicePlan,
     pub(super) network_devices: NetworkDevicePlan,
@@ -285,6 +286,7 @@ impl InitPlan {
             "linux.readonlyPaths",
         )?;
         let mounts = mount::plan_all(spec.mounts().as_deref(), &namespaces)?;
+        let cgroup_ownership = CgroupOwnershipPlan::from_mounts(&mounts, &namespaces);
         if cgroup.uses_control_workload_layout() {
             mount::validate_control_workload_cgroup_mount(&mounts)?;
         }
@@ -341,6 +343,7 @@ impl InitPlan {
             capabilities: process_plan.capabilities,
             seccomp,
             cgroup,
+            cgroup_ownership,
             intel_rdt,
             devices,
             network_devices,
@@ -356,6 +359,19 @@ impl InitPlan {
             annotations,
             hooks,
         })
+    }
+
+    pub(super) fn resolve_cgroup_ownership(
+        &mut self,
+        rootless_effective_uid: Option<u32>,
+    ) -> Result<()> {
+        if !self.cgroup_ownership.requested() {
+            return Ok(());
+        }
+        self.namespaces
+            .resolve_joined_user_mappings(self.uid, self.gid, &self.additional_gids)?;
+        self.cgroup_ownership
+            .resolve(self.uid, &self.namespaces, rootless_effective_uid)
     }
 }
 

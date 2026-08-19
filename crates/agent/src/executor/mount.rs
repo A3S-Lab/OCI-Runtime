@@ -39,6 +39,9 @@ pub(super) struct MountPlan {
     pub(super) recursive_attributes: Option<attributes::RecursiveMountAttributes>,
     pub(super) idmap: Option<IdmapPlan>,
     pub(super) data: Vec<String>,
+    oci_cgroup_source: bool,
+    oci_cgroup_destination: bool,
+    oci_readonly_option: bool,
 }
 
 pub(super) fn plan_all(
@@ -133,6 +136,8 @@ impl MountPlan {
         } else {
             None
         };
+        let oci_cgroup_destination =
+            mount.destination().as_os_str().as_bytes() == b"/sys/fs/cgroup";
         let destination = normalize_destination(index, mount.destination())?;
         if destination == Path::new("/") {
             return Err(unsupported(
@@ -149,6 +154,9 @@ impl MountPlan {
                 Ok(source.clone())
             })
             .transpose()?;
+        let oci_cgroup_source = source
+            .as_ref()
+            .is_some_and(|source| source.as_os_str().as_bytes() == b"cgroup");
         let mut filesystem_type = mount
             .typ()
             .as_deref()
@@ -165,6 +173,7 @@ impl MountPlan {
         let mut idmap_recursive = None;
         let mut data = Vec::new();
         let options = mount.options().as_deref().unwrap_or_default();
+        let oci_readonly_option = options.iter().any(|option| option == "ro");
         if options.len() > MAX_MOUNT_OPTIONS {
             return Err(invalid(format!(
                 "mounts[{index}].options contains {} entries; maximum is {MAX_MOUNT_OPTIONS}",
@@ -388,7 +397,17 @@ impl MountPlan {
             recursive_attributes,
             idmap,
             data,
+            oci_cgroup_source,
+            oci_cgroup_destination,
+            oci_readonly_option,
         })
+    }
+
+    pub(super) fn requests_cgroup_ownership(&self) -> bool {
+        self.oci_cgroup_source
+            && self.oci_cgroup_destination
+            && !self.oci_readonly_option
+            && self.filesystem_type.as_deref() == Some("cgroup2")
     }
 
     pub(super) fn prepare_target(&self, bundle_directory: &Path, rootfs: &Path) -> Result<PathBuf> {

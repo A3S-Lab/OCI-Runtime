@@ -663,6 +663,11 @@ impl LinuxExecutor {
         let rootless = self.user_mapping_runtime.is_rootless();
         let mut plan = InitPlan::from_bundle(&bundle, &process_io)?;
         plan.cgroup.ensure_runtime_path(&key.id, key.generation)?;
+        plan.resolve_cgroup_ownership(
+            self.user_mapping_runtime
+                .effective_ids()
+                .map(|(uid, _)| uid),
+        )?;
         if rootless {
             if !plan.namespaces.new_user() {
                 return Err(executor_error(

@@ -447,6 +447,16 @@ and verifies that the late device access still fails with `EPERM`. Run the
 focused gate with
 `A3S_OCI_NATIVE_FOCUS=device-boundary bash .github/scripts/native-linux-smoke.sh`.
 
+Writable OCI cgroup mounts now follow the OCI 1.3 delegation boundary. The
+executor changes ownership only for an exact `source: "cgroup"` mount at
+`/sys/fs/cgroup`, with no `ro` option and a newly created cgroup namespace. It
+maps `process.user.uid` to the host UID, preserves the group, and changes only
+the container cgroup directory plus existing files listed by
+`/sys/kernel/cgroup/delegate`; if that inventory is absent, it uses the three
+normative fallback files. The focused Native Linux gate also proves that a
+read-only cgroup mount and unlisted controller files keep their ownership:
+`A3S_OCI_NATIVE_FOCUS=cgroup-ownership bash .github/scripts/native-linux-smoke.sh`.
+
 The rootful terminal-init profile derives init I/O from `process.terminal`,
 applies the configured 120x40 size before launch, and binds the exact PTY slave
 to `/dev/console`. It also creates a configured FIFO outside `/dev` with mapped
@@ -492,8 +502,8 @@ The repository turns release claims into checked inventories:
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 94 |
-| Owner-bound non-semantic rules | 109 |
-| OCI normative dispositions | 455 enforced · 51 validated · 2 conformant · 147 pending review |
+| Owner-bound non-semantic rules | 110 |
+| OCI normative dispositions | 465 enforced · 51 validated · 2 conformant · 137 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |

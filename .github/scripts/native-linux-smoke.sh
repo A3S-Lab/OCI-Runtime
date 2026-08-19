@@ -212,6 +212,8 @@ control_bundle="$qualification_root/control-bundle"
 terminal_bundle="$qualification_root/terminal-bundle"
 terminal_existing_bundle="$qualification_root/terminal-existing-bundle"
 device_boundary_bundle="$qualification_root/device-boundary-bundle"
+cgroup_ownership_bundle="$qualification_root/cgroup-ownership-bundle"
+cgroup_ownership_readonly_bundle="$qualification_root/cgroup-ownership-readonly-bundle"
 recovery_bundle="$qualification_root/recovery-bundle"
 rootless_bundle="$qualification_root/rootless-bundle"
 network_device_bundle="$qualification_root/network-device-bundle"
@@ -435,12 +437,129 @@ mv \
   "$device_boundary_bundle/config.json.tmp" \
   "$device_boundary_bundle/config.json"
 for candidate in \
+  "$cgroup_ownership_bundle" \
+  "$cgroup_ownership_readonly_bundle"; do
+  mkdir "$candidate"
+  cp -a --no-preserve=ownership "$bundle/." "$candidate/"
+done
+cgroup_ownership_hook_trace="$cgroup_ownership_bundle/rootfs/.a3s-oci-hook-trace"
+cgroup_ownership_readonly_hook_trace="$cgroup_ownership_readonly_bundle/rootfs/.a3s-oci-hook-trace"
+cgroup_delegate_inventory="$cgroup_ownership_bundle/rootfs/.a3s-oci-cgroup-delegate"
+if [[ -r /sys/kernel/cgroup/delegate ]]; then
+  sed '/^$/d' /sys/kernel/cgroup/delegate >"$cgroup_delegate_inventory"
+else
+  printf '%s\n' cgroup.procs cgroup.subtree_control cgroup.threads \
+    >"$cgroup_delegate_inventory"
+fi
+while IFS= read -r delegate_file; do
+  if [[ ! "$delegate_file" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    printf 'Invalid kernel cgroup delegate file: %s\n' "$delegate_file" >&2
+    exit 1
+  fi
+done <"$cgroup_delegate_inventory"
+cgroup_unlisted_file=""
+for candidate in cgroup.events cgroup.type cgroup.stat; do
+  if [[ -e "/sys/fs/cgroup/$candidate" ]] && \
+      ! grep -Fxq "$candidate" "$cgroup_delegate_inventory"; then
+    cgroup_unlisted_file="$candidate"
+    break
+  fi
+done
+if [[ -z "$cgroup_unlisted_file" ]]; then
+  printf '%s\n' 'No stable unlisted cgroup v2 file is available for ownership evidence' >&2
+  exit 1
+fi
+printf '%s\n' "$cgroup_unlisted_file" \
+  >"$cgroup_ownership_bundle/rootfs/.a3s-oci-cgroup-unlisted"
+# shellcheck disable=SC2016 # Expanded by the delegated cgroup workload.
+cgroup_ownership_command='set -eu; overflow_uid=$(/bin/busybox cat /proc/sys/kernel/overflowuid); overflow_gid=$(/bin/busybox cat /proc/sys/kernel/overflowgid); test "$(/bin/busybox stat -c "%u:%g" /sys/fs/cgroup)" = "0:$overflow_gid"; delegated=0; while IFS= read -r name; do if [ -e "/sys/fs/cgroup/$name" ]; then test "$(/bin/busybox stat -c "%u:%g" "/sys/fs/cgroup/$name")" = "0:$overflow_gid"; delegated=$((delegated + 1)); fi; done < /.a3s-oci-cgroup-delegate; test "$delegated" -gt 0; unlisted=$(/bin/busybox cat /.a3s-oci-cgroup-unlisted); test "$(/bin/busybox stat -c "%u:%g" "/sys/fs/cgroup/$unlisted")" = "$overflow_uid:$overflow_gid"; /bin/busybox mkdir /sys/fs/cgroup/a3s-delegation-write-probe; /bin/busybox rmdir /sys/fs/cgroup/a3s-delegation-write-probe; '
+jq \
+  --arg command_prefix "$cgroup_ownership_command" \
+  --arg hook_trace "$cgroup_ownership_hook_trace" \
+  '
+    del(.linux.personality, .linux.memoryPolicy)
+    | .linux.cgroupsPath = "a3s-oci-cgroup-ownership-smoke"
+    | .process.args[2] = (
+        $command_prefix
+        + (.process.args[2]
+            | split("test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; ")
+            | join("")
+            | split("/bin/busybox awk '\''$2 == \"bind=static:0\" { ok = 1 } END { exit !ok }'\'' /proc/self/numa_maps; ")
+            | join(""))
+      )
+    | .mounts += [{
+        destination: "/sys/fs/cgroup",
+        type: "cgroup",
+        source: "cgroup",
+        options: ["rw", "nosuid", "noexec", "nodev"]
+      }]
+    | .annotations["dev.a3s.oci.cgroup-ownership"] = "delegate-v1"
+    | .hooks |= with_entries(
+        .value |= map(
+          .env |= map(
+            if startswith("A3S_HOOK_TRACE=")
+               and . != "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+            then "A3S_HOOK_TRACE=" + $hook_trace
+            else .
+            end
+          )
+        )
+      )
+  ' \
+  "$cgroup_ownership_bundle/config.json" \
+  >"$cgroup_ownership_bundle/config.json.tmp"
+mv \
+  "$cgroup_ownership_bundle/config.json.tmp" \
+  "$cgroup_ownership_bundle/config.json"
+# shellcheck disable=SC2016 # Expanded by the read-only cgroup workload.
+cgroup_ownership_readonly_command='set -eu; overflow_uid=$(/bin/busybox cat /proc/sys/kernel/overflowuid); overflow_gid=$(/bin/busybox cat /proc/sys/kernel/overflowgid); test "$(/bin/busybox stat -c "%u:%g" /sys/fs/cgroup)" = "$overflow_uid:$overflow_gid"; if /bin/busybox mkdir /sys/fs/cgroup/a3s-readonly-write-probe 2>/tmp/a3s-cgroup-readonly-error; then /bin/busybox rmdir /sys/fs/cgroup/a3s-readonly-write-probe; exit 91; fi; /bin/busybox rm -f /tmp/a3s-cgroup-readonly-error; '
+jq \
+  --arg command_prefix "$cgroup_ownership_readonly_command" \
+  --arg hook_trace "$cgroup_ownership_readonly_hook_trace" \
+  '
+    del(.linux.personality, .linux.memoryPolicy)
+    | .linux.cgroupsPath = "a3s-oci-cgroup-ownership-readonly-smoke"
+    | .process.args[2] = (
+        $command_prefix
+        + (.process.args[2]
+            | split("test \"$(/bin/busybox cat /proc/self/personality)\" = 00000008; ")
+            | join("")
+            | split("/bin/busybox awk '\''$2 == \"bind=static:0\" { ok = 1 } END { exit !ok }'\'' /proc/self/numa_maps; ")
+            | join(""))
+      )
+    | .mounts += [{
+        destination: "/sys/fs/cgroup",
+        type: "cgroup",
+        source: "cgroup",
+        options: ["ro", "nosuid", "noexec", "nodev"]
+      }]
+    | .annotations["dev.a3s.oci.cgroup-ownership"] = "preserve-readonly-v1"
+    | .hooks |= with_entries(
+        .value |= map(
+          .env |= map(
+            if startswith("A3S_HOOK_TRACE=")
+               and . != "A3S_HOOK_TRACE=/.a3s-oci-hook-trace"
+            then "A3S_HOOK_TRACE=" + $hook_trace
+            else .
+            end
+          )
+        )
+      )
+  ' \
+  "$cgroup_ownership_readonly_bundle/config.json" \
+  >"$cgroup_ownership_readonly_bundle/config.json.tmp"
+mv \
+  "$cgroup_ownership_readonly_bundle/config.json.tmp" \
+  "$cgroup_ownership_readonly_bundle/config.json"
+for candidate in \
   "$bundle" \
   "$bundle_b" \
   "$control_bundle" \
   "$terminal_bundle" \
   "$terminal_existing_bundle" \
-  "$device_boundary_bundle"; do
+  "$device_boundary_bundle" \
+  "$cgroup_ownership_bundle" \
+  "$cgroup_ownership_readonly_bundle"; do
   jq --exit-status \
     '.linux.uidMappings
          == [{"containerID": 0, "hostID": 100000, "size": 65536}]
@@ -453,6 +572,8 @@ sudo chown -R 100000:200000 "$control_bundle/rootfs"
 sudo chown -R 100000:200000 "$terminal_bundle/rootfs"
 sudo chown -R 100000:200000 "$terminal_existing_bundle/rootfs"
 sudo chown -R 100000:200000 "$device_boundary_bundle/rootfs"
+sudo chown -R 100000:200000 "$cgroup_ownership_bundle/rootfs"
+sudo chown -R 100000:200000 "$cgroup_ownership_readonly_bundle/rootfs"
 sudo chown -R 100000:200000 "$recovery_bundle/rootfs"
 for candidate in "${soak_bundles[@]}"; do
   sudo chown -R 100000:200000 "$candidate/rootfs"
@@ -473,6 +594,12 @@ sudo chmod 0666 "$terminal_existing_hook_trace"
 sudo touch "$device_boundary_hook_trace"
 sudo chown 100000:200000 "$device_boundary_hook_trace"
 sudo chmod 0666 "$device_boundary_hook_trace"
+sudo touch "$cgroup_ownership_hook_trace"
+sudo chown 100000:200000 "$cgroup_ownership_hook_trace"
+sudo chmod 0666 "$cgroup_ownership_hook_trace"
+sudo touch "$cgroup_ownership_readonly_hook_trace"
+sudo chown 100000:200000 "$cgroup_ownership_readonly_hook_trace"
+sudo chmod 0666 "$cgroup_ownership_readonly_hook_trace"
 sudo chmod 0755 "$qualification_root"
 test "$(stat --format '%u:%g' "$bundle/rootfs")" = '100000:200000'
 test "$(stat --format '%u:%g' "$bundle_b/rootfs")" = '100000:200000'
@@ -2067,6 +2194,13 @@ elif [[ "$native_focus" == device-boundary ]]; then
   test ! -e "$device_boundary_bundle/rootfs/undeclared-device"
   test ! -e "$device_boundary_bundle/rootfs/late-device-error"
   exit 0
+elif [[ "$native_focus" == cgroup-ownership ]]; then
+  run_smoke false "$cgroup_ownership_bundle" "$cgroup_ownership_hook_trace"
+  run_smoke \
+    false \
+    "$cgroup_ownership_readonly_bundle" \
+    "$cgroup_ownership_readonly_hook_trace"
+  exit 0
 elif [[ "$native_focus" == rootless-device-boundary ]]; then
   run_rootless_smoke
   run_rootless_device_policy_smoke
@@ -2205,6 +2339,11 @@ verify_host_network_device_absent "$network_device_success_source"
 
 run_smoke false
 run_smoke false "$device_boundary_bundle" "$device_boundary_hook_trace"
+run_smoke false "$cgroup_ownership_bundle" "$cgroup_ownership_hook_trace"
+run_smoke \
+  false \
+  "$cgroup_ownership_readonly_bundle" \
+  "$cgroup_ownership_readonly_hook_trace"
 run_smoke false "$terminal_bundle" "$terminal_hook_trace"
 test ! -e "$terminal_bundle/rootfs/dev/console"
 test ! -e "$terminal_bundle/rootfs/run/a3s/device-fifo"
