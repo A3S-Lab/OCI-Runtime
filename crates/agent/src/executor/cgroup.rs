@@ -18,6 +18,7 @@ mod io;
 mod manager;
 mod ownership;
 mod plan;
+mod rdma;
 mod setting;
 mod stats;
 mod update;
@@ -35,7 +36,8 @@ const CGROUP_EVENTS: &str = "cgroup.events";
 const CGROUP_FREEZE: &str = "cgroup.freeze";
 const CGROUP_PROCS: &str = "cgroup.procs";
 const REQUIRED_CONTROLLERS: [&str; 4] = ["cpu", "cpuset", "memory", "pids"];
-const SUPPORTED_CONTROLLERS: [&str; 6] = ["cpu", "cpuset", "hugetlb", "io", "memory", "pids"];
+const SUPPORTED_CONTROLLERS: [&str; 7] =
+    ["cpu", "cpuset", "hugetlb", "io", "memory", "pids", "rdma"];
 const FREEZE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTECTED_CGROUP_DESCRIPTOR_MINIMUM: RawFd = 10;
@@ -153,6 +155,7 @@ impl CgroupHandle {
         let configured = (|| {
             initialize_cpuset(&current)?;
             let huge_tlb_settings = plan.huge_tlb().settings(&current)?;
+            plan.rdma().preflight_create(&current)?;
             let (device_filter, delegated_device_filter) =
                 install_device_filter(devices, &current, manager)?;
             let Some(headroom) = plan.control_headroom() else {
@@ -160,6 +163,7 @@ impl CgroupHandle {
                 settings.extend(huge_tlb_settings);
                 apply_settings(&current, &settings)?;
                 plan.block_io().apply_create(&current)?;
+                plan.rdma().apply_create(&current)?;
                 let init_procs = open_cgroup_procs(&current)?;
                 ownership.apply(&current)?;
                 return Ok((
@@ -268,7 +272,8 @@ impl CgroupHandle {
         let mut settings = plan.settings_with_oom_group(false);
         settings.extend(plan.huge_tlb().settings(&workload)?);
         apply_settings(&workload, &settings)?;
-        plan.block_io().apply_create(&workload)
+        plan.block_io().apply_create(&workload)?;
+        plan.rdma().apply_create(&workload)
     }
 
     pub(super) fn init_procs_descriptor(&self) -> RawFd {

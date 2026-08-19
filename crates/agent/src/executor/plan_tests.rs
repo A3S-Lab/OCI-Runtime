@@ -764,21 +764,36 @@ fn plans_exec_cpu_affinity_and_ignores_it_for_init() {
 }
 
 #[test]
-fn rejects_unimplemented_cgroup_v2_resource_families() {
-    for (field, value) in [
-        ("rdma", serde_json::json!({"mlx5_0": {"hcaHandles": 1}})),
-        ("unified", serde_json::json!({"memory.max": "1"})),
-    ] {
-        let mut config: serde_json::Value =
-            serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
-        config["linux"] = serde_json::json!({"resources": {}});
-        config["linux"]["resources"][field] = value;
-        let config = serde_json::to_string(&config).expect("encode unsupported cgroup field");
-        let error = InitPlan::from_bundle(&bundle(&config), &null_io())
-            .expect_err("unsupported cgroup resource families must fail closed");
-        assert_eq!(error.code, ErrorCode::Unsupported);
-        assert!(error.message.contains(&format!("linux.resources.{field}")));
-    }
+fn rejects_arbitrary_unified_cgroup_v2_resources() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["linux"] = serde_json::json!({
+        "resources": {
+            "unified": {"memory.max": "1"}
+        }
+    });
+    let config = serde_json::to_string(&config).expect("encode unsupported unified resources");
+    let error = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect_err("arbitrary unified resources must fail closed");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("linux.resources.unified"));
+}
+
+#[test]
+fn accepts_rdma_resources_for_runtime_controller_resolution() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed config");
+    config["linux"] = serde_json::json!({
+        "resources": {
+            "rdma": {
+                "mlx5_0": {"hcaHandles": 3, "hcaObjects": 10000}
+            }
+        }
+    });
+    let config = serde_json::to_string(&config).expect("encode RDMA config");
+
+    let _plan = InitPlan::from_bundle(&bundle(&config), &null_io())
+        .expect("RDMA resources must survive init planning");
 }
 
 #[test]

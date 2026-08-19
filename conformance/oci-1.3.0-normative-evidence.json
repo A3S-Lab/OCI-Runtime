@@ -1086,14 +1086,29 @@
     },
     {
       "requirementIds": [
-        "sha256:09e3e030e1407cf927c6074a67fb9fd9dd3f18858afb3e2cd4f0bea4eb852639"
+        "sha256:450ad86b7d0f53a7762cfa9d5f89ab6d0bc79bdaf21fdc5948f423950632ff1a",
+        "sha256:de1778b0b90faa72d4c45949981ee26df41eda803ea11d1d93ca2c063a6a91d5",
+        "sha256:0f688d9bdc9a537bfe20250e1b1ac59053a4eb45619f6f3e2181e9961af1fd84",
+        "sha256:09e3e030e1407cf927c6074a67fb9fd9dd3f18858afb3e2cd4f0bea4eb852639",
+        "sha256:eb39bd2f2c6d205b9a01e36ee459c86a6a36ca76bbb6defa6101cd1dec1282d2"
       ],
-      "disposition": "validated",
-      "owner": "sdk-semantic-validation",
+      "disposition": "enforced",
+      "owner": "linux-executor",
       "ruleIds": [
+        "oci.linux.rdma.cgroup-v2-controls",
         "oci.linux.rdma.limit-required"
       ],
       "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-rdma-readback",
+        "executor::cgroup::plan::tests::plans_rdma_as_an_independent_workload_only_controller",
+        "executor::cgroup::rdma::tests::applies_and_rolls_back_complete_live_updates",
+        "executor::cgroup::rdma::tests::plans_sorted_partial_and_complete_kernel_limits",
+        "executor::cgroup::rdma::tests::prepares_partial_update_and_exact_rollback_without_touching_omitted_fields",
+        "executor::cgroup::rdma::tests::rejects_empty_or_unsafe_device_entries",
+        "executor::cgroup::update::tests::plans_rdma_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::rolls_back_rdma_before_earlier_static_settings",
+        "executor::cgroup::update::tests::updates_exact_workload_and_derived_management_envelope_atomically",
+        "executor::plan_tests::accepts_rdma_resources_for_runtime_controller_resolution",
         "semantic::tests::accepts_validated_normative_cross_field_boundaries",
         "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
       ]

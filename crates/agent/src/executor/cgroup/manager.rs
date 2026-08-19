@@ -986,7 +986,7 @@ mod tests {
 
         std::fs::write(
             directory.path().join("cgroup.controllers"),
-            "cpu cpuset hugetlb io memory pids",
+            "cpu cpuset hugetlb io memory pids rdma",
         )
         .expect("optional controllers");
         assert_eq!(
@@ -998,13 +998,13 @@ mod tests {
 
         std::fs::write(
             directory.path().join("cgroup.subtree_control"),
-            "cpu cpuset hugetlb io memory pids",
+            "cpu cpuset hugetlb io memory pids rdma",
         )
         .expect("enabled optional controllers");
         assert_eq!(
             required_delegated_controllers(directory.path())
                 .expect("delegation with enabled optional controllers"),
-            BTreeSet::from(["cpu", "cpuset", "hugetlb", "io", "memory", "pids"]),
+            BTreeSet::from(["cpu", "cpuset", "hugetlb", "io", "memory", "pids", "rdma"]),
             "enabled optional controllers are propagated without becoming baseline requirements"
         );
     }

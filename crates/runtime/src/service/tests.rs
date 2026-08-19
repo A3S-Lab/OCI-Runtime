@@ -1525,7 +1525,7 @@ async fn reports_only_operations_that_are_currently_implemented() {
     assert_eq!(*cgroup.v2(), Some(true));
     assert_eq!(*cgroup.systemd(), Some(false));
     assert_eq!(*cgroup.systemd_user(), Some(false));
-    assert_eq!(*cgroup.rdma(), Some(false));
+    assert_eq!(*cgroup.rdma(), Some(true));
     let apparmor = linux.apparmor().as_ref().expect("apparmor feature report");
     assert_eq!(*apparmor.enabled(), Some(false));
     let selinux = linux.selinux().as_ref().expect("selinux feature report");

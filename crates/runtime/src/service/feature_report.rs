@@ -98,7 +98,7 @@ fn compiled_linux_features() -> Result<LinuxFeature> {
         .v2(true)
         .systemd(false)
         .systemd_user(false)
-        .rdma(false)
+        .rdma(true)
         .build()
         .map_err(feature_build_error)?;
     let seccomp = SeccompBuilder::default()

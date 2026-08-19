@@ -289,7 +289,7 @@ A3S_OCI_NATIVE_FOCUS=cgroup-ownership \
   bash .github/scripts/native-linux-smoke.sh
 ```
 
-### Control/workload HugeTLB gate
+### Control/workload HugeTLB and RDMA gate
 
 The default matrix also runs the opt-in `control-workload-v1` topology. When
 the host exposes the `hugetlb` controller, a kernel hugepage inventory entry,
@@ -302,6 +302,14 @@ without requiring preallocated huge pages. Hosts without that controller or a
 matching page-size control skip only this positive real-kernel assertion; the
 portable unsupported-controller, unavailable-page-size, update, read-back, and
 rollback tests still run.
+
+When the host also exposes the `rdma` controller, a usable device under
+`/sys/class/infiniband`, and a matching root `rdma.max` entry, the wrapper adds
+zero HCA handle and object limits for that device. Trusted init requires the
+control child to retain `hca_handle=max hca_object=max` and the workload child
+to read back `hca_handle=0 hca_object=0`. Hosts without a matching controller
+and device skip only this positive real-kernel assertion; deterministic
+planning, partial-update, exact read-back, and reverse-rollback tests still run.
 
 The delegated-rootless counterpart omits `linux.cgroupsPath` and removes the
 unrelated personality and memory-policy profiles from its temporary fixture.

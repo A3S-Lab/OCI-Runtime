@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- OCI 1.3 RDMA enforcement for cgroup v2. The shared Linux executor validates
+  bounded device names, requires at least one HCA handle or object limit per
+  entry, checks the optional `rdma` controller and live device inventory before
+  device-policy mutation, and applies deterministic keyed writes on Create and
+  live Update. Omitted fields survive partial updates, values at the kernel's
+  signed-counter ceiling normalize to `max`, every effective value is read back,
+  and failures roll prior RDMA and cgroup mutations back in reverse order.
+  `control-workload-v1` applies RDMA only to the workload leaf, feature discovery
+  reports the implemented capability, and Native Linux qualification performs
+  real control/workload read-back when the host exposes a usable RDMA device.
+  One owner-bound executor rule plus the existing semantic rule promote all five
+  RDMA requirements, leaving 490 enforced, 50 validated, two conformant, and 113
+  pending entries. Arbitrary `linux.resources.unified` writes remain explicitly
+  unsupported.
 - OCI 1.3 HugeTLB enforcement for cgroup v2. `hugepageLimits` now retains the
   complete normative `uint64` limit range, requires both `pageSize` and `limit`,
   rejects unsafe, overflowing, duplicate, or unavailable page-size controls,

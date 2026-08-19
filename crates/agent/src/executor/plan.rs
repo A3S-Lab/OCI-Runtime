@@ -503,6 +503,7 @@ fn validate_profile(raw: &Value) -> Result<()> {
                 "pids",
                 "blockIO",
                 "hugepageLimits",
+                "rdma",
             ],
         )?;
     }

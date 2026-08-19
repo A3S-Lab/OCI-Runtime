@@ -10636,10 +10636,26 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "**`rdma`** (object, OPTIONAL) represents the cgroup subsystem `rdma`.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.rdma.cgroup-v2-controls",
+        "oci.linux.rdma.limit-required"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-rdma-readback",
+        "executor::cgroup::plan::tests::plans_rdma_as_an_independent_workload_only_controller",
+        "executor::cgroup::rdma::tests::applies_and_rolls_back_complete_live_updates",
+        "executor::cgroup::rdma::tests::plans_sorted_partial_and_complete_kernel_limits",
+        "executor::cgroup::rdma::tests::prepares_partial_update_and_exact_rollback_without_touching_omitted_fields",
+        "executor::cgroup::rdma::tests::rejects_empty_or_unsafe_device_entries",
+        "executor::cgroup::update::tests::plans_rdma_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::rolls_back_rdma_before_earlier_static_settings",
+        "executor::cgroup::update::tests::updates_exact_workload_and_derived_management_envelope_atomically",
+        "executor::plan_tests::accepts_rdma_resources_for_runtime_controller_resolution",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:de1778b0b90faa72d4c45949981ee26df41eda803ea11d1d93ca2c063a6a91d5",
@@ -10650,10 +10666,26 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`hcaHandles`** *(uint32, OPTIONAL)* - specifies the maximum number of hca_handles in the cgroup",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.rdma.cgroup-v2-controls",
+        "oci.linux.rdma.limit-required"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-rdma-readback",
+        "executor::cgroup::plan::tests::plans_rdma_as_an_independent_workload_only_controller",
+        "executor::cgroup::rdma::tests::applies_and_rolls_back_complete_live_updates",
+        "executor::cgroup::rdma::tests::plans_sorted_partial_and_complete_kernel_limits",
+        "executor::cgroup::rdma::tests::prepares_partial_update_and_exact_rollback_without_touching_omitted_fields",
+        "executor::cgroup::rdma::tests::rejects_empty_or_unsafe_device_entries",
+        "executor::cgroup::update::tests::plans_rdma_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::rolls_back_rdma_before_earlier_static_settings",
+        "executor::cgroup::update::tests::updates_exact_workload_and_derived_management_envelope_atomically",
+        "executor::plan_tests::accepts_rdma_resources_for_runtime_controller_resolution",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:0f688d9bdc9a537bfe20250e1b1ac59053a4eb45619f6f3e2181e9961af1fd84",
@@ -10664,10 +10696,26 @@
       "keyword": "optional",
       "occurrence": 1,
       "source": "* **`hcaObjects`** *(uint32, OPTIONAL)* - specifies the maximum number of hca_objects in the cgroup",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.rdma.cgroup-v2-controls",
+        "oci.linux.rdma.limit-required"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-rdma-readback",
+        "executor::cgroup::plan::tests::plans_rdma_as_an_independent_workload_only_controller",
+        "executor::cgroup::rdma::tests::applies_and_rolls_back_complete_live_updates",
+        "executor::cgroup::rdma::tests::plans_sorted_partial_and_complete_kernel_limits",
+        "executor::cgroup::rdma::tests::prepares_partial_update_and_exact_rollback_without_touching_omitted_fields",
+        "executor::cgroup::rdma::tests::rejects_empty_or_unsafe_device_entries",
+        "executor::cgroup::update::tests::plans_rdma_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::rolls_back_rdma_before_earlier_static_settings",
+        "executor::cgroup::update::tests::updates_exact_workload_and_derived_management_envelope_atomically",
+        "executor::plan_tests::accepts_rdma_resources_for_runtime_controller_resolution",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:09e3e030e1407cf927c6074a67fb9fd9dd3f18858afb3e2cd4f0bea4eb852639",
@@ -10678,12 +10726,23 @@
       "keyword": "must",
       "occurrence": 1,
       "source": "You MUST specify at least one of the `hcaHandles` or `hcaObjects` in a given entry, and MAY specify both.",
-      "disposition": "validated",
-      "owner": "sdk-semantic-validation",
+      "disposition": "enforced",
+      "owner": "linux-executor",
       "ruleIds": [
+        "oci.linux.rdma.cgroup-v2-controls",
         "oci.linux.rdma.limit-required"
       ],
       "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-rdma-readback",
+        "executor::cgroup::plan::tests::plans_rdma_as_an_independent_workload_only_controller",
+        "executor::cgroup::rdma::tests::applies_and_rolls_back_complete_live_updates",
+        "executor::cgroup::rdma::tests::plans_sorted_partial_and_complete_kernel_limits",
+        "executor::cgroup::rdma::tests::prepares_partial_update_and_exact_rollback_without_touching_omitted_fields",
+        "executor::cgroup::rdma::tests::rejects_empty_or_unsafe_device_entries",
+        "executor::cgroup::update::tests::plans_rdma_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::rolls_back_rdma_before_earlier_static_settings",
+        "executor::cgroup::update::tests::updates_exact_workload_and_derived_management_envelope_atomically",
+        "executor::plan_tests::accepts_rdma_resources_for_runtime_controller_resolution",
         "semantic::tests::accepts_validated_normative_cross_field_boundaries",
         "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
       ]
@@ -10697,10 +10756,26 @@
       "keyword": "may",
       "occurrence": 2,
       "source": "You MUST specify at least one of the `hcaHandles` or `hcaObjects` in a given entry, and MAY specify both.",
-      "disposition": "pending-review",
+      "disposition": "enforced",
       "owner": "linux-executor",
-      "ruleIds": [],
-      "testIds": []
+      "ruleIds": [
+        "oci.linux.rdma.cgroup-v2-controls",
+        "oci.linux.rdma.limit-required"
+      ],
+      "testIds": [
+        ".github/scripts/native-linux-smoke.sh::control-workload-rdma-readback",
+        "executor::cgroup::plan::tests::plans_rdma_as_an_independent_workload_only_controller",
+        "executor::cgroup::rdma::tests::applies_and_rolls_back_complete_live_updates",
+        "executor::cgroup::rdma::tests::plans_sorted_partial_and_complete_kernel_limits",
+        "executor::cgroup::rdma::tests::prepares_partial_update_and_exact_rollback_without_touching_omitted_fields",
+        "executor::cgroup::rdma::tests::rejects_empty_or_unsafe_device_entries",
+        "executor::cgroup::update::tests::plans_rdma_updates_only_for_the_workload_leaf",
+        "executor::cgroup::update::tests::rolls_back_rdma_before_earlier_static_settings",
+        "executor::cgroup::update::tests::updates_exact_workload_and_derived_management_envelope_atomically",
+        "executor::plan_tests::accepts_rdma_resources_for_runtime_controller_resolution",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
     },
     {
       "id": "sha256:ba31b36554e187130b365dbf20d655c25ec49bbed6a932e2f21851babdec1e06",
