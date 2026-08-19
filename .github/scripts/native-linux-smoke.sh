@@ -41,6 +41,7 @@ network_device_rollback_second="a3snr1$$"
 network_device_rootless_source="a3snl$$"
 hugetlb_page_size=""
 hugetlb_reservation_control=false
+rdma_device=""
 
 detect_hugetlb_page_size() {
   local candidate
@@ -77,6 +78,31 @@ detect_hugetlb_page_size() {
   done
 
   printf '%s' "$selected_page_size"
+}
+
+detect_rdma_device() {
+  local candidate
+  local candidate_name
+
+  if ! grep -qw rdma /sys/fs/cgroup/cgroup.controllers || \
+    [[ ! -r /sys/fs/cgroup/rdma.max ]]; then
+    return 0
+  fi
+
+  for candidate in /sys/class/infiniband/*; do
+    [[ -e "$candidate" ]] || continue
+    candidate_name="${candidate##*/}"
+    if [[ ! "$candidate_name" =~ ^[[:alnum:]_.:-]+$ ]] || \
+      ((${#candidate_name} > 63)); then
+      continue
+    fi
+    if awk -v device="$candidate_name" \
+      '$1 == device { found = 1 } END { exit !found }' \
+      /sys/fs/cgroup/rdma.max; then
+      printf '%s' "$candidate_name"
+      return 0
+    fi
+  done
 }
 
 restore_host() {
@@ -243,6 +269,14 @@ else
     'Native HugeTLB evidence skipped: no usable host cgroup-v2 HugeTLB page size'
 fi
 
+rdma_device="$(detect_rdma_device)"
+if [[ -n "$rdma_device" ]]; then
+  printf 'Native RDMA evidence enabled for device %s\n' "$rdma_device"
+else
+  printf '%s\n' \
+    'Native RDMA evidence skipped: no usable host cgroup-v2 RDMA device'
+fi
+
 features="$("$PWD/target/debug/a3s-oci" features)"
 printf '%s\n' "$features"
 jq --exit-status \
@@ -346,11 +380,16 @@ if [[ -n "$hugetlb_page_size" ]]; then
     control_command_prefix+="test \"\$(/bin/busybox cat /sys/fs/cgroup/a3s-workload/hugetlb.${hugetlb_page_size}.rsvd.max)\" = 0; "
   fi
 fi
+if [[ -n "$rdma_device" ]]; then
+  control_command_prefix+="/bin/busybox grep -Fxq '${rdma_device} hca_handle=max hca_object=max' /sys/fs/cgroup/a3s-control/rdma.max; "
+  control_command_prefix+="/bin/busybox grep -Fxq '${rdma_device} hca_handle=0 hca_object=0' /sys/fs/cgroup/a3s-workload/rdma.max; "
+fi
 control_command_prefix+='exec 6>&- 7>&-; '
 jq \
   --arg command_prefix "$control_command_prefix" \
   --arg hook_trace "$control_hook_trace" \
   --arg hugetlb_page_size "$hugetlb_page_size" \
+  --arg rdma_device "$rdma_device" \
   '
     .process.args[2] = ($command_prefix + .process.args[2])
     | .mounts += [{
@@ -375,6 +414,12 @@ jq \
         pageSize: $hugetlb_page_size,
         limit: 0
       }]
+      end
+    | if $rdma_device == ""
+      then .
+      else .linux.resources.rdma = {
+        ($rdma_device): {hcaHandles: 0, hcaObjects: 0}
+      }
       end
     | .annotations["dev.a3s.oci.cgroup.layout"] = "control-workload-v1"
     | .annotations["dev.a3s.oci.cgroup.control-memory-headroom-bytes"] = "67108864"

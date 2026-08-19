@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 120-entry pending normative evidence backlog.
+- [ ] Close the remaining 113-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -522,6 +522,12 @@ driver implements.
     page sizes, reverse partial writes, and keep the controller optional until
     requested. Retain conditional real-kernel workload read-back on both Native
     Linux CI architectures.
+  - [x] Bind all five OCI RDMA entries to semantic validation and exact
+    cgroup-v2 Create and Update behavior. Require at least one per-device limit,
+    preserve omitted HCA fields, normalize the kernel signed-counter ceiling to
+    `max`, verify effective keyed state, reverse partial writes, keep `rdma`
+    optional until requested, and retain workload-only control/workload
+    placement with conditional real-kernel read-back.
   - [x] Bind all 20 OCI Linux device entries to exact schema, planning, rootful
     enforcement, cleanup, and ordered cgroup-device evidence. Cover all four
     node types, paths outside `/dev`, conditional major/minor values, mode and
@@ -1517,15 +1523,17 @@ leak. Only then may KVM become `experimental`.
   registries, and prove every advertised seccomp action, architecture, and
   operator against the shared executor. Forty-one feature requirements are
   owner-bound. Subsequent common-configuration, platform, extensibility,
-  namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device, and
-  HugeTLB promotions leave 485 enforced, 51 validated, and 117 pending entries.
+  namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
+  HugeTLB, and RDMA promotions leave 490 enforced, 50 validated, and 113 pending
+  entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
 - [x] Apply and read back cgroup v2 memory limit/reservation/swap, CPU
   shares/quota/burst/period/cpuset/idle, PID limits, Block I/O default and
-  per-device weight plus read/write BPS/IOPS limits, and HugeTLB usage plus
-  optional reservation limits for every requested live page size. Preserve zero and map
+  per-device weight plus read/write BPS/IOPS limits, HugeTLB usage plus optional
+  reservation limits for every requested live page size, and keyed RDMA HCA
+  handle/object limits. Preserve zero and map
   the OCI memory and PIDs `-1` sentinel to cgroup v2 `max` for Create and
   Update, reject values below `-1`, keep reservation independent of the hard
   limit, require finite total swap to have a compatible finite memory limit,
@@ -1538,9 +1546,10 @@ leak. Only then may KVM become `experimental`.
   through `cgroup.freeze` and verify the exact transition through
   `cgroup.events`. Keep Block I/O on the workload leaf, preserve omitted keyed
   values during partial updates, verify every write, and roll back in reverse
-  order if a later resource or device-policy mutation fails. Keep HugeTLB on
-  the workload leaf as well, preserve omitted page sizes, and preflight every
-  dynamic control before device-policy mutation.
+  order if a later resource or device-policy mutation fails. Keep HugeTLB and
+  RDMA on the workload leaf as well, preserve omitted page sizes and HCA fields,
+  and preflight every dynamic control and RDMA device before device-policy
+  mutation.
 - [x] Create a private controller-enabled cgroup-v2 manager, apply
   generation-fenced partial resource updates with exact read-back and
   reverse-order rollback, and expose normalized CPU, memory, PID, and event
@@ -1596,8 +1605,10 @@ leak. Only then may KVM become `experimental`.
     sizes, including full-range `uint64` decoding, kernel-aligned read-back,
     partial Update preservation, reverse rollback, optional-controller
     propagation, and workload-only control/workload placement.
-  - [x] Explicitly reject unsupported RDMA and unified resource requests before
-    mutation.
+  - [x] Enforce keyed RDMA handle/object limits with controller and device
+    preflight, partial-update preservation, exact read-back, reverse rollback,
+    and workload-only control/workload placement. Continue rejecting arbitrary
+    unified resource writes before mutation.
   - [x] Add rootful device-access BPF with exact block/char allowlists, access
     subsets, and live filter replacement on update.
   - [x] Make the OCI declared/default device inventory an immutable cgroup-v2

@@ -5,6 +5,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 use super::hugetlb::HugeTlbPlan;
 use super::io::{AppliedBlockIoUpdate, BlockIoPlan};
+use super::rdma::{AppliedRdmaUpdate, RdmaPlan};
 use super::{
     cgroup_v2_limit_value, normalize_cgroup_value, parse_max_value, parse_u64_value, read_required,
     shares_to_weight, validate_cpuset, validate_memory_value, validate_pids_limit,
@@ -36,10 +37,17 @@ impl CgroupHandle {
             .await?;
         prepared.extend(prepare_update_settings(&self.leaf, settings).await?);
         let prepared_block_io = plan.block_io.prepare_update(&self.leaf).await?;
+        let prepared_rdma = plan.rdma.prepare_update(&self.leaf).await?;
         let applied = apply_prepared_update_settings(prepared).await?;
         let applied_block_io = match prepared_block_io.apply().await {
             Ok(applied_block_io) => applied_block_io,
-            Err(error) => return rollback_update(&applied, None, error).await,
+            Err(error) => return rollback_update(&applied, None, None, error).await,
+        };
+        let applied_rdma = match prepared_rdma.apply().await {
+            Ok(applied_rdma) => applied_rdma,
+            Err(error) => {
+                return rollback_update(&applied, Some(&applied_block_io), None, error).await;
+            }
         };
 
         let Some(next_devices) = next_devices else {
@@ -60,7 +68,13 @@ impl CgroupHandle {
                 (true, false) => device_filter.authority.remove(&device_filter.key),
             };
             if let Err(error) = result {
-                return rollback_update(&applied, Some(&applied_block_io), error).await;
+                return rollback_update(
+                    &applied,
+                    Some(&applied_block_io),
+                    Some(&applied_rdma),
+                    error,
+                )
+                .await;
             }
             self.devices = next_devices;
             device_filter.active = next_active;
@@ -81,7 +95,13 @@ impl CgroupHandle {
             (None, None) => Ok(()),
         };
         if let Err(error) = device_update {
-            return rollback_update(&applied, Some(&applied_block_io), error).await;
+            return rollback_update(
+                &applied,
+                Some(&applied_block_io),
+                Some(&applied_rdma),
+                error,
+            )
+            .await;
         }
         self.devices = next_devices;
         self.device_filter = next_device_filter;
@@ -104,6 +124,7 @@ struct CgroupUpdatePlan {
     pids_limit: Option<i64>,
     block_io: BlockIoPlan,
     huge_tlb: HugeTlbPlan,
+    rdma: RdmaPlan,
 }
 
 impl CgroupUpdatePlan {
@@ -116,6 +137,7 @@ impl CgroupUpdatePlan {
             BlockIoPlan::from_oci(resources.block_io().as_ref()).map_err(as_update_error)?;
         let huge_tlb = HugeTlbPlan::from_oci(resources.hugepage_limits().as_deref())
             .map_err(as_update_error)?;
+        let rdma = RdmaPlan::from_oci(resources.rdma().as_ref()).map_err(as_update_error)?;
         let plan = Self {
             memory_limit: memory.and_then(|memory| memory.limit()),
             memory_reservation: memory.and_then(|memory| memory.reservation()),
@@ -130,6 +152,7 @@ impl CgroupUpdatePlan {
             pids_limit: pids.map(|pids| pids.limit()),
             block_io,
             huge_tlb,
+            rdma,
         };
         plan.validate()?;
         Ok(plan)
@@ -212,6 +235,7 @@ impl CgroupUpdatePlan {
         management.memory_reservation = None;
         management.block_io = BlockIoPlan::default();
         management.huge_tlb = HugeTlbPlan::default();
+        management.rdma = RdmaPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -466,6 +490,7 @@ async fn apply_prepared_update_settings(
             return rollback_update(
                 &applied,
                 None,
+                None,
                 update_error(
                     ErrorCode::PermissionDenied,
                     format!(
@@ -490,6 +515,7 @@ async fn apply_prepared_update_settings(
                 return rollback_update(
                     &applied,
                     None,
+                    None,
                     update_error(
                         ErrorCode::FailedPrecondition,
                         format!(
@@ -505,6 +531,7 @@ async fn apply_prepared_update_settings(
         if normalize_cgroup_value(&actual) != normalize_cgroup_value(&expected) {
             return rollback_update(
                 &applied,
+                None,
                 None,
                 update_error(
                     ErrorCode::FailedPrecondition,
@@ -524,12 +551,17 @@ async fn apply_prepared_update_settings(
 async fn rollback_update(
     applied: &[AppliedUpdateSetting],
     block_io: Option<&AppliedBlockIoUpdate>,
+    rdma: Option<&AppliedRdmaUpdate>,
     original: Error,
 ) -> Result<()> {
-    let mut failures = match block_io {
-        Some(block_io) => block_io.rollback().await,
+    let mut failures = match rdma {
+        Some(rdma) => rdma.rollback().await,
         None => Vec::new(),
     };
+    failures.extend(match block_io {
+        Some(block_io) => block_io.rollback().await,
+        None => Vec::new(),
+    });
     for setting in applied.iter().rev() {
         let destination = setting.path.join(&setting.file);
         if let Err(error) = tokio::fs::write(&destination, setting.old.as_bytes()).await {
@@ -958,6 +990,27 @@ mod tests {
     }
 
     #[test]
+    fn plans_rdma_updates_only_for_the_workload_leaf() {
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "rdma": {
+                "mlx5_0": {"hcaHandles": 3, "hcaObjects": 10000}
+            }
+        }))
+        .expect("RDMA update");
+        let plan = CgroupUpdatePlan::from_resources(&resources).expect("RDMA update plan");
+        let management = plan
+            .management_plan(&ControlHeadroom {
+                memory_bytes: 64 * 1024 * 1024,
+                cpu_quota_micros: 25_000,
+                pids: 16,
+            })
+            .expect("management plan");
+
+        assert!(!plan.rdma.is_empty());
+        assert!(management.rdma.is_empty());
+    }
+
+    #[test]
     fn rejects_pids_updates_below_the_unlimited_sentinel() {
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "pids": {"limit": -2}
@@ -1018,6 +1071,7 @@ mod tests {
                     ("cpu.max.burst", "5000"),
                     ("cpu.idle", "0"),
                     ("pids.max", "528"),
+                    ("rdma.max", "mlx5_0 hca_handle=max hca_object=max"),
                     ("cgroup.procs", ""),
                 ],
             ),
@@ -1032,6 +1086,7 @@ mod tests {
                     ("cpu.max.burst", "10000"),
                     ("cpu.idle", "0"),
                     ("pids.max", "512"),
+                    ("rdma.max", "mlx5_0 hca_handle=7 hca_object=11"),
                     ("cgroup.procs", ""),
                 ],
             ),
@@ -1071,7 +1126,10 @@ mod tests {
         let resources: LinuxResources = serde_json::from_value(serde_json::json!({
             "memory": {"limit": 268435456, "swap": 536870912},
             "cpu": {"quota": 100000, "burst": 20000, "period": 100000, "idle": 1},
-            "pids": {"limit": 256}
+            "pids": {"limit": 256},
+            "rdma": {
+                "mlx5_0": {"hcaHandles": 3, "hcaObjects": 10000}
+            }
         }))
         .expect("resource update");
 
@@ -1090,6 +1148,7 @@ mod tests {
                     ("cpu.max.burst", "5000"),
                     ("cpu.idle", "0"),
                     ("pids.max", "272"),
+                    ("rdma.max", "mlx5_0 hca_handle=max hca_object=max"),
                 ],
             ),
             (
@@ -1102,6 +1161,7 @@ mod tests {
                     ("cpu.max.burst", "20000"),
                     ("cpu.idle", "1"),
                     ("pids.max", "256"),
+                    ("rdma.max", "mlx5_0 hca_handle=3 hca_object=10000"),
                 ],
             ),
         ] {
@@ -1158,6 +1218,7 @@ mod tests {
         let error = rollback_update(
             &applied,
             None,
+            None,
             update_error(ErrorCode::PermissionDenied, "synthetic update failure"),
         )
         .await
@@ -1168,6 +1229,61 @@ mod tests {
             std::fs::read_to_string(directory.path().join(file)).expect("rolled-back limit"),
             "10",
             "reverse rollback must restore the oldest retained value last"
+        );
+    }
+
+    #[tokio::test]
+    async fn rolls_back_rdma_before_earlier_static_settings() {
+        let directory = tempfile::tempdir().expect("temporary cgroup");
+        std::fs::write(directory.path().join("cpu.weight"), "200").expect("updated CPU weight");
+        std::fs::write(
+            directory.path().join("rdma.max"),
+            "mlx5_0 hca_handle=7 hca_object=11",
+        )
+        .expect("current RDMA state");
+        let resources: LinuxResources = serde_json::from_value(serde_json::json!({
+            "rdma": {
+                "mlx5_0": {"hcaHandles": 3, "hcaObjects": 10000}
+            }
+        }))
+        .expect("RDMA update");
+        let plan = CgroupUpdatePlan::from_resources(&resources).expect("RDMA update plan");
+        let applied_rdma = plan
+            .rdma
+            .prepare_update(directory.path())
+            .await
+            .expect("prepare RDMA update")
+            .apply()
+            .await
+            .expect("apply RDMA update");
+        let applied = [AppliedUpdateSetting {
+            path: directory.path().to_path_buf(),
+            file: "cpu.weight".to_string(),
+            old: "100".to_string(),
+        }];
+
+        let error = rollback_update(
+            &applied,
+            None,
+            Some(&applied_rdma),
+            update_error(
+                ErrorCode::PermissionDenied,
+                "synthetic device-policy failure",
+            ),
+        )
+        .await
+        .expect_err("rollback returns the original update failure");
+
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("rdma.max"))
+                .expect("rolled-back RDMA state"),
+            "mlx5_0 hca_handle=7 hca_object=11"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("cpu.weight"))
+                .expect("rolled-back CPU weight"),
+            "100"
         );
     }
 

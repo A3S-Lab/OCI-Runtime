@@ -770,10 +770,10 @@ placeholder cleanup between owners.
 The executor requires both `pidfd_open` and `pidfd_send_signal`. It currently
 rejects mount entries and rootfs mutation in inherited or joined mount
 namespaces, rootless supplementary groups and nondelegated cgroup paths,
-Block I/O or HugeTLB requests whose required cgroup-v2 controller or dynamic
-control is unavailable, RDMA and unified resources, and every other
-unimplemented OCI property. Rootless cgroup-v2 real-host qualification and
-device-policy delegation, hook
+Block I/O, HugeTLB, or RDMA requests whose required cgroup-v2 controller,
+dynamic control, or device is unavailable, arbitrary unified resources, and
+every other unimplemented OCI property. Rootless cgroup-v2 real-host
+qualification and device-policy delegation, hook
 rollback/recovery, security-negative, and soak certification remain release
 blockers rather than silently accepted compatibility gaps.
 

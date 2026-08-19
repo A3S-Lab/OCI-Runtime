@@ -8,7 +8,7 @@ use a3s_oci_sdk::{
     CONTROL_WORKLOAD_CGROUP_LAYOUT_ANNOTATION, CONTROL_WORKLOAD_CGROUP_LAYOUT_V1,
 };
 
-use super::{cgroup_error, hugetlb::HugeTlbPlan, io::BlockIoPlan, CgroupSetting};
+use super::{cgroup_error, hugetlb::HugeTlbPlan, io::BlockIoPlan, rdma::RdmaPlan, CgroupSetting};
 
 pub(super) const DEFAULT_CPU_PERIOD_MICROS: u64 = 100_000;
 
@@ -43,6 +43,7 @@ pub(in crate::executor) struct CgroupPlan {
     pids_limit: Option<i64>,
     block_io: BlockIoPlan,
     huge_tlb: HugeTlbPlan,
+    rdma: RdmaPlan,
 }
 
 impl CgroupPlan {
@@ -83,6 +84,7 @@ impl CgroupPlan {
         let pids = resources.pids().as_ref();
         let block_io = BlockIoPlan::from_oci(resources.block_io().as_ref())?;
         let huge_tlb = HugeTlbPlan::from_oci(resources.hugepage_limits().as_deref())?;
+        let rdma = RdmaPlan::from_oci(resources.rdma().as_ref())?;
         let plan = Self {
             layout,
             path,
@@ -99,6 +101,7 @@ impl CgroupPlan {
             pids_limit: pids.map(|pids| pids.limit()),
             block_io,
             huge_tlb,
+            rdma,
         };
         plan.validate()?;
         Ok(plan)
@@ -264,6 +267,7 @@ impl CgroupPlan {
         management.memory_reservation = None;
         management.block_io = BlockIoPlan::default();
         management.huge_tlb = HugeTlbPlan::default();
+        management.rdma = RdmaPlan::default();
         management.memory_swap = self
             .memory_swap
             .map(|value| {
@@ -314,6 +318,10 @@ impl CgroupPlan {
         &self.huge_tlb
     }
 
+    pub(super) fn rdma(&self) -> &RdmaPlan {
+        &self.rdma
+    }
+
     pub(super) fn required_controllers(&self) -> BTreeSet<&'static str> {
         let mut controllers = BTreeSet::new();
         if self.memory_limit.is_some()
@@ -341,6 +349,9 @@ impl CgroupPlan {
         }
         if !self.huge_tlb.is_empty() {
             controllers.insert("hugetlb");
+        }
+        if !self.rdma.is_empty() {
+            controllers.insert("rdma");
         }
         controllers
     }
@@ -444,7 +455,7 @@ pub(super) fn validate_supported_resource_fields(resources: &LinuxResources) -> 
     if let Some(field) = object.keys().find(|field| {
         !matches!(
             field.as_str(),
-            "devices" | "memory" | "cpu" | "pids" | "blockIO" | "hugepageLimits"
+            "devices" | "memory" | "cpu" | "pids" | "blockIO" | "hugepageLimits" | "rdma"
         )
     }) {
         return Err(unsupported(
@@ -612,6 +623,14 @@ mod tests {
             "resources": {"hugepageLimits": limits}
         }))
         .expect("decode Linux HugeTLB controls")
+    }
+
+    fn linux_with_rdma(limits: serde_json::Value) -> Linux {
+        serde_json::from_value(serde_json::json!({
+            "cgroupsPath": "rdma/controls",
+            "resources": {"rdma": limits}
+        }))
+        .expect("decode Linux RDMA controls")
     }
 
     fn control_workload_annotations() -> BTreeMap<String, String> {
@@ -802,6 +821,34 @@ mod tests {
             .expect("management envelope");
         assert!(!control.huge_tlb().is_empty());
         assert!(management.huge_tlb().is_empty());
+    }
+
+    #[test]
+    fn plans_rdma_as_an_independent_workload_only_controller() {
+        let linux = linux_with_rdma(serde_json::json!({
+            "mlx5_0": {"hcaHandles": 3, "hcaObjects": 10000}
+        }));
+        let plan =
+            CgroupPlan::from_linux(Some(&linux), &BTreeMap::new()).expect("RDMA cgroup plan");
+
+        assert!(plan.settings().is_empty());
+        assert!(!plan.rdma().is_empty());
+        assert_eq!(plan.required_controllers(), ["rdma"].into());
+
+        let mut control_linux =
+            serde_json::to_value(fixture_linux()).expect("encode Linux fixture");
+        control_linux["resources"]["rdma"] = serde_json::json!({
+            "mlx5_0": {"hcaHandles": 3, "hcaObjects": 10000}
+        });
+        let control_linux =
+            serde_json::from_value(control_linux).expect("decode control/workload RDMA fixture");
+        let control = CgroupPlan::from_linux(Some(&control_linux), &control_workload_annotations())
+            .expect("control/workload RDMA plan");
+        let management = control
+            .management_plan(control.control_headroom().expect("control headroom"))
+            .expect("management envelope");
+        assert!(!control.rdma().is_empty());
+        assert!(management.rdma().is_empty());
     }
 
     #[test]
