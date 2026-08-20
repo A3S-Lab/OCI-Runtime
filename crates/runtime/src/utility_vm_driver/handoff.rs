@@ -49,7 +49,7 @@ impl BundleHandoffStore {
                 return Err(handoff_error(
                     ErrorCode::Conflict,
                     format!(
-                        "both the HVF operation handoff and exact-generation bundle exist: {} and {}",
+                        "both the utility-VM operation handoff and exact-generation bundle exist: {} and {}",
                         source.display(),
                         destination.display()
                     ),
@@ -63,7 +63,8 @@ impl BundleHandoffStore {
             return Ok(bundle);
         }
 
-        let source = canonical_private_directory(&source, "HVF operation bundle handoff").await?;
+        let source =
+            canonical_private_directory(&source, "utility-VM operation bundle handoff").await?;
         validate_source_ancestry(
             &self.runtime_root,
             &source,
@@ -85,7 +86,7 @@ impl BundleHandoffStore {
                 handoff_error(
                     ErrorCode::Unavailable,
                     format!(
-                        "failed to atomically move HVF bundle handoff {} into {}: {error}",
+                        "failed to atomically move utility-VM bundle handoff {} into {}: {error}",
                         source.display(),
                         destination.display()
                     ),
@@ -104,7 +105,7 @@ impl BundleHandoffStore {
         let Some(runtime_share) = super::layout::existing_exact_runtime_share_path(
             &self.runtime_share_root,
             target,
-            "cleanup-hvf-bundle-handoff",
+            "cleanup-utility-vm-bundle-handoff",
         )
         .await?
         else {
@@ -119,7 +120,7 @@ impl BundleHandoffStore {
                     return Err(handoff_error(
                         ErrorCode::FailedPrecondition,
                         format!(
-                            "HVF bundle-handoff marker is not a private plain file: {}",
+                            "utility-VM bundle-handoff marker is not a private plain file: {}",
                             marker_path.display()
                         ),
                     ));
@@ -129,7 +130,7 @@ impl BundleHandoffStore {
                     return Err(handoff_error(
                         ErrorCode::FailedPrecondition,
                         format!(
-                            "HVF bundle-handoff marker targets {:?}, not {:?}",
+                            "utility-VM bundle-handoff marker targets {:?}, not {:?}",
                             marker.target, target
                         ),
                     ));
@@ -139,7 +140,7 @@ impl BundleHandoffStore {
                     if bundle.config_digest() != marker.config_digest {
                         return Err(handoff_error(
                             ErrorCode::FailedPrecondition,
-                            "runtime-owned HVF bundle no longer matches its handoff marker",
+                            "runtime-owned utility-VM bundle no longer matches its handoff marker",
                         ));
                     }
                 }
@@ -148,7 +149,7 @@ impl BundleHandoffStore {
                 return Err(handoff_error(
                     ErrorCode::FailedPrecondition,
                     format!(
-                        "runtime-owned HVF bundle has no ownership marker: {}",
+                        "runtime-owned utility-VM bundle has no ownership marker: {}",
                         bundle_path.display()
                     ),
                 ));
@@ -165,7 +166,7 @@ impl BundleHandoffStore {
                 handoff_error(
                     ErrorCode::Internal,
                     format!(
-                        "failed to remove exact-generation HVF share {}: {error}",
+                        "failed to remove exact-generation utility-VM share {}: {error}",
                         runtime_share.display()
                     ),
                 )
@@ -183,12 +184,13 @@ impl BundleHandoffStore {
     ) -> Result<GuestPath> {
         let runtime_share =
             super::layout::exact_runtime_share_path(&self.runtime_share_root, target).await?;
-        let bundle = canonical_private_directory(bundle, "runtime-owned HVF OCI bundle").await?;
+        let bundle =
+            canonical_private_directory(bundle, "runtime-owned utility-VM OCI bundle").await?;
         let relative = bundle.strip_prefix(&runtime_share).map_err(|error| {
             handoff_error(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "HVF OCI bundle must be contained by exact runtime share {}: {} ({error})",
+                    "utility-VM OCI bundle must be contained by exact runtime share {}: {} ({error})",
                     runtime_share.display(),
                     bundle.display()
                 ),
@@ -200,7 +202,7 @@ impl BundleHandoffStore {
                 return Err(handoff_error(
                     ErrorCode::InvalidArgument,
                     format!(
-                        "HVF OCI bundle has a non-normal component: {}",
+                        "utility-VM OCI bundle has a non-normal component: {}",
                         bundle.display()
                     ),
                 ));
@@ -208,14 +210,17 @@ impl BundleHandoffStore {
             let component = component.to_str().ok_or_else(|| {
                 handoff_error(
                     ErrorCode::InvalidArgument,
-                    format!("HVF OCI bundle path is not Unicode: {}", bundle.display()),
+                    format!(
+                        "utility-VM OCI bundle path is not Unicode: {}",
+                        bundle.display()
+                    ),
                 )
             })?;
             if component.contains(['/', '\\', '\0']) {
                 return Err(handoff_error(
                     ErrorCode::InvalidArgument,
                     format!(
-                        "HVF OCI bundle has an invalid guest component: {}",
+                        "utility-VM OCI bundle has an invalid guest component: {}",
                         bundle.display()
                     ),
                 ));
@@ -225,7 +230,7 @@ impl BundleHandoffStore {
         if components.is_empty() {
             return Err(handoff_error(
                 ErrorCode::InvalidArgument,
-                "HVF OCI bundle cannot be the runtime-share root itself",
+                "utility-VM OCI bundle cannot be the runtime-share root itself",
             ));
         }
         GuestPath::new(format!(
@@ -250,12 +255,13 @@ async fn validate_source_ancestry(
     operation_id: &OperationId,
 ) -> Result<()> {
     let expected = runtime_bundle_handoff_directory(runtime_root, container_id, operation_id)?;
-    let expected = canonical_private_directory(&expected, "HVF operation bundle handoff").await?;
+    let expected =
+        canonical_private_directory(&expected, "utility-VM operation bundle handoff").await?;
     if source != expected {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "HVF bundle handoff must use the exact operation path {}: {}",
+                "utility-VM bundle handoff must use the exact operation path {}: {}",
                 expected.display(),
                 source.display()
             ),
@@ -264,38 +270,38 @@ async fn validate_source_ancestry(
     let operation_directory = source.parent().ok_or_else(|| {
         handoff_error(
             ErrorCode::FailedPrecondition,
-            "HVF bundle handoff has no operation directory",
+            "utility-VM bundle handoff has no operation directory",
         )
     })?;
     let container_directory = operation_directory.parent().ok_or_else(|| {
         handoff_error(
             ErrorCode::FailedPrecondition,
-            "HVF bundle handoff has no container directory",
+            "utility-VM bundle handoff has no container directory",
         )
     })?;
     let handoff_root = container_directory.parent().ok_or_else(|| {
         handoff_error(
             ErrorCode::FailedPrecondition,
-            "HVF bundle handoff has no protected root",
+            "utility-VM bundle handoff has no protected root",
         )
     })?;
     let expected_root = canonical_private_directory(
         &runtime_bundle_handoff_root(runtime_root)?,
-        "HVF bundle-handoff root",
+        "utility-VM bundle-handoff root",
     )
     .await?;
     if handoff_root != expected_root {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "HVF bundle handoff escaped protected root {}: {}",
+                "utility-VM bundle handoff escaped protected root {}: {}",
                 expected_root.display(),
                 source.display()
             ),
         ));
     }
     for path in [container_directory, operation_directory] {
-        canonical_private_directory(path, "HVF bundle-handoff ancestor").await?;
+        canonical_private_directory(path, "utility-VM bundle-handoff ancestor").await?;
     }
     Ok(())
 }
@@ -308,7 +314,7 @@ async fn load_exact_bundle(path: &Path, expected: &OciBundle) -> Result<OciBundl
         return Err(handoff_error(
             ErrorCode::Conflict,
             format!(
-                "HVF bundle handoff configuration differs from durable digest {}",
+                "utility-VM bundle handoff configuration differs from durable digest {}",
                 expected.config_digest()
             ),
         ));
@@ -317,10 +323,10 @@ async fn load_exact_bundle(path: &Path, expected: &OciBundle) -> Result<OciBundl
 }
 
 async fn load_bundle_without_expected(path: &Path) -> Result<OciBundle> {
-    let directory = canonical_private_directory(path, "HVF portable OCI bundle").await?;
+    let directory = canonical_private_directory(path, "utility-VM portable OCI bundle").await?;
     let config = canonical_plain_file(
         &directory.join("config.json"),
-        "HVF OCI configuration",
+        "utility-VM OCI configuration",
         true,
     )
     .await?;
@@ -328,7 +334,7 @@ async fn load_bundle_without_expected(path: &Path) -> Result<OciBundle> {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "HVF OCI configuration escaped bundle {}: {}",
+                "utility-VM OCI configuration escaped bundle {}: {}",
                 directory.display(),
                 config.display()
             ),
@@ -343,7 +349,7 @@ async fn validate_portable_bundle(bundle: &OciBundle) -> Result<()> {
     let root = bundle.spec().root().as_ref().ok_or_else(|| {
         handoff_error(
             ErrorCode::InvalidArgument,
-            "HVF bundle handoff requires an OCI root filesystem",
+            "utility-VM bundle handoff requires an OCI root filesystem",
         )
     })?;
     let root_path = root.path();
@@ -355,21 +361,21 @@ async fn validate_portable_bundle(bundle: &OciBundle) -> Result<()> {
         return Err(handoff_error(
             ErrorCode::InvalidArgument,
             format!(
-                "HVF bundle handoff requires a normalized relative root.path: {}",
+                "utility-VM bundle handoff requires a normalized relative root.path: {}",
                 root_path.display()
             ),
         ));
     }
     let rootfs = canonical_plain_directory(
         &bundle.directory().join(root_path),
-        "HVF portable bundle rootfs",
+        "utility-VM portable bundle rootfs",
     )
     .await?;
     if rootfs == bundle.directory() || !rootfs.starts_with(bundle.directory()) {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "HVF portable rootfs escapes bundle {}: {}",
+                "utility-VM portable rootfs escapes bundle {}: {}",
                 bundle.directory().display(),
                 rootfs.display()
             ),
@@ -395,7 +401,7 @@ async fn validate_portable_bundle(bundle: &OciBundle) -> Result<()> {
         let source = mount.source().as_ref().ok_or_else(|| {
             handoff_error(
                 ErrorCode::InvalidArgument,
-                format!("HVF portable bind mount {index} has no source"),
+                format!("utility-VM portable bind mount {index} has no source"),
             )
         })?;
         if source.is_absolute()
@@ -406,7 +412,7 @@ async fn validate_portable_bundle(bundle: &OciBundle) -> Result<()> {
             return Err(handoff_error(
                 ErrorCode::InvalidArgument,
                 format!(
-                    "HVF portable bind mount {index} requires a normalized relative source: {}",
+                    "utility-VM portable bind mount {index} requires a normalized relative source: {}",
                     source.display()
                 ),
             ));
@@ -431,7 +437,7 @@ async fn ensure_marker(
         if retained != expected {
             return Err(handoff_error(
                 ErrorCode::Conflict,
-                "existing HVF bundle-handoff marker differs from this create",
+                "existing utility-VM bundle-handoff marker differs from this create",
             ));
         }
         remove_private_file_if_present(&runtime_share.join(PENDING_MARKER_FILE)).await?;
@@ -443,13 +449,13 @@ async fn ensure_marker(
     let encoded = serde_json::to_vec(&expected).map_err(|error| {
         handoff_error(
             ErrorCode::Internal,
-            format!("failed to encode HVF bundle-handoff marker: {error}"),
+            format!("failed to encode utility-VM bundle-handoff marker: {error}"),
         )
     })?;
     if encoded.len() > MAX_MARKER_BYTES {
         return Err(handoff_error(
             ErrorCode::Internal,
-            "HVF bundle-handoff marker exceeds its fixed bound",
+            "utility-VM bundle-handoff marker exceeds its fixed bound",
         ));
     }
     let mut options = tokio::fs::OpenOptions::new();
@@ -462,7 +468,7 @@ async fn ensure_marker(
         handoff_error(
             ErrorCode::Internal,
             format!(
-                "failed to create HVF bundle-handoff marker {}: {error}",
+                "failed to create utility-VM bundle-handoff marker {}: {error}",
                 pending.display()
             ),
         )
@@ -471,7 +477,7 @@ async fn ensure_marker(
         handoff_error(
             ErrorCode::Internal,
             format!(
-                "failed to write HVF bundle-handoff marker {}: {error}",
+                "failed to write utility-VM bundle-handoff marker {}: {error}",
                 pending.display()
             ),
         )
@@ -480,7 +486,7 @@ async fn ensure_marker(
         handoff_error(
             ErrorCode::Internal,
             format!(
-                "failed to flush HVF bundle-handoff marker {}: {error}",
+                "failed to flush utility-VM bundle-handoff marker {}: {error}",
                 pending.display()
             ),
         )
@@ -489,7 +495,7 @@ async fn ensure_marker(
         handoff_error(
             ErrorCode::Internal,
             format!(
-                "failed to sync HVF bundle-handoff marker {}: {error}",
+                "failed to sync utility-VM bundle-handoff marker {}: {error}",
                 pending.display()
             ),
         )
@@ -501,7 +507,7 @@ async fn ensure_marker(
             handoff_error(
                 ErrorCode::Internal,
                 format!(
-                    "failed to commit HVF bundle-handoff marker {}: {error}",
+                    "failed to commit utility-VM bundle-handoff marker {}: {error}",
                     marker_path.display()
                 ),
             )
@@ -514,7 +520,7 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
         handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "failed to inspect HVF bundle-handoff marker {}: {error}",
+                "failed to inspect utility-VM bundle-handoff marker {}: {error}",
                 path.display()
             ),
         )
@@ -523,7 +529,7 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "HVF bundle-handoff marker is not a bounded private file: {}",
+                "utility-VM bundle-handoff marker is not a bounded private file: {}",
                 path.display()
             ),
         ));
@@ -534,7 +540,10 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
         .map_err(|error| {
             handoff_error(
                 ErrorCode::FailedPrecondition,
-                format!("failed to open HVF marker {}: {error}", path.display()),
+                format!(
+                    "failed to open utility-VM marker {}: {error}",
+                    path.display()
+                ),
             )
         })?
         .take((MAX_MARKER_BYTES + 1) as u64)
@@ -543,14 +552,17 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
         .map_err(|error| {
             handoff_error(
                 ErrorCode::FailedPrecondition,
-                format!("failed to read HVF marker {}: {error}", path.display()),
+                format!(
+                    "failed to read utility-VM marker {}: {error}",
+                    path.display()
+                ),
             )
         })?;
     let marker: BundleHandoffMarker = serde_json::from_slice(&encoded).map_err(|error| {
         handoff_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "invalid HVF bundle-handoff marker {}: {error}",
+                "invalid utility-VM bundle-handoff marker {}: {error}",
                 path.display()
             ),
         )
@@ -562,7 +574,10 @@ async fn read_marker(path: &Path) -> Result<BundleHandoffMarker> {
     {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
-            format!("invalid HVF bundle-handoff evidence: {}", path.display()),
+            format!(
+                "invalid utility-VM bundle-handoff evidence: {}",
+                path.display()
+            ),
         ));
     }
     Ok(marker)
@@ -589,25 +604,25 @@ async fn remove_private_file_if_present(path: &Path) -> Result<()> {
 async fn cleanup_empty_source_parents(source: &Path, runtime_root: &Path) -> Result<()> {
     let expected_root = canonical_private_directory(
         &runtime_bundle_handoff_root(runtime_root)?,
-        "HVF bundle-handoff root",
+        "utility-VM bundle-handoff root",
     )
     .await?;
     let operation_directory = source.parent().ok_or_else(|| {
         handoff_error(
             ErrorCode::FailedPrecondition,
-            "HVF bundle handoff has no operation parent",
+            "utility-VM bundle handoff has no operation parent",
         )
     })?;
     let container_directory = operation_directory.parent().ok_or_else(|| {
         handoff_error(
             ErrorCode::FailedPrecondition,
-            "HVF bundle handoff has no container parent",
+            "utility-VM bundle handoff has no container parent",
         )
     })?;
     if container_directory.parent() != Some(expected_root.as_path()) {
         return Err(handoff_error(
             ErrorCode::FailedPrecondition,
-            "refusing to clean HVF handoff parents outside the protected root",
+            "refusing to clean utility-VM handoff parents outside the protected root",
         ));
     }
     remove_directory_if_empty(operation_directory).await?;
@@ -637,5 +652,5 @@ async fn sync_directory(path: &Path) -> Result<()> {
 }
 
 fn handoff_error(code: ErrorCode, message: impl Into<String>) -> Error {
-    Error::new(code, message).for_operation("prepare-hvf-bundle-handoff")
+    Error::new(code, message).for_operation("prepare-utility-vm-bundle-handoff")
 }

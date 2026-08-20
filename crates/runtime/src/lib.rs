@@ -49,6 +49,11 @@ mod filesystem_smoke;
 mod host_cleanup;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf_driver;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod kvm_driver;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_hvf_host_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -79,6 +84,14 @@ mod state;
 mod transport_cleanup_report;
 #[cfg(unix)]
 mod unix_service;
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+mod utility_vm_driver;
 mod utility_vm_soak_report;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_driver;
@@ -125,6 +138,11 @@ pub use driver::{
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use hvf_driver::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub use kvm_driver::{KvmRuntimeDriver, KvmRuntimeDriverConfig};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use macos_hvf_host_smoke::{
     macos_hvf_host_service_smoke, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeConfig,

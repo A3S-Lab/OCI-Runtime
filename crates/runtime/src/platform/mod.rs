@@ -7,7 +7,7 @@ mod unsupported;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::native_driver_capability;
+pub(crate) use linux::{kvm_driver_capability, native_driver_capability};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(crate) use macos::hvf_driver_capability;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

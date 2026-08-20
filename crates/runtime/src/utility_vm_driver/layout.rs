@@ -8,33 +8,57 @@ use a3s_oci_sdk::{
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
-use super::HvfRuntimeDriverConfig;
-
 pub(super) const CONSOLE_DIRECTORY: &str = "console";
 pub(super) const RECOVERY_DIRECTORY: &str = "recovery";
 pub(super) const RUNTIME_SHARE_DIRECTORY: &str = "shares";
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+const BOOTSTRAP_DIRECTORY: &str = "bootstrap";
 pub(super) const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 pub(super) const PRIVATE_FILE_MODE: u32 = 0o600;
 
-#[derive(Debug)]
-pub(super) struct PreparedHvfLayout {
-    pub(super) shim: PathBuf,
-    pub(super) runtime_root: PathBuf,
-    pub(super) system_image_manifest: PathBuf,
-    pub(super) system_image_manifest_sha256: String,
-    pub(super) runtime_share_root: PathBuf,
-    pub(super) console_directory: PathBuf,
-    pub(super) recovery_directory: PathBuf,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UtilityVmBootstrap {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    RuntimeShare,
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    PrivateEmptyRoot,
 }
 
-impl PreparedHvfLayout {
-    pub(super) async fn open(config: HvfRuntimeDriverConfig) -> Result<Self> {
+#[derive(Debug)]
+pub(crate) struct PreparedUtilityVmLayout {
+    pub(crate) shim: PathBuf,
+    pub(crate) runtime_root: PathBuf,
+    pub(crate) system_image_manifest: PathBuf,
+    pub(crate) system_image_manifest_sha256: String,
+    pub(crate) runtime_share_root: PathBuf,
+    pub(crate) console_directory: PathBuf,
+    pub(crate) recovery_directory: PathBuf,
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub(crate) bootstrap_root: PathBuf,
+}
+
+impl PreparedUtilityVmLayout {
+    pub(crate) async fn open(
+        shim: PathBuf,
+        runtime_root: PathBuf,
+        system_image_manifest: PathBuf,
+        bootstrap: UtilityVmBootstrap,
+    ) -> Result<Self> {
         let runtime_root =
-            ensure_private_directory(config.runtime_root, "HVF runtime root").await?;
-        let shim = canonical_plain_file(&config.shim, "HVF libkrun shim", false).await?;
+            ensure_private_directory(runtime_root, "utility-VM runtime root").await?;
+        let shim = canonical_plain_file(&shim, "utility-VM libkrun shim", false).await?;
         let system_image_manifest = canonical_plain_file(
-            &config.system_image_manifest,
-            "HVF system-image manifest",
+            &system_image_manifest,
+            "utility-VM system-image manifest",
             false,
         )
         .await?;
@@ -44,7 +68,7 @@ impl PreparedHvfLayout {
             return Err(path_error(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "immutable HVF system-image manifest must be outside writable runtime root {}: {}",
+                    "immutable utility-VM system-image manifest must be outside writable runtime root {}: {}",
                     runtime_root.display(),
                     system_image_manifest.display()
                 ),
@@ -54,24 +78,39 @@ impl PreparedHvfLayout {
 
         let runtime_share_root = ensure_private_directory(
             runtime_root.join(RUNTIME_SHARE_DIRECTORY),
-            "HVF runtime-share root",
+            "utility-VM runtime-share root",
         )
         .await?;
         let console_directory = ensure_private_directory(
             runtime_root.join(CONSOLE_DIRECTORY),
-            "HVF console directory",
+            "utility-VM console directory",
         )
         .await?;
         let recovery_directory = ensure_private_directory(
             runtime_root.join(RECOVERY_DIRECTORY),
-            "HVF recovery directory",
+            "utility-VM recovery directory",
         )
         .await?;
         ensure_private_directory(
             runtime_bundle_handoff_root(&runtime_root)?,
-            "HVF bundle-handoff root",
+            "utility-VM bundle-handoff root",
         )
         .await?;
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let UtilityVmBootstrap::RuntimeShare = bootstrap;
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        let bootstrap_root = match bootstrap {
+            UtilityVmBootstrap::PrivateEmptyRoot => {
+                ensure_empty_private_directory(
+                    runtime_root.join(BOOTSTRAP_DIRECTORY),
+                    "utility-VM bootstrap root",
+                )
+                .await?
+            }
+        };
 
         Ok(Self {
             shim,
@@ -81,11 +120,16 @@ impl PreparedHvfLayout {
             runtime_share_root,
             console_directory,
             recovery_directory,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            bootstrap_root,
         })
     }
 }
 
-pub(super) fn validate_absolute_normalized_path(path: &Path, label: &str) -> Result<()> {
+pub(crate) fn validate_absolute_normalized_path(path: &Path, label: &str) -> Result<()> {
     if !path.is_absolute()
         || path
             .components()
@@ -100,6 +144,43 @@ pub(super) fn validate_absolute_normalized_path(path: &Path, label: &str) -> Res
         ));
     }
     Ok(())
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+async fn ensure_empty_private_directory(path: PathBuf, label: &'static str) -> Result<PathBuf> {
+    let directory = ensure_private_directory(path, label).await?;
+    let mut entries = tokio::fs::read_dir(&directory).await.map_err(|error| {
+        path_error(
+            ErrorCode::FailedPrecondition,
+            format!(
+                "failed to enumerate {label} {}: {error}",
+                directory.display()
+            ),
+        )
+    })?;
+    if entries
+        .next_entry()
+        .await
+        .map_err(|error| {
+            path_error(
+                ErrorCode::FailedPrecondition,
+                format!(
+                    "failed to enumerate {label} {}: {error}",
+                    directory.display()
+                ),
+            )
+        })?
+        .is_some()
+    {
+        return Err(path_error(
+            ErrorCode::FailedPrecondition,
+            format!("{label} must remain empty: {}", directory.display()),
+        ));
+    }
+    Ok(directory)
 }
 
 pub(super) async fn ensure_private_directory(
@@ -273,7 +354,7 @@ pub(super) fn require_exact_generation(
         Error::new(
             ErrorCode::InvalidArgument,
             format!(
-                "HVF driver operation requires an exact generation for container {}",
+                "utility-VM driver operation requires an exact generation for container {}",
                 target.id
             ),
         )
@@ -285,17 +366,17 @@ pub(super) async fn ensure_exact_runtime_share_path(
     runtime_share_root: &Path,
     target: &ContainerTarget,
 ) -> Result<PathBuf> {
-    let generation = require_exact_generation(target, "prepare-hvf-runtime-share")?;
+    let generation = require_exact_generation(target, "prepare-utility-vm-runtime-share")?;
     ensure_private_directory(
         runtime_share_root.join(target.id.as_str()),
-        "HVF container-share directory",
+        "utility-VM container-share directory",
     )
     .await?;
     ensure_private_directory(
         runtime_share_root
             .join(target.id.as_str())
             .join(generation.0.to_string()),
-        "HVF generation-share directory",
+        "utility-VM generation-share directory",
     )
     .await
 }
@@ -310,13 +391,16 @@ pub(super) async fn existing_exact_runtime_share_path(
     if path_metadata(&configured_container).await?.is_none() {
         return Ok(None);
     }
-    let container =
-        canonical_private_directory(&configured_container, "HVF container-share directory").await?;
+    let container = canonical_private_directory(
+        &configured_container,
+        "utility-VM container-share directory",
+    )
+    .await?;
     if container.parent() != Some(runtime_share_root) {
         return Err(path_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "HVF container share escaped protected root {}: {}",
+                "utility-VM container share escaped protected root {}: {}",
                 runtime_share_root.display(),
                 container.display()
             ),
@@ -327,12 +411,13 @@ pub(super) async fn existing_exact_runtime_share_path(
         return Ok(None);
     }
     let share =
-        canonical_private_directory(&configured_share, "HVF generation-share directory").await?;
+        canonical_private_directory(&configured_share, "utility-VM generation-share directory")
+            .await?;
     if share.parent() != Some(container.as_path()) {
         return Err(path_error(
             ErrorCode::FailedPrecondition,
             format!(
-                "HVF generation share escaped container directory {}: {}",
+                "utility-VM generation share escaped container directory {}: {}",
                 container.display(),
                 share.display()
             ),
@@ -345,17 +430,17 @@ pub(super) async fn exact_runtime_share_path(
     runtime_share_root: &Path,
     target: &ContainerTarget,
 ) -> Result<PathBuf> {
-    existing_exact_runtime_share_path(runtime_share_root, target, "resolve-hvf-runtime-share")
+    existing_exact_runtime_share_path(runtime_share_root, target, "resolve-utility-vm-runtime-share")
         .await?
         .ok_or_else(|| {
             Error::new(
                 ErrorCode::FailedPrecondition,
                 format!(
-                    "HVF exact-generation runtime share does not exist for container {} generation {:?}",
+                    "utility-VM exact-generation runtime share does not exist for container {} generation {:?}",
                     target.id, target.generation
                 ),
             )
-            .for_operation("resolve-hvf-runtime-share")
+            .for_operation("resolve-utility-vm-runtime-share")
         })
 }
 
@@ -427,5 +512,5 @@ async fn sha256_path(path: &Path) -> Result<String> {
 }
 
 fn path_error(code: ErrorCode, message: impl Into<String>) -> Error {
-    Error::new(code, message).for_operation("open-hvf-runtime-driver")
+    Error::new(code, message).for_operation("open-utility-vm-runtime-driver")
 }

@@ -153,9 +153,37 @@ impl UtilityVmSession {
         console: &Path,
         recovery_report: Option<&Path>,
     ) -> std::result::Result<Self, AgentVmSmokeReport> {
-        let owner = AgentVmSession::connect(
+        Self::connect_with_verified_runtime_share(
             shim,
             runtime_share,
+            system_image_manifest,
+            expected_system_image_manifest_sha256,
+            runtime_share,
+            console,
+            recovery_report,
+        )
+        .await
+    }
+
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
+    pub(crate) async fn connect_with_verified_runtime_share(
+        shim: &Path,
+        rootfs: &Path,
+        system_image_manifest: &Path,
+        expected_system_image_manifest_sha256: &str,
+        runtime_share: &Path,
+        console: &Path,
+        recovery_report: Option<&Path>,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        let owner = AgentVmSession::connect(
+            shim,
+            rootfs,
             Some(system_image_manifest),
             Some(expected_system_image_manifest_sha256),
             Some(runtime_share),

@@ -44,14 +44,15 @@ struct KvmObservation {
 }
 
 pub(crate) fn features() -> RuntimeFeatures {
-    RuntimeFeatures::current(vec![
-        native_driver_capability(),
-        kvm_capability(observe_kvm()),
-    ])
+    RuntimeFeatures::current(vec![native_driver_capability(), kvm_driver_capability()])
 }
 
 pub(crate) fn native_driver_capability() -> DriverCapability {
     native_capability(observe_native_linux())
+}
+
+pub(crate) fn kvm_driver_capability() -> DriverCapability {
+    kvm_capability(observe_kvm())
 }
 
 fn observe_native_linux() -> NativeLinuxObservation {
