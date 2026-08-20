@@ -526,8 +526,16 @@ do not count as real WHPX evidence until the following two gates pass:
 1. rerun the complete WHPX SDK, soak, owner-death, and service-recovery
    matrices against the exact v1 manifest on a fresh WHPX-enabled Windows
    host, retaining the v4 boot evidence in every session;
-2. prove that every in-process native WHPX/libkrun handle is reclaimed without
-   relying on Windows process teardown.
+2. retain the v6 shim report from every matrix session and require its nonzero
+   `windows_handles_before_vm` and `windows_handles_after_vm` values to match,
+   with `windows_handle_inventory_restored=true`.
+
+The implementation now captures those two inventories in the libkrun shim,
+after immutable assets are pinned and again immediately after
+`krun_start_enter` returns. Host validation and the hardware soak script reject
+missing, zero, mismatched, or false evidence. This closes the code path but not
+the release gate: the complete fresh-host rerun must still retain the evidence
+before WHPX can become `experimental`.
 
 Broader namespace, mount, capability, resource, seccomp, hook, and shared-guest
 coverage remains part of the shared executor, OCI conformance, and later

@@ -11,7 +11,7 @@ use super::{
 fn valid_output(platform: &str) -> BoundedOutput {
     BoundedOutput {
         bytes: serde_json::to_vec(&json!({
-            "schema_version": "a3s.oci.krun-agent-vm-smoke.v5",
+            "schema_version": "a3s.oci.krun-agent-vm-smoke.v6",
             "platform": platform,
             "status": "available",
             "runtime_bundle_loaded": true,
@@ -78,6 +78,9 @@ fn valid_output(platform: &str) -> BoundedOutput {
             "vm_entered": true,
             "guest_exit_code": 0,
             "console_created": true,
+            "windows_handles_before_vm": 37,
+            "windows_handles_after_vm": 37,
+            "windows_handle_inventory_restored": true,
             "vcpus": 1,
             "memory_mib": 512
         }))
@@ -209,6 +212,36 @@ fn rejects_a_windows_shim_report_with_a_different_system_image_manifest() {
     )
     .expect_err("host and Windows shim manifest digests must agree");
     assert!(error.contains("manifest digest does not match"));
+}
+
+#[test]
+fn rejects_windows_shim_evidence_without_exact_in_process_handle_reclamation() {
+    for (field, value) in [
+        ("windows_handles_before_vm", json!(0)),
+        ("windows_handles_after_vm", json!(38)),
+        ("windows_handle_inventory_restored", json!(false)),
+    ] {
+        let mut output = valid_output("windows");
+        let mut report: Value =
+            serde_json::from_slice(&output.bytes).expect("decode test evidence");
+        report[field] = value;
+        output.bytes = serde_json::to_vec(&report).expect("serialize test evidence");
+
+        let error = parse_shim_report(&output, HostPlatform::Windows, true, Some(&"7".repeat(64)))
+            .expect_err("Windows shim handle drift must fail closed");
+        assert!(error.contains("handle"), "unexpected error: {error}");
+    }
+
+    let mut missing = valid_output("windows");
+    let mut report: Value = serde_json::from_slice(&missing.bytes).expect("decode test evidence");
+    report
+        .as_object_mut()
+        .expect("test report object")
+        .remove("windows_handles_after_vm");
+    missing.bytes = serde_json::to_vec(&report).expect("serialize test evidence");
+    assert!(
+        parse_shim_report(&missing, HostPlatform::Windows, true, Some(&"7".repeat(64)),).is_err()
+    );
 }
 
 #[test]

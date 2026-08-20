@@ -6,6 +6,13 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Fail-closed in-process Windows handle reclamation evidence for real WHPX
+  entry. Shim schema v6 records the nonzero current-process handle inventory
+  immediately before libkrun context creation and after `krun_start_enter`
+  returns; its own success contract, Host report validation, and the WHPX
+  hardware soak all require exact equality before process teardown. The
+  release gate remains open until a fresh WHPX host retains this evidence
+  across the complete SDK, recovery, negative, and soak matrices.
 - Deterministic Linux x86_64 and AArch64 libkrun runtime inputs plus an
   isolated context gate. One shared manifest now pins the archive, native
   library, firmware, and firmware-exported kernel identities for every

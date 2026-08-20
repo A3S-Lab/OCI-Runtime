@@ -11,7 +11,7 @@ pub const KRUN_SYSTEM_IMAGE_CONTEXT_SMOKE_SCHEMA_VERSION: &str =
 /// Schema emitted by the real utility-VM entry smoke.
 pub const KRUN_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-vm-smoke.v2";
 /// Schema emitted while booting the negotiation-only guest agent.
-pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v5";
+pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v6";
 
 /// Exact immutable macOS boot assets observed by the isolated VM worker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -439,6 +439,18 @@ pub struct KrunAgentVmSmokeReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guest_exit_code: Option<i32>,
     pub console_created: bool,
+    /// In-process Windows handle count after immutable assets were pinned and
+    /// immediately before the libkrun context was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_handles_before_vm: Option<u32>,
+    /// In-process Windows handle count after `krun_start_enter` returned,
+    /// before the shim process was allowed to exit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_handles_after_vm: Option<u32>,
+    /// Whether the post-entry Windows handle inventory exactly matched the
+    /// pre-context inventory without relying on process teardown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_handle_inventory_restored: Option<bool>,
     pub vcpus: u8,
     pub memory_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -468,6 +480,9 @@ impl KrunAgentVmSmokeReport {
             vm_entered: false,
             guest_exit_code: None,
             console_created: false,
+            windows_handles_before_vm: None,
+            windows_handles_after_vm: None,
+            windows_handle_inventory_restored: None,
             vcpus: config.vcpus(),
             memory_mib: config.memory_mib(),
             reason: None,
@@ -517,6 +532,11 @@ impl KrunAgentVmSmokeReport {
                             .windows_boot_assets
                             .as_ref()
                             .is_some_and(WindowsBootAssetsEvidence::is_success)
+                        && self
+                            .windows_handles_before_vm
+                            .is_some_and(|count| count > 0)
+                        && self.windows_handles_after_vm == self.windows_handles_before_vm
+                        && self.windows_handle_inventory_restored == Some(true)
                 }
                 HostPlatform::Macos => {
                     self.runtime_share_configured

@@ -192,7 +192,9 @@ the process-takeover libkrun call. Immediately before entry, that worker:
 Successful negotiation requires protocol version 10, the target architecture,
 and all 21 Agent operations. The outer
 `a3s.oci.agent-vm-smoke.v10` report binds that session to nested
-`a3s.oci.krun-agent-vm-smoke.v5` boot-asset and KVM evidence.
+`a3s.oci.krun-agent-vm-smoke.v6` boot-asset and KVM evidence. The v6 addition
+is Windows-specific handle-reclamation evidence; Linux retains the same strict
+KVM and immutable-asset fields under the shared schema.
 
 The same script is a strict unavailable-host gate. When the feature probe says
 KVM is unavailable, it requires the worker to finish all non-KVM configuration

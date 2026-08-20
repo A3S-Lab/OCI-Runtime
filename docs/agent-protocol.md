@@ -413,9 +413,13 @@ from one writable host share. The runtime accepts only the plain directory at
 only that exact directory to `krun_add_virtiofs` with tag
 `a3s-oci-runtime`. The Linux agent must mount it at
 `/run/a3s-oci-runtime` before it can read the one-time token or connect to the
-host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v5` records the separate
-device plus the exact immutable boot assets. Candidate-driver sessions require
-the runtime-share evidence and the digest of the selected system-image
+host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v6` records the separate
+device plus the exact immutable boot assets. On Windows it also records the
+current-process handle count immediately before libkrun context creation and
+after `krun_start_enter` returns. The Host accepts cleanup only when both
+nonzero counts match and the shim marks the inventory restored, so process
+teardown cannot hide a leaked WHPX or libkrun handle. Candidate-driver sessions
+require the runtime-share evidence and the digest of the selected system-image
 manifest. Bundle paths, token files, and recovery-report paths are then
 validated below the fixed guest mount rather than below the system root.
 

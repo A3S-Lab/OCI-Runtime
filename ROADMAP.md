@@ -1303,6 +1303,11 @@ real-driver coverage remains open for the other utility-VM backends.
   runtime directories.
 - [ ] Prove in-process native handle reclamation independently of Windows
   process teardown.
+  - [x] Emit nonzero current-process handle counts immediately before libkrun
+    context creation and after `krun_start_enter` returns. Shim schema v6 and
+    Host validation require exact equality before cleanup can succeed.
+  - [ ] Retain that exact evidence across the complete fresh-host WHPX SDK,
+    recovery, negative, and soak matrices.
 
 Exit gate: a fresh Windows host test boots a utility VM, runs the fixed OCI
 bundle, validates negative isolation cases, retains exact terminal evidence

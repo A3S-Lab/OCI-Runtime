@@ -1063,6 +1063,27 @@ function Assert-MultiContainerReport {
         $Result.Report.bridge.status -ne 'available') {
         throw "$Label did not retain complete Windows multi-container evidence"
     }
+    Assert-WindowsShimHandleReclamation -Label $Label `
+        -Bridge $Result.Report.bridge
+}
+
+function Assert-WindowsShimHandleReclamation {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Label,
+        [Parameter(Mandatory)]
+        [object]$Bridge
+    )
+
+    $shim = $Bridge.shim_report
+    if ($null -eq $shim -or
+        $shim.schema_version -ne 'a3s.oci.krun-agent-vm-smoke.v6' -or
+        [uint64]$shim.windows_handles_before_vm -eq 0 -or
+        [uint64]$shim.windows_handles_after_vm -ne
+            [uint64]$shim.windows_handles_before_vm -or
+        $shim.windows_handle_inventory_restored -ne $true) {
+        throw "$Label did not prove in-process WHPX/libkrun handle reclamation"
+    }
 }
 
 function Assert-LifecycleFaultReport {
@@ -1089,6 +1110,8 @@ function Assert-LifecycleFaultReport {
         $Result.Report.bridge.status -ne 'available') {
         throw "$Label did not retain exact lifecycle fault-cleanup evidence"
     }
+    Assert-WindowsShimHandleReclamation -Label $Label `
+        -Bridge $Result.Report.bridge
 }
 
 function Assert-PositiveReport {
@@ -1152,6 +1175,8 @@ function Assert-PositiveReport {
         $Result.Report.bridge.selected_protocol -ne 10) {
         throw "$Label did not retain a successful authenticated bridge"
     }
+    Assert-WindowsShimHandleReclamation -Label $Label `
+        -Bridge $Result.Report.bridge
     $operations = @($Result.Report.bridge.advertised_operations) -join ','
     $expectedOperations = (
         'create,state,start,kill,delete,wait,exec,signal-process,' +
@@ -1891,6 +1916,8 @@ try {
             $run.Report.guest_runtime_clean -ne $true) {
             throw "$label did not cleanly stop the authenticated guest"
         }
+        Assert-WindowsShimHandleReclamation -Label $label `
+            -Bridge $run.Report.bridge
         $audit = Get-FixtureAudit -Fixture $fixture
         Assert-RuntimeAudit -Label $label -Audit $audit
         if ($audit.MarkerExists) {
@@ -2008,6 +2035,8 @@ try {
                     $run.Report.guest_runtime_clean -ne $true) {
                     throw "$label did not shut down the authenticated guest cleanly"
                 }
+                Assert-WindowsShimHandleReclamation -Label $label `
+                    -Bridge $run.Report.bridge
             }
             elseif ($run.Report.bridge.endpoint_bound -ne $false -or
                 $run.Report.bridge.shim_spawned -ne $false) {
