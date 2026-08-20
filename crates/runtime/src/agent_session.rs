@@ -40,7 +40,7 @@ use crate::report::AgentVmSmokeReport;
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DIAGNOSTIC_CHARS: usize = 2_048;
-const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v5";
+const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v6";
 const SHIM_TRUE_FIELDS: &[&str] = &[
     "runtime_bundle_loaded",
     "context_created",
@@ -1472,6 +1472,33 @@ fn parse_shim_report(
                 != Some("0x0000000001000123")
         {
             return Err("libkrun shim Windows boot-asset provenance is unexpected".into());
+        }
+        let handles_before = object
+            .get("windows_handles_before_vm")
+            .and_then(Value::as_u64)
+            .and_then(|count| u32::try_from(count).ok())
+            .filter(|count| *count > 0)
+            .ok_or_else(|| {
+                "libkrun shim Windows pre-entry handle inventory is missing or invalid".to_string()
+            })?;
+        let handles_after = object
+            .get("windows_handles_after_vm")
+            .and_then(Value::as_u64)
+            .and_then(|count| u32::try_from(count).ok())
+            .filter(|count| *count > 0)
+            .ok_or_else(|| {
+                "libkrun shim Windows post-entry handle inventory is missing or invalid".to_string()
+            })?;
+        if object
+            .get("windows_handle_inventory_restored")
+            .and_then(Value::as_bool)
+            != Some(true)
+            || handles_after != handles_before
+        {
+            return Err(format!(
+                "libkrun shim did not reclaim the in-process Windows handle inventory: \
+                 {handles_before} to {handles_after}"
+            ));
         }
     }
     if matches!(platform, HostPlatform::Macos) {

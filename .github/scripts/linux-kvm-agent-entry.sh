@@ -111,7 +111,7 @@ if [[ "$kvm_status" == "available" ]]; then
            "acknowledge-operations"]
      and .shim_report_verified and .shim_exit_code == 0
      and .console_created
-     and .shim_report.schema_version == "a3s.oci.krun-agent-vm-smoke.v5"
+     and .shim_report.schema_version == "a3s.oci.krun-agent-vm-smoke.v6"
      and .shim_report.platform == "linux"
      and .shim_report.status == "available"
      and .shim_report.runtime_bundle_loaded
@@ -145,7 +145,7 @@ elif [[ "$kvm_status" == "unavailable" ]]; then
      and (.protocol_negotiated | not)
      and (.shim_report_verified | not)
      and .shim_exit_code == 2
-     and .shim_report.schema_version == "a3s.oci.krun-agent-vm-smoke.v5"
+     and .shim_report.schema_version == "a3s.oci.krun-agent-vm-smoke.v6"
      and .shim_report.platform == "linux"
      and .shim_report.status == "unavailable"
      and .shim_report.runtime_bundle_loaded

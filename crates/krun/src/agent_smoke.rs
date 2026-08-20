@@ -277,6 +277,15 @@ fn agent_vm_smoke_windows(
         return report;
     }
 
+    let handles_before = match current_process_handle_count() {
+        Ok(count) => count,
+        Err(reason) => {
+            report.reason = Some(reason);
+            return report;
+        }
+    };
+    report.windows_handles_before_vm = Some(handles_before);
+
     let mut context = match KrunContext::create() {
         Ok(context) => {
             report.context_created = true;
@@ -358,7 +367,25 @@ fn agent_vm_smoke_windows(
     report.windows_boot_assets = Some(system_image.evidence());
 
     std::env::set_var("LIBKRUN_WINDOWS_RETURN_ON_EXIT", "1");
-    match context.start_enter() {
+    let enter_result = context.start_enter();
+    let handles_after = match current_process_handle_count() {
+        Ok(count) => count,
+        Err(reason) => {
+            report.reason = Some(reason);
+            return report;
+        }
+    };
+    report.windows_handles_after_vm = Some(handles_after);
+    report.windows_handle_inventory_restored = Some(handles_after == handles_before);
+    if handles_after != handles_before {
+        report.reason = Some(format!(
+            "Windows handle inventory changed across VM entry before shim teardown: \
+             {handles_before} to {handles_after}"
+        ));
+        return report;
+    }
+
+    match enter_result {
         Ok(exit_code) => {
             report.vm_entered = true;
             report.guest_exit_code = Some(exit_code);
@@ -381,4 +408,24 @@ fn agent_vm_smoke_windows(
         report.reason = Some("guest agent did not satisfy the shim smoke contract".into());
     }
     report
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn current_process_handle_count() -> Result<u32, String> {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
+
+    let mut count = 0;
+    // SAFETY: `GetCurrentProcess` returns a process pseudo-handle valid in this
+    // process and `count` is a writable `u32` for the duration of the call.
+    let succeeded = unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut count) };
+    if succeeded == 0 {
+        return Err(format!(
+            "failed to capture the in-process Windows handle inventory: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if count == 0 {
+        return Err("Windows reported an empty in-process handle inventory".to_string());
+    }
+    Ok(count)
 }
