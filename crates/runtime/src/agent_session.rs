@@ -94,6 +94,10 @@ struct AgentVmConnectOptions<'a> {
     qualify_kvm_compatibility_drift: Option<&'a str>,
 }
 
+// Connection failures intentionally return the complete retained qualification
+// report. Keeping that structured evidence by value is part of this internal
+// API; boxing it would make every report consumer heap-aware.
+#[allow(clippy::result_large_err)]
 impl UtilityVmSession {
     pub(crate) async fn connect(
         shim: &Path,
@@ -396,6 +400,8 @@ impl UtilityVmSession {
     }
 }
 
+// Every connector below uses AgentVmSmokeReport as structured failure evidence.
+#[allow(clippy::result_large_err)]
 impl AgentVmSession {
     pub(crate) async fn connect(
         shim: &Path,
