@@ -275,7 +275,7 @@ mod tests {
         MacosHvfHostService::prepare_layout(&config)
             .await
             .expect("private host layout");
-        let fixture = crate::hvf_driver::tests::shutdown_fixture(
+        let fixture = crate::utility_vm_driver::tests::shutdown_fixture(
             config.driver_runtime_root(),
             config.system_image_manifest.clone(),
         )

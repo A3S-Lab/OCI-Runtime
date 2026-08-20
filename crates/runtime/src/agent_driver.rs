@@ -3,6 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 
 #[cfg(any(
+    target_os = "linux",
     all(target_os = "windows", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
@@ -30,6 +31,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 #[cfg(any(
+    target_os = "linux",
     all(target_os = "windows", target_arch = "x86_64"),
     all(target_os = "macos", target_arch = "aarch64")
 ))]
@@ -162,6 +164,7 @@ impl AgentDriverClient {
     }
 
     #[cfg(any(
+        target_os = "linux",
         all(target_os = "windows", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64")
     ))]

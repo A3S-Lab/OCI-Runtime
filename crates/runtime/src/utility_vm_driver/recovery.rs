@@ -16,17 +16,17 @@ const RECOVERY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(16);
 
 #[derive(Debug, Clone)]
-pub(super) struct RecoveryStore {
+pub(crate) struct RecoveryStore {
     directory: PathBuf,
 }
 
 impl RecoveryStore {
-    pub(super) fn new(directory: PathBuf) -> Self {
+    pub(crate) fn new(directory: PathBuf) -> Self {
         Self { directory }
     }
 
-    pub(super) fn path(&self, target: &ContainerTarget) -> Result<PathBuf> {
-        let generation = require_exact_generation(target, "hvf-recovery-report-path")?;
+    pub(crate) fn path(&self, target: &ContainerTarget) -> Result<PathBuf> {
+        let generation = require_exact_generation(target, "utility-vm-recovery-report-path")?;
         Ok(self
             .directory
             .join(format!("{}-{}.json", target.id, generation.0)))
@@ -62,14 +62,14 @@ impl RecoveryStore {
         };
         if !is_private_file(&metadata) || metadata.len() > AGENT_RECOVERY_REPORT_MAX_BYTES as u64 {
             return Err(recovery_error(format!(
-                "HVF recovery report must be a same-UID mode-0600 file of at most {} bytes: {}",
+                "utility-VM recovery report must be a same-UID mode-0600 file of at most {} bytes: {}",
                 AGENT_RECOVERY_REPORT_MAX_BYTES,
                 path.display()
             )));
         }
         let file = tokio::fs::File::open(&path).await.map_err(|error| {
             recovery_error(format!(
-                "failed to open HVF recovery report {}: {error}",
+                "failed to open utility-VM recovery report {}: {error}",
                 path.display()
             ))
         })?;
@@ -79,20 +79,20 @@ impl RecoveryStore {
             .await
             .map_err(|error| {
                 recovery_error(format!(
-                    "failed to read HVF recovery report {}: {error}",
+                    "failed to read utility-VM recovery report {}: {error}",
                     path.display()
                 ))
             })?;
         if encoded.len() > AGENT_RECOVERY_REPORT_MAX_BYTES {
             return Err(recovery_error(format!(
-                "HVF recovery report grew beyond {} bytes: {}",
+                "utility-VM recovery report grew beyond {} bytes: {}",
                 AGENT_RECOVERY_REPORT_MAX_BYTES,
                 path.display()
             )));
         }
         let report = AgentRecoveryReport::from_json(&encoded).map_err(|error| {
             recovery_error(format!(
-                "HVF recovery report {} is invalid: {error}",
+                "utility-VM recovery report {} is invalid: {error}",
                 path.display()
             ))
         })?;
@@ -105,7 +105,7 @@ impl RecoveryStore {
             .find(|retained| &retained.target == target)
             .ok_or_else(|| {
                 recovery_error(format!(
-                    "HVF recovery report {} does not contain container {} generation {:?}",
+                    "utility-VM recovery report {} does not contain container {} generation {:?}",
                     path.display(),
                     target.id,
                     target.generation
@@ -113,7 +113,7 @@ impl RecoveryStore {
             })?;
         if retained.config_digest != expected_config_digest {
             return Err(recovery_error(format!(
-                "HVF recovery report config digest mismatch for container {} generation {:?}: durable {}, report {}",
+                "utility-VM recovery report config digest mismatch for container {} generation {:?}: durable {}, report {}",
                 target.id,
                 target.generation,
                 expected_config_digest,
@@ -125,8 +125,8 @@ impl RecoveryStore {
 
     pub(super) async fn remove(&self, target: &ContainerTarget) -> Result<()> {
         let path = self.path(target)?;
-        remove_private_file(&path, "HVF recovery report").await?;
-        remove_private_file(&pending_path(&path), "HVF recovery pending marker").await
+        remove_private_file(&path, "utility-VM recovery report").await?;
+        remove_private_file(&pending_path(&path), "utility-VM recovery pending marker").await
     }
 
     async fn wait_until_settled(&self, path: &Path) -> Result<Option<std::fs::Metadata>> {
@@ -148,7 +148,7 @@ impl RecoveryStore {
                 Some(metadata) => {
                     if !is_private_file(&metadata) || metadata.len() != 0 {
                         return Err(recovery_error(format!(
-                            "HVF recovery pending marker must be a same-UID empty mode-0600 file: {}",
+                            "utility-VM recovery pending marker must be a same-UID empty mode-0600 file: {}",
                             pending.display()
                         )));
                     }
@@ -163,11 +163,11 @@ impl RecoveryStore {
                 return Err(Error::new(
                     ErrorCode::Unavailable,
                     format!(
-                        "timed out waiting for HVF recovery handoff marker {}",
+                        "timed out waiting for utility-VM recovery handoff marker {}",
                         pending.display()
                     ),
                 )
-                .for_operation("hvf-recover")
+                .for_operation("utility-vm-recover")
                 .retryable(true));
             }
             sleep(RECOVERY_POLL_INTERVAL).await;
@@ -203,7 +203,7 @@ pub(super) fn pending_path(report: &Path) -> PathBuf {
 }
 
 fn recovery_error(message: impl Into<String>) -> Error {
-    Error::new(ErrorCode::FailedPrecondition, message).for_operation("hvf-recover")
+    Error::new(ErrorCode::FailedPrecondition, message).for_operation("utility-vm-recover")
 }
 
 #[cfg(test)]
