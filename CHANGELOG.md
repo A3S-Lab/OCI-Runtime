@@ -6,6 +6,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Qualification-only Linux KVM post-probe failure coverage. On a KVM-capable
+  host, the entry gate now runs a second isolated session that opens and pins
+  the real `/dev/kvm`, requires API version 12, and fails deliberately before
+  the native libkrun VM-entry call. Shim schema v7 distinguishes this path with
+  `kvm_post_probe_failure_injected`, while the outer gate requires exit code 2,
+  no bridge or protocol negotiation, and exact endpoint, shim-process,
+  token-handoff, and runtime-share inventory restoration. Normal production
+  sessions cannot enable the injection.
 - Fail-closed in-process Windows handle reclamation evidence for real WHPX
   entry. Shim schema v6 records the nonzero current-process handle inventory
   immediately before libkrun context creation and after `krun_start_enter`

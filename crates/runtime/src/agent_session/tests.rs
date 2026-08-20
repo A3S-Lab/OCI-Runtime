@@ -11,7 +11,7 @@ use super::{
 fn valid_output(platform: &str) -> BoundedOutput {
     BoundedOutput {
         bytes: serde_json::to_vec(&json!({
-            "schema_version": "a3s.oci.krun-agent-vm-smoke.v6",
+            "schema_version": "a3s.oci.krun-agent-vm-smoke.v7",
             "platform": platform,
             "status": "available",
             "runtime_bundle_loaded": true,
@@ -21,6 +21,7 @@ fn valid_output(platform: &str) -> BoundedOutput {
             "runtime_share_configured": true,
             "kvm_device_opened": true,
             "kvm_api_verified": true,
+            "kvm_post_probe_failure_injected": false,
             "linux_boot_assets": {
                 "target_arch": std::env::consts::ARCH,
                 "manifest_sha256": "0".repeat(64),
@@ -142,6 +143,18 @@ fn rejects_incomplete_or_truncated_shim_evidence() {
         Some(&"7".repeat(64)),
     )
     .is_err());
+}
+
+#[test]
+fn rejects_injected_kvm_failure_as_normal_success_evidence() {
+    let mut output = valid_output("linux");
+    let mut value: Value = serde_json::from_slice(&output.bytes).expect("decode test evidence");
+    value["kvm_post_probe_failure_injected"] = json!(true);
+    output.bytes = serde_json::to_vec(&value).expect("serialize test evidence");
+
+    let error = parse_shim_report(&output, HostPlatform::Linux, true, Some(&"0".repeat(64)))
+        .expect_err("qualification injection must not satisfy normal VM success");
+    assert!(error.contains("post-probe failure"));
 }
 
 #[test]

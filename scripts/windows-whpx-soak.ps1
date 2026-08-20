@@ -1077,7 +1077,7 @@ function Assert-WindowsShimHandleReclamation {
 
     $shim = $Bridge.shim_report
     if ($null -eq $shim -or
-        $shim.schema_version -ne 'a3s.oci.krun-agent-vm-smoke.v6' -or
+        $shim.schema_version -ne 'a3s.oci.krun-agent-vm-smoke.v7' -or
         [uint64]$shim.windows_handles_before_vm -eq 0 -or
         [uint64]$shim.windows_handles_after_vm -ne
             [uint64]$shim.windows_handles_before_vm -or

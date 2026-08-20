@@ -1486,13 +1486,20 @@ release-promotion gates above.
 - [x] Retain fail-closed context evidence for invalid, missing, symbolic-link,
   or drifted Linux libkrun, firmware, and exported-kernel assets.
 - [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM
-  device and compatibility drift across the system root and guest agent. The
-  independent probe already covers absent, inaccessible, ioctl-failing, and
-  wrong-version KVM devices. The entry worker now repeats real-character-device,
-  read/write, identity, and API-version checks immediately before libkrun so an
-  absent or unusable device returns versioned evidence instead of relying on a
-  native-process abort; injected post-probe initialization failure and the
-  complete compatibility-drift matrix remain open.
+  device and compatibility drift across the system root and guest agent.
+  - [x] Cover absent, inaccessible, ioctl-failing, and wrong-version KVM
+    devices in the independent probe, and repeat real-character-device,
+    read/write, identity, and API-version checks immediately before libkrun so
+    an unusable entry device returns versioned evidence instead of relying on a
+    native-process abort.
+  - [x] Add a qualification-only post-probe failure on KVM-capable hosts. The
+    worker opens and pins the real `/dev/kvm`, requires API version 12, records
+    `kvm_post_probe_failure_injected=true` in shim schema v7, and exits before
+    native VM entry. The real-host gate requires exit code 2, no bridge or
+    protocol negotiation, and exact endpoint, shim-process, token-handoff, and
+    runtime-share inventory restoration.
+  - [ ] Run the complete system-root and guest-agent compatibility-drift matrix
+    at the real-entry boundary on x86_64 and AArch64.
 
 Exit gate: a fresh KVM-capable Linux host boots the pinned utility VM, passes
 the complete SDK and recovery matrices through the authenticated guest agent,

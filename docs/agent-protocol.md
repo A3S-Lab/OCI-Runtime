@@ -413,7 +413,7 @@ from one writable host share. The runtime accepts only the plain directory at
 only that exact directory to `krun_add_virtiofs` with tag
 `a3s-oci-runtime`. The Linux agent must mount it at
 `/run/a3s-oci-runtime` before it can read the one-time token or connect to the
-host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v6` records the separate
+host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v7` records the separate
 device plus the exact immutable boot assets. On Windows it also records the
 current-process handle count immediately before libkrun context creation and
 after `krun_start_enter` returns. The Host accepts cleanup only when both
@@ -439,6 +439,15 @@ The shim itself must be the host runtime's direct child and the leader of its
 private process group. A pidfd pins the runtime-owner incarnation; owner death
 cleans the token handoff and terminates the exact shim/worker group after the
 bounded recovery grace.
+
+The Linux real-host gate also has a hidden qualification-only failure path. It
+uses the normal Host endpoint and one-time token setup, creates the isolated
+worker, opens and pins the real `/dev/kvm`, and requires API version 12. Shim
+schema `a3s.oci.krun-agent-vm-smoke.v7` then records
+`kvm_post_probe_failure_injected=true` and exits before the native VM-entry
+call. The Host must observe no bridge or protocol negotiation and must restore
+the exact endpoint, shim-process, token-handoff, and runtime-share inventories.
+Production session constructors always leave this injection disabled.
 
 The last retained real WHPX `agent-vm-smoke` booted the static musl Linux
 agent, carried its CID-host port 4093 connection through libkrun to that

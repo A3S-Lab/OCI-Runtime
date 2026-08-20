@@ -192,18 +192,25 @@ the process-takeover libkrun call. Immediately before entry, that worker:
 Successful negotiation requires protocol version 10, the target architecture,
 and all 21 Agent operations. The outer
 `a3s.oci.agent-vm-smoke.v10` report binds that session to nested
-`a3s.oci.krun-agent-vm-smoke.v6` boot-asset and KVM evidence. The v6 addition
-is Windows-specific handle-reclamation evidence; Linux retains the same strict
-KVM and immutable-asset fields under the shared schema.
+`a3s.oci.krun-agent-vm-smoke.v7` boot-asset and KVM evidence. The v7 addition
+records whether the qualification-only Linux post-probe failure was injected.
+Normal entry requires that field to be false. The Windows handle-reclamation
+evidence introduced in v6 remains mandatory under the shared v7 schema.
 
 The same script is a strict unavailable-host gate. When the feature probe says
 KVM is unavailable, it requires the worker to finish all non-KVM configuration
 and then fail with explicit KVM evidence. It also compares endpoint and process
 inventories and rejects leftover token or recovery handoffs. When the probe
-says KVM is available, only a real authenticated Guest boot and zero exit are
-accepted. CI runs this contract for x86_64 and AArch64; the driver remains
+says KVM is available, it first requires a real authenticated Guest boot and
+zero exit, then runs a hidden qualification-only session. The second worker
+must open and pin the real KVM device, verify API version 12, set
+`kvm_post_probe_failure_injected=true`, and exit with status 2 before VM entry.
+The Host must never accept a bridge or negotiate the token, and endpoint,
+process, token-handoff, and runtime-share inventories must return exactly to
+baseline. CI runs this contract for x86_64 and AArch64; the driver remains
 `probe-only` until successful retained real-entry evidence and the later
-lifecycle, recovery, and soak gates pass on every advertised architecture.
+compatibility-drift, lifecycle, recovery, and soak gates pass on every
+advertised architecture.
 
 ## Experimental lifecycle gate
 

@@ -25,7 +25,9 @@ use crate::{KrunAgentVmSmokeReport, LinuxBootAssetsEvidence, VmConfig};
 
 const AGENT_GUEST_PATH: &str = "/usr/bin/a3s-oci-agent";
 const WORKER_COMMAND: &str = "__linux-agent-vm-worker";
-const WORKER_SCHEMA_VERSION: &str = "a3s.oci.linux-kvm-agent-vm-worker.v1";
+const WORKER_SCHEMA_VERSION: &str = "a3s.oci.linux-kvm-agent-vm-worker.v2";
+const POST_PROBE_FAILURE_REASON: &str =
+    "injected Linux KVM failure after device verification and before native VM entry";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_WORKER_OUTPUT_BYTES: u64 = 64 * 1024;
 
@@ -39,6 +41,7 @@ struct WorkerEvidence {
     runtime_share_configured: bool,
     kvm_device_opened: bool,
     kvm_api_verified: bool,
+    kvm_post_probe_failure_injected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     linux_boot_assets: Option<LinuxBootAssetsEvidence>,
     agent_binary_present: bool,
@@ -61,6 +64,7 @@ impl WorkerEvidence {
             runtime_share_configured: false,
             kvm_device_opened: false,
             kvm_api_verified: false,
+            kvm_post_probe_failure_injected: false,
             linux_boot_assets: None,
             agent_binary_present: false,
             agent_vsock_configured: false,
@@ -81,6 +85,7 @@ pub(crate) struct LinuxAgentVmConfig<'a> {
     pub(crate) socket: &'a Path,
     pub(crate) guest_recovery_report: Option<&'a str>,
     pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
+    pub(crate) qualify_kvm_post_probe_failure: bool,
     pub(crate) vm: VmConfig,
 }
 
@@ -94,6 +99,7 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         socket,
         guest_recovery_report,
         transport_qualification,
+        qualify_kvm_post_probe_failure,
         vm: config,
     } = configuration;
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
@@ -174,6 +180,9 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
     if let Some(encoded) = &encoded_qualification {
         command.env(AGENT_TRANSPORT_QUALIFICATION_ENV, encoded);
     }
+    if qualify_kvm_post_probe_failure {
+        command.arg("--qualify-kvm-post-probe-failure");
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -213,6 +222,7 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
             report.runtime_share_configured = evidence.runtime_share_configured;
             report.kvm_device_opened = evidence.kvm_device_opened;
             report.kvm_api_verified = evidence.kvm_api_verified;
+            report.kvm_post_probe_failure_injected = evidence.kvm_post_probe_failure_injected;
             report.linux_boot_assets = evidence.linux_boot_assets.clone();
             report.agent_binary_present = evidence.agent_binary_present;
             report.agent_vsock_configured = evidence.agent_vsock_configured;
@@ -271,6 +281,7 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         && report.runtime_share_configured
         && report.kvm_device_opened
         && report.kvm_api_verified
+        && !report.kvm_post_probe_failure_injected
         && report
             .linux_boot_assets
             .as_ref()
@@ -291,15 +302,28 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
     report
 }
 
-pub(crate) fn run_worker(
-    system_image_manifest: &Path,
-    runtime_share: &Path,
-    guest_token_file: &str,
-    console: &Path,
-    socket: &Path,
-    guest_recovery_report: Option<&str>,
-    transport_qualification: Option<&AgentTransportQualificationRequest>,
-) -> bool {
+pub(crate) struct LinuxAgentVmWorkerConfig<'a> {
+    pub(crate) system_image_manifest: &'a Path,
+    pub(crate) runtime_share: &'a Path,
+    pub(crate) guest_token_file: &'a str,
+    pub(crate) console: &'a Path,
+    pub(crate) socket: &'a Path,
+    pub(crate) guest_recovery_report: Option<&'a str>,
+    pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
+    pub(crate) qualify_kvm_post_probe_failure: bool,
+}
+
+pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
+    let LinuxAgentVmWorkerConfig {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+        qualify_kvm_post_probe_failure,
+    } = configuration;
     let mut evidence = WorkerEvidence::initial();
     let runtime_share = match LinuxRuntimeShare::open(runtime_share) {
         Ok(runtime_share) => runtime_share,
@@ -404,6 +428,9 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.kvm_api_verified = true;
+    if let Err(reason) = inject_post_probe_failure(&mut evidence, qualify_kvm_post_probe_failure) {
+        return fail_worker(&mut evidence, reason);
+    }
     evidence.enter_attempted = true;
 
     if let Err(error) = emit_worker_evidence(&evidence) {
@@ -418,6 +445,19 @@ pub(crate) fn run_worker(
         ),
         Err(error) => fail_worker(&mut evidence, error.to_string()),
     }
+}
+
+fn inject_post_probe_failure(evidence: &mut WorkerEvidence, requested: bool) -> Result<(), String> {
+    if !requested {
+        return Ok(());
+    }
+    if !evidence.kvm_device_opened || !evidence.kvm_api_verified {
+        return Err(
+            "Linux KVM post-probe failure qualification requires a verified KVM device".to_string(),
+        );
+    }
+    evidence.kvm_post_probe_failure_injected = true;
+    Err(POST_PROBE_FAILURE_REASON.to_string())
 }
 
 fn paths_overlap(left: &Path, right: &Path) -> bool {
@@ -473,7 +513,10 @@ fn fail_worker(evidence: &mut WorkerEvidence, reason: String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_worker_evidence, WorkerEvidence, WORKER_SCHEMA_VERSION};
+    use super::{
+        inject_post_probe_failure, parse_worker_evidence, WorkerEvidence,
+        POST_PROBE_FAILURE_REASON, WORKER_SCHEMA_VERSION,
+    };
 
     #[test]
     fn worker_evidence_uses_the_latest_valid_record() {
@@ -490,5 +533,22 @@ mod tests {
         let parsed = parse_worker_evidence(output.as_bytes()).expect("worker evidence must parse");
         assert_eq!(parsed.schema_version, WORKER_SCHEMA_VERSION);
         assert_eq!(parsed.reason.as_deref(), Some("entry failed"));
+    }
+
+    #[test]
+    fn post_probe_qualification_fails_before_native_vm_entry() {
+        let mut evidence = WorkerEvidence::initial();
+        evidence.kvm_device_opened = true;
+        evidence.kvm_api_verified = true;
+
+        inject_post_probe_failure(&mut evidence, false)
+            .expect("normal VM entry must not inject a qualification failure");
+        assert!(!evidence.kvm_post_probe_failure_injected);
+
+        let error = inject_post_probe_failure(&mut evidence, true)
+            .expect_err("qualification must stop after the verified KVM probe");
+        assert_eq!(error, POST_PROBE_FAILURE_REASON);
+        assert!(evidence.kvm_post_probe_failure_injected);
+        assert!(!evidence.enter_attempted);
     }
 }

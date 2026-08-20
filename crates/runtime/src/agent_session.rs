@@ -40,7 +40,7 @@ use crate::report::AgentVmSmokeReport;
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DIAGNOSTIC_CHARS: usize = 2_048;
-const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v6";
+const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v7";
 const SHIM_TRUE_FIELDS: &[&str] = &[
     "runtime_bundle_loaded",
     "context_created",
@@ -90,6 +90,7 @@ struct AgentVmConnectOptions<'a> {
     recovery_report: Option<&'a Path>,
     faults: Arc<dyn AgentTransportFaultInjector>,
     guest_qualification: Option<&'a AgentTransportQualificationRequest>,
+    qualify_kvm_post_probe_failure: bool,
 }
 
 impl UtilityVmSession {
@@ -273,6 +274,7 @@ impl UtilityVmSession {
                 recovery_report: None,
                 faults,
                 guest_qualification: None,
+                qualify_kvm_post_probe_failure: false,
             },
         )
         .await?;
@@ -308,6 +310,7 @@ impl UtilityVmSession {
                 recovery_report: None,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: Some(qualification),
+                qualify_kvm_post_probe_failure: false,
             },
         )
         .await?;
@@ -411,6 +414,35 @@ impl AgentVmSession {
                 recovery_report,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: None,
+                qualify_kvm_post_probe_failure: false,
+            },
+        )
+        .await
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub(crate) async fn connect_with_kvm_post_probe_failure(
+        shim: &Path,
+        rootfs: &Path,
+        system_image_manifest: Option<&Path>,
+        runtime_share: Option<&Path>,
+        console: &Path,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        Self::connect_inner(
+            shim,
+            rootfs,
+            console,
+            AgentVmConnectOptions {
+                system_image_manifest,
+                expected_system_image_manifest_sha256: None,
+                runtime_share,
+                recovery_report: None,
+                faults: Arc::new(NoAgentTransportFaultInjector),
+                guest_qualification: None,
+                qualify_kvm_post_probe_failure: true,
             },
         )
         .await
@@ -439,6 +471,7 @@ impl AgentVmSession {
                 recovery_report: None,
                 faults,
                 guest_qualification: None,
+                qualify_kvm_post_probe_failure: false,
             },
         )
         .await
@@ -467,6 +500,7 @@ impl AgentVmSession {
                 recovery_report: None,
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: Some(qualification),
+                qualify_kvm_post_probe_failure: false,
             },
         )
         .await
@@ -485,7 +519,13 @@ impl AgentVmSession {
             recovery_report,
             faults,
             guest_qualification,
+            qualify_kvm_post_probe_failure,
         } = options;
+        #[cfg(not(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )))]
+        let _ = qualify_kvm_post_probe_failure;
         let platform = HostPlatform::current();
         let mut report = AgentVmSmokeReport::initial(platform);
         let shim = match canonical_file(shim, "libkrun shim").await {
@@ -785,6 +825,13 @@ impl AgentVmSession {
             if let Some(path) = recovery_report {
                 command.arg("--recovery-report").arg(path);
             }
+        }
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        if qualify_kvm_post_probe_failure {
+            command.arg("--qualify-kvm-post-probe-failure");
         }
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         {
@@ -1340,6 +1387,15 @@ fn parse_shim_report(
         );
     }
     if matches!(platform, HostPlatform::Linux) {
+        if object
+            .get("kvm_post_probe_failure_injected")
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            return Err(
+                "libkrun shim unexpectedly injected the Linux KVM post-probe failure".into(),
+            );
+        }
         for field in ["kvm_device_opened", "kvm_api_verified"] {
             if object.get(field).and_then(Value::as_bool) != Some(true) {
                 return Err(format!(

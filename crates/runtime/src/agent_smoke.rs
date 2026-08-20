@@ -97,3 +97,39 @@ pub async fn agent_vm_smoke(
         AgentVmSmokeReport::unsupported(HostPlatform::current())
     }
 }
+
+/// Exercise Linux KVM setup through a verified device/API probe, then stop
+/// before the native VM-entry call.
+///
+/// This entry point exists only for real-host qualification. Production VM
+/// sessions never enable the injected failure.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+#[must_use]
+pub async fn qualify_kvm_post_probe_failure(
+    shim: &Path,
+    rootfs: &Path,
+    system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
+    console: &Path,
+) -> AgentVmSmokeReport {
+    match crate::agent_session::AgentVmSession::connect_with_kvm_post_probe_failure(
+        shim,
+        rootfs,
+        system_image_manifest,
+        runtime_share,
+        console,
+    )
+    .await
+    {
+        Ok(session) => session
+            .finish_with_failure(
+                "Linux KVM post-probe failure qualification unexpectedly reached the guest agent",
+            )
+            .await,
+        Err(report) => report,
+    }
+}
