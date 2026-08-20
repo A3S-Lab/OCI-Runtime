@@ -14,6 +14,11 @@ mod context;
     all(target_os = "macos", target_arch = "aarch64")
 ))]
 mod ffi;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_context;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_agent_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -27,6 +32,14 @@ mod macos_system_image;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_vm_smoke;
 mod report;
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+mod runtime_assets;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod windows_system_image;
 
@@ -106,9 +119,21 @@ pub fn context_smoke() -> KrunContextSmokeReport {
         context_smoke_macos()
     }
 
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    {
+        context_smoke_linux()
+    }
+
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     {
         KrunContextSmokeReport {
@@ -123,8 +148,8 @@ pub fn context_smoke() -> KrunContextSmokeReport {
             vcpus: 1,
             memory_mib: 128,
             reason: Some(
-                "the current context smoke is implemented only for Windows x86_64/WHPX and \
-                 macOS aarch64/HVF"
+                "the current context smoke is implemented only for Linux x86_64/aarch64 KVM, \
+                 Windows x86_64/WHPX, and macOS aarch64/HVF"
                     .into(),
             ),
         }
@@ -256,7 +281,85 @@ fn context_smoke_macos() -> KrunContextSmokeReport {
     report
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn context_smoke_linux() -> KrunContextSmokeReport {
+    use linux_context::{KrunContext, LinuxKrunApi};
+
+    let config = match VmConfig::new(1, 128) {
+        Ok(config) => config,
+        Err(error) => {
+            let mut report = KrunContextSmokeReport::linux(fallback_context_config());
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    let mut report = KrunContextSmokeReport::linux(config);
+
+    let api = match LinuxKrunApi::load() {
+        Ok(api) => {
+            report.runtime_bundle_loaded = true;
+            api
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+
+    let mut context = match KrunContext::create(api) {
+        Ok(context) => {
+            report.context_created = true;
+            context
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+
+    if let Err(error) = context.set_vm_config(config) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.vm_configured = true;
+
+    let endpoint = match AgentVsockEndpoint::generate() {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            report.context_released = context.close().is_ok();
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    let socket_path = std::env::temp_dir().join(format!("{}.sock", endpoint.pipe_name()));
+    if let Err(error) = context.set_agent_vsock(&socket_path, endpoint.port()) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.agent_vsock_configured = true;
+
+    match context.close() {
+        Ok(()) => {
+            report.context_released = true;
+            report.status = CapabilityStatus::Available;
+        }
+        Err(error) => report.reason = Some(error.to_string()),
+    }
+    report
+}
+
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 const fn fallback_context_config() -> VmConfig {
     VmConfig {
         vcpus: 1,

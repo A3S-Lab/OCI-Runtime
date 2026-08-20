@@ -1,5 +1,69 @@
 # Native Runtime Provenance
 
+## Linux x86_64 And AArch64
+
+The Linux shim carries one minimal native runtime archive for each advertised
+KVM architecture. Each archive contains exactly the versioned libkrun object
+and the firmware object that it loads; no Box executable, symbolic link, or
+mutable root filesystem is included.
+
+| Target | Archive bytes | Archive SHA-256 | Source Box release SHA-256 |
+| --- | ---: | --- | --- |
+| `linux-x86_64` | 7,471,288 | `8df72533d8006ee0a929048e015192f23f57b0582a155a47a616f9272a2bc719` | `d1aa83dc0111f8982a8ac984064fd4e8cf553deb87a94f28ad85b9f1da9af530` |
+| `linux-aarch64` | 11,538,808 | `f930a75945862ce039646b521783b06268c49cd9470f9d64a66fc585350ce7e4` | `2420b5f5c46bc773856f7a07a3525c80f61946a81127033770e7d340b9b277cd` |
+
+The inner file identities are:
+
+| Target | File | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| `linux-x86_64` | `libkrun.so.1.17.0` | 5,824,233 | `5a1fdec0e6fc3021aaa6314703b939c4094694662251f6219e8a7ebb1a91390c` |
+| `linux-x86_64` | `libkrunfw.so.5` | 19,206,985 | `dfe9796599c397ef914f6948e81f47384aca33a404aea32c82ca9134472936d6` |
+| `linux-aarch64` | `libkrun.so.1.17.0` | 4,918,753 | `02236ec44afac5a1d1831fea1dda9a6250a67a5c5c6d47550dfdb72591b0fde3` |
+| `linux-aarch64` | `libkrunfw.so.5` | 23,004,041 | `b440b30751cefb2e9325d39853c64cc397acc9d72cdedc5a07a5e56daf553e46` |
+
+All four files come without modification from the checksum-verified
+[`A3S-Lab/Box v3.1.0`](https://github.com/A3S-Lab/Box/releases/tag/v3.1.0)
+Linux packages at commit
+[`5328dea`](https://github.com/A3S-Lab/Box/commit/5328dea976d07643945fa7d42b9ed5256e9afc58).
+That revision pins its libkrun source gitlink to
+[`A3S-Lab/libkrun@e506839`](https://github.com/A3S-Lab/libkrun/commit/e50683984386611f9a06d7a66d87976d8aa4bbcb),
+and the matching release publishes `a3s-libkrun-source.tar` with SHA-256
+`05f6d3137d424e131aafc9cd0fdef6cde019b4ede15b19cacf6435280748588e`.
+
+The Box build obtains its Linux firmware inputs from
+[`boxlite-ai/libkrunfw v5.3.0`](https://github.com/boxlite-ai/libkrunfw/releases/tag/v5.3.0),
+commit
+[`fad43a1`](https://github.com/boxlite-ai/libkrunfw/commit/fad43a12d689586b4cb46110efc1d2a0f20b5361).
+It pins the x86_64 release asset to SHA-256
+`0a7bb64a35a273b8501801dd69b75736a8c676aa21aa62fb5642842cda9dc91d`
+and the AArch64 asset to
+`8b5b9211da5445d9301dafb2201431f4392ab96455512bce63a5cfbd33c49839`,
+then gives the packaged object its final `libkrunfw.so.5` SONAME. The firmware
+source tag builds Linux 6.12.76 from the kernel.org archive whose published
+SHA-256 is
+`bbb43e834c46e6bd49a5c28f22e679a937443404e1f653204d4b24929f3ad896`.
+Its checked-in x86_64 and AArch64 configurations and complete patch series are
+therefore bound to the same immutable source revision as the binary inputs.
+
+The two minimal archives were each produced twice with GNU tar 1.35 and
+matched byte for byte. Starting from a directory containing the two exact
+regular files, the command is:
+
+```bash
+XZ_OPT=-9 tar --sort=name --format=ustar --mtime=@0 \
+  --owner=0 --group=0 --numeric-owner \
+  -cJf krun-linux-ARCH.tar.xz \
+  libkrun.so.1.17.0 libkrunfw.so.5
+```
+
+The shared runtime-asset manifest is compiled into the build script and its
+unit tests. It verifies every archive size and digest, rejects non-file,
+duplicate, undeclared, or nested entries, and checks every extracted size and
+digest. On Linux, the isolated shim build stages only the selected
+architecture's two files. This establishes the native runtime input; it does
+not register a KVM driver or complete the immutable system-image, guest-agent,
+real-KVM lifecycle, recovery, or soak gates.
+
 ## Windows x86_64
 
 The Windows x86_64 shim carries one deterministic native runtime archive:

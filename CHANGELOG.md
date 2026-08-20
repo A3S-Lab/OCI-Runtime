@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- Deterministic Linux x86_64 and AArch64 libkrun runtime inputs plus an
+  isolated context gate. One shared manifest now pins the archive, native
+  library, firmware, and firmware-exported kernel identities for every
+  Windows, macOS, and Linux bundle. The Linux shim rejects non-regular or
+  symbolic-link assets, size or digest drift, unexpected kernel size,
+  addresses, or digest, and missing ABI symbols before creating a context. It
+  then configures VM resources and a plain agent vsock and releases the
+  context without opening `/dev/kvm` or entering a VM. Linux x86_64 and
+  AArch64 CI retain positive lifecycle plus tampered-asset and symlink-negative
+  coverage. KVM remains `probe-only`; the immutable system root, authenticated
+  guest boot, workload driver, recovery matrices, and soak gates remain open.
 - Complete classification of the OCI 1.3 normative inventory. The final 17
   common, Linux, and Features entries now bind invalid-value rejection,
   explicit supported subsets, typed additional file descriptors, deliberate

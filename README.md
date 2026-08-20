@@ -372,7 +372,7 @@ reattachment remains open for the Box B2 cutover.
 | Host path | Retained real evidence | Current readiness and open gate |
 | --- | --- | --- |
 | Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle, including all six OCI default devices, `/dev/ptmx`, configured-init `/dev/console`, an explicit FIFO outside `/dev`, the immutable declared/default device boundary, and the bounded A3S Box device policy; SDK service transport; exec/PTY/I/O; init/exec scheduler and namespaced-sysctl read-back; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64/aarch64 Box production-owner composition through all four SDKs plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
-| Linux KVM utility VM | Device access, ioctl result, and KVM API version probes | `probe-only`; workload driver not implemented |
+| Linux KVM utility VM | Independent device/access/ioctl/API-version probes; deterministic x86_64 and AArch64 runtime archives; exact libkrun, firmware, and exported-kernel verification; isolated create/configure/plain-vsock/release context gates with asset-tamper and symlink rejection | `probe-only`; context configuration does not enter a VM. The immutable system root, authenticated guest boot, workload driver, recovery matrices, and real-KVM soak remain open |
 | macOS arm64/HVF | Public same-UID SDK host service; one dedicated VM per exact generation; manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate writable runtime share; Guest-local devtmpfs sources for privileged OCI device nodes; a real protocol-v10 bridge with all 21 Guest operations; retained full protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 workload-operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves; source revision `a5a6b53` passed the revision-bound public-path gate across all 20 driver operations plus `features`/`list`/`events`, Host Service `SIGKILL` recovery, and a separate 25/25 fresh-VM soak with zero transient leaks | `experimental` on Apple Silicon. Every currently advertised public macOS/HVF function is implemented and the protocol-v10 public path is qualified at the recorded revision. Signed release-package qualification, OCI conformance, security review, upgrade/rollback compatibility, and longer release soak remain before `supported` |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup. The current implementation also builds a reproducible x86_64 ext4 system image, pins Linux 6.12.91 and all native boot assets, attaches the root read-only, and keeps the runtime share separate | `probe-only`; the complete SDK/recovery matrix must still pass with those exact assets on a fresh WHPX host, and in-process native-handle reclamation remains before `experimental` |
 
@@ -437,6 +437,11 @@ Only the isolated `a3s-oci-krun-shim` loads checksum-pinned native libkrun
 assets. The SDK, CLI discovery path, durable host service, and Native Linux
 driver do not initialize a hypervisor library.
 
+On Linux x86_64 and AArch64, `a3s-oci-krun-shim context-smoke` verifies and
+loads the selected native bundle, checks the firmware-exported kernel, and
+creates, configures, and releases one libkrun context. That command does not
+open `/dev/kvm`, enter a VM, or change the KVM driver's `probe-only` readiness.
+
 | Owner | Keeps | Must not absorb |
 | --- | --- | --- |
 | A3S Box product plane | Desired state, images/builds, named volumes, product networks, Compose, health/restart policy, log retention, and secret authorization | Actual PID/VM identity or runtime operation journals |
@@ -457,7 +462,7 @@ Real execution gates require a prepared host and isolated runtime root.
 
 | Host | Entry point | Guide |
 | --- | --- | --- |
-| Linux x86_64/aarch64 | `bash .github/scripts/native-linux-smoke.sh` | [Native Linux development](docs/linux-native.md) |
+| Linux x86_64/aarch64 | `cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke` and `bash .github/scripts/native-linux-smoke.sh` | [Native Linux development](docs/linux-native.md) |
 | Apple Silicon | `cargo run -p a3s-oci-cli -- hvf-smoke` followed by the signed utility-VM profiles | [macOS HVF development](docs/macos-hvf.md) |
 | Windows x86_64 | `scripts/windows-whpx-driver-smoke.ps1` and `scripts/windows-whpx-recovery-smoke.ps1` with a verified container-rootfs archive and `windows-system-image` manifest | [Windows WHPX development](docs/windows-whpx.md) |
 

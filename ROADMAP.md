@@ -148,6 +148,11 @@ Completed:
   reporting that does not touch `/dev/kvm`;
 - Linux KVM device, access, ioctl, and API-version reporting without libkrun
   initialization;
+- deterministic Linux x86_64 and AArch64 libkrun archives with one shared
+  manifest binding archive, library, firmware, and exported-kernel identities;
+- isolated Linux libkrun create/configure/plain-vsock/release context evidence
+  with runtime symlink and content-drift rejection, without opening `/dev/kvm`
+  or entering a VM;
 - Apple Silicon and Hypervisor.framework capability reporting through a
   direct `kern.hv_support` query;
 - entitlement-aware direct Hypervisor.framework VM-object create/destroy
@@ -1421,8 +1426,17 @@ release-promotion gates above.
 
 - [x] Report `/dev/kvm` presence, access, ioctl, and API-version evidence
   independently from Native Linux readiness.
-- [ ] Pin and verify the Linux libkrun runtime, A3S Linux kernel, immutable
-  system root, and guest agent as one compatibility set for every advertised
+- [x] Pin and verify the Linux libkrun runtime, firmware, and
+  firmware-exported A3S Linux kernel for x86_64 and AArch64. The build accepts
+  only the exact two-file archive for the selected architecture, and the
+  isolated shim repeats real-file, size, digest, kernel-size, address, and
+  kernel-digest checks before native API use.
+- [x] Create, configure VM resources and a plain agent vsock, and release one
+  dynamically loaded libkrun context on Linux x86_64 and AArch64 without
+  opening `/dev/kvm` or entering a VM. Positive CI and tampered-file plus
+  symbolic-link negatives retain the boundary.
+- [ ] Bind the verified native runtime and kernel to the immutable system root
+  and static guest agent as one compatibility set for every advertised
   architecture.
 - [ ] Start the KVM worker in an isolated shim, mount only the protected
   per-generation runtime share, and authenticate the AF_VSOCK guest-agent
@@ -1436,9 +1450,12 @@ release-promotion gates above.
 - [ ] Add a bounded real-host KVM soak for every advertised architecture and
   retain per-wave process, descriptor, marker, cgroup, endpoint, and
   runtime-root leak evidence.
-- [ ] Retain fail-closed evidence for an absent, inaccessible, wrong-version,
-  or initialization-failing KVM device and for invalid or drifted runtime
-  assets.
+- [x] Retain fail-closed context evidence for invalid, missing, symbolic-link,
+  or drifted Linux libkrun, firmware, and exported-kernel assets.
+- [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM
+  device and compatibility drift across the system root and guest agent. The
+  independent probe already covers absent, inaccessible, ioctl-failing, and
+  wrong-version KVM devices.
 
 Exit gate: a fresh KVM-capable Linux host boots the pinned utility VM, passes
 the complete SDK and recovery matrices through the authenticated guest agent,
