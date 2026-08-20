@@ -5,6 +5,9 @@ use crate::VmConfig;
 
 /// Schema emitted by the libkrun context smoke.
 pub const KRUN_CONTEXT_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-context-smoke.v2";
+/// Schema emitted while binding the immutable Linux KVM boot compatibility set.
+pub const KRUN_SYSTEM_IMAGE_CONTEXT_SMOKE_SCHEMA_VERSION: &str =
+    "a3s.oci.krun-system-image-context-smoke.v1";
 /// Schema emitted by the real utility-VM entry smoke.
 pub const KRUN_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-vm-smoke.v2";
 /// Schema emitted while booting the negotiation-only guest agent.
@@ -51,6 +54,54 @@ impl MacosBootAssetsEvidence {
             && self.kernel_entry_address.starts_with("0x")
             && self.root_disk_read_only
             && self.runtime_share_separate
+    }
+}
+
+/// Exact immutable Linux KVM boot assets bound to one libkrun context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinuxBootAssetsEvidence {
+    pub target_arch: String,
+    pub manifest_sha256: String,
+    pub system_image_sha256: String,
+    pub system_image_size: u64,
+    pub guest_agent_sha256: String,
+    pub guest_agent_size: u64,
+    pub runtime_archive_sha256: String,
+    pub libkrun_sha256: String,
+    pub firmware_sha256: String,
+    pub kernel_bundle_sha256: String,
+    pub kernel_bundle_size: u64,
+    pub kernel_guest_load_address: String,
+    pub kernel_entry_address: String,
+    pub root_disk_read_only: bool,
+}
+
+impl LinuxBootAssetsEvidence {
+    /// Return whether every immutable Linux boot-asset identity is present.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        [
+            &self.manifest_sha256,
+            &self.system_image_sha256,
+            &self.guest_agent_sha256,
+            &self.runtime_archive_sha256,
+            &self.libkrun_sha256,
+            &self.firmware_sha256,
+            &self.kernel_bundle_sha256,
+        ]
+        .into_iter()
+        .all(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }) && matches!(self.target_arch.as_str(), "x86_64" | "aarch64")
+            && self.system_image_size > 0
+            && self.guest_agent_size > 0
+            && self.kernel_bundle_size > 0
+            && self.kernel_guest_load_address.starts_with("0x")
+            && self.kernel_entry_address.starts_with("0x")
+            && self.root_disk_read_only
     }
 }
 
@@ -201,6 +252,69 @@ impl KrunContextSmokeReport {
             && self.vm_configured
             && self.agent_vsock_configured
             && self.context_released
+    }
+}
+
+/// Evidence from binding a manifest-verified Linux system image to libkrun.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KrunSystemImageContextSmokeReport {
+    pub schema_version: String,
+    pub platform: HostPlatform,
+    pub status: CapabilityStatus,
+    pub runtime_bundle_loaded: bool,
+    pub system_image_verified: bool,
+    pub context_created: bool,
+    pub vm_configured: bool,
+    pub root_disk_configured: bool,
+    pub agent_vsock_configured: bool,
+    pub context_released: bool,
+    pub vcpus: u8,
+    pub memory_mib: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_assets: Option<LinuxBootAssetsEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl KrunSystemImageContextSmokeReport {
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub(crate) fn linux(config: VmConfig) -> Self {
+        Self {
+            schema_version: KRUN_SYSTEM_IMAGE_CONTEXT_SMOKE_SCHEMA_VERSION.to_string(),
+            platform: HostPlatform::Linux,
+            status: CapabilityStatus::Unavailable,
+            runtime_bundle_loaded: false,
+            system_image_verified: false,
+            context_created: false,
+            vm_configured: false,
+            root_disk_configured: false,
+            agent_vsock_configured: false,
+            context_released: false,
+            vcpus: config.vcpus(),
+            memory_mib: config.memory_mib(),
+            boot_assets: None,
+            reason: None,
+        }
+    }
+
+    /// Return whether the full pre-entry compatibility-set gate succeeded.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        matches!(self.status, CapabilityStatus::Available)
+            && self.runtime_bundle_loaded
+            && self.system_image_verified
+            && self.context_created
+            && self.vm_configured
+            && self.root_disk_configured
+            && self.agent_vsock_configured
+            && self.context_released
+            && self
+                .boot_assets
+                .as_ref()
+                .is_some_and(LinuxBootAssetsEvidence::is_success)
     }
 }
 

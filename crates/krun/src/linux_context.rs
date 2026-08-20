@@ -9,11 +9,17 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_LOCAL, RTLD_NOW};
 use sha2::{Digest, Sha256};
 
-use crate::runtime_assets::{runtime_bundle, RuntimeBundle, RuntimeFile, RuntimeKernel};
+use crate::linux_system_image::LinuxSystemImage;
+use crate::runtime_assets::{
+    runtime_bundle, RuntimeBundle, RuntimeFile, RuntimeFileRole, RuntimeKernel,
+};
 use crate::VmConfig;
 
-const LIBKRUN_NAME: &str = "libkrun.so.1.17.0";
-const LIBKRUNFW_NAME: &str = "libkrunfw.so.5";
+const KRUN_DISK_FORMAT_RAW: u32 = 0;
+const SYSTEM_DISK_ID: &str = "a3s-oci-system";
+const ROOT_DISK_DEVICE: &str = "/dev/vda";
+const ROOT_DISK_FILESYSTEM: &str = "ext4";
+const ROOT_DISK_OPTIONS: &str = "ro";
 
 type KrunCreateCtx = unsafe extern "C" fn() -> i32;
 type KrunFreeCtx = unsafe extern "C" fn(u32) -> i32;
@@ -21,6 +27,9 @@ type KrunSetVmConfig = unsafe extern "C" fn(u32, u8, u32) -> i32;
 type KrunDisableImplicitVsock = unsafe extern "C" fn(u32) -> i32;
 type KrunAddVsock = unsafe extern "C" fn(u32, u32) -> i32;
 type KrunAddVsockPort = unsafe extern "C" fn(u32, u32, *const c_char, bool) -> i32;
+type KrunAddDisk = unsafe extern "C" fn(u32, *const c_char, *const c_char, u32, bool) -> i32;
+type KrunSetRootDiskRemount =
+    unsafe extern "C" fn(u32, *const c_char, *const c_char, *const c_char) -> i32;
 type KrunfwGetKernel = unsafe extern "C" fn(*mut u64, *mut u64, *mut usize) -> *const c_char;
 
 /// Exact process-local Linux API loaded from the selected runtime bundle.
@@ -31,6 +40,8 @@ pub(crate) struct LinuxKrunApi {
     disable_implicit_vsock: KrunDisableImplicitVsock,
     add_vsock: KrunAddVsock,
     add_vsock_port: KrunAddVsockPort,
+    add_disk: KrunAddDisk,
+    set_root_disk_remount: KrunSetRootDiskRemount,
     get_kernel: KrunfwGetKernel,
     runtime_dir: PathBuf,
     bundle: &'static RuntimeBundle,
@@ -42,20 +53,27 @@ pub(crate) struct LinuxKrunApi {
 
 impl LinuxKrunApi {
     pub(crate) fn load() -> Result<Self> {
-        let bundle = runtime_bundle("linux", std::env::consts::ARCH).ok_or_else(|| {
-            runtime_error(
-                "resolve-linux-libkrun-runtime",
-                format!(
-                    "no pinned Linux libkrun runtime exists for architecture {}",
-                    std::env::consts::ARCH
-                ),
-            )
-        })?;
+        let bundle = runtime_bundle("linux", std::env::consts::ARCH)
+            .map_err(|error| {
+                runtime_error(
+                    "resolve-linux-libkrun-runtime",
+                    format!("checked-in runtime asset manifest is invalid: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                runtime_error(
+                    "resolve-linux-libkrun-runtime",
+                    format!(
+                        "no pinned Linux libkrun runtime exists for architecture {}",
+                        std::env::consts::ARCH
+                    ),
+                )
+            })?;
         let runtime_dir = resolve_runtime_dir(bundle)?;
-        let firmware_file = required_file(bundle, LIBKRUNFW_NAME)?;
-        let krun_file = required_file(bundle, LIBKRUN_NAME)?;
-        let firmware_path = runtime_dir.join(firmware_file.name);
-        let krun_path = runtime_dir.join(krun_file.name);
+        let firmware_file = required_file(bundle, RuntimeFileRole::Firmware)?;
+        let krun_file = required_file(bundle, RuntimeFileRole::Library)?;
+        let firmware_path = runtime_dir.join(&firmware_file.name);
+        let krun_path = runtime_dir.join(&krun_file.name);
 
         // SAFETY: both absolute paths name checksum-verified regular files.
         // RTLD_GLOBAL makes the firmware's fixed SONAME available while the
@@ -98,6 +116,12 @@ impl LinuxKrunApi {
             )?,
             add_vsock: load_symbol(&krun, b"krun_add_vsock\0", "krun_add_vsock")?,
             add_vsock_port: load_symbol(&krun, b"krun_add_vsock_port2\0", "krun_add_vsock_port2")?,
+            add_disk: load_symbol(&krun, b"krun_add_disk2\0", "krun_add_disk2")?,
+            set_root_disk_remount: load_symbol(
+                &krun,
+                b"krun_set_root_disk_remount\0",
+                "krun_set_root_disk_remount",
+            )?,
             get_kernel,
             runtime_dir,
             bundle,
@@ -107,6 +131,10 @@ impl LinuxKrunApi {
         };
         api.reverify_runtime()?;
         Ok(api)
+    }
+
+    pub(crate) fn runtime_bundle(&self) -> &'static RuntimeBundle {
+        self.bundle
     }
 
     fn reverify_runtime(&self) -> Result<()> {
@@ -126,6 +154,7 @@ impl LinuxKrunApi {
 pub(crate) struct KrunContext {
     id: Option<u32>,
     api: LinuxKrunApi,
+    system_image: Option<LinuxSystemImage>,
     not_thread_safe: PhantomData<Rc<()>>,
 }
 
@@ -146,8 +175,78 @@ impl KrunContext {
         Ok(Self {
             id: Some(id),
             api,
+            system_image: None,
             not_thread_safe: PhantomData,
         })
+    }
+
+    pub(crate) fn set_read_only_system_image(
+        &mut self,
+        system_image: LinuxSystemImage,
+    ) -> Result<()> {
+        let id = self.active_id("configure-linux-kvm-system-image")?;
+        if self.system_image.is_some() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "Linux KVM system image has already been configured",
+            )
+            .for_operation("configure-linux-kvm-system-image"));
+        }
+        self.api.reverify_runtime()?;
+        system_image.reverify(self.api.runtime_bundle())?;
+
+        let disk_id = value_to_cstring("krun_add_disk2", "block identifier", SYSTEM_DISK_ID)?;
+        let image_path = system_image.pinned_image_path();
+        let image_path = path_to_cstring("krun_add_disk2", &image_path)?;
+        // SAFETY: the retained descriptor keeps the verified raw image alive,
+        // all strings remain valid for the call, and read-only is explicit.
+        let status = unsafe {
+            (self.api.add_disk)(
+                id,
+                disk_id.as_ptr(),
+                image_path.as_ptr(),
+                KRUN_DISK_FORMAT_RAW,
+                true,
+            )
+        };
+        check_status(
+            "krun_add_disk2",
+            status,
+            "failed to attach the immutable Linux KVM system image read-only",
+        )?;
+
+        let device = value_to_cstring(
+            "krun_set_root_disk_remount",
+            "root disk device",
+            ROOT_DISK_DEVICE,
+        )?;
+        let filesystem = value_to_cstring(
+            "krun_set_root_disk_remount",
+            "root disk filesystem",
+            ROOT_DISK_FILESYSTEM,
+        )?;
+        let options = value_to_cstring(
+            "krun_set_root_disk_remount",
+            "root disk mount options",
+            ROOT_DISK_OPTIONS,
+        )?;
+        // SAFETY: the exact block disk was configured above and all fixed
+        // strings remain NUL-terminated for this call.
+        let status = unsafe {
+            (self.api.set_root_disk_remount)(
+                id,
+                device.as_ptr(),
+                filesystem.as_ptr(),
+                options.as_ptr(),
+            )
+        };
+        check_status(
+            "krun_set_root_disk_remount",
+            status,
+            "failed to select the immutable ext4 root disk read-only",
+        )?;
+        self.system_image = Some(system_image);
+        Ok(())
     }
 
     pub(crate) fn set_vm_config(&mut self, config: VmConfig) -> Result<()> {
@@ -292,8 +391,8 @@ fn verify_runtime_dir(runtime_dir: &Path, bundle: &RuntimeBundle) -> Result<Path
         ));
     }
 
-    for file in bundle.files {
-        verify_runtime_file(&runtime_dir.join(file.name), file)?;
+    for file in &bundle.files {
+        verify_runtime_file(&runtime_dir.join(&file.name), file)?;
     }
 
     runtime_dir.canonicalize().map_err(|error| {
@@ -381,7 +480,16 @@ fn verify_exported_kernel(get_kernel: KrunfwGetKernel, expected: &RuntimeKernel)
     // is loaded from the checksum-verified firmware object and owns the
     // returned immutable buffer for the process lifetime.
     let bytes = unsafe { get_kernel(&mut guest_load_address, &mut entry_address, &mut size) };
-    if bytes.is_null() || size != expected.size {
+    let expected_size = usize::try_from(expected.size).map_err(|_| {
+        runtime_error(
+            "verify-linux-libkrun-kernel",
+            format!(
+                "pinned firmware kernel size does not fit this host: {}",
+                expected.size
+            ),
+        )
+    })?;
+    if bytes.is_null() || size != expected_size {
         return Err(runtime_error(
             "verify-linux-libkrun-kernel",
             format!(
@@ -418,21 +526,18 @@ fn verify_exported_kernel(get_kernel: KrunfwGetKernel, expected: &RuntimeKernel)
 
 fn required_file(
     bundle: &'static RuntimeBundle,
-    name: &'static str,
+    role: RuntimeFileRole,
 ) -> Result<&'static RuntimeFile> {
-    bundle
-        .files
-        .iter()
-        .find(|file| file.name == name)
-        .ok_or_else(|| {
-            runtime_error(
-                "resolve-linux-libkrun-runtime",
-                format!(
-                    "{} runtime manifest does not declare {name}",
-                    bundle.platform
-                ),
-            )
-        })
+    bundle.file(role).ok_or_else(|| {
+        runtime_error(
+            "resolve-linux-libkrun-runtime",
+            format!(
+                "{} runtime manifest does not declare the {} role",
+                bundle.platform,
+                role.as_str()
+            ),
+        )
+    })
 }
 
 fn path_to_cstring(operation: &'static str, path: &Path) -> Result<CString> {
@@ -447,6 +552,20 @@ fn path_to_cstring(operation: &'static str, path: &Path) -> Result<CString> {
         Error::new(
             ErrorCode::InvalidArgument,
             "path contains an embedded NUL byte",
+        )
+        .for_operation(operation)
+    })
+}
+
+fn value_to_cstring(
+    operation: &'static str,
+    description: &'static str,
+    value: &str,
+) -> Result<CString> {
+    CString::new(value).map_err(|_| {
+        Error::new(
+            ErrorCode::InvalidArgument,
+            format!("{description} contains an embedded NUL byte"),
         )
         .for_operation(operation)
     })
@@ -494,7 +613,7 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::{verify_runtime_file, LinuxKrunApi};
-    use crate::runtime_assets::RuntimeFile;
+    use crate::runtime_assets::{RuntimeFile, RuntimeFileRole};
 
     #[test]
     fn checksum_verified_runtime_exports_the_required_context_api() {
@@ -510,9 +629,10 @@ mod tests {
         symlink(&target, &link).expect("create runtime symlink");
 
         let expected = RuntimeFile {
-            name: "runtime",
+            role: RuntimeFileRole::Library,
+            name: "runtime".to_string(),
             size: 7,
-            sha256: "d92c6a81b2ff30f006066879b4f5b8aa648cbd0c42f282403ba2d9cd904b3e41",
+            sha256: "d92c6a81b2ff30f006066879b4f5b8aa648cbd0c42f282403ba2d9cd904b3e41".to_string(),
         };
         let error = verify_runtime_file(&link, &expected)
             .expect_err("a symbolic-link runtime asset must be rejected");

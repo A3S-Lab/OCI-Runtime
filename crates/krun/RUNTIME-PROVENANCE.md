@@ -56,13 +56,38 @@ XZ_OPT=-9 tar --sort=name --format=ustar --mtime=@0 \
   libkrun.so.1.17.0 libkrunfw.so.5
 ```
 
-The shared runtime-asset manifest is compiled into the build script and its
-unit tests. It verifies every archive size and digest, rejects non-file,
-duplicate, undeclared, or nested entries, and checks every extracted size and
-digest. On Linux, the isolated shim build stages only the selected
-architecture's two files. This establishes the native runtime input; it does
-not register a KVM driver or complete the immutable system-image, guest-agent,
-real-KVM lifecycle, recovery, or soak gates.
+`runtime/runtime-assets.json` is the single machine-readable identity for all
+packaged native bundles. Its strict schema gives every file one semantic role,
+rejects unknown fields, unsupported or duplicate targets, platforms, roles,
+names, unsafe paths, zero values, and malformed digests, and requires exactly
+one library and firmware for each target. The build script and Linux shim parse
+that same checked-in document. Archive tests additionally reject non-file,
+duplicate, undeclared, or nested entries and verify every extracted byte.
+
+## Immutable Linux KVM System Roots
+
+`scripts/build-linux-kvm-system-image.sh` selects the exact Linux target bundle
+from the shared runtime manifest instead of copying its values into shell. For
+both x86_64 and AArch64, CI supplies the matching static `a3s-oci-agent`, builds
+the ext4 image twice, requires byte equality, extracts the installed agent back
+out of the image, and requires it to equal the supplied executable. The output
+manifest uses schema `a3s.oci.linux-kvm-system-image.v1` and binds the image,
+compressed archive, Alpine input, exact agent, native runtime, firmware-exported
+kernel, filesystem UUID, and compatibility level.
+
+The Linux shim accepts only an absolute real-file manifest and its real-file
+sibling image. It opens both with `O_NOFOLLOW`, retains read-only descriptors,
+checks path and descriptor identity, size, digest, architecture, and the exact
+runtime-bundle object, then exposes the image to libkrun through its retained
+`/proc/self/fd` descriptor. The `system-image-context-smoke` gate configures
+that disk read-only together with VM resources and plain agent vsock, reverifies
+all pinned bytes, and releases the context without opening `/dev/kvm` or
+entering a VM. Symbolic links, path replacement, same-size mutation, unknown
+manifest fields, and runtime drift fail closed.
+
+This closes the immutable compatibility-set gate. It does not register a KVM
+driver or complete authenticated guest boot, real-KVM lifecycle, recovery, or
+soak gates.
 
 ## Windows x86_64
 

@@ -1,0 +1,123 @@
+{
+  "schema_version": "a3s.oci.krun-runtime-assets.v1",
+  "bundles": [
+    {
+      "target_os": "windows",
+      "target_arch": "x86_64",
+      "platform": "windows-x86_64",
+      "archive": "runtime/windows-x86_64/krun-windows-x64.tar.xz",
+      "archive_size": 8106464,
+      "archive_sha256": "ce178184bc9e309c9f8fef181312cd6c398fc825807124e31afab949b790627e",
+      "files": [
+        {
+          "role": "library",
+          "name": "krun.dll",
+          "size": 7428608,
+          "sha256": "f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e"
+        },
+        {
+          "role": "import-library",
+          "name": "krun.lib",
+          "size": 11870,
+          "sha256": "3ac760758158bd4d2d6570db58037d47cd370a8e6ea04ccf54a8b24fd1fdec3d"
+        },
+        {
+          "role": "firmware",
+          "name": "libkrunfw.dll",
+          "size": 21473280,
+          "sha256": "44f25540f58155c01258fe123617636fdc6cff27873e38e71dbc75f139602077"
+        }
+      ],
+      "kernel": {
+        "size": 21364736,
+        "sha256": "781375ea09f4279ec5bfeab26ecc7067358a3fc98190467e2ab01cc6e98936dd",
+        "guest_load_address": 16777216,
+        "entry_address": 16777507
+      }
+    },
+    {
+      "target_os": "macos",
+      "target_arch": "aarch64",
+      "platform": "macos-aarch64",
+      "archive": "runtime/macos-aarch64/krun-macos-arm64.tar.xz",
+      "archive_size": 11701136,
+      "archive_sha256": "5486f38e91eb4da0e58888b543c93fe669c918ad4b84dd495f0d1dfdffc43b56",
+      "files": [
+        {
+          "role": "library",
+          "name": "libkrun.1.17.0.dylib",
+          "size": 4557488,
+          "sha256": "c5353f9cbd91564ce26eceaf1bdc33341097b43280fe029203ccca02807c082d"
+        },
+        {
+          "role": "firmware",
+          "name": "libkrunfw.5.dylib",
+          "size": 22952096,
+          "sha256": "841bc9d5eecbc2aeeb6098fbc75d484427680d7503f5ed9bcdfe9d072a9420d4"
+        }
+      ],
+      "kernel": {
+        "size": 22740992,
+        "sha256": "b1180b50148ed14f5fbeadf17288ce8abcf245daa468255b7ff41113bbf01199",
+        "guest_load_address": 2147483648,
+        "entry_address": 2147483648
+      }
+    },
+    {
+      "target_os": "linux",
+      "target_arch": "aarch64",
+      "platform": "linux-aarch64",
+      "archive": "runtime/linux-aarch64/krun-linux-aarch64.tar.xz",
+      "archive_size": 11538808,
+      "archive_sha256": "f930a75945862ce039646b521783b06268c49cd9470f9d64a66fc585350ce7e4",
+      "files": [
+        {
+          "role": "library",
+          "name": "libkrun.so.1.17.0",
+          "size": 4918753,
+          "sha256": "02236ec44afac5a1d1831fea1dda9a6250a67a5c5c6d47550dfdb72591b0fde3"
+        },
+        {
+          "role": "firmware",
+          "name": "libkrunfw.so.5",
+          "size": 23004041,
+          "sha256": "b440b30751cefb2e9325d39853c64cc397acc9d72cdedc5a07a5e56daf553e46"
+        }
+      ],
+      "kernel": {
+        "size": 22740992,
+        "sha256": "b1180b50148ed14f5fbeadf17288ce8abcf245daa468255b7ff41113bbf01199",
+        "guest_load_address": 2147483648,
+        "entry_address": 2147483648
+      }
+    },
+    {
+      "target_os": "linux",
+      "target_arch": "x86_64",
+      "platform": "linux-x86_64",
+      "archive": "runtime/linux-x86_64/krun-linux-x86_64.tar.xz",
+      "archive_size": 7471288,
+      "archive_sha256": "8df72533d8006ee0a929048e015192f23f57b0582a155a47a616f9272a2bc719",
+      "files": [
+        {
+          "role": "library",
+          "name": "libkrun.so.1.17.0",
+          "size": 5824233,
+          "sha256": "5a1fdec0e6fc3021aaa6314703b939c4094694662251f6219e8a7ebb1a91390c"
+        },
+        {
+          "role": "firmware",
+          "name": "libkrunfw.so.5",
+          "size": 19206985,
+          "sha256": "dfe9796599c397ef914f6948e81f47384aca33a404aea32c82ca9134472936d6"
+        }
+      ],
+      "kernel": {
+        "size": 19070976,
+        "sha256": "bd183424e2ef6e3adefab5e3820acc647171c960336504cd0751e62aff381819",
+        "guest_load_address": 16777216,
+        "entry_address": 16777507
+      }
+    }
+  ]
+}

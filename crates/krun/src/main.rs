@@ -39,6 +39,16 @@ struct Cli {
 enum Command {
     /// Create, configure, and release one libkrun context without booting a VM.
     ContextSmoke,
+    /// Bind and verify the complete immutable Linux KVM boot compatibility set.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    SystemImageContextSmoke {
+        /// Exact immutable Linux KVM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+    },
     /// Boot a utility VM and verify a command ran inside the supplied rootfs.
     VmSmoke {
         /// Extracted Linux root filesystem presented as the guest root.
@@ -137,6 +147,25 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::ContextSmoke => {
             let report = a3s_oci_krun::context_smoke();
+            let succeeded = report.is_success();
+            if let Err(error) = write_json(&report) {
+                eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");
+                return ExitCode::FAILURE;
+            }
+            if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            }
+        }
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::SystemImageContextSmoke {
+            system_image_manifest,
+        } => {
+            let report = a3s_oci_krun::system_image_context_smoke(&system_image_manifest);
             let succeeded = report.is_success();
             if let Err(error) = write_json(&report) {
                 eprintln!("a3s-oci-krun-shim: failed to serialize report: {error}");

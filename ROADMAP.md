@@ -1435,9 +1435,14 @@ release-promotion gates above.
   dynamically loaded libkrun context on Linux x86_64 and AArch64 without
   opening `/dev/kvm` or entering a VM. Positive CI and tampered-file plus
   symbolic-link negatives retain the boundary.
-- [ ] Bind the verified native runtime and kernel to the immutable system root
+- [x] Bind the verified native runtime and kernel to the immutable system root
   and static guest agent as one compatibility set for every advertised
-  architecture.
+  architecture. CI builds byte-reproducible x86_64 and AArch64 ext4 roots,
+  proves that each contains the exact supplied static agent, embeds the exact
+  target bundle from the strict shared asset manifest, and configures the
+  descriptor-pinned root read-only in an isolated libkrun context. Manifest,
+  image, target, runtime, symbolic-link, replacement, and same-size content
+  drift all fail closed before VM entry.
 - [ ] Start the KVM worker in an isolated shim, mount only the protected
   per-generation runtime share, and authenticate the AF_VSOCK guest-agent
   session without falling back to host-kernel execution.
