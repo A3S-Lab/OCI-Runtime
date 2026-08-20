@@ -262,10 +262,10 @@ enum Command {
         /// Isolated libkrun shim executable.
         #[arg(long, value_name = "FILE")]
         shim: PathBuf,
-        /// Extracted Linux root filesystem containing /usr/bin/a3s-oci-agent.
+        /// Empty bootstrap directory kept separate from the immutable system image.
         #[arg(long, value_name = "DIR")]
         rootfs: PathBuf,
-        /// Immutable system-image manifest required by macOS HVF.
+        /// Immutable system-image manifest required by each utility-VM host path.
         #[arg(long, value_name = "FILE")]
         system_image_manifest: Option<PathBuf>,
         /// Writable directory exported separately from the immutable system root.

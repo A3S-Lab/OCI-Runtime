@@ -10,7 +10,7 @@ pub const WHPX_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.whpx-smoke.v1";
 /// Schema emitted by the Hypervisor.framework VM-object smoke.
 pub const HVF_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.hvf-smoke.v1";
 /// Schema emitted by the authenticated guest-agent VM smoke.
-pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v9";
+pub const AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.agent-vm-smoke.v10";
 /// Schema emitted by the fixed OCI core-lifecycle utility-VM smoke.
 pub const OCI_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.oci-vm-smoke.v9";
 /// Schema emitted by the native Linux SDK lifecycle smoke.
@@ -207,7 +207,7 @@ pub struct AgentVmSmokeReport {
     /// Process ID of the verified bridge peer.
     ///
     /// This is the shim itself on Windows and its direct VM worker child on
-    /// macOS.
+    /// macOS and Linux KVM.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bridge_process_id: Option<u32>,
     /// Whether the connected bridge peer matched the required process identity.
@@ -271,14 +271,18 @@ impl AgentVmSmokeReport {
 
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     pub(crate) fn unsupported(platform: HostPlatform) -> Self {
         let mut report = Self::initial(platform);
         report.status = CapabilityStatus::Unsupported;
         report.reason = Some(
-            "the authenticated guest-agent VM smoke is implemented only for Windows x86_64/WHPX \
-             and macOS aarch64/HVF"
+            "the authenticated guest-agent VM smoke is implemented only for Linux x86_64/aarch64 KVM, \
+             Windows x86_64/WHPX, and macOS aarch64/HVF"
                 .into(),
         );
         report
@@ -309,12 +313,16 @@ impl AgentVmSmokeReport {
         let process_identity_matches =
             match (self.platform, self.shim_process_id, self.bridge_process_id) {
                 (HostPlatform::Windows, Some(shim), Some(bridge)) => shim != 0 && bridge == shim,
+                (HostPlatform::Linux, Some(shim), Some(bridge)) => {
+                    shim != 0 && bridge != 0 && bridge != shim
+                }
                 (HostPlatform::Macos, Some(shim), Some(bridge)) => {
                     shim != 0 && bridge != 0 && bridge != shim
                 }
                 _ => false,
             };
         let expected_architecture = match self.platform {
+            HostPlatform::Linux => Some(std::env::consts::ARCH),
             HostPlatform::Windows => Some("x86_64"),
             HostPlatform::Macos => Some("aarch64"),
             _ => None,

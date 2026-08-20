@@ -11,7 +11,7 @@ pub const KRUN_SYSTEM_IMAGE_CONTEXT_SMOKE_SCHEMA_VERSION: &str =
 /// Schema emitted by the real utility-VM entry smoke.
 pub const KRUN_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-vm-smoke.v2";
 /// Schema emitted while booting the negotiation-only guest agent.
-pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v4";
+pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v5";
 
 /// Exact immutable macOS boot assets observed by the isolated VM worker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,6 +423,10 @@ pub struct KrunAgentVmSmokeReport {
     pub vm_configured: bool,
     pub rootfs_configured: bool,
     pub runtime_share_configured: bool,
+    pub kvm_device_opened: bool,
+    pub kvm_api_verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linux_boot_assets: Option<LinuxBootAssetsEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub macos_boot_assets: Option<MacosBootAssetsEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -452,6 +456,9 @@ impl KrunAgentVmSmokeReport {
             vm_configured: false,
             rootfs_configured: false,
             runtime_share_configured: false,
+            kvm_device_opened: false,
+            kvm_api_verified: false,
+            linux_boot_assets: None,
             macos_boot_assets: None,
             windows_boot_assets: None,
             agent_binary_present: false,
@@ -469,14 +476,18 @@ impl KrunAgentVmSmokeReport {
 
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     pub(crate) fn unsupported(platform: HostPlatform, config: VmConfig) -> Self {
         let mut report = Self::initial(platform, config);
         report.status = CapabilityStatus::Unsupported;
         report.reason = Some(
-            "the guest-agent VM smoke is implemented only for Windows x86_64/WHPX and \
-             macOS aarch64/HVF"
+            "the guest-agent VM smoke is implemented only for Linux x86_64/aarch64 KVM, \
+             Windows x86_64/WHPX, and macOS aarch64/HVF"
                 .into(),
         );
         report
@@ -491,6 +502,15 @@ impl KrunAgentVmSmokeReport {
             && self.vm_configured
             && self.rootfs_configured
             && match self.platform {
+                HostPlatform::Linux => {
+                    self.runtime_share_configured
+                        && self.kvm_device_opened
+                        && self.kvm_api_verified
+                        && self
+                            .linux_boot_assets
+                            .as_ref()
+                            .is_some_and(LinuxBootAssetsEvidence::is_success)
+                }
                 HostPlatform::Windows => {
                     self.runtime_share_configured
                         && self

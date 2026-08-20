@@ -7,7 +7,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(target_os = "macos")]
 const PRIVATE_TMP_ROOT: &str = "/private/tmp";
+#[cfg(target_os = "linux")]
+const PRIVATE_TMP_ROOT: &str = "/tmp";
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_SOCKET_MODE: u32 = 0o600;
 
@@ -177,7 +180,7 @@ pub(crate) fn read_bounded_worker_output(mut input: impl Read, limit: u64) -> io
     if output.len() as u64 > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("macOS VM worker output exceeds {limit} bytes"),
+            format!("utility-VM worker output exceeds {limit} bytes"),
         ));
     }
     Ok(output)

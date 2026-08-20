@@ -1,7 +1,11 @@
 use std::io;
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -13,17 +17,29 @@ use zeroize::Zeroizing;
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 mod bootstrap_token;
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 mod owner_process;
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 mod recovery_report;
 
@@ -74,7 +90,11 @@ enum Command {
         /// Exact immutable system-image manifest required by the utility VM.
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         #[arg(long, value_name = "FILE")]
         system_image_manifest: PathBuf,
@@ -85,20 +105,34 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         pipe_name: String,
         /// Private host Unix socket mapped to the guest control port.
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
+        ))]
         #[arg(long, value_name = "FILE")]
         socket_path: PathBuf,
         /// Runtime process whose exit must terminate this shim and its VM.
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         #[arg(long, value_name = "PID")]
         owner_pid: NonZeroU32,
         /// Protected host-only destination for verified shutdown evidence.
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         #[arg(long, value_name = "FILE")]
         recovery_report: Option<PathBuf>,
@@ -106,8 +140,14 @@ enum Command {
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         #[arg(long, value_name = "DIR")]
         runtime_share: PathBuf,
-        /// Writable host directory exported to the macOS guest.
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        /// Writable host directory exported to the Unix-hosted utility VM.
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
+        ))]
         #[arg(long, value_name = "DIR")]
         runtime_share: PathBuf,
     },
@@ -128,6 +168,26 @@ enum Command {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[command(name = "__macos-agent-vm-worker", hide = true)]
     MacosAgentVmWorker {
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        runtime_share: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        guest_token_file: String,
+        #[arg(long, value_name = "FILE")]
+        console: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        socket_path: PathBuf,
+        #[arg(long, value_name = "FILE")]
+        guest_recovery_report: Option<String>,
+    },
+    /// Internal process-takeover boundary for the Linux KVM guest-agent VM.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(name = "__linux-agent-vm-worker", hide = true)]
+    LinuxAgentVmWorker {
         #[arg(long, value_name = "FILE")]
         system_image_manifest: PathBuf,
         #[arg(long, value_name = "DIR")]
@@ -209,26 +269,50 @@ fn main() -> ExitCode {
             rootfs,
             #[cfg(any(
                 all(target_os = "windows", target_arch = "x86_64"),
-                all(target_os = "macos", target_arch = "aarch64")
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
             ))]
             system_image_manifest,
             console,
             pipe_name,
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            #[cfg(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            ))]
             socket_path,
             #[cfg(any(
                 all(target_os = "windows", target_arch = "x86_64"),
-                all(target_os = "macos", target_arch = "aarch64")
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
             ))]
             owner_pid,
             #[cfg(any(
                 all(target_os = "windows", target_arch = "x86_64"),
-                all(target_os = "macos", target_arch = "aarch64")
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
             ))]
             recovery_report,
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             runtime_share,
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            #[cfg(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            ))]
             runtime_share,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
@@ -252,9 +336,21 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            #[cfg(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            ))]
             let socket_path = Some(socket_path.as_path());
-            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            #[cfg(not(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            )))]
             let socket_path = None;
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             let report = {
@@ -330,7 +426,13 @@ fn main() -> ExitCode {
                 owner_monitor.mark_vm_finished();
                 report
             };
-            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            #[cfg(any(
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
+            ))]
             let report = {
                 let bootstrap = match bootstrap_token::BootstrapTokenFile::create(
                     &runtime_share,
@@ -405,7 +507,11 @@ fn main() -> ExitCode {
             };
             #[cfg(not(any(
                 all(target_os = "windows", target_arch = "x86_64"),
-                all(target_os = "macos", target_arch = "aarch64")
+                all(target_os = "macos", target_arch = "aarch64"),
+                all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )
             )))]
             let report = a3s_oci_krun::agent_vm_smoke(
                 &rootfs,
@@ -463,6 +569,39 @@ fn main() -> ExitCode {
                 }
             };
             if a3s_oci_krun::run_macos_agent_vm_worker(
+                &system_image_manifest,
+                &runtime_share,
+                &guest_token_file,
+                &console,
+                &socket_path,
+                guest_recovery_report.as_deref(),
+                transport_qualification.as_ref(),
+            ) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            }
+        }
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::LinuxAgentVmWorker {
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            socket_path,
+            guest_recovery_report,
+        } => {
+            let transport_qualification = match take_transport_qualification() {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("a3s-oci-krun-shim: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if a3s_oci_krun::run_linux_agent_vm_worker(
                 &system_image_manifest,
                 &runtime_share,
                 &guest_token_file,

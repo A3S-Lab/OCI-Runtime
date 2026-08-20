@@ -11,14 +11,33 @@ mod agent_smoke;
 mod context;
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 mod ffi;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+mod linux_agent_smoke;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod linux_context;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_kvm_device;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_runtime_share;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -30,8 +49,6 @@ mod macos_agent_smoke;
 mod macos_assets;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_context;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-mod macos_process;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_system_image;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -45,6 +62,14 @@ mod report;
     )
 ))]
 mod runtime_assets;
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+mod unix_process;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod windows_system_image;
 
@@ -553,6 +578,35 @@ pub fn run_macos_agent_vm_worker(
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
     macos_agent_smoke::run_worker(
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+    )
+}
+
+/// Run the private Linux KVM guest-agent VM worker.
+///
+/// This is exported only for the hidden shim process boundary.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_linux_agent_vm_worker(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    guest_token_file: &str,
+    console: &Path,
+    socket: &Path,
+    guest_recovery_report: Option<&str>,
+    transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
+) -> bool {
+    linux_agent_smoke::run_worker(
         system_image_manifest,
         runtime_share,
         guest_token_file,

@@ -2,7 +2,11 @@ use std::path::Path;
 
 #[cfg(not(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 )))]
 use a3s_oci_core::HostPlatform;
 
@@ -23,7 +27,11 @@ pub async fn agent_vm_smoke(
 ) -> AgentVmSmokeReport {
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -50,7 +58,11 @@ pub async fn agent_vm_smoke(
             }
         };
         let report = match session {
-            Ok(session) => session.shutdown().await,
+            Ok(session) => {
+                let negotiated_client = session.client();
+                drop(negotiated_client);
+                session.shutdown().await
+            }
             Err(report) => report,
         };
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -63,11 +75,22 @@ pub async fn agent_vm_smoke(
         {
             report
         }
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        {
+            report
+        }
     }
 
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     {
         let _ = (shim, rootfs, system_image_manifest, runtime_share, console);

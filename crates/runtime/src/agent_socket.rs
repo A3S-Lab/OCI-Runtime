@@ -9,18 +9,21 @@ use a3s_oci_agent_protocol::AgentVsockEndpoint;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use tokio::net::{UnixListener, UnixStream};
 
+#[cfg(target_os = "macos")]
 pub(crate) const PRIVATE_TMP_ROOT: &str = "/private/tmp";
+#[cfg(target_os = "linux")]
+pub(crate) const PRIVATE_TMP_ROOT: &str = "/tmp";
 const SOCKET_FILE_NAME: &str = "agent.sock";
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_SOCKET_MODE: u32 = 0o600;
 
-/// Exclusive macOS endpoint for one libkrun guest-agent bridge.
+/// Exclusive Unix endpoint for one libkrun guest-agent bridge.
 ///
-/// The endpoint lives in a random runtime-owned directory below
-/// `/private/tmp`. The directory and socket are removed when the listener is
-/// consumed or dropped.
+/// The endpoint lives in a random runtime-owned directory below the platform's
+/// private temporary root. The directory and socket are removed when the
+/// listener is consumed or dropped.
 #[derive(Debug)]
-pub struct MacosAgentSocketListener {
+pub struct UnixAgentSocketListener {
     endpoint: AgentVsockEndpoint,
     directory: PathBuf,
     socket_path: PathBuf,
@@ -28,7 +31,7 @@ pub struct MacosAgentSocketListener {
     cleaned: bool,
 }
 
-impl MacosAgentSocketListener {
+impl UnixAgentSocketListener {
     /// Bind a private Unix socket for one generated guest-agent endpoint.
     pub fn bind(endpoint: AgentVsockEndpoint) -> Result<Self> {
         let directory = Path::new(PRIVATE_TMP_ROOT).join(endpoint.pipe_name());
@@ -126,9 +129,9 @@ impl MacosAgentSocketListener {
     /// Accept only a Unix peer whose parent is the previously spawned shim.
     ///
     /// libkrun enters the VM in a direct worker child because
-    /// `krun_start_enter` takes over that process. macOS exposes the connected
-    /// process through `LOCAL_PEERPID`; `proc_pidinfo` then proves the worker's
-    /// direct parent before the session token is disclosed.
+    /// `krun_start_enter` takes over that process. The kernel-reported peer PID
+    /// and its direct parent are both verified before the session token is
+    /// disclosed.
     pub async fn accept_from_child(
         mut self,
         expected_parent_process_id: u32,
@@ -217,7 +220,7 @@ impl Drop for EndpointCleanupGuard {
     }
 }
 
-impl Drop for MacosAgentSocketListener {
+impl Drop for UnixAgentSocketListener {
     fn drop(&mut self) {
         let _ = self.cleanup();
     }
@@ -280,6 +283,7 @@ fn verify_owned_entry(path: &Path, kind: EntryKind, mode: u32) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn unix_peer_process_id(stream: &UnixStream) -> Result<u32> {
     let mut peer_process_id: libc::pid_t = 0;
     let mut value_length =
@@ -330,6 +334,7 @@ fn unix_peer_process_id(stream: &UnixStream) -> Result<u32> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn process_parent_id(process_id: u32) -> Result<u32> {
     let process_id = libc::pid_t::try_from(process_id).map_err(|error| {
         Error::new(
@@ -384,6 +389,117 @@ fn process_parent_id(process_id: u32) -> Result<u32> {
     }
     Ok(process_info.pbi_ppid)
 }
+
+#[cfg(target_os = "linux")]
+fn unix_peer_process_id(stream: &UnixStream) -> Result<u32> {
+    let mut credentials = MaybeUninit::<libc::ucred>::zeroed();
+    let mut value_length =
+        libc::socklen_t::try_from(size_of::<libc::ucred>()).map_err(|error| {
+            Error::new(
+                ErrorCode::Internal,
+                format!("failed to represent SO_PEERCRED value size: {error}"),
+            )
+            .for_operation("identify-agent-socket-peer")
+        })?;
+    // SAFETY: the stream owns a connected Unix descriptor and the output
+    // storage is valid for one ucred structure.
+    let status = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            credentials.as_mut_ptr().cast(),
+            &mut value_length,
+        )
+    };
+    if status != 0 {
+        return Err(Error::new(
+            ErrorCode::Internal,
+            format!(
+                "failed to identify guest-agent socket peer: {}",
+                io::Error::last_os_error()
+            ),
+        )
+        .for_operation("identify-agent-socket-peer"));
+    }
+    if usize::try_from(value_length).ok() != Some(size_of::<libc::ucred>()) {
+        return Err(Error::new(
+            ErrorCode::Internal,
+            format!(
+                "SO_PEERCRED returned {value_length} bytes, expected {}",
+                size_of::<libc::ucred>()
+            ),
+        )
+        .for_operation("identify-agent-socket-peer"));
+    }
+    // SAFETY: getsockopt reported the complete structure size.
+    let credentials = unsafe { credentials.assume_init() };
+    // SAFETY: geteuid has no arguments and cannot fail.
+    let effective_user_id = unsafe { libc::geteuid() };
+    if credentials.uid != effective_user_id {
+        return Err(Error::new(
+            ErrorCode::PermissionDenied,
+            format!(
+                "guest-agent socket peer UID {} does not match runtime UID {effective_user_id}",
+                credentials.uid
+            ),
+        )
+        .for_operation("identify-agent-socket-peer"));
+    }
+    u32::try_from(credentials.pid).map_err(|_| {
+        Error::new(
+            ErrorCode::Internal,
+            format!(
+                "SO_PEERCRED returned invalid process ID {}",
+                credentials.pid
+            ),
+        )
+        .for_operation("identify-agent-socket-peer")
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn process_parent_id(process_id: u32) -> Result<u32> {
+    let status_path = PathBuf::from(format!("/proc/{process_id}/status"));
+    let encoded = fs::read_to_string(&status_path).map_err(|error| {
+        Error::new(
+            ErrorCode::PermissionDenied,
+            format!("failed to inspect guest-agent socket peer PID {process_id}: {error}"),
+        )
+        .for_operation("verify-agent-socket-parent")
+    })?;
+    let mut observed_process = None;
+    let mut observed_parent = None;
+    for line in encoded.lines() {
+        if let Some(value) = line.strip_prefix("Pid:") {
+            observed_process = value.trim().parse::<u32>().ok();
+        } else if let Some(value) = line.strip_prefix("PPid:") {
+            observed_parent = value.trim().parse::<u32>().ok();
+        }
+    }
+    if observed_process != Some(process_id) {
+        return Err(Error::new(
+            ErrorCode::PermissionDenied,
+            format!(
+                "Linux procfs returned PID {observed_process:?} for guest-agent peer PID {process_id}"
+            ),
+        )
+        .for_operation("verify-agent-socket-parent"));
+    }
+    observed_parent.ok_or_else(|| {
+        Error::new(
+            ErrorCode::PermissionDenied,
+            format!("Linux procfs omitted the parent of guest-agent peer PID {process_id}"),
+        )
+        .for_operation("verify-agent-socket-parent")
+    })
+}
+
+#[cfg(target_os = "macos")]
+pub type MacosAgentSocketListener = UnixAgentSocketListener;
+
+#[cfg(target_os = "linux")]
+pub type LinuxAgentSocketListener = UnixAgentSocketListener;
 
 fn cleanup_endpoint_paths(socket_path: &Path, directory: &Path) -> io::Result<()> {
     let socket_result = match fs::remove_file(socket_path) {

@@ -372,7 +372,7 @@ reattachment remains open for the Box B2 cutover.
 | Host path | Retained real evidence | Current readiness and open gate |
 | --- | --- | --- |
 | Native Linux x86_64/aarch64 | Rootful and helper-backed rootless lifecycle, including all six OCI default devices, `/dev/ptmx`, configured-init `/dev/console`, an explicit FIFO outside `/dev`, the immutable declared/default device boundary, and the bounded A3S Box device policy; SDK service transport; exec/PTY/I/O; init/exec scheduler and namespaced-sysctl read-back; cgroup update/stats; hooks; namespace and mount profiles; multi-container fencing; fault cleanup; owner-`SIGKILL` safe termination and stopped cleanup; 25 waves × 4 containers; x86_64/aarch64 Box production-owner composition through all four SDKs plus fresh-Box-process owner-death/restart gates | Default inventory `probe-only`; explicitly opened development driver `experimental`. Live session reattachment, default cutover, production security, and OCI conformance remain |
-| Linux KVM utility VM | Independent device/access/ioctl/API-version probes; deterministic x86_64 and AArch64 runtime archives and immutable ext4 roots; exact libkrun, firmware, exported kernel, and static Guest Agent compatibility sets; descriptor-pinned read-only root attachment; isolated create/configure/root/plain-vsock/release context gates with manifest, asset-tamper, replacement, and symlink rejection | `probe-only`; context configuration does not enter a VM. Authenticated guest boot, the workload driver, recovery matrices, and real-KVM soak remain open |
+| Linux KVM utility VM | Independent device/access/ioctl/API-version probes; deterministic x86_64 and AArch64 runtime archives and immutable ext4 roots; exact libkrun, firmware, exported kernel, and static Guest Agent compatibility sets; descriptor-pinned read-only root attachment; isolated create/configure/root/plain-vsock/release context gates; an isolated real-entry worker with descriptor-pinned KVM and runtime-share checks, pidfd owner death, kernel-authenticated Unix peer identity, protocol-v10 negotiation, and retained fail-closed cleanup evidence when KVM is unavailable | `probe-only`; successful authenticated real entry is not yet retained on every advertised architecture. The workload driver, recovery matrices, and real-KVM soak remain open |
 | macOS arm64/HVF | Public same-UID SDK host service; one dedicated VM per exact generation; manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate writable runtime share; Guest-local devtmpfs sources for privileged OCI device nodes; a real protocol-v10 bridge with all 21 Guest operations; retained full protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 workload-operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves; source revision `a5a6b53` passed the revision-bound public-path gate across all 20 driver operations plus `features`/`list`/`events`, Host Service `SIGKILL` recovery, and a separate 25/25 fresh-VM soak with zero transient leaks | `experimental` on Apple Silicon. Every currently advertised public macOS/HVF function is implemented and the protocol-v10 public path is qualified at the recorded revision. Signed release-package qualification, OCI conformance, security review, upgrade/rollback compatibility, and longer release soak remain before `supported` |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup. The current implementation also builds a reproducible x86_64 ext4 system image, pins Linux 6.12.91 and all native boot assets, attaches the root read-only, and keeps the runtime share separate | `probe-only`; the complete SDK/recovery matrix must still pass with those exact assets on a fresh WHPX host, and in-process native-handle reclamation remains before `experimental` |
 
@@ -452,6 +452,24 @@ a3s-oci-krun-shim system-image-context-smoke \
 It pins the manifest and raw image with read-only descriptors, rechecks every
 byte immediately before native API use, attaches the root read-only, and then
 releases the context. It still does not enter KVM or claim guest execution.
+
+The separate authenticated entry gate adds a UID-owned mode-`0700` generation
+share, a same-UID Unix endpoint, a pidfd-bound shim owner, and a direct isolated
+VM worker. The worker revalidates every boot asset, pins `/dev/kvm`, requires
+API version 12, and enters only through the immutable system root. The Host
+accepts only the kernel-reported direct worker child before protocol-v10 token
+negotiation:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  bash .github/scripts/linux-kvm-agent-entry.sh
+```
+
+On a host without usable KVM the same command must fail after non-KVM setup,
+retain nested KVM evidence, and restore endpoint, process, and handoff
+inventories. This implementation does not promote the driver: successful
+real-entry evidence on both x86_64 and AArch64 plus the complete lifecycle,
+recovery, and soak matrices remain required.
 
 | Owner | Keeps | Must not absorb |
 | --- | --- | --- |

@@ -1,4 +1,4 @@
-use std::ffi::{c_char, CString};
+use std::ffi::c_char;
 use std::fs::{self, File};
 use std::io::Read;
 use std::marker::PhantomData;
@@ -8,7 +8,11 @@ use std::rc::Rc;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_LOCAL, RTLD_NOW};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
+use crate::ffi::{path_to_cstring, value_to_cstring, FfiStringArray};
+use crate::linux_kvm_device::LinuxKvmDevice;
+use crate::linux_runtime_share::LinuxRuntimeShare;
 use crate::linux_system_image::LinuxSystemImage;
 use crate::runtime_assets::{
     runtime_bundle, RuntimeBundle, RuntimeFile, RuntimeFileRole, RuntimeKernel,
@@ -30,6 +34,12 @@ type KrunAddVsockPort = unsafe extern "C" fn(u32, u32, *const c_char, bool) -> i
 type KrunAddDisk = unsafe extern "C" fn(u32, *const c_char, *const c_char, u32, bool) -> i32;
 type KrunSetRootDiskRemount =
     unsafe extern "C" fn(u32, *const c_char, *const c_char, *const c_char) -> i32;
+type KrunAddVirtiofs = unsafe extern "C" fn(u32, *const c_char, *const c_char) -> i32;
+type KrunSetWorkdir = unsafe extern "C" fn(u32, *const c_char) -> i32;
+type KrunSetExec =
+    unsafe extern "C" fn(u32, *const c_char, *const *const c_char, *const *const c_char) -> i32;
+type KrunSetConsoleOutput = unsafe extern "C" fn(u32, *const c_char) -> i32;
+type KrunStartEnter = unsafe extern "C" fn(u32) -> i32;
 type KrunfwGetKernel = unsafe extern "C" fn(*mut u64, *mut u64, *mut usize) -> *const c_char;
 
 /// Exact process-local Linux API loaded from the selected runtime bundle.
@@ -42,6 +52,11 @@ pub(crate) struct LinuxKrunApi {
     add_vsock_port: KrunAddVsockPort,
     add_disk: KrunAddDisk,
     set_root_disk_remount: KrunSetRootDiskRemount,
+    add_virtiofs: KrunAddVirtiofs,
+    set_workdir: KrunSetWorkdir,
+    set_exec: KrunSetExec,
+    set_console_output: KrunSetConsoleOutput,
+    start_enter: KrunStartEnter,
     get_kernel: KrunfwGetKernel,
     runtime_dir: PathBuf,
     bundle: &'static RuntimeBundle,
@@ -122,6 +137,15 @@ impl LinuxKrunApi {
                 b"krun_set_root_disk_remount\0",
                 "krun_set_root_disk_remount",
             )?,
+            add_virtiofs: load_symbol(&krun, b"krun_add_virtiofs\0", "krun_add_virtiofs")?,
+            set_workdir: load_symbol(&krun, b"krun_set_workdir\0", "krun_set_workdir")?,
+            set_exec: load_symbol(&krun, b"krun_set_exec\0", "krun_set_exec")?,
+            set_console_output: load_symbol(
+                &krun,
+                b"krun_set_console_output\0",
+                "krun_set_console_output",
+            )?,
+            start_enter: load_symbol(&krun, b"krun_start_enter\0", "krun_start_enter")?,
             get_kernel,
             runtime_dir,
             bundle,
@@ -155,6 +179,7 @@ pub(crate) struct KrunContext {
     id: Option<u32>,
     api: LinuxKrunApi,
     system_image: Option<LinuxSystemImage>,
+    runtime_share: Option<LinuxRuntimeShare>,
     not_thread_safe: PhantomData<Rc<()>>,
 }
 
@@ -176,6 +201,7 @@ impl KrunContext {
             id: Some(id),
             api,
             system_image: None,
+            runtime_share: None,
             not_thread_safe: PhantomData,
         })
     }
@@ -261,6 +287,36 @@ impl KrunContext {
         )
     }
 
+    pub(crate) fn add_runtime_share(
+        &mut self,
+        tag: &str,
+        runtime_share: LinuxRuntimeShare,
+    ) -> Result<()> {
+        let id = self.active_id("krun_add_virtiofs")?;
+        if self.runtime_share.is_some() {
+            return Err(Error::new(
+                ErrorCode::FailedPrecondition,
+                "Linux KVM runtime share has already been configured",
+            )
+            .for_operation("krun_add_virtiofs"));
+        }
+        self.api.reverify_runtime()?;
+        runtime_share.reverify()?;
+        let tag = value_to_cstring("krun_add_virtiofs", "virtio-fs tag", tag)?;
+        let pinned_path = runtime_share.pinned_path();
+        let pinned_path = path_to_cstring("krun_add_virtiofs", &pinned_path)?;
+        // SAFETY: the context is exclusively owned and the descriptor-pinned
+        // share plus both C strings remain live through the complete call.
+        let status = unsafe { (self.api.add_virtiofs)(id, tag.as_ptr(), pinned_path.as_ptr()) };
+        check_status(
+            "krun_add_virtiofs",
+            status,
+            "failed to attach the protected Linux KVM runtime share",
+        )?;
+        self.runtime_share = Some(runtime_share);
+        Ok(())
+    }
+
     pub(crate) fn set_agent_vsock(&mut self, socket_path: &Path, port: u32) -> Result<()> {
         let id = self.active_id("configure-agent-vsock")?;
         let socket_path = path_to_cstring("krun_add_vsock_port2", socket_path)?;
@@ -293,6 +349,109 @@ impl KrunContext {
             status,
             "failed to map the guest agent port to a Linux Unix socket",
         )
+    }
+
+    pub(crate) fn set_workdir(&mut self, workdir: &str) -> Result<()> {
+        let id = self.active_id("krun_set_workdir")?;
+        let workdir = value_to_cstring("krun_set_workdir", "working directory", workdir)?;
+        // SAFETY: the context remains exclusively owned and the C string is
+        // retained for the duration of the call.
+        let status = unsafe { (self.api.set_workdir)(id, workdir.as_ptr()) };
+        check_status(
+            "krun_set_workdir",
+            status,
+            "failed to configure the Linux KVM guest working directory",
+        )
+    }
+
+    pub(crate) fn set_exec(
+        &mut self,
+        executable: &str,
+        arguments: &[String],
+        environment: &[(String, String)],
+    ) -> Result<()> {
+        let id = self.active_id("krun_set_exec")?;
+        let executable = value_to_cstring("krun_set_exec", "executable", executable)?;
+        let arguments = FfiStringArray::new("krun_set_exec", "arguments", arguments)?;
+        let environment_entries = Zeroizing::new(
+            environment
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>(),
+        );
+        let environment =
+            FfiStringArray::new("krun_set_exec", "environment", &environment_entries)?;
+
+        // SAFETY: the context is exclusively owned. All pointers refer to
+        // live allocations and both pointer tables have libkrun's fixed size.
+        let status = unsafe {
+            (self.api.set_exec)(
+                id,
+                executable.as_ptr(),
+                arguments.as_ptr(),
+                environment.as_ptr(),
+            )
+        };
+        check_status(
+            "krun_set_exec",
+            status,
+            "failed to configure the Linux KVM guest agent",
+        )
+    }
+
+    pub(crate) fn set_console_output(&mut self, output: &Path) -> Result<()> {
+        let id = self.active_id("krun_set_console_output")?;
+        let output = path_to_cstring("krun_set_console_output", output)?;
+        // SAFETY: the context remains exclusively owned and the C string is
+        // retained for the duration of the call.
+        let status = unsafe { (self.api.set_console_output)(id, output.as_ptr()) };
+        check_status(
+            "krun_set_console_output",
+            status,
+            "failed to configure Linux KVM console output",
+        )
+    }
+
+    pub(crate) fn start_enter(mut self, kvm_device: &LinuxKvmDevice) -> Result<i32> {
+        self.api.reverify_runtime()?;
+        kvm_device.reverify()?;
+        let system_image = self.system_image.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "Linux KVM VM entry requires a manifest-bound immutable system image",
+            )
+            .for_operation("krun_start_enter")
+        })?;
+        system_image.reverify(self.api.runtime_bundle())?;
+        let runtime_share = self.runtime_share.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "Linux KVM VM entry requires one protected per-generation runtime share",
+            )
+            .for_operation("krun_start_enter")
+        })?;
+        runtime_share.reverify()?;
+        let id = self.id.take().ok_or_else(|| {
+            Error::new(
+                ErrorCode::FailedPrecondition,
+                "libkrun context has already been released",
+            )
+            .for_operation("krun_start_enter")
+        })?;
+
+        // SAFETY: the live context is exclusively owned. libkrun consumes it
+        // before VM construction and returns either a guest status or a
+        // negative errno-style entry failure.
+        let status = unsafe { (self.api.start_enter)(id) };
+        if status < 0 {
+            Err(ffi_error(
+                "krun_start_enter",
+                status,
+                "failed to enter the Linux KVM utility VM",
+            ))
+        } else {
+            Ok(status)
+        }
     }
 
     pub(crate) fn close(mut self) -> Result<()> {
@@ -537,37 +696,6 @@ fn required_file(
                 role.as_str()
             ),
         )
-    })
-}
-
-fn path_to_cstring(operation: &'static str, path: &Path) -> Result<CString> {
-    let value = path.to_str().ok_or_else(|| {
-        Error::new(
-            ErrorCode::InvalidArgument,
-            format!("path is not valid UTF-8: {}", path.display()),
-        )
-        .for_operation(operation)
-    })?;
-    CString::new(value).map_err(|_| {
-        Error::new(
-            ErrorCode::InvalidArgument,
-            "path contains an embedded NUL byte",
-        )
-        .for_operation(operation)
-    })
-}
-
-fn value_to_cstring(
-    operation: &'static str,
-    description: &'static str,
-    value: &str,
-) -> Result<CString> {
-    CString::new(value).map_err(|_| {
-        Error::new(
-            ErrorCode::InvalidArgument,
-            format!("{description} contains an embedded NUL byte"),
-        )
-        .for_operation(operation)
     })
 }
 

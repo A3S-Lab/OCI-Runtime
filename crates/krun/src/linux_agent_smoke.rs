@@ -5,13 +5,6 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use crate::macos_context::{KrunContext, MacosKrunApi};
-use crate::macos_system_image::MacosSystemImage;
-use crate::unix_process::{
-    read_bounded_worker_output, resolve_agent_socket, resolve_console, terminate_and_wait,
-    wait_for_worker,
-};
-use crate::{KrunAgentVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
 use a3s_oci_agent_protocol::{
     AgentTransportQualificationRequest, AgentVsockEndpoint, AGENT_RECOVERY_REPORT_ENV,
     AGENT_RUNTIME_SHARE_ENV, AGENT_RUNTIME_SHARE_TAG, AGENT_SESSION_TOKEN_FILE_ENV,
@@ -20,9 +13,19 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
 
+use crate::linux_context::{KrunContext, LinuxKrunApi};
+use crate::linux_kvm_device::LinuxKvmDevice;
+use crate::linux_runtime_share::LinuxRuntimeShare;
+use crate::linux_system_image::LinuxSystemImage;
+use crate::unix_process::{
+    read_bounded_worker_output, resolve_agent_socket, resolve_console, terminate_and_wait,
+    wait_for_worker,
+};
+use crate::{KrunAgentVmSmokeReport, LinuxBootAssetsEvidence, VmConfig};
+
 const AGENT_GUEST_PATH: &str = "/usr/bin/a3s-oci-agent";
-const WORKER_COMMAND: &str = "__macos-agent-vm-worker";
-const WORKER_SCHEMA_VERSION: &str = "a3s.oci.macos-agent-vm-worker.v2";
+const WORKER_COMMAND: &str = "__linux-agent-vm-worker";
+const WORKER_SCHEMA_VERSION: &str = "a3s.oci.linux-kvm-agent-vm-worker.v1";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_WORKER_OUTPUT_BYTES: u64 = 64 * 1024;
 
@@ -34,8 +37,10 @@ struct WorkerEvidence {
     vm_configured: bool,
     rootfs_configured: bool,
     runtime_share_configured: bool,
+    kvm_device_opened: bool,
+    kvm_api_verified: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    macos_boot_assets: Option<MacosBootAssetsEvidence>,
+    linux_boot_assets: Option<LinuxBootAssetsEvidence>,
     agent_binary_present: bool,
     agent_vsock_configured: bool,
     workload_configured: bool,
@@ -54,7 +59,9 @@ impl WorkerEvidence {
             vm_configured: false,
             rootfs_configured: false,
             runtime_share_configured: false,
-            macos_boot_assets: None,
+            kvm_device_opened: false,
+            kvm_api_verified: false,
+            linux_boot_assets: None,
             agent_binary_present: false,
             agent_vsock_configured: false,
             workload_configured: false,
@@ -65,7 +72,7 @@ impl WorkerEvidence {
     }
 }
 
-pub(crate) struct MacosAgentVmConfig<'a> {
+pub(crate) struct LinuxAgentVmConfig<'a> {
     pub(crate) system_image_manifest: &'a Path,
     pub(crate) runtime_share: &'a Path,
     pub(crate) guest_token_file: &'a str,
@@ -77,8 +84,8 @@ pub(crate) struct MacosAgentVmConfig<'a> {
     pub(crate) vm: VmConfig,
 }
 
-pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgentVmSmokeReport {
-    let MacosAgentVmConfig {
+pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgentVmSmokeReport {
+    let LinuxAgentVmConfig {
         system_image_manifest,
         runtime_share,
         guest_token_file,
@@ -89,38 +96,17 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         transport_qualification,
         vm: config,
     } = configuration;
-    let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Macos, config);
-    // The parent intentionally does not load libkrun. Only bounded worker
-    // evidence may advance the native setup fields.
+    let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
+    // Native libraries are loaded only in the bounded worker, never in this
+    // public shim parent or the host runtime.
     report.runtime_bundle_loaded = false;
-    let runtime_share = match canonical_runtime_share(runtime_share) {
-        Ok(runtime_share) => runtime_share,
-        Err(reason) => {
-            report.reason = Some(reason);
+    let runtime_share = match LinuxRuntimeShare::open(runtime_share) {
+        Ok(runtime_share) => runtime_share.path().to_path_buf(),
+        Err(error) => {
+            report.reason = Some(error.to_string());
             return report;
         }
     };
-    let state_directory = runtime_share.join("run");
-    let state_metadata = fs::symlink_metadata(&state_directory).map_err(|error| {
-        format!(
-            "failed to inspect writable runtime-state directory {}: {error}",
-            state_directory.display()
-        )
-    });
-    match state_metadata {
-        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
-        Ok(_) => {
-            report.reason = Some(format!(
-                "runtime-state path must be a real directory inside the writable share: {}",
-                state_directory.display()
-            ));
-            return report;
-        }
-        Err(reason) => {
-            report.reason = Some(reason);
-            return report;
-        }
-    }
     report.runtime_share_configured = true;
     let console = match resolve_console(console) {
         Ok(console) => console,
@@ -169,6 +155,7 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         .arg("--socket-path")
         .arg(&socket)
         .env_remove(AGENT_TRANSPORT_QUALIFICATION_ENV)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     if let Some(path) = guest_recovery_report {
@@ -191,7 +178,7 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         Ok(child) => child,
         Err(error) => {
             report.reason = Some(format!(
-                "failed to start the macOS guest-agent VM worker: {error}"
+                "failed to start the Linux KVM guest-agent worker: {error}"
             ));
             return report;
         }
@@ -207,10 +194,11 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
             let cleanup_error = terminate_and_wait(&mut child).err();
             report.reason = Some(match cleanup_error {
                 Some(cleanup_error) => format!(
-                    "failed to wait for the macOS guest-agent VM worker: {error}; \
-                     worker cleanup also failed: {cleanup_error}"
+                    "failed to wait for the Linux KVM guest-agent worker: {error}; worker cleanup also failed: {cleanup_error}"
                 ),
-                None => format!("failed to wait for the macOS guest-agent VM worker: {error}"),
+                None => format!(
+                    "failed to wait for the Linux KVM guest-agent worker: {error}"
+                ),
             });
             None
         }
@@ -223,7 +211,9 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
             report.vm_configured = evidence.vm_configured;
             report.rootfs_configured = evidence.rootfs_configured;
             report.runtime_share_configured = evidence.runtime_share_configured;
-            report.macos_boot_assets = evidence.macos_boot_assets.clone();
+            report.kvm_device_opened = evidence.kvm_device_opened;
+            report.kvm_api_verified = evidence.kvm_api_verified;
+            report.linux_boot_assets = evidence.linux_boot_assets.clone();
             report.agent_binary_present = evidence.agent_binary_present;
             report.agent_vsock_configured = evidence.agent_vsock_configured;
             report.workload_configured = evidence.workload_configured;
@@ -243,8 +233,7 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         if worker_exit.timed_out {
             report.reason.get_or_insert_with(|| {
                 format!(
-                    "macOS guest-agent VM worker exceeded the {} second timeout and was \
-                     terminated",
+                    "Linux KVM guest-agent worker exceeded the {} second timeout and was terminated",
                     WORKER_TIMEOUT.as_secs()
                 )
             });
@@ -257,7 +246,7 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
             if report.guest_exit_code.is_none() {
                 report.reason.get_or_insert_with(|| {
                     format!(
-                        "macOS guest-agent VM worker exited without a guest status: {}",
+                        "Linux KVM guest-agent worker exited without a guest status: {}",
                         worker_exit.status
                     )
                 });
@@ -280,10 +269,12 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         && report.vm_configured
         && report.rootfs_configured
         && report.runtime_share_configured
+        && report.kvm_device_opened
+        && report.kvm_api_verified
         && report
-            .macos_boot_assets
+            .linux_boot_assets
             .as_ref()
-            .is_some_and(MacosBootAssetsEvidence::is_success)
+            .is_some_and(LinuxBootAssetsEvidence::is_success)
         && report.agent_binary_present
         && report.agent_vsock_configured
         && report.workload_configured
@@ -295,7 +286,7 @@ pub(crate) fn agent_vm_smoke(configuration: MacosAgentVmConfig<'_>) -> KrunAgent
         report.status = CapabilityStatus::Available;
         report.reason = None;
     } else if report.reason.is_none() {
-        report.reason = Some("guest agent did not satisfy the shim smoke contract".into());
+        report.reason = Some("guest agent did not satisfy the Linux KVM shim contract".into());
     }
     report
 }
@@ -310,9 +301,9 @@ pub(crate) fn run_worker(
     transport_qualification: Option<&AgentTransportQualificationRequest>,
 ) -> bool {
     let mut evidence = WorkerEvidence::initial();
-    let runtime_share = match canonical_runtime_share(runtime_share) {
+    let runtime_share = match LinuxRuntimeShare::open(runtime_share) {
         Ok(runtime_share) => runtime_share,
-        Err(reason) => return fail_worker(&mut evidence, reason),
+        Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
     let console = match resolve_console(console) {
         Ok(console) => console,
@@ -323,31 +314,29 @@ pub(crate) fn run_worker(
         Err(reason) => return fail_worker(&mut evidence, reason),
     };
 
-    let api = match MacosKrunApi::load() {
+    let api = match LinuxKrunApi::load() {
         Ok(api) => {
             evidence.runtime_bundle_loaded = true;
             api
         }
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
-    let system_image = match MacosSystemImage::load(system_image_manifest, api.runtime_provenance())
-    {
+    let system_image = match LinuxSystemImage::load(system_image_manifest, api.runtime_bundle()) {
         Ok(system_image) => system_image,
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
-    if system_image.image_path().starts_with(&runtime_share)
-        || runtime_share.starts_with(system_image.image_path())
-        || system_image.manifest_path().starts_with(&runtime_share)
-        || runtime_share.starts_with(system_image.manifest_path())
+    if paths_overlap(system_image.manifest_path(), runtime_share.path())
+        || paths_overlap(system_image.image_path(), runtime_share.path())
     {
         return fail_worker(
             &mut evidence,
-            "immutable system image, manifest, and writable runtime share must be disjoint"
+            "immutable Linux KVM system assets and writable runtime share must be disjoint"
                 .to_string(),
         );
     }
     evidence.agent_binary_present = true;
-    evidence.macos_boot_assets = Some(system_image.evidence(true));
+    evidence.linux_boot_assets = Some(system_image.evidence());
+
     let config = crate::fallback_config();
     let mut context = match KrunContext::create(api) {
         Ok(context) => {
@@ -364,7 +353,7 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.rootfs_configured = true;
-    if let Err(error) = context.add_virtiofs(AGENT_RUNTIME_SHARE_TAG, &runtime_share) {
+    if let Err(error) = context.add_runtime_share(AGENT_RUNTIME_SHARE_TAG, runtime_share) {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.runtime_share_configured = true;
@@ -404,51 +393,46 @@ pub(crate) fn run_worker(
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.console_configured = true;
+    let kvm_device = match LinuxKvmDevice::open() {
+        Ok(device) => {
+            evidence.kvm_device_opened = true;
+            device
+        }
+        Err(error) => return fail_worker(&mut evidence, error.to_string()),
+    };
+    if let Err(error) = kvm_device.verify_api() {
+        return fail_worker(&mut evidence, error.to_string());
+    }
+    evidence.kvm_api_verified = true;
     evidence.enter_attempted = true;
 
     if let Err(error) = emit_worker_evidence(&evidence) {
         evidence.reason = Some(format!("failed to emit pre-entry worker evidence: {error}"));
         return false;
     }
-    match context.start_enter() {
+    match context.start_enter(&kvm_device) {
+        Ok(0) => emit_worker_evidence(&evidence).is_ok(),
         Ok(status) => fail_worker(
             &mut evidence,
-            format!("krun_start_enter unexpectedly returned status {status}"),
+            format!("Linux KVM guest agent returned non-zero status {status}"),
         ),
         Err(error) => fail_worker(&mut evidence, error.to_string()),
     }
 }
 
-fn canonical_runtime_share(path: &Path) -> Result<std::path::PathBuf, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "failed to inspect writable runtime share {}: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        return Err(format!(
-            "writable runtime share must be a real directory, not a symlink: {}",
-            path.display()
-        ));
-    }
-    path.canonicalize().map_err(|error| {
-        format!(
-            "failed to canonicalize writable runtime share {}: {error}",
-            path.display()
-        )
-    })
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
 }
 
 fn collect_worker_evidence(
     output_reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>,
 ) -> Result<WorkerEvidence, String> {
     let output_reader = output_reader
-        .ok_or_else(|| "macOS guest-agent VM worker stdout was unavailable".to_string())?;
+        .ok_or_else(|| "Linux KVM guest-agent worker stdout was unavailable".to_string())?;
     let output = output_reader
         .join()
-        .map_err(|_| "macOS guest-agent VM worker output reader panicked".to_string())?
-        .map_err(|error| format!("failed to read macOS guest-agent VM worker evidence: {error}"))?;
+        .map_err(|_| "Linux KVM guest-agent worker output reader panicked".to_string())?
+        .map_err(|error| format!("failed to read Linux KVM worker evidence: {error}"))?;
     parse_worker_evidence(&output)
 }
 
@@ -458,18 +442,17 @@ fn parse_worker_evidence(output: &[u8]) -> Result<WorkerEvidence, String> {
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
     {
-        let evidence: WorkerEvidence = serde_json::from_slice(line).map_err(|error| {
-            format!("macOS guest-agent VM worker emitted invalid evidence: {error}")
-        })?;
+        let evidence: WorkerEvidence = serde_json::from_slice(line)
+            .map_err(|error| format!("Linux KVM worker emitted invalid evidence: {error}"))?;
         if evidence.schema_version != WORKER_SCHEMA_VERSION {
             return Err(format!(
-                "macOS guest-agent VM worker emitted unsupported schema {}",
+                "Linux KVM worker emitted unsupported schema {}",
                 evidence.schema_version
             ));
         }
         latest = Some(evidence);
     }
-    latest.ok_or_else(|| "macOS guest-agent VM worker emitted no setup evidence".to_string())
+    latest.ok_or_else(|| "Linux KVM worker emitted no setup evidence".to_string())
 }
 
 fn emit_worker_evidence(evidence: &WorkerEvidence) -> io::Result<()> {
@@ -483,7 +466,7 @@ fn emit_worker_evidence(evidence: &WorkerEvidence) -> io::Result<()> {
 fn fail_worker(evidence: &mut WorkerEvidence, reason: String) -> bool {
     evidence.reason = Some(reason);
     if let Err(error) = emit_worker_evidence(evidence) {
-        eprintln!("a3s-oci-krun-shim: failed to emit worker failure evidence: {error}");
+        eprintln!("a3s-oci-krun-shim: failed to emit Linux KVM worker failure: {error}");
     }
     false
 }

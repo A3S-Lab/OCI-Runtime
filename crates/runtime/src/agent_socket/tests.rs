@@ -10,7 +10,7 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_sdk::{async_trait, Error, ErrorCode, Result};
 use tokio::process::{Child, Command};
 
-use super::{MacosAgentSocketListener, PRIVATE_DIRECTORY_MODE, PRIVATE_SOCKET_MODE};
+use super::{UnixAgentSocketListener, PRIVATE_DIRECTORY_MODE, PRIVATE_SOCKET_MODE};
 
 const CHILD_SOCKET_ENV: &str = "A3S_OCI_TEST_AGENT_SOCKET";
 const CHILD_TOKEN_ENV: &str = "A3S_OCI_TEST_AGENT_TOKEN";
@@ -23,7 +23,8 @@ struct CoreAgent;
 #[async_trait]
 impl GuestAgentService for CoreAgent {
     fn capabilities(&self) -> AgentCapabilities {
-        AgentCapabilities::core("0.1.0-test", "aarch64").expect("valid core capabilities")
+        AgentCapabilities::core("0.1.0-test", std::env::consts::ARCH)
+            .expect("valid core capabilities")
     }
 
     async fn create(&self, _request: AgentCreateRequest) -> Result<AgentState> {
@@ -47,11 +48,11 @@ impl GuestAgentService for CoreAgent {
     }
 }
 
-fn unique_listener() -> MacosAgentSocketListener {
-    MacosAgentSocketListener::bind(
+fn unique_listener() -> UnixAgentSocketListener {
+    UnixAgentSocketListener::bind(
         AgentVsockEndpoint::generate().expect("operating-system random source"),
     )
-    .expect("bind private macOS agent socket")
+    .expect("bind private Unix agent socket")
 }
 
 fn spawn_agent_child(socket_path: &Path, token: &SessionToken, expect_rejection: bool) -> Child {
@@ -85,7 +86,7 @@ async fn assert_child_succeeded(child: Child) {
 #[test]
 fn listener_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<MacosAgentSocketListener>();
+    assert_send_sync::<UnixAgentSocketListener>();
 }
 
 #[tokio::test]
@@ -188,7 +189,7 @@ async fn endpoint_modes_collisions_and_drop_cleanup_are_fail_closed() {
         PRIVATE_SOCKET_MODE
     );
 
-    let error = MacosAgentSocketListener::bind(endpoint)
+    let error = UnixAgentSocketListener::bind(endpoint)
         .expect_err("second endpoint owner must be rejected");
     assert_eq!(error.code, ErrorCode::Conflict);
     drop(listener);

@@ -9,11 +9,11 @@ use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
 
 use crate::macos_context::{KrunContext, MacosKrunApi};
-use crate::macos_process::{
+use crate::macos_system_image::MacosSystemImage;
+use crate::unix_process::{
     read_bounded_worker_output, require_absent, resolve_console, terminate_and_wait,
     wait_for_worker,
 };
-use crate::macos_system_image::MacosSystemImage;
 use crate::{KrunVmSmokeReport, MacosBootAssetsEvidence, VmConfig};
 use a3s_oci_agent_protocol::AGENT_RUNTIME_SHARE_TAG;
 
