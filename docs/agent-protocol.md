@@ -413,7 +413,7 @@ from one writable host share. The runtime accepts only the plain directory at
 only that exact directory to `krun_add_virtiofs` with tag
 `a3s-oci-runtime`. The Linux agent must mount it at
 `/run/a3s-oci-runtime` before it can read the one-time token or connect to the
-host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v4` records the separate
+host. Shim report schema `a3s.oci.krun-agent-vm-smoke.v5` records the separate
 device plus the exact immutable boot assets. Candidate-driver sessions require
 the runtime-share evidence and the digest of the selected system-image
 manifest. Bundle paths, token files, and recovery-report paths are then
@@ -427,6 +427,14 @@ the connected process is the direct worker child of the exact public libkrun
 shim. An unrelated peer is rejected before protocol bytes are read. A direct
 child with the wrong token is rejected during the following authentication
 step.
+
+Linux KVM uses the same one-session Unix endpoint contract below `/tmp`.
+`SO_PEERCRED` supplies the kernel-authenticated UID and PID, and the host reads
+that PID's procfs status to require the direct worker child of the exact shim.
+The shim itself must be the host runtime's direct child and the leader of its
+private process group. A pidfd pins the runtime-owner incarnation; owner death
+cleans the token handoff and terminates the exact shim/worker group after the
+bounded recovery grace.
 
 The last retained real WHPX `agent-vm-smoke` booted the static musl Linux
 agent, carried its CID-host port 4093 connection through libkrun to that
@@ -484,7 +492,7 @@ explicitly.
 The real macOS `agent-vm-smoke` builds the same agent as a static aarch64 musl
 binary, boots it through HVF, maps guest CID-host port 4093 to the verified
 Unix stream, and retains both the public shim PID and the direct VM worker PID
-in the stable `a3s.oci.agent-vm-smoke.v9` report schema. The current signed
+in the versioned `a3s.oci.agent-vm-smoke.v10` report schema. The current signed
 path negotiates protocol version 10 and the exact 20 workload operations plus
 `acknowledge-operations`. The missing-entitlement path
 must exit with status `2`, report no negotiation, terminate the shim process

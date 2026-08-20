@@ -10,16 +10,30 @@ mod agent_driver;
 mod agent_pipe;
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 mod agent_session;
 mod agent_smoke;
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 mod agent_smoke_process;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 mod agent_socket;
 mod box_whpx_service;
 mod cleanup_report;
@@ -88,6 +102,11 @@ pub use a3s_oci_agent_protocol::{
 #[cfg(windows)]
 pub use agent_pipe::WindowsAgentPipeListener;
 pub use agent_smoke::agent_vm_smoke;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub use agent_socket::LinuxAgentSocketListener;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use agent_socket::MacosAgentSocketListener;
 pub use box_whpx_service::{

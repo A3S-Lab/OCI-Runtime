@@ -129,9 +129,57 @@ pub fn agent_vm_smoke(
         })
     }
 
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    {
+        let Some(system_image_manifest) = system_image_manifest else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
+            report.reason =
+                Some("the Linux KVM guest-agent bridge requires a system-image manifest".into());
+            return report;
+        };
+        let Some(runtime_share) = handoff.runtime_share else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
+            report.reason =
+                Some("the Linux KVM guest-agent bridge requires a protected runtime share".into());
+            return report;
+        };
+        let Some(guest_token_file) = handoff.guest_token_file else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
+            report.reason = Some(
+                "the Linux KVM guest-agent bridge requires a protected guest token file".into(),
+            );
+            return report;
+        };
+        let Some(socket_path) = socket_path else {
+            let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
+            report.reason =
+                Some("the Linux KVM guest-agent bridge requires a Unix socket path".into());
+            return report;
+        };
+        let _ = (rootfs, token);
+        crate::linux_agent_smoke::agent_vm_smoke(crate::linux_agent_smoke::LinuxAgentVmConfig {
+            system_image_manifest,
+            runtime_share,
+            guest_token_file,
+            console,
+            endpoint,
+            socket: socket_path,
+            guest_recovery_report: handoff.guest_recovery_report,
+            transport_qualification: handoff.transport_qualification,
+            vm: config,
+        })
+    }
+
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     {
         let _ = (

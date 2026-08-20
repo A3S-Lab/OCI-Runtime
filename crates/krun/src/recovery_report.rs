@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
@@ -17,9 +17,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     MoveFileExW, FILE_ATTRIBUTE_REPARSE_POINT, MOVEFILE_WRITE_THROUGH,
 };
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(unix)]
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
 pub(crate) struct RecoveryReportHandoff {
@@ -88,7 +88,7 @@ impl RecoveryReportHandoff {
                 ),
             ));
         }
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(unix)]
         if let Err(error) = fs::set_permissions(
             &directory,
             fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
@@ -343,7 +343,7 @@ fn plain_private_directory(metadata: &fs::Metadata) -> bool {
     {
         metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
     }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(unix)]
     {
         // SAFETY: geteuid has no preconditions or failure return.
         metadata.uid() == unsafe { libc::geteuid() }
@@ -359,7 +359,7 @@ fn plain_private_file(metadata: &fs::Metadata) -> bool {
     {
         metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
     }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(unix)]
     {
         // SAFETY: geteuid has no preconditions or failure return.
         metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o777 == PRIVATE_FILE_MODE
@@ -369,7 +369,7 @@ fn plain_private_file(metadata: &fs::Metadata) -> bool {
 fn private_new_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(unix)]
     options
         .mode(PRIVATE_FILE_MODE)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
@@ -516,7 +516,7 @@ mod tests {
 
     fn create_private_directory(path: &Path) {
         std::fs::create_dir(path).expect("create private test directory");
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
@@ -527,7 +527,7 @@ mod tests {
 
     fn write_private_file(path: &Path, contents: &[u8]) {
         std::fs::write(path, contents).expect("write private test file");
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 

@@ -18,10 +18,22 @@ pub(crate) struct RunningShim {
 
 impl RunningShim {
     pub(crate) fn spawn(command: &mut Command) -> io::Result<Self> {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
+        ))]
         command.process_group(0);
         let mut child = command.spawn()?;
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
+        ))]
         verify_process_group(&mut child)?;
         let stdout = child
             .stdout
@@ -106,7 +118,13 @@ impl RunningShim {
     }
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 fn verify_process_group(child: &mut Child) -> io::Result<()> {
     let process_id = child
         .id()
@@ -130,7 +148,13 @@ fn verify_process_group(child: &mut Child) -> io::Result<()> {
     Err(error)
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 async fn terminate_process_tree(child: &mut Child) -> io::Result<()> {
     let Some(process_id) = child.id() else {
         return Ok(());
@@ -151,7 +175,13 @@ async fn terminate_process_tree(child: &mut Child) -> io::Result<()> {
     }
 }
 
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+)))]
 async fn terminate_process_tree(child: &mut Child) -> io::Result<()> {
     child.kill().await
 }
@@ -207,7 +237,16 @@ async fn collect_output(
     }
 }
 
-#[cfg(all(test, target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    test,
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )
+))]
 mod tests {
     use std::process::Stdio;
     use std::time::{Duration, Instant};

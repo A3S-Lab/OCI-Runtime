@@ -389,13 +389,13 @@ target/debug/a3s-oci agent-vm-smoke \
   --console "$asset_dir/agent-console.log"
 ```
 
-The top-level report keeps the stable `a3s.oci.agent-vm-smoke.v9` schema name;
+The top-level report uses the versioned `a3s.oci.agent-vm-smoke.v10` schema name;
 the negotiated protocol is reported independently. A successful current Apple
 Silicon qualification must retain the following contract:
 
 ```json
 {
-  "schema_version": "a3s.oci.agent-vm-smoke.v9",
+  "schema_version": "a3s.oci.agent-vm-smoke.v10",
   "platform": "macos",
   "status": "available",
   "endpoint_bound": true,
@@ -709,7 +709,7 @@ connection must then make the guest executor force-stop any live configured
 process and its namespace supervisor, and remove its runtime root before the
 agent and VM exit.
 
-The nested `a3s.oci.agent-vm-smoke.v9` report independently requires exact
+The nested `a3s.oci.agent-vm-smoke.v10` report independently requires exact
 endpoint removal, shim and direct VM-worker PID disappearance, and complete
 `(fd, fd_type)` inventory restoration. The outer report additionally requires
 marker removal and no new `a3s-oci-agent-*` directory under the guest `/run`.

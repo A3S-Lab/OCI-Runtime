@@ -160,6 +160,49 @@ describes only the isolated native context gate. The `libkrun-kvm` driver
 therefore remains `probe-only` until the immutable system root, authenticated
 guest session, complete SDK/recovery matrices, and real-KVM soak pass.
 
+## Authenticated Linux KVM entry gate
+
+The stronger entry gate uses the immutable system-image compatibility set and
+never falls back to the Native Linux driver. Run it with the exact target
+manifest:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  bash .github/scripts/linux-kvm-agent-entry.sh
+```
+
+The Host first validates a separate owner-only runtime share and binds a
+same-UID Unix socket. It starts the shim as the direct child and leader of a
+private process group. The shim pins the Host owner with a pidfd, writes the
+one-time token below the exact runtime share, and starts a separate worker for
+the process-takeover libkrun call. Immediately before entry, that worker:
+
+1. revalidates the manifest, raw image, libkrun, firmware, exported kernel,
+   static Guest Agent, and target architecture;
+2. attaches the immutable root disk read-only and exports only the
+   descriptor-pinned, UID-owned, mode-`0700` generation share;
+3. configures the fixed plain-vsock Agent port, Guest executable, environment,
+   and bounded console;
+4. opens a real nonsymlink `/dev/kvm` character device read/write, pins its
+   device/inode identity, requires API version 12, and repeats those checks at
+   the final entry boundary;
+5. enters the VM and lets the Host accept only the worker PID reported by
+   `SO_PEERCRED` whose direct parent is the exact shim.
+
+Successful negotiation requires protocol version 10, the target architecture,
+and all 21 Agent operations. The outer
+`a3s.oci.agent-vm-smoke.v10` report binds that session to nested
+`a3s.oci.krun-agent-vm-smoke.v5` boot-asset and KVM evidence.
+
+The same script is a strict unavailable-host gate. When the feature probe says
+KVM is unavailable, it requires the worker to finish all non-KVM configuration
+and then fail with explicit KVM evidence. It also compares endpoint and process
+inventories and rejects leftover token or recovery handoffs. When the probe
+says KVM is available, only a real authenticated Guest boot and zero exit are
+accepted. CI runs this contract for x86_64 and AArch64; the driver remains
+`probe-only` until successful retained real-entry evidence and the later
+lifecycle, recovery, and soak gates pass on every advertised architecture.
+
 ## Experimental lifecycle gate
 
 The `native-linux-smoke` command opens the native driver beneath isolated

@@ -143,6 +143,14 @@ impl LinuxSystemImage {
         PathBuf::from(format!("/proc/self/fd/{}", self.image.file.as_raw_fd()))
     }
 
+    pub(crate) fn manifest_path(&self) -> &Path {
+        &self.manifest.path
+    }
+
+    pub(crate) fn image_path(&self) -> &Path {
+        &self.image.path
+    }
+
     pub(crate) fn evidence(&self) -> LinuxBootAssetsEvidence {
         self.evidence.clone()
     }

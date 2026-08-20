@@ -1446,6 +1446,15 @@ release-promotion gates above.
 - [ ] Start the KVM worker in an isolated shim, mount only the protected
   per-generation runtime share, and authenticate the AF_VSOCK guest-agent
   session without falling back to host-kernel execution.
+
+  The current candidate implements the isolated worker, descriptor-pinned
+  runtime share and KVM device, pidfd-bound direct shim owner, kernel-verified
+  direct Unix peer, one-time token handoff, protocol-v10 negotiation, exact
+  immutable boot evidence, and process/endpoint/handoff cleanup. The x86_64
+  and AArch64 CI lanes require real authenticated entry whenever their KVM
+  probe is available and otherwise retain explicit post-configuration KVM
+  failure evidence. This parent remains open until both advertised
+  architectures retain successful real-entry reports.
 - [ ] Implement a launch-ready KVM `RuntimeDriver` through the shared
   twenty-operation adapter with exact-generation routing, bounded shutdown,
   and complete process, endpoint, share, and runtime-root ownership.
@@ -1460,7 +1469,11 @@ release-promotion gates above.
 - [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM
   device and compatibility drift across the system root and guest agent. The
   independent probe already covers absent, inaccessible, ioctl-failing, and
-  wrong-version KVM devices.
+  wrong-version KVM devices. The entry worker now repeats real-character-device,
+  read/write, identity, and API-version checks immediately before libkrun so an
+  absent or unusable device returns versioned evidence instead of relying on a
+  native-process abort; injected post-probe initialization failure and the
+  complete compatibility-drift matrix remain open.
 
 Exit gate: a fresh KVM-capable Linux host boots the pinned utility VM, passes
 the complete SDK and recovery matrices through the authenticated guest agent,

@@ -15,12 +15,16 @@ use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde_json::Value;
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 use sha2::{Digest, Sha256};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use tokio::net::windows::named_pipe::NamedPipeServer;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -29,14 +33,14 @@ use tokio::time::timeout;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use crate::agent_pipe::WindowsAgentPipeListener;
 use crate::agent_smoke_process::{BoundedOutput, CompletedShim, RunningShim, MAX_CAPTURE_BYTES};
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-use crate::agent_socket::MacosAgentSocketListener;
+#[cfg(unix)]
+use crate::agent_socket::UnixAgentSocketListener;
 use crate::report::AgentVmSmokeReport;
 
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DIAGNOSTIC_CHARS: usize = 2_048;
-const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v4";
+const SHIM_REPORT_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v5";
 const SHIM_TRUE_FIELDS: &[&str] = &[
     "runtime_bundle_loaded",
     "context_created",
@@ -52,7 +56,7 @@ const SHIM_TRUE_FIELDS: &[&str] = &[
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 type PlatformAgentStream = NamedPipeServer;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(unix)]
 type PlatformAgentStream = UnixStream;
 
 pub(crate) struct AgentVmSession {
@@ -218,6 +222,10 @@ impl UtilityVmSession {
         })
     }
 
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     pub(crate) async fn connect_with_separate_runtime_share_and_host_fault_injector(
         shim: &Path,
         rootfs: &Path,
@@ -249,6 +257,10 @@ impl UtilityVmSession {
         })
     }
 
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     pub(crate) async fn connect_with_separate_runtime_share_and_guest_qualification(
         shim: &Path,
         rootfs: &Path,
@@ -317,6 +329,10 @@ impl UtilityVmSession {
         self.shutdown_inner(None).await
     }
 
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     pub(crate) async fn shutdown_with_failure(
         &self,
         reason: impl Into<String>,
@@ -454,7 +470,11 @@ impl AgentVmSession {
         };
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let (system_image_manifest, expected_system_image_manifest_sha256) = {
             let Some(path) = system_image_manifest else {
@@ -492,7 +512,11 @@ impl AgentVmSession {
         };
         #[cfg(not(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         )))]
         let expected_system_image_manifest_sha256 = {
             let _ = system_image_manifest;
@@ -532,6 +556,19 @@ impl AgentVmSession {
                 ))
             }
         };
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        if runtime_share
+            .as_ref()
+            .is_some_and(|share| paths_overlap(&rootfs, share))
+        {
+            return Err(failed(
+                report,
+                "Linux KVM bootstrap root and writable runtime share must be disjoint",
+            ));
+        }
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         if runtime_share
             .as_ref()
@@ -548,9 +585,27 @@ impl AgentVmSession {
                 Ok(path) => Some(path),
                 Err(reason) => return Err(failed(report, reason)),
             };
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        let runtime_share = match runtime_share {
+            Some(path) => match prepare_linux_runtime_share(path).await {
+                Ok(path) => Some(path),
+                Err(reason) => return Err(failed(report, reason)),
+            },
+            None => return Err(failed(
+                report,
+                "Linux KVM utility-VM sessions require a protected per-generation runtime share",
+            )),
+        };
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let system_image_manifest_path = match system_image_manifest.as_deref() {
             Some(path) => path,
@@ -563,7 +618,11 @@ impl AgentVmSession {
         };
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let system_image_directory = match system_image_manifest_path.parent() {
             Some(path) => path,
@@ -576,7 +635,11 @@ impl AgentVmSession {
         };
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let runtime_share_path = match runtime_share.as_deref() {
             Some(path) => path,
@@ -589,7 +652,11 @@ impl AgentVmSession {
         };
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         if paths_overlap(system_image_directory, runtime_share_path) {
             return Err(failed(
@@ -599,12 +666,20 @@ impl AgentVmSession {
         }
         #[cfg(not(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         )))]
         let _ = runtime_share;
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         ))]
         let recovery_report = match recovery_report {
             Some(path) => match prepare_recovery_report_path(path).await {
@@ -615,7 +690,11 @@ impl AgentVmSession {
         };
         #[cfg(not(any(
             all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )
         )))]
         let _ = recovery_report;
 
@@ -634,8 +713,8 @@ impl AgentVmSession {
             }
             Err(error) => return Err(failed(report, error.to_string())),
         };
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        let listener = match MacosAgentSocketListener::bind(endpoint.clone()) {
+        #[cfg(unix)]
+        let listener = match UnixAgentSocketListener::bind(endpoint.clone()) {
             Ok(listener) => {
                 report.endpoint_bound = true;
                 listener
@@ -664,7 +743,7 @@ impl AgentVmSession {
             .arg(&console)
             .arg("--pipe-name")
             .arg(endpoint.pipe_name());
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        #[cfg(unix)]
         {
             command
                 .arg("--system-image-manifest")
@@ -813,14 +892,22 @@ impl AgentVmSession {
             runtime_share_required: {
                 #[cfg(any(
                     all(target_os = "windows", target_arch = "x86_64"),
-                    all(target_os = "macos", target_arch = "aarch64")
+                    all(target_os = "macos", target_arch = "aarch64"),
+                    all(
+                        target_os = "linux",
+                        any(target_arch = "x86_64", target_arch = "aarch64")
+                    )
                 ))]
                 {
                     runtime_share.is_some()
                 }
                 #[cfg(not(any(
                     all(target_os = "windows", target_arch = "x86_64"),
-                    all(target_os = "macos", target_arch = "aarch64")
+                    all(target_os = "macos", target_arch = "aarch64"),
+                    all(
+                        target_os = "linux",
+                        any(target_arch = "x86_64", target_arch = "aarch64")
+                    )
                 )))]
                 {
                     false
@@ -1118,7 +1205,11 @@ async fn prepare_console_path(path: &Path) -> Result<PathBuf, String> {
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 async fn prepare_recovery_report_path(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
@@ -1195,6 +1286,7 @@ fn parse_shim_report(
         return Err("libkrun shim did not report the guest-agent VM path available".into());
     }
     let expected_platform = match platform {
+        HostPlatform::Linux => "linux",
         HostPlatform::Windows => "windows",
         HostPlatform::Macos => "macos",
         _ => return Err("guest-agent session ran on an unsupported host platform".into()),
@@ -1218,6 +1310,74 @@ fn parse_shim_report(
         return Err(
             "libkrun shim did not configure the required per-generation runtime share".into(),
         );
+    }
+    if matches!(platform, HostPlatform::Linux) {
+        for field in ["kvm_device_opened", "kvm_api_verified"] {
+            if object.get(field).and_then(Value::as_bool) != Some(true) {
+                return Err(format!(
+                    "libkrun shim Linux KVM evidence field `{field}` is not true"
+                ));
+            }
+        }
+        let expected = expected_system_image_manifest_sha256.ok_or_else(|| {
+            "host did not retain the required Linux KVM system-image manifest digest".to_string()
+        })?;
+        let assets = object
+            .get("linux_boot_assets")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                "libkrun shim did not retain Linux KVM immutable boot-asset evidence".to_string()
+            })?;
+        if assets.get("manifest_sha256").and_then(Value::as_str) != Some(expected) {
+            return Err(
+                "libkrun shim Linux KVM manifest digest does not match the host digest".into(),
+            );
+        }
+        if assets.get("target_arch").and_then(Value::as_str) != Some(std::env::consts::ARCH) {
+            return Err("libkrun shim Linux KVM target architecture is unexpected".into());
+        }
+        if assets.get("root_disk_read_only").and_then(Value::as_bool) != Some(true) {
+            return Err(
+                "libkrun shim Linux KVM boot asset `root_disk_read_only` is not true".into(),
+            );
+        }
+        for field in [
+            "system_image_sha256",
+            "guest_agent_sha256",
+            "runtime_archive_sha256",
+            "libkrun_sha256",
+            "firmware_sha256",
+            "kernel_bundle_sha256",
+        ] {
+            let digest = assets.get(field).and_then(Value::as_str).ok_or_else(|| {
+                format!("libkrun shim Linux KVM boot-asset field `{field}` is missing")
+            })?;
+            if !is_canonical_hex(digest, 64) {
+                return Err(format!(
+                    "libkrun shim Linux KVM boot-asset field `{field}` is not a canonical SHA-256"
+                ));
+            }
+        }
+        if assets.get("system_image_size").and_then(Value::as_u64) != Some(67_108_864)
+            || assets
+                .get("guest_agent_size")
+                .and_then(Value::as_u64)
+                .is_none_or(|size| size == 0)
+            || assets
+                .get("kernel_bundle_size")
+                .and_then(Value::as_u64)
+                .is_none_or(|size| size == 0)
+            || !assets
+                .get("kernel_guest_load_address")
+                .and_then(Value::as_str)
+                .is_some_and(|address| address.starts_with("0x"))
+            || !assets
+                .get("kernel_entry_address")
+                .and_then(Value::as_str)
+                .is_some_and(|address| address.starts_with("0x"))
+        {
+            return Err("libkrun shim Linux KVM boot-asset provenance is unexpected".into());
+        }
     }
     if matches!(platform, HostPlatform::Windows) {
         let expected = expected_system_image_manifest_sha256.ok_or_else(|| {
@@ -1402,9 +1562,94 @@ async fn prepare_macos_runtime_share(path: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+async fn prepare_linux_runtime_share(path: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+
+    if !path.is_absolute() {
+        return Err(format!(
+            "Linux KVM runtime share must be absolute: {}",
+            path.display()
+        ));
+    }
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        format!(
+            "failed to inspect Linux KVM runtime share {}: {error}",
+            path.display()
+        )
+    })?;
+    // SAFETY: geteuid has no arguments and cannot fail.
+    let effective_user_id = unsafe { libc::geteuid() };
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_dir()
+        || metadata.uid() != effective_user_id
+        || metadata.mode() & 0o777 != PRIVATE_DIRECTORY_MODE
+    {
+        return Err(format!(
+            "Linux KVM runtime share must be a real UID-{effective_user_id} directory with mode {PRIVATE_DIRECTORY_MODE:03o}: {}",
+            path.display()
+        ));
+    }
+    let path = tokio::fs::canonicalize(path).await.map_err(|error| {
+        format!(
+            "failed to canonicalize Linux KVM runtime share {}: {error}",
+            path.display()
+        )
+    })?;
+    let state = path.join("run");
+    match tokio::fs::symlink_metadata(&state).await {
+        Ok(metadata)
+            if metadata.file_type().is_dir()
+                && !metadata.file_type().is_symlink()
+                && metadata.uid() == effective_user_id
+                && metadata.mode() & 0o777 == PRIVATE_DIRECTORY_MODE => {}
+        Ok(_) => {
+            return Err(format!(
+                "Linux KVM runtime-state path must be a real private directory: {}",
+                state.display()
+            ))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            tokio::fs::create_dir(&state).await.map_err(|error| {
+                format!(
+                    "failed to create Linux KVM runtime-state directory {}: {error}",
+                    state.display()
+                )
+            })?;
+            tokio::fs::set_permissions(
+                &state,
+                std::fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to protect Linux KVM runtime-state directory {}: {error}",
+                    state.display()
+                )
+            })?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect Linux KVM runtime-state directory {}: {error}",
+                state.display()
+            ))
+        }
+    }
+    Ok(path)
+}
+
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 pub(crate) async fn sha256_path(path: &Path) -> Result<String, String> {
     use tokio::io::AsyncReadExt;
@@ -1458,6 +1703,7 @@ fn expected_operations() -> Vec<AgentOperation> {
 
 const fn expected_guest_architecture(platform: HostPlatform) -> &'static str {
     match platform {
+        HostPlatform::Linux => std::env::consts::ARCH,
         HostPlatform::Windows => "x86_64",
         HostPlatform::Macos => "aarch64",
         _ => "",
@@ -1473,9 +1719,9 @@ async fn accept_bridge(
     Ok((stream, shim_process_id))
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(unix)]
 async fn accept_bridge(
-    listener: MacosAgentSocketListener,
+    listener: UnixAgentSocketListener,
     shim_process_id: u32,
 ) -> a3s_oci_sdk::Result<(PlatformAgentStream, u32)> {
     listener.accept_from_child(shim_process_id).await
@@ -1491,10 +1737,13 @@ fn failed(mut report: AgentVmSmokeReport, reason: impl Into<String>) -> AgentVmS
 }
 
 fn failed_with_output(
-    report: AgentVmSmokeReport,
+    mut report: AgentVmSmokeReport,
     reason: &str,
     completed: &CompletedShim,
 ) -> AgentVmSmokeReport {
+    if report.shim_report.is_none() {
+        report.shim_report = bounded_unverified_shim_report(&completed.stdout);
+    }
     let mut details = Vec::new();
     details.extend(completed.collection_errors.iter().cloned());
     if let Some(stderr) = diagnostic(&completed.stderr) {
@@ -1509,6 +1758,18 @@ fn failed_with_output(
         format!("{reason}; {}", details.join("; "))
     };
     failed(report, reason)
+}
+
+fn bounded_unverified_shim_report(output: &BoundedOutput) -> Option<Value> {
+    if output.truncated {
+        return None;
+    }
+    let report: Value = serde_json::from_slice(&output.bytes).ok()?;
+    let object = report.as_object()?;
+    if object.get("schema_version").and_then(Value::as_str) != Some(SHIM_REPORT_SCHEMA_VERSION) {
+        return None;
+    }
+    Some(report)
 }
 
 fn diagnostic(output: &BoundedOutput) -> Option<String> {

@@ -1,6 +1,12 @@
 use std::io;
 use std::num::NonZeroU32;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -62,6 +68,14 @@ type ExactOwner = OwnedHandle;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 struct ExactOwner {
     queue: OwnedFd,
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+struct ExactOwner {
+    pidfd: OwnedFd,
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -150,6 +164,54 @@ fn open(owner_pid: NonZeroU32) -> io::Result<ExactOwner> {
     Ok(ExactOwner { queue })
 }
 
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn open(owner_pid: NonZeroU32) -> io::Result<ExactOwner> {
+    let owner_pid = libc::pid_t::try_from(owner_pid.get())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    // SAFETY: getppid, getpid, and getpgrp have no preconditions.
+    let parent = unsafe { libc::getppid() };
+    let process = unsafe { libc::getpid() };
+    let process_group = unsafe { libc::getpgrp() };
+    if parent != owner_pid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("runtime owner PID {owner_pid} is not the shim's direct parent PID {parent}"),
+        ));
+    }
+    if process_group != process {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "Linux KVM shim PID {process} must lead its process group; observed {process_group}"
+            ),
+        ));
+    }
+
+    // SAFETY: pidfd_open takes a positive live PID and zero flags. The
+    // returned descriptor pins this process incarnation across PID reuse.
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, owner_pid, 0_u32) };
+    if descriptor < 0 {
+        let error = io::Error::last_os_error();
+        return Err(io::Error::new(
+            error.kind(),
+            format!("failed to open runtime owner PID {owner_pid} with pidfd: {error}"),
+        ));
+    }
+    let descriptor = i32::try_from(descriptor)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    // SAFETY: pidfd_open returned one newly owned nonnegative descriptor.
+    let pidfd = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    // Prevent the owner descriptor from crossing into the VM worker exec.
+    // SAFETY: pidfd is live and F_SETFD accepts FD_CLOEXEC.
+    if unsafe { libc::fcntl(pidfd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(ExactOwner { pidfd })
+}
+
 fn terminate_when_signaled(
     owner: ExactOwner,
     bootstrap_cleanup: CleanupPaths,
@@ -174,6 +236,30 @@ fn wait_for_owner_exit(owner: &ExactOwner) {
     // conditions must fail closed.
     unsafe {
         WaitForSingleObject(owner.as_raw_handle(), INFINITE);
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn wait_for_owner_exit(owner: &ExactOwner) {
+    let mut descriptor = libc::pollfd {
+        fd: owner.pidfd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: descriptor points to one initialized pollfd and -1 requests
+        // an unbounded wait. Any terminal event or non-EINTR error fails closed.
+        let status = unsafe { libc::poll(&mut descriptor, 1, -1) };
+        if status > 0 {
+            return;
+        }
+        if status < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        return;
     }
 }
 
@@ -206,7 +292,13 @@ fn terminate_current_shim() -> ! {
     std::process::exit(OWNER_EXIT_CODE as i32);
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 fn terminate_current_shim() -> ! {
     // open() verified that this shim leads a private process group. Killing the
     // negative group ID tears down the shim and its libkrun worker together.
@@ -258,7 +350,13 @@ impl VmCompletion {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
     use std::num::NonZeroU32;
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     use std::os::windows::io::AsRawHandle;
@@ -269,7 +367,13 @@ mod tests {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    #[cfg(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
     use super::open;
     use super::VmCompletion;
 
@@ -289,6 +393,60 @@ mod tests {
     #[test]
     fn rejects_a_missing_owner_process() {
         assert!(open(NonZeroU32::new(u32::MAX).expect("nonzero process ID")).is_err());
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn opens_the_exact_direct_linux_parent() {
+        use std::os::unix::process::CommandExt;
+
+        const OWNER_PID_ENV: &str = "A3S_OCI_TEST_OWNER_PID";
+        const CHILD_TEST: &str = "owner_process::tests::linux_owner_child";
+
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("resolve owner-monitor test executable"),
+        )
+        .args(["--exact", CHILD_TEST, "--nocapture"])
+        .env(OWNER_PID_ENV, std::process::id().to_string())
+        .process_group(0)
+        .output()
+        .expect("spawn isolated owner-monitor test child");
+        assert!(
+            output.status.success(),
+            "owner-monitor test child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn linux_owner_child() {
+        use std::os::fd::AsRawFd;
+
+        let Ok(owner_pid) = std::env::var("A3S_OCI_TEST_OWNER_PID") else {
+            return;
+        };
+        std::env::remove_var("A3S_OCI_TEST_OWNER_PID");
+        let owner_pid = owner_pid
+            .parse::<u32>()
+            .ok()
+            .and_then(NonZeroU32::new)
+            .expect("valid direct parent process ID");
+        let owner = open(owner_pid).expect("pin exact direct parent with pidfd");
+        let mut descriptor = libc::pollfd {
+            fd: owner.pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: descriptor points to one initialized pollfd and zero performs
+        // a nonblocking liveness check.
+        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 0) }, 0);
     }
 
     #[test]

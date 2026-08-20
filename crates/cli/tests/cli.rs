@@ -67,7 +67,7 @@ fn agent_vm_smoke_fails_closed_with_versioned_output() {
     assert_eq!(output.status.code(), Some(2));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
-    assert_eq!(report["schema_version"], "a3s.oci.agent-vm-smoke.v9");
+    assert_eq!(report["schema_version"], "a3s.oci.agent-vm-smoke.v10");
     assert_ne!(report["status"], "available");
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         let cleanup = &report["macos_cleanup"];
