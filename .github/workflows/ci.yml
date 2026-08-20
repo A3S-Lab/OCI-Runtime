@@ -23,6 +23,12 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        name: Download immutable Linux KVM system image
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-kvm-system-image-x86_64
+          path: ${{ runner.temp }}/a3s-oci-linux-kvm-system-image
       - if: runner.os == 'macOS'
         name: Download immutable macOS system image
         uses: actions/download-artifact@v4
@@ -74,6 +80,28 @@ jobs:
           }
           "A3S_OCI_WINDOWS_SYSTEM_IMAGE_MANIFEST=$manifest" | Out-File `
             -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - if: runner.os == 'Linux'
+        name: Pin immutable Linux KVM system-image path
+        shell: bash
+        run: |
+          directory="$RUNNER_TEMP/a3s-oci-linux-kvm-system-image"
+          manifest="$directory/system-image.json"
+          image="$directory/a3s-oci-system.ext4"
+          archive="$directory/a3s-oci-system.ext4.xz"
+          test -f "$manifest"
+          test -f "$image"
+          test -f "$archive"
+          test "$(jq --raw-output '.image.sha256' "$manifest")" = "$(sha256sum "$image" | cut -d ' ' -f 1)"
+          test "$(jq --raw-output '.image.archive_sha256' "$manifest")" = "$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          jq --exit-status \
+            --slurpfile assets crates/krun/runtime/runtime-assets.json \
+            '.schema_version == "a3s.oci.linux-kvm-system-image.v1"
+             and .architecture == "x86_64"
+             and .runtime == ($assets[0].bundles[] | select(
+               .target_os == "linux" and .target_arch == "x86_64"
+             ))' "$manifest" >/dev/null
+          chmod 0444 "$manifest" "$image" "$archive"
+          printf 'A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=%s\n' "$manifest" >> "$GITHUB_ENV"
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Exhaustive durable-state and host-driver fault matrix
@@ -118,8 +146,12 @@ jobs:
           retention-days: 14
       - run: cargo run -p a3s-oci-cli -- features
       - if: runner.os == 'Linux'
-        name: Isolated Linux libkrun context lifecycle
-        run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+        name: Isolated Linux libkrun compatibility-set lifecycle
+        run: |
+          cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+          cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- \
+            system-image-context-smoke \
+            --system-image-manifest "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
         shell: bash
@@ -975,16 +1007,45 @@ jobs:
 
   native-linux-arm64:
     name: native-linux-lifecycle (aarch64)
+    needs: guest-agent-musl
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Linux libkrun runtime integrity and context lifecycle
+      - name: Download immutable Linux KVM system image
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-kvm-system-image-aarch64
+          path: ${{ runner.temp }}/a3s-oci-linux-kvm-system-image
+      - name: Verify immutable Linux KVM system image
+        run: |
+          directory="$RUNNER_TEMP/a3s-oci-linux-kvm-system-image"
+          manifest="$directory/system-image.json"
+          image="$directory/a3s-oci-system.ext4"
+          archive="$directory/a3s-oci-system.ext4.xz"
+          test -f "$manifest"
+          test -f "$image"
+          test -f "$archive"
+          test "$(jq --raw-output '.image.sha256' "$manifest")" = "$(sha256sum "$image" | cut -d ' ' -f 1)"
+          test "$(jq --raw-output '.image.archive_sha256' "$manifest")" = "$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          jq --exit-status \
+            --slurpfile assets crates/krun/runtime/runtime-assets.json \
+            '.schema_version == "a3s.oci.linux-kvm-system-image.v1"
+             and .architecture == "aarch64"
+             and .runtime == ($assets[0].bundles[] | select(
+               .target_os == "linux" and .target_arch == "aarch64"
+             ))' "$manifest" >/dev/null
+          chmod 0444 "$manifest" "$image" "$archive"
+          printf 'A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=%s\n' "$manifest" >> "$GITHUB_ENV"
+      - name: Linux libkrun runtime and compatibility-set context lifecycle
         run: |
           cargo test -p a3s-oci-krun --all-targets
           cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+          cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- \
+            system-image-context-smoke \
+            --system-image-manifest "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
       - name: Rootless generated-cgroup device boundary
         env:
           A3S_OCI_NATIVE_FOCUS: rootless-device-boundary
@@ -1077,6 +1138,64 @@ jobs:
         with:
           name: windows-system-image
           path: ${{ runner.temp }}/a3s-oci-windows-system-image
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build reproducible immutable Linux KVM system image (x86_64)
+        shell: bash
+        run: |
+          alpine="$RUNNER_TEMP/alpine-minirootfs-3.22.5-x86_64.tar.gz"
+          agent="target/x86_64-unknown-linux-musl/release/a3s-oci-agent"
+          output="$RUNNER_TEMP/a3s-oci-linux-kvm-system-image-x86_64"
+          test -f "$alpine"
+          bash scripts/build-linux-kvm-system-image.sh \
+            --architecture x86_64 \
+            --alpine-archive "$alpine" \
+            --agent "$agent" \
+            --output-dir "$output" \
+            --reproducibility-delay 1
+          jq --exit-status \
+            --arg agent_sha256 "$(sha256sum "$agent" | cut -d ' ' -f 1)" \
+            --slurpfile assets crates/krun/runtime/runtime-assets.json \
+            '.schema_version == "a3s.oci.linux-kvm-system-image.v1"
+             and .architecture == "x86_64"
+             and .sources.agent.sha256 == $agent_sha256
+             and .runtime == ($assets[0].bundles[] | select(
+               .target_os == "linux" and .target_arch == "x86_64"
+             ))' "$output/system-image.json" >/dev/null
+      - name: Upload immutable Linux KVM system image (x86_64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-kvm-system-image-x86_64
+          path: ${{ runner.temp }}/a3s-oci-linux-kvm-system-image-x86_64
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build reproducible immutable Linux KVM system image (aarch64)
+        shell: bash
+        run: |
+          alpine="$RUNNER_TEMP/alpine-minirootfs-3.22.5-aarch64.tar.gz"
+          agent="target/aarch64-unknown-linux-musl/release/a3s-oci-agent"
+          output="$RUNNER_TEMP/a3s-oci-linux-kvm-system-image-aarch64"
+          test -f "$alpine"
+          bash scripts/build-linux-kvm-system-image.sh \
+            --architecture aarch64 \
+            --alpine-archive "$alpine" \
+            --agent "$agent" \
+            --output-dir "$output" \
+            --reproducibility-delay 1
+          jq --exit-status \
+            --arg agent_sha256 "$(sha256sum "$agent" | cut -d ' ' -f 1)" \
+            --slurpfile assets crates/krun/runtime/runtime-assets.json \
+            '.schema_version == "a3s.oci.linux-kvm-system-image.v1"
+             and .architecture == "aarch64"
+             and .sources.agent.sha256 == $agent_sha256
+             and .runtime == ($assets[0].bundles[] | select(
+               .target_os == "linux" and .target_arch == "aarch64"
+             ))' "$output/system-image.json" >/dev/null
+      - name: Upload immutable Linux KVM system image (aarch64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-kvm-system-image-aarch64
+          path: ${{ runner.temp }}/a3s-oci-linux-kvm-system-image-aarch64
           if-no-files-found: error
           retention-days: 14
       - name: Stage static guest qualification artifacts

@@ -19,6 +19,11 @@ mod ffi;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod linux_context;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_system_image;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_agent_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -49,9 +54,10 @@ use a3s_oci_core::HostPlatform;
 use a3s_oci_sdk::{Error, ErrorCode, Result};
 pub use agent_smoke::{agent_vm_smoke, AgentVmHandoff};
 pub use report::{
-    KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunVmSmokeReport, MacosBootAssetsEvidence,
-    WindowsBootAssetsEvidence, KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION,
-    KRUN_CONTEXT_SMOKE_SCHEMA_VERSION, KRUN_VM_SMOKE_SCHEMA_VERSION,
+    KrunAgentVmSmokeReport, KrunContextSmokeReport, KrunSystemImageContextSmokeReport,
+    KrunVmSmokeReport, LinuxBootAssetsEvidence, MacosBootAssetsEvidence, WindowsBootAssetsEvidence,
+    KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION, KRUN_CONTEXT_SMOKE_SCHEMA_VERSION,
+    KRUN_SYSTEM_IMAGE_CONTEXT_SMOKE_SCHEMA_VERSION, KRUN_VM_SMOKE_SCHEMA_VERSION,
 };
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -326,6 +332,99 @@ fn context_smoke_linux() -> KrunContextSmokeReport {
         return report;
     }
     report.vm_configured = true;
+
+    let endpoint = match AgentVsockEndpoint::generate() {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            report.context_released = context.close().is_ok();
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    let socket_path = std::env::temp_dir().join(format!("{}.sock", endpoint.pipe_name()));
+    if let Err(error) = context.set_agent_vsock(&socket_path, endpoint.port()) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.agent_vsock_configured = true;
+
+    match context.close() {
+        Ok(()) => {
+            report.context_released = true;
+            report.status = CapabilityStatus::Available;
+        }
+        Err(error) => report.reason = Some(error.to_string()),
+    }
+    report
+}
+
+/// Bind the exact Linux runtime, firmware kernel, immutable root, and guest
+/// agent to one libkrun context without entering a VM.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[must_use]
+pub fn system_image_context_smoke(manifest_path: &Path) -> KrunSystemImageContextSmokeReport {
+    use linux_context::{KrunContext, LinuxKrunApi};
+    use linux_system_image::LinuxSystemImage;
+
+    let config = match VmConfig::new(1, 128) {
+        Ok(config) => config,
+        Err(error) => {
+            let mut report = KrunSystemImageContextSmokeReport::linux(fallback_context_config());
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    let mut report = KrunSystemImageContextSmokeReport::linux(config);
+
+    let api = match LinuxKrunApi::load() {
+        Ok(api) => {
+            report.runtime_bundle_loaded = true;
+            api
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    let system_image = match LinuxSystemImage::load(manifest_path, api.runtime_bundle()) {
+        Ok(system_image) => {
+            report.system_image_verified = true;
+            report.boot_assets = Some(system_image.evidence());
+            system_image
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+
+    let mut context = match KrunContext::create(api) {
+        Ok(context) => {
+            report.context_created = true;
+            context
+        }
+        Err(error) => {
+            report.reason = Some(error.to_string());
+            return report;
+        }
+    };
+    if let Err(error) = context.set_vm_config(config) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.vm_configured = true;
+
+    if let Err(error) = context.set_read_only_system_image(system_image) {
+        report.context_released = context.close().is_ok();
+        report.reason = Some(error.to_string());
+        return report;
+    }
+    report.root_disk_configured = true;
 
     let endpoint = match AgentVsockEndpoint::generate() {
         Ok(endpoint) => endpoint,

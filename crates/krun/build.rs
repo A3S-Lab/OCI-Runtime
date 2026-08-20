@@ -8,24 +8,31 @@ use xz2::read::XzDecoder;
 #[path = "src/runtime_assets.rs"]
 mod runtime_assets;
 
-use runtime_assets::{runtime_bundle, RuntimeBundle, RuntimeFile, RUNTIME_BUNDLES};
+use runtime_assets::{
+    runtime_bundle, runtime_bundles, RuntimeBundle, RuntimeFile, RuntimeFileRole,
+};
 
 fn main() {
     println!("cargo:rerun-if-changed=src/runtime_assets.rs");
-    for bundle in RUNTIME_BUNDLES {
+    println!("cargo:rerun-if-changed=runtime/runtime-assets.json");
+    let bundles = runtime_bundles()
+        .unwrap_or_else(|error| panic!("checked-in runtime asset manifest is invalid: {error}"));
+    for bundle in bundles {
         println!("cargo:rerun-if-changed={}", bundle.archive);
     }
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let Some(bundle) = runtime_bundle(&target_os, &target_arch) else {
+    let Some(bundle) = runtime_bundle(&target_os, &target_arch)
+        .unwrap_or_else(|error| panic!("checked-in runtime asset manifest is invalid: {error}"))
+    else {
         return;
     };
 
     let manifest_dir = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo did not set manifest dir"),
     );
-    let archive = manifest_dir.join(bundle.archive);
+    let archive = manifest_dir.join(&bundle.archive);
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo did not set OUT_DIR"));
     let runtime_dir = out_dir.join(format!(
         "{}-runtime-{}",
@@ -37,7 +44,7 @@ fn main() {
 
     let profile_dir = profile_dir(&out_dir).expect("failed to derive Cargo profile directory");
     if target_os == "windows" {
-        stage_windows_runtime(&runtime_dir, &profile_dir);
+        stage_windows_runtime(&runtime_dir, &profile_dir, bundle);
         println!("cargo:rustc-link-search=native={}", runtime_dir.display());
         println!(
             "cargo:rustc-env=A3S_OCI_KRUN_RUNTIME_DIR={}",
@@ -45,7 +52,7 @@ fn main() {
         );
     } else {
         let staged_runtime = profile_dir.join("a3s-oci-krun-runtime");
-        stage_runtime_files(&runtime_dir, &staged_runtime, bundle.files).unwrap_or_else(|error| {
+        stage_runtime_files(&runtime_dir, &staged_runtime, &bundle.files).unwrap_or_else(|error| {
             panic!("failed to stage {} runtime files: {error}", bundle.platform)
         });
         println!(
@@ -55,14 +62,21 @@ fn main() {
     }
 }
 
-fn stage_windows_runtime(runtime_dir: &Path, profile_dir: &Path) {
-    for name in ["krun.dll", "libkrunfw.dll"] {
-        let source = runtime_dir.join(name);
-        copy_runtime_file(&source, &profile_dir.join(name))
-            .unwrap_or_else(|error| panic!("failed to stage {}: {error}", source.display()));
-        copy_runtime_file(&source, &profile_dir.join("deps").join(name)).unwrap_or_else(|error| {
-            panic!("failed to stage {} for tests: {error}", source.display())
+fn stage_windows_runtime(runtime_dir: &Path, profile_dir: &Path, bundle: &RuntimeBundle) {
+    for role in [RuntimeFileRole::Library, RuntimeFileRole::Firmware] {
+        let file = bundle.file(role).unwrap_or_else(|| {
+            panic!(
+                "validated {} bundle is missing the {} role",
+                bundle.platform,
+                role.as_str()
+            )
         });
+        let source = runtime_dir.join(&file.name);
+        copy_runtime_file(&source, &profile_dir.join(&file.name))
+            .unwrap_or_else(|error| panic!("failed to stage {}: {error}", source.display()));
+        copy_runtime_file(&source, &profile_dir.join("deps").join(&file.name)).unwrap_or_else(
+            |error| panic!("failed to stage {} for tests: {error}", source.display()),
+        );
     }
 }
 
@@ -72,8 +86,8 @@ fn stage_runtime_files(
     files: &[RuntimeFile],
 ) -> io::Result<()> {
     for file in files {
-        let source = runtime_dir.join(file.name);
-        let destination = destination_dir.join(file.name);
+        let source = runtime_dir.join(&file.name);
+        let destination = destination_dir.join(&file.name);
         copy_runtime_file(&source, &destination)?;
         verify_runtime_file(&destination, file)?;
     }
@@ -86,14 +100,14 @@ fn install_runtime(
     bundle: &RuntimeBundle,
 ) -> io::Result<()> {
     verify_size(archive_path, bundle.archive_size)?;
-    verify_sha256(archive_path, bundle.archive_sha256)?;
-    if runtime_files_match(runtime_dir, bundle.files) {
+    verify_sha256(archive_path, &bundle.archive_sha256)?;
+    if runtime_files_match(runtime_dir, &bundle.files) {
         return Ok(());
     }
 
     fs::create_dir_all(runtime_dir)?;
-    for file in bundle.files {
-        let path = runtime_dir.join(file.name);
+    for file in &bundle.files {
+        let path = runtime_dir.join(&file.name);
         match fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -148,7 +162,7 @@ fn install_runtime(
     if seen.iter().any(|present| !present) {
         return Err(invalid_archive(bundle, "is incomplete".to_string()));
     }
-    if !runtime_files_match(runtime_dir, bundle.files) {
+    if !runtime_files_match(runtime_dir, &bundle.files) {
         return Err(invalid_archive(
             bundle,
             "files do not match their pinned checksums".to_string(),
@@ -167,12 +181,12 @@ fn invalid_archive(bundle: &RuntimeBundle, message: String) -> io::Error {
 fn runtime_files_match(runtime_dir: &Path, files: &[RuntimeFile]) -> bool {
     files
         .iter()
-        .all(|file| verify_runtime_file(&runtime_dir.join(file.name), file).is_ok())
+        .all(|file| verify_runtime_file(&runtime_dir.join(&file.name), file).is_ok())
 }
 
 fn verify_runtime_file(path: &Path, file: &RuntimeFile) -> io::Result<()> {
     verify_size(path, file.size)?;
-    verify_sha256(path, file.sha256)
+    verify_sha256(path, &file.sha256)
 }
 
 fn verify_size(path: &Path, expected: u64) -> io::Result<()> {

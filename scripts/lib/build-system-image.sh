@@ -165,6 +165,13 @@ a3s_build_system_image() {
   fi
 
   local image="$temporary/system-1.ext4"
+  local installed_agent="$temporary/installed-a3s-oci-agent"
+  debugfs -R "dump /usr/bin/a3s-oci-agent $installed_agent" "$image" >/dev/null 2>&1
+  if ! cmp "$agent" "$installed_agent"; then
+    echo "system image does not contain the exact supplied guest agent" >&2
+    return 1
+  fi
+
   local archive="$temporary/a3s-oci-system.ext4.xz"
   xz --threads=1 --check=crc64 -9e --stdout "$image" > "$archive"
 
