@@ -159,6 +159,12 @@ jobs:
           A3S_OCI_LINUX_KVM_AGENT_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-agent-entry.json
           A3S_OCI_LINUX_KVM_POST_PROBE_FAILURE_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-post-probe-failure.json
         run: bash .github/scripts/linux-kvm-agent-entry.sh
+      - if: runner.os == 'Linux'
+        name: Linux KVM pre-entry compatibility-drift matrix
+        timeout-minutes: 12
+        env:
+          A3S_OCI_LINUX_KVM_COMPATIBILITY_DRIFT_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
+        run: bash .github/scripts/linux-kvm-compatibility-drift.sh
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
         shell: bash
@@ -925,6 +931,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-native-rootless-device-policy.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-agent-entry.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-post-probe-failure.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
@@ -1061,6 +1068,11 @@ jobs:
           A3S_OCI_LINUX_KVM_AGENT_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-agent-entry.json
           A3S_OCI_LINUX_KVM_POST_PROBE_FAILURE_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-post-probe-failure.json
         run: bash .github/scripts/linux-kvm-agent-entry.sh
+      - name: Linux KVM pre-entry compatibility-drift matrix
+        timeout-minutes: 12
+        env:
+          A3S_OCI_LINUX_KVM_COMPATIBILITY_DRIFT_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
+        run: bash .github/scripts/linux-kvm-compatibility-drift.sh
       - name: Rootless generated-cgroup device boundary
         env:
           A3S_OCI_NATIVE_FOCUS: rootless-device-boundary
@@ -1084,6 +1096,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-native-rootless-device-policy.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-agent-entry.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-post-probe-failure.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
           if-no-files-found: warn
           retention-days: 14
 

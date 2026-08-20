@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A 14-case Linux KVM compatibility-drift matrix at the configured worker
+  boundary on x86_64 and AArch64. The worker now reverifies the runtime,
+  libkrun, firmware-exported kernel, immutable manifest and root image, Guest
+  Agent evidence, and runtime share before it opens `/dev/kvm`, then repeats
+  the same checks after the device is pinned. A hidden qualification barrier
+  covers manifest and image replacement, same-size mutation, and symlinks;
+  architecture, runtime target, Guest Agent identity, and archive, libkrun,
+  firmware, and kernel provenance mismatches fail during worker load. Every
+  case requires exit code 2 before VM entry plus exact endpoint, process,
+  token-handoff, and runtime-share cleanup, so both Linux CI architectures can
+  retain this evidence even when their runner exposes no usable KVM device.
 - Qualification-only Linux KVM post-probe failure coverage. On a KVM-capable
   host, the entry gate now runs a second isolated session that opens and pins
   the real `/dev/kvm`, requires API version 12, and fails deliberately before

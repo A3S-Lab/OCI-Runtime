@@ -1498,8 +1498,15 @@ release-promotion gates above.
     native VM entry. The real-host gate requires exit code 2, no bridge or
     protocol negotiation, and exact endpoint, shim-process, token-handoff, and
     runtime-share inventory restoration.
-  - [ ] Run the complete system-root and guest-agent compatibility-drift matrix
-    at the real-entry boundary on x86_64 and AArch64.
+  - [x] Run the complete system-root and guest-agent compatibility-drift matrix
+    at the configured real-entry worker boundary on x86_64 and AArch64. The
+    14-case `a3s.oci.linux-kvm-compatibility-drift.v1` gate covers manifest and
+    raw-image replacement, same-size mutation, and symlinks; architecture and
+    runtime-target mismatch; Guest Agent version and digest drift; and runtime
+    archive, libkrun, firmware, and exported-kernel provenance drift. Every
+    case fails before KVM-device access or VM entry and restores endpoint,
+    shim-process, token-handoff, and runtime-share inventories, so the two CI
+    architectures retain the matrix even without a usable KVM device.
 
 Exit gate: a fresh KVM-capable Linux host boots the pinned utility VM, passes
 the complete SDK and recovery matrices through the authenticated guest agent,

@@ -279,8 +279,20 @@ enum Command {
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, conflicts_with = "qualify_kvm_compatibility_drift")]
         qualify_kvm_post_probe_failure: bool,
+        /// Pause before KVM access for one qualification-only asset mutation.
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        #[arg(
+            long,
+            hide = true,
+            value_name = "CASE",
+            conflicts_with = "qualify_kvm_post_probe_failure"
+        )]
+        qualify_kvm_compatibility_drift: Option<String>,
     },
     /// Run a fixed OCI core lifecycle inside one utility VM.
     OciVmSmoke {

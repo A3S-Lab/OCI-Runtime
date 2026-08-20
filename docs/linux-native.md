@@ -178,7 +178,8 @@ one-time token below the exact runtime share, and starts a separate worker for
 the process-takeover libkrun call. Immediately before entry, that worker:
 
 1. revalidates the manifest, raw image, libkrun, firmware, exported kernel,
-   static Guest Agent, and target architecture;
+   static Guest Agent, target architecture, and runtime share before KVM-device
+   access, then repeats the complete asset check at the final entry boundary;
 2. attaches the immutable root disk read-only and exports only the
    descriptor-pinned, UID-owned, mode-`0700` generation share;
 3. configures the fixed plain-vsock Agent port, Guest executable, environment,
@@ -207,10 +208,28 @@ must open and pin the real KVM device, verify API version 12, set
 `kvm_post_probe_failure_injected=true`, and exit with status 2 before VM entry.
 The Host must never accept a bridge or negotiate the token, and endpoint,
 process, token-handoff, and runtime-share inventories must return exactly to
-baseline. CI runs this contract for x86_64 and AArch64; the driver remains
-`probe-only` until successful retained real-entry evidence and the later
-compatibility-drift, lifecycle, recovery, and soak gates pass on every
-advertised architecture.
+baseline.
+
+The compatibility-drift gate uses the same Host, shim parent, direct worker,
+and cleanup path but stops before `/dev/kvm` is opened:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  bash .github/scripts/linux-kvm-compatibility-drift.sh
+```
+
+A qualification-only synchronization point introduces manifest and raw-image
+replacement, same-size mutation, symlinks, or Guest Agent digest drift after
+the worker has configured the complete compatibility set. Architecture,
+runtime-target, Guest Agent version, runtime archive, libkrun, firmware, and
+exported-kernel provenance mismatches are rejected during worker load. All 14
+cases require exit code 2, no KVM access, bridge, protocol negotiation, or VM
+entry, and exact endpoint, shim-process, token-handoff, and runtime-share
+inventory restoration. The report schema is
+`a3s.oci.linux-kvm-compatibility-drift.v1`. CI runs both entry contracts and
+this matrix on x86_64 and AArch64. The driver remains `probe-only` until
+successful retained real-entry evidence and the later lifecycle, recovery,
+and soak gates pass on every advertised architecture.
 
 ## Experimental lifecycle gate
 

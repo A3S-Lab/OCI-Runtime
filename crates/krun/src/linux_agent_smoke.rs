@@ -13,6 +13,7 @@ use a3s_oci_agent_protocol::{
 use a3s_oci_core::{CapabilityStatus, HostPlatform};
 use serde::{Deserialize, Serialize};
 
+use crate::linux_compatibility_drift::CompatibilityDriftBarrier;
 use crate::linux_context::{KrunContext, LinuxKrunApi};
 use crate::linux_kvm_device::LinuxKvmDevice;
 use crate::linux_runtime_share::LinuxRuntimeShare;
@@ -86,6 +87,7 @@ pub(crate) struct LinuxAgentVmConfig<'a> {
     pub(crate) guest_recovery_report: Option<&'a str>,
     pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
     pub(crate) qualify_kvm_post_probe_failure: bool,
+    pub(crate) qualify_kvm_compatibility_drift: Option<&'a str>,
     pub(crate) vm: VmConfig,
 }
 
@@ -100,6 +102,7 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
         guest_recovery_report,
         transport_qualification,
         qualify_kvm_post_probe_failure,
+        qualify_kvm_compatibility_drift,
         vm: config,
     } = configuration;
     let mut report = KrunAgentVmSmokeReport::initial(HostPlatform::Linux, config);
@@ -182,6 +185,9 @@ pub(crate) fn agent_vm_smoke(configuration: LinuxAgentVmConfig<'_>) -> KrunAgent
     }
     if qualify_kvm_post_probe_failure {
         command.arg("--qualify-kvm-post-probe-failure");
+    }
+    if let Some(case) = qualify_kvm_compatibility_drift {
+        command.arg("--qualify-kvm-compatibility-drift").arg(case);
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -311,6 +317,7 @@ pub(crate) struct LinuxAgentVmWorkerConfig<'a> {
     pub(crate) guest_recovery_report: Option<&'a str>,
     pub(crate) transport_qualification: Option<&'a AgentTransportQualificationRequest>,
     pub(crate) qualify_kvm_post_probe_failure: bool,
+    pub(crate) qualify_kvm_compatibility_drift: Option<&'a str>,
 }
 
 pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
@@ -323,12 +330,14 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         guest_recovery_report,
         transport_qualification,
         qualify_kvm_post_probe_failure,
+        qualify_kvm_compatibility_drift,
     } = configuration;
     let mut evidence = WorkerEvidence::initial();
     let runtime_share = match LinuxRuntimeShare::open(runtime_share) {
         Ok(runtime_share) => runtime_share,
         Err(error) => return fail_worker(&mut evidence, error.to_string()),
     };
+    let runtime_share_path = runtime_share.path().to_path_buf();
     let console = match resolve_console(console) {
         Ok(console) => console,
         Err(reason) => return fail_worker(&mut evidence, reason),
@@ -417,6 +426,31 @@ pub(crate) fn run_worker(configuration: LinuxAgentVmWorkerConfig<'_>) -> bool {
         return fail_worker(&mut evidence, error.to_string());
     }
     evidence.console_configured = true;
+    if let Some(case) = qualify_kvm_compatibility_drift {
+        let barrier = match CompatibilityDriftBarrier::wait(&runtime_share_path, case) {
+            Ok(barrier) => barrier,
+            Err(reason) => return fail_worker(&mut evidence, reason),
+        };
+        let verification = context.reverify_entry_assets();
+        drop(barrier);
+        return match verification {
+            Err(error) => fail_worker(
+                &mut evidence,
+                format!(
+                    "Linux KVM compatibility-drift qualification {case} failed closed before KVM device access: {error}"
+                ),
+            ),
+            Ok(()) => fail_worker(
+                &mut evidence,
+                format!(
+                    "Linux KVM compatibility-drift qualification {case} did not detect an asset change before KVM device access"
+                ),
+            ),
+        };
+    }
+    if let Err(error) = context.reverify_entry_assets() {
+        return fail_worker(&mut evidence, error.to_string());
+    }
     let kvm_device = match LinuxKvmDevice::open() {
         Ok(device) => {
             evidence.kvm_device_opened = true;
