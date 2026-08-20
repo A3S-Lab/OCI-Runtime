@@ -91,8 +91,13 @@ struct AgentVmConnectOptions<'a> {
     faults: Arc<dyn AgentTransportFaultInjector>,
     guest_qualification: Option<&'a AgentTransportQualificationRequest>,
     qualify_kvm_post_probe_failure: bool,
+    qualify_kvm_compatibility_drift: Option<&'a str>,
 }
 
+// Connection failures intentionally return the complete retained qualification
+// report. Keeping that structured evidence by value is part of this internal
+// API; boxing it would make every report consumer heap-aware.
+#[allow(clippy::result_large_err)]
 impl UtilityVmSession {
     pub(crate) async fn connect(
         shim: &Path,
@@ -275,6 +280,7 @@ impl UtilityVmSession {
                 faults,
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: false,
+                qualify_kvm_compatibility_drift: None,
             },
         )
         .await?;
@@ -311,6 +317,7 @@ impl UtilityVmSession {
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: Some(qualification),
                 qualify_kvm_post_probe_failure: false,
+                qualify_kvm_compatibility_drift: None,
             },
         )
         .await?;
@@ -393,6 +400,8 @@ impl UtilityVmSession {
     }
 }
 
+// Every connector below uses AgentVmSmokeReport as structured failure evidence.
+#[allow(clippy::result_large_err)]
 impl AgentVmSession {
     pub(crate) async fn connect(
         shim: &Path,
@@ -415,6 +424,7 @@ impl AgentVmSession {
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: false,
+                qualify_kvm_compatibility_drift: None,
             },
         )
         .await
@@ -443,6 +453,37 @@ impl AgentVmSession {
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: true,
+                qualify_kvm_compatibility_drift: None,
+            },
+        )
+        .await
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub(crate) async fn connect_with_kvm_compatibility_drift(
+        shim: &Path,
+        rootfs: &Path,
+        system_image_manifest: Option<&Path>,
+        runtime_share: Option<&Path>,
+        console: &Path,
+        case: &str,
+    ) -> std::result::Result<Self, AgentVmSmokeReport> {
+        Self::connect_inner(
+            shim,
+            rootfs,
+            console,
+            AgentVmConnectOptions {
+                system_image_manifest,
+                expected_system_image_manifest_sha256: None,
+                runtime_share,
+                recovery_report: None,
+                faults: Arc::new(NoAgentTransportFaultInjector),
+                guest_qualification: None,
+                qualify_kvm_post_probe_failure: false,
+                qualify_kvm_compatibility_drift: Some(case),
             },
         )
         .await
@@ -472,6 +513,7 @@ impl AgentVmSession {
                 faults,
                 guest_qualification: None,
                 qualify_kvm_post_probe_failure: false,
+                qualify_kvm_compatibility_drift: None,
             },
         )
         .await
@@ -501,6 +543,7 @@ impl AgentVmSession {
                 faults: Arc::new(NoAgentTransportFaultInjector),
                 guest_qualification: Some(qualification),
                 qualify_kvm_post_probe_failure: false,
+                qualify_kvm_compatibility_drift: None,
             },
         )
         .await
@@ -520,12 +563,16 @@ impl AgentVmSession {
             faults,
             guest_qualification,
             qualify_kvm_post_probe_failure,
+            qualify_kvm_compatibility_drift,
         } = options;
         #[cfg(not(all(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         )))]
-        let _ = qualify_kvm_post_probe_failure;
+        let _ = (
+            qualify_kvm_post_probe_failure,
+            qualify_kvm_compatibility_drift,
+        );
         let platform = HostPlatform::current();
         let mut report = AgentVmSmokeReport::initial(platform);
         let shim = match canonical_file(shim, "libkrun shim").await {
@@ -832,6 +879,13 @@ impl AgentVmSession {
         ))]
         if qualify_kvm_post_probe_failure {
             command.arg("--qualify-kvm-post-probe-failure");
+        }
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        if let Some(case) = qualify_kvm_compatibility_drift {
+            command.arg("--qualify-kvm-compatibility-drift").arg(case);
         }
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         {

@@ -133,3 +133,39 @@ pub async fn qualify_kvm_post_probe_failure(
         Err(report) => report,
     }
 }
+
+/// Pause a Linux KVM worker after complete non-KVM configuration, let the
+/// qualification harness mutate one named asset, and require fail-closed
+/// reverification before `/dev/kvm` is opened.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+#[must_use]
+pub async fn qualify_kvm_compatibility_drift(
+    shim: &Path,
+    rootfs: &Path,
+    system_image_manifest: Option<&Path>,
+    runtime_share: Option<&Path>,
+    console: &Path,
+    case: &str,
+) -> AgentVmSmokeReport {
+    match crate::agent_session::AgentVmSession::connect_with_kvm_compatibility_drift(
+        shim,
+        rootfs,
+        system_image_manifest,
+        runtime_share,
+        console,
+        case,
+    )
+    .await
+    {
+        Ok(session) => session
+            .finish_with_failure(format!(
+                "Linux KVM compatibility-drift qualification {case} unexpectedly reached the guest agent"
+            ))
+            .await,
+        Err(report) => report,
+    }
+}

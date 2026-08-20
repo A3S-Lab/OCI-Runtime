@@ -26,6 +26,11 @@ pub struct AgentVmHandoff<'a> {
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
     qualify_kvm_post_probe_failure: bool,
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    qualify_kvm_compatibility_drift: Option<&'a str>,
 }
 
 impl<'a> AgentVmHandoff<'a> {
@@ -46,6 +51,11 @@ impl<'a> AgentVmHandoff<'a> {
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
             qualify_kvm_post_probe_failure: false,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            qualify_kvm_compatibility_drift: None,
         }
     }
 
@@ -68,6 +78,18 @@ impl<'a> AgentVmHandoff<'a> {
     #[must_use]
     pub const fn with_kvm_post_probe_failure(mut self, enabled: bool) -> Self {
         self.qualify_kvm_post_probe_failure = enabled;
+        self
+    }
+
+    /// Pause after Linux KVM entry assets are configured so qualification can
+    /// mutate one named asset before the worker's pre-device reverification.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[must_use]
+    pub const fn with_kvm_compatibility_drift(mut self, case: Option<&'a str>) -> Self {
+        self.qualify_kvm_compatibility_drift = case;
         self
     }
 }
@@ -192,6 +214,7 @@ pub fn agent_vm_smoke(
             guest_recovery_report: handoff.guest_recovery_report,
             transport_qualification: handoff.transport_qualification,
             qualify_kvm_post_probe_failure: handoff.qualify_kvm_post_probe_failure,
+            qualify_kvm_compatibility_drift: handoff.qualify_kvm_compatibility_drift,
             vm: config,
         })
     }

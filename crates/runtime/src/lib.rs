@@ -120,6 +120,12 @@ pub use agent_smoke::agent_vm_smoke;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 #[doc(hidden)]
+pub use agent_smoke::qualify_kvm_compatibility_drift;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
 pub use agent_smoke::qualify_kvm_post_probe_failure;
 #[cfg(all(
     target_os = "linux",

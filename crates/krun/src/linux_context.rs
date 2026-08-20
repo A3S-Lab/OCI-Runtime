@@ -412,15 +412,18 @@ impl KrunContext {
         )
     }
 
-    pub(crate) fn start_enter(mut self, kvm_device: &LinuxKvmDevice) -> Result<i32> {
+    /// Revalidate every retained non-KVM entry asset without entering a VM.
+    ///
+    /// The worker calls this before opening `/dev/kvm`; `start_enter` repeats
+    /// the same checks after the device has been pinned and verified.
+    pub(crate) fn reverify_entry_assets(&self) -> Result<()> {
         self.api.reverify_runtime()?;
-        kvm_device.reverify()?;
         let system_image = self.system_image.as_ref().ok_or_else(|| {
             Error::new(
                 ErrorCode::FailedPrecondition,
                 "Linux KVM VM entry requires a manifest-bound immutable system image",
             )
-            .for_operation("krun_start_enter")
+            .for_operation("reverify-linux-kvm-entry-assets")
         })?;
         system_image.reverify(self.api.runtime_bundle())?;
         let runtime_share = self.runtime_share.as_ref().ok_or_else(|| {
@@ -428,9 +431,14 @@ impl KrunContext {
                 ErrorCode::FailedPrecondition,
                 "Linux KVM VM entry requires one protected per-generation runtime share",
             )
-            .for_operation("krun_start_enter")
+            .for_operation("reverify-linux-kvm-entry-assets")
         })?;
-        runtime_share.reverify()?;
+        runtime_share.reverify()
+    }
+
+    pub(crate) fn start_enter(mut self, kvm_device: &LinuxKvmDevice) -> Result<i32> {
+        kvm_device.reverify()?;
+        self.reverify_entry_assets()?;
         let id = self.id.take().ok_or_else(|| {
             Error::new(
                 ErrorCode::FailedPrecondition,

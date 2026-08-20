@@ -27,6 +27,11 @@ mod linux_agent_smoke;
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+mod linux_compatibility_drift;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod linux_context;
 #[cfg(all(
     target_os = "linux",
@@ -615,6 +620,7 @@ pub fn run_linux_agent_vm_worker(
         guest_recovery_report,
         transport_qualification,
         qualify_kvm_post_probe_failure: false,
+        qualify_kvm_compatibility_drift: None,
     })
 }
 
@@ -646,6 +652,39 @@ pub fn run_linux_agent_vm_worker_with_kvm_post_probe_failure(
         guest_recovery_report,
         transport_qualification,
         qualify_kvm_post_probe_failure: true,
+        qualify_kvm_compatibility_drift: None,
+    })
+}
+
+/// Run the private Linux KVM guest-agent worker with a qualification-only
+/// compatibility mutation barrier before KVM-device access.
+///
+/// This is exported only for the hidden shim process boundary.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_linux_agent_vm_worker_with_compatibility_drift(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    guest_token_file: &str,
+    console: &Path,
+    socket: &Path,
+    guest_recovery_report: Option<&str>,
+    case: &str,
+) -> bool {
+    linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        socket,
+        guest_recovery_report,
+        transport_qualification: None,
+        qualify_kvm_post_probe_failure: false,
+        qualify_kvm_compatibility_drift: Some(case),
     })
 }
 

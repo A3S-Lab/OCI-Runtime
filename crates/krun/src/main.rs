@@ -155,8 +155,20 @@ enum Command {
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, conflicts_with = "qualify_kvm_compatibility_drift")]
         qualify_kvm_post_probe_failure: bool,
+        /// Pause before KVM access for one qualification-only asset mutation.
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        #[arg(
+            long,
+            hide = true,
+            value_name = "CASE",
+            conflicts_with = "qualify_kvm_post_probe_failure"
+        )]
+        qualify_kvm_compatibility_drift: Option<String>,
     },
     /// Internal process-takeover boundary for the macOS VM smoke.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -207,8 +219,15 @@ enum Command {
         socket_path: PathBuf,
         #[arg(long, value_name = "FILE")]
         guest_recovery_report: Option<String>,
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, conflicts_with = "qualify_kvm_compatibility_drift")]
         qualify_kvm_post_probe_failure: bool,
+        #[arg(
+            long,
+            hide = true,
+            value_name = "CASE",
+            conflicts_with = "qualify_kvm_post_probe_failure"
+        )]
+        qualify_kvm_compatibility_drift: Option<String>,
     },
 }
 
@@ -328,6 +347,11 @@ fn main() -> ExitCode {
                 any(target_arch = "x86_64", target_arch = "aarch64")
             ))]
             qualify_kvm_post_probe_failure,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            qualify_kvm_compatibility_drift,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
                 Ok(endpoint) => endpoint,
@@ -501,6 +525,12 @@ fn main() -> ExitCode {
                     any(target_arch = "x86_64", target_arch = "aarch64")
                 ))]
                 let handoff = handoff.with_kvm_post_probe_failure(qualify_kvm_post_probe_failure);
+                #[cfg(all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                ))]
+                let handoff = handoff
+                    .with_kvm_compatibility_drift(qualify_kvm_compatibility_drift.as_deref());
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
                     Some(&system_image_manifest),
@@ -614,6 +644,7 @@ fn main() -> ExitCode {
             socket_path,
             guest_recovery_report,
             qualify_kvm_post_probe_failure,
+            qualify_kvm_compatibility_drift,
         } => {
             let transport_qualification = match take_transport_qualification() {
                 Ok(request) => request,
@@ -622,7 +653,17 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let succeeded = if qualify_kvm_post_probe_failure {
+            let succeeded = if let Some(case) = qualify_kvm_compatibility_drift.as_deref() {
+                a3s_oci_krun::run_linux_agent_vm_worker_with_compatibility_drift(
+                    &system_image_manifest,
+                    &runtime_share,
+                    &guest_token_file,
+                    &console,
+                    &socket_path,
+                    guest_recovery_report.as_deref(),
+                    case,
+                )
+            } else if qualify_kvm_post_probe_failure {
                 a3s_oci_krun::run_linux_agent_vm_worker_with_kvm_post_probe_failure(
                     &system_image_manifest,
                     &runtime_share,
