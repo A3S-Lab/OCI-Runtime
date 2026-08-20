@@ -117,6 +117,49 @@ The output distinguishes:
 Opening `/dev/kvm` for the capability ioctl does not initialize libkrun or
 create a VM.
 
+## Isolated Linux libkrun context gate
+
+The separate `a3s-oci-krun-shim` owns the optional native libkrun boundary.
+The SDK, feature probe, durable host service, and Native Linux driver neither
+link nor load these assets. Run the context gate explicitly with:
+
+```bash
+cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
+```
+
+The build selects exactly one deterministic runtime archive for the target
+architecture. The x86_64 and AArch64 archives each contain only
+`libkrun.so.1.17.0` and `libkrunfw.so.5`. Their archive sizes and SHA-256
+digests, both inner-file identities, and the firmware-exported kernel size,
+guest load address, entry address, and digest are recorded in one shared
+manifest. Full source and reproduction details live in
+[`crates/krun/RUNTIME-PROVENANCE.md`](../crates/krun/RUNTIME-PROVENANCE.md).
+
+At runtime the shim:
+
+1. selects an adjacent packaged runtime directory, falling back to Cargo's
+   staged directory only for a repository build;
+2. requires a real directory and real regular files, rejecting symbolic
+   links, wrong sizes, and digest drift;
+3. loads the exact firmware with `RTLD_NOW | RTLD_GLOBAL`, then the exact
+   libkrun object with `RTLD_NOW | RTLD_LOCAL`;
+4. verifies the kernel exported by `krunfw_get_kernel` and resolves only the
+   six context symbols it uses;
+5. repeats the asset and exported-kernel checks before allocating a context;
+6. creates one context, configures one vCPU, 128 MiB, and a plain AF_VSOCK
+   device with the agent port, then releases the context.
+
+A successful report has schema `a3s.oci.krun-context-smoke.v2`, platform
+`linux`, status `available`, and all five lifecycle booleans set to `true`.
+Tests also copy the shim beside a modified runtime and beside a runtime
+directory symlink and require both attempts to fail before `krun_create_ctx`.
+
+This gate deliberately does not open `/dev/kvm`, construct a VMM, enter a VM,
+boot the guest agent, or register a workload driver. Its `available` status
+describes only the isolated native context gate. The `libkrun-kvm` driver
+therefore remains `probe-only` until the immutable system root, authenticated
+guest session, complete SDK/recovery matrices, and real-KVM soak pass.
+
 ## Experimental lifecycle gate
 
 The `native-linux-smoke` command opens the native driver beneath isolated
