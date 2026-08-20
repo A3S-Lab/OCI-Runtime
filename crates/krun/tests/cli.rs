@@ -1,5 +1,26 @@
 use std::process::Command;
 
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use std::fs::{self, OpenOptions};
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use std::io::Write;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use std::os::unix::fs::symlink;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use std::path::{Path, PathBuf};
+
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -19,7 +40,11 @@ fn context_smoke_emits_consistent_versioned_output() {
 
     if cfg!(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )) {
         assert!(
             output.status.success(),
@@ -34,6 +59,95 @@ fn context_smoke_emits_consistent_versioned_output() {
     } else {
         assert_eq!(output.status.code(), Some(2));
     }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn linux_context_smoke_rejects_a_tampered_adjacent_runtime() {
+    let (directory, shim, runtime) = copied_linux_context_fixture();
+    let mut libkrun = OpenOptions::new()
+        .append(true)
+        .open(runtime.join("libkrun.so.1.17.0"))
+        .expect("open copied libkrun");
+    libkrun.write_all(&[0]).expect("tamper copied libkrun");
+    drop(libkrun);
+
+    let report = failed_linux_context_smoke(&shim);
+    assert!(report
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("size mismatch")));
+    drop(directory);
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn linux_context_smoke_rejects_an_adjacent_runtime_symlink() {
+    let source_shim = PathBuf::from(env!("CARGO_BIN_EXE_a3s-oci-krun-shim"));
+    let source_runtime = source_shim
+        .parent()
+        .expect("shim executable directory")
+        .join("a3s-oci-krun-runtime");
+    let directory = tempfile::tempdir().expect("temporary shim directory");
+    let shim = directory.path().join("a3s-oci-krun-shim");
+    fs::copy(&source_shim, &shim).expect("copy context-smoke shim");
+    symlink(
+        &source_runtime,
+        directory.path().join("a3s-oci-krun-runtime"),
+    )
+    .expect("create adjacent runtime symlink");
+
+    let report = failed_linux_context_smoke(&shim);
+    assert!(report
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("runtime path must be a real directory")));
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn copied_linux_context_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let source_shim = PathBuf::from(env!("CARGO_BIN_EXE_a3s-oci-krun-shim"));
+    let source_runtime = source_shim
+        .parent()
+        .expect("shim executable directory")
+        .join("a3s-oci-krun-runtime");
+    let directory = tempfile::tempdir().expect("temporary shim directory");
+    let shim = directory.path().join("a3s-oci-krun-shim");
+    fs::copy(&source_shim, &shim).expect("copy context-smoke shim");
+    let runtime = directory.path().join("a3s-oci-krun-runtime");
+    fs::create_dir(&runtime).expect("create copied runtime directory");
+    for name in ["libkrun.so.1.17.0", "libkrunfw.so.5"] {
+        fs::copy(source_runtime.join(name), runtime.join(name))
+            .expect("copy context-smoke runtime asset");
+    }
+    (directory, shim, runtime)
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn failed_linux_context_smoke(shim: &Path) -> a3s_oci_krun::KrunContextSmokeReport {
+    let output = Command::new(shim)
+        .arg("context-smoke")
+        .output()
+        .expect("context smoke command must start");
+    assert_eq!(output.status.code(), Some(2));
+    let report: a3s_oci_krun::KrunContextSmokeReport =
+        serde_json::from_slice(&output.stdout).expect("smoke output must be valid JSON");
+    assert!(!report.is_success());
+    assert!(!report.runtime_bundle_loaded);
+    assert!(!report.context_created);
+    report
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

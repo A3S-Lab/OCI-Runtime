@@ -117,6 +117,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - run: cargo run -p a3s-oci-cli -- features
+      - if: runner.os == 'Linux'
+        name: Isolated Linux libkrun context lifecycle
+        run: cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
         shell: bash
@@ -978,6 +981,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Linux libkrun runtime integrity and context lifecycle
+        run: |
+          cargo test -p a3s-oci-krun --all-targets
+          cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
       - name: Rootless generated-cgroup device boundary
         env:
           A3S_OCI_NATIVE_FOCUS: rootless-device-boundary

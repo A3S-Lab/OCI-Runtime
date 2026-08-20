@@ -138,7 +138,11 @@ pub struct KrunContextSmokeReport {
 impl KrunContextSmokeReport {
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     fn initial(platform: HostPlatform, config: VmConfig, runtime_bundle_loaded: bool) -> Self {
         Self {
@@ -168,6 +172,14 @@ impl KrunContextSmokeReport {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     pub(crate) fn macos(config: VmConfig) -> Self {
         Self::initial(HostPlatform::Macos, config, false)
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    pub(crate) fn linux(config: VmConfig) -> Self {
+        Self::initial(HostPlatform::Linux, config, false)
     }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]

@@ -5,69 +5,21 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use xz2::read::XzDecoder;
 
-const WINDOWS_RUNTIME_ARCHIVE: &str = "runtime/windows-x86_64/krun-windows-x64.tar.xz";
-const WINDOWS_RUNTIME_ARCHIVE_SHA256: &str =
-    "ce178184bc9e309c9f8fef181312cd6c398fc825807124e31afab949b790627e";
-const WINDOWS_RUNTIME_FILES: &[(&str, &str)] = &[
-    (
-        "krun.dll",
-        "f21293b65ee16058c9014b543c708d84c50dc28d7775dbd77bac32faabafa59e",
-    ),
-    (
-        "krun.lib",
-        "3ac760758158bd4d2d6570db58037d47cd370a8e6ea04ccf54a8b24fd1fdec3d",
-    ),
-    (
-        "libkrunfw.dll",
-        "44f25540f58155c01258fe123617636fdc6cff27873e38e71dbc75f139602077",
-    ),
-];
+#[path = "src/runtime_assets.rs"]
+mod runtime_assets;
 
-const MACOS_RUNTIME_ARCHIVE: &str = "runtime/macos-aarch64/krun-macos-arm64.tar.xz";
-const MACOS_RUNTIME_ARCHIVE_SHA256: &str =
-    "5486f38e91eb4da0e58888b543c93fe669c918ad4b84dd495f0d1dfdffc43b56";
-const MACOS_RUNTIME_FILES: &[(&str, &str)] = &[
-    (
-        "libkrun.1.17.0.dylib",
-        "c5353f9cbd91564ce26eceaf1bdc33341097b43280fe029203ccca02807c082d",
-    ),
-    (
-        "libkrunfw.5.dylib",
-        "841bc9d5eecbc2aeeb6098fbc75d484427680d7503f5ed9bcdfe9d072a9420d4",
-    ),
-];
-
-struct RuntimeBundle {
-    platform: &'static str,
-    archive: &'static str,
-    archive_sha256: &'static str,
-    files: &'static [(&'static str, &'static str)],
-}
-
-const WINDOWS_RUNTIME: RuntimeBundle = RuntimeBundle {
-    platform: "windows-x86_64",
-    archive: WINDOWS_RUNTIME_ARCHIVE,
-    archive_sha256: WINDOWS_RUNTIME_ARCHIVE_SHA256,
-    files: WINDOWS_RUNTIME_FILES,
-};
-
-const MACOS_RUNTIME: RuntimeBundle = RuntimeBundle {
-    platform: "macos-aarch64",
-    archive: MACOS_RUNTIME_ARCHIVE,
-    archive_sha256: MACOS_RUNTIME_ARCHIVE_SHA256,
-    files: MACOS_RUNTIME_FILES,
-};
+use runtime_assets::{runtime_bundle, RuntimeBundle, RuntimeFile, RUNTIME_BUNDLES};
 
 fn main() {
-    println!("cargo:rerun-if-changed={WINDOWS_RUNTIME_ARCHIVE}");
-    println!("cargo:rerun-if-changed={MACOS_RUNTIME_ARCHIVE}");
+    println!("cargo:rerun-if-changed=src/runtime_assets.rs");
+    for bundle in RUNTIME_BUNDLES {
+        println!("cargo:rerun-if-changed={}", bundle.archive);
+    }
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let bundle = match (target_os.as_str(), target_arch.as_str()) {
-        ("windows", "x86_64") => &WINDOWS_RUNTIME,
-        ("macos", "aarch64") => &MACOS_RUNTIME,
-        _ => return,
+    let Some(bundle) = runtime_bundle(&target_os, &target_arch) else {
+        return;
     };
 
     let manifest_dir = PathBuf::from(
@@ -117,13 +69,13 @@ fn stage_windows_runtime(runtime_dir: &Path, profile_dir: &Path) {
 fn stage_runtime_files(
     runtime_dir: &Path,
     destination_dir: &Path,
-    files: &[(&str, &str)],
+    files: &[RuntimeFile],
 ) -> io::Result<()> {
-    for (name, expected) in files {
-        let source = runtime_dir.join(name);
-        let destination = destination_dir.join(name);
+    for file in files {
+        let source = runtime_dir.join(file.name);
+        let destination = destination_dir.join(file.name);
         copy_runtime_file(&source, &destination)?;
-        verify_sha256(&destination, expected)?;
+        verify_runtime_file(&destination, file)?;
     }
     Ok(())
 }
@@ -133,14 +85,15 @@ fn install_runtime(
     runtime_dir: &Path,
     bundle: &RuntimeBundle,
 ) -> io::Result<()> {
+    verify_size(archive_path, bundle.archive_size)?;
     verify_sha256(archive_path, bundle.archive_sha256)?;
     if runtime_files_match(runtime_dir, bundle.files) {
         return Ok(());
     }
 
     fs::create_dir_all(runtime_dir)?;
-    for (name, _) in bundle.files {
-        let path = runtime_dir.join(name);
+    for file in bundle.files {
+        let path = runtime_dir.join(file.name);
         match fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -174,7 +127,7 @@ fn install_runtime(
         let Some(index) = bundle
             .files
             .iter()
-            .position(|(expected, _)| *expected == name)
+            .position(|expected| expected.name == name)
         else {
             return Err(invalid_archive(
                 bundle,
@@ -211,10 +164,30 @@ fn invalid_archive(bundle: &RuntimeBundle, message: String) -> io::Error {
     )
 }
 
-fn runtime_files_match(runtime_dir: &Path, files: &[(&str, &str)]) -> bool {
+fn runtime_files_match(runtime_dir: &Path, files: &[RuntimeFile]) -> bool {
     files
         .iter()
-        .all(|(name, expected)| verify_sha256(&runtime_dir.join(name), expected).is_ok())
+        .all(|file| verify_runtime_file(&runtime_dir.join(file.name), file).is_ok())
+}
+
+fn verify_runtime_file(path: &Path, file: &RuntimeFile) -> io::Result<()> {
+    verify_size(path, file.size)?;
+    verify_sha256(path, file.sha256)
+}
+
+fn verify_size(path: &Path, expected: u64) -> io::Result<()> {
+    let actual = fs::metadata(path)?.len();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "size mismatch for {}: expected {expected}, found {actual}",
+                path.display()
+            ),
+        ))
+    }
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> io::Result<()> {
@@ -261,41 +234,4 @@ fn copy_runtime_file(source: &Path, destination: &Path) -> io::Result<()> {
     fs::create_dir_all(parent)?;
     fs::copy(source, destination)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{profile_dir, MACOS_RUNTIME_FILES, WINDOWS_RUNTIME_FILES};
-    use std::path::Path;
-
-    #[test]
-    fn profile_directory_is_derived_from_cargo_out_dir() {
-        let out = Path::new(r"C:\target\debug\build\crate-hash\out");
-        assert_eq!(profile_dir(out), Some(Path::new(r"C:\target\debug").into()));
-    }
-
-    #[test]
-    fn runtime_manifest_has_exactly_one_entry_per_required_file() {
-        for (files, required) in [
-            (
-                WINDOWS_RUNTIME_FILES,
-                &["krun.dll", "krun.lib", "libkrunfw.dll"][..],
-            ),
-            (
-                MACOS_RUNTIME_FILES,
-                &["libkrun.1.17.0.dylib", "libkrunfw.5.dylib"][..],
-            ),
-        ] {
-            assert_eq!(files.len(), required.len());
-            for required_name in required {
-                assert_eq!(
-                    files
-                        .iter()
-                        .filter(|(name, _)| name == required_name)
-                        .count(),
-                    1
-                );
-            }
-        }
-    }
 }
