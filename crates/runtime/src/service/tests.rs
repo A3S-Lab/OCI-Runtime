@@ -1710,6 +1710,57 @@ async fn rejects_caller_vm_configuration_before_durable_reservation_and_create_d
 }
 
 #[tokio::test]
+async fn rejects_unsupported_mount_labels_before_durable_reservation_and_create_dispatch() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let bundle = OciBundle::from_json(
+        temporary.path().join("bundle"),
+        serde_json::json!({
+            "ociVersion": "1.3.0",
+            "process": {
+                "terminal": false,
+                "user": {"uid": 0, "gid": 0},
+                "args": ["/bin/true"],
+                "cwd": "/"
+            },
+            "root": {"path": "rootfs", "readonly": true},
+            "linux": {
+                "namespaces": [{"type": "mount"}],
+                "mountLabel": "system_u:object_r:container_file_t:s0"
+            }
+        })
+        .to_string(),
+    )
+    .expect("schema-valid OCI mount-label bundle");
+    let request = CreateRequest {
+        context: OperationContext::new(operation_id("mount-label-create")),
+        id: container_id("mount-label"),
+        attachments: CreateAttachments::from_bundle(&bundle, ProcessIo::default())
+            .expect("valid attachment contract"),
+        bundle,
+        isolation: IsolationRequest::DedicatedVm,
+    };
+    let driver = Arc::new(RecordingDriver::supported());
+    let service = open_service(&temporary, Arc::clone(&driver)).await;
+
+    let error = service
+        .create(request)
+        .await
+        .expect_err("an unadvertised mount label must fail before durable mutation");
+
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("linux.mountLabel"));
+    assert!(
+        driver.calls().is_empty(),
+        "driver must not observe a mutating create dispatch"
+    );
+    assert!(service
+        .list(ListRequest::default())
+        .await
+        .expect("list durable records")
+        .is_empty());
+}
+
+#[tokio::test]
 async fn reports_builtin_and_driver_unsafe_config_annotations_for_configured_services() {
     const DRIVER_EXTENSION: &str = "dev.a3s.network.tsi";
 

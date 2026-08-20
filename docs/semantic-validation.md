@@ -135,8 +135,6 @@ payloads.
 This rule set establishes a fail-closed validation boundary. Complete OCI
 conformance still requires:
 
-- promotion of all pending entries in the generated normative coverage lock
-  to an exact rule, enforcement owner, and test;
 - complete positive and negative semantic fixtures;
 - selected-driver capability and enforcement checks;
 - durable lifecycle and start-time snapshot validation;

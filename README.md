@@ -537,8 +537,8 @@ The repository turns release claims into checked inventories:
 | Named OCI schema properties and enum values classified | 423 |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 95 |
-| Owner-bound non-semantic rules | 141 |
-| OCI normative dispositions | 566 enforced · 51 validated · 7 conformant · 14 reviewed external · 17 pending review |
+| Owner-bound non-semantic rules | 156 |
+| OCI normative dispositions | 578 enforced · 51 validated · 12 conformant · 14 reviewed external · 0 pending review |
 | Registered durable commit fault stages | 741 |
 | Durable-state replacement qualification | macOS/Linux/Windows complete, including a real Linux bind mount and the Windows reparse-point matrix |
 | Before/after `RuntimeDriver` fault boundaries | 44 |
@@ -574,13 +574,13 @@ The repository turns release claims into checked inventories:
 | Guest operations behind protocol v10 | 21 (20 public workload operations + 1 maintenance acknowledgement) |
 
 The locks prove inventory and exercised boundaries, not full conformance by
-themselves. Remaining normative enforcement, upstream lifecycle suites,
-adversarial security, upgrade compatibility, and exact release-artifact
-qualification must all pass before a driver becomes `supported`.
+themselves. The OCI 1.3 normative inventory has no unclassified entries, but
+upstream lifecycle suites, adversarial security, upgrade compatibility, and
+exact release-artifact qualification must all pass before a driver becomes
+`supported`.
 
 ### Still intentionally open
 
-- complete review and enforcement of pending OCI normative entries;
 - real-kernel Intel RDT qualification on CAT/MBA-capable Linux hosts;
 - real-host qualification of descriptor-confined filesystem sessions on each
   remaining utility-VM driver;

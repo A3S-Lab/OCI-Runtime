@@ -466,7 +466,7 @@ driver implements.
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
   configuration and enforce them at SDK request boundaries.
-- [ ] Close the remaining 17-entry pending normative evidence backlog.
+- [x] Close the remaining 17-entry pending normative evidence backlog.
   - [x] Bind the common configuration and runtime-feature annotation map
     shapes, optional and empty forms, string values, and unknown-key
     preservation to pinned schema and bundle round-trip evidence.
@@ -482,8 +482,9 @@ driver implements.
   - [x] Validate every emitted feature document against the pinned schema and
     bind its version range, hooks, Linux availability, namespaces, cgroup,
     seccomp, AppArmor, SELinux, and ID-mapped-mount claims to the same SDK
-    registries and executor tests. Keep the compile-time-only recommendation
-    open because configured driver capabilities are resolved at runtime.
+    registries and executor tests. Resolve the compile-time recommendation by
+    freezing the driver-specific report when the configured service is built,
+    rather than varying capabilities per workload execution.
   - [x] Bind common Root, Mounts, POSIX-platform Mounts, Process, and
     POSIX-platform User behavior to exact admission, planning, init/exec, and
     native workload evidence. The 37 promoted entries cover declared-root
@@ -599,12 +600,36 @@ driver implements.
     a dedicated `reviewed-external` disposition with a mandatory rationale,
     stable boundary rule, and retained test evidence. Runtime validation adds
     the previously ambiguous OCI image `os.features` array mapping.
-  - [ ] Classify every entry by common/process, Linux, VM, state, or feature
+  - [x] Bind the final two common value-policy entries to schema, semantic,
+    executor-plan, selected-driver, and feature-report evidence. Invalid or
+    unsupported values fail before durable mutation, and each configured
+    service publishes the exact supported subset it will enforce.
+  - [x] Bind the two Linux runtime file-descriptor entries to the typed,
+    collision-safe inherited-descriptor planner. A3S passes only the exact
+    advertised control descriptors and deliberately adds no optional
+    `/dev/null` descriptors.
+  - [x] Bind the two network-device termination entries to retained native
+    evidence. The runtime moves interfaces into the container namespace during
+    Create, never reconfigures them as part of workload lifecycle, and never
+    moves them back during termination or cleanup.
+  - [x] Bind the six remaining cgroup entries to exact v2 behavior: optional
+    fit checks fail when requested controls are unavailable; an omitted path
+    receives a stable private generation-fenced location; unrequested extra
+    controllers are not attached; representable v1 CPU, memory, and Block I/O
+    settings convert to v2; and unrepresentable controls fail before mutation.
+  - [x] Bind rootfs propagation, masked paths, and read-only paths to shared
+    planner plus native read-back evidence. Reject `linux.mountLabel` at the
+    selected-driver preflight before durable reservation because SELinux mount
+    labeling is not advertised.
+  - [x] Bind the final Features recommendation to the stable configured-service
+    capability report. Runtime driver selection happens when the service is
+    constructed, and per-container execution cannot alter that report.
+  - [x] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
-  - [ ] Bind every applicable entry to an exact validator, enforcement owner,
+  - [x] Bind every applicable entry to an exact validator, enforcement owner,
     positive test, negative test, and retained evidence field; bind every
     inapplicable entry to a reviewed reason.
-  - [ ] Make CI reject pending, unclassified, duplicate, stale, or
+  - [x] Make CI reject pending, unclassified, duplicate, stale, or
     source-digest-mismatched entries and require the generated ledger to reach
     zero pending entries.
 - [x] Add version-negotiated local IPC transport for out-of-process callers.
@@ -1578,9 +1603,10 @@ leak. Only then may KVM become `experimental`.
   owner-bound. Subsequent common-configuration, platform, extensibility,
   namespace, ID-mapping, time-offset, PIDs, memory, Block I/O, Linux-device,
   HugeTLB, RDMA, Unified, network-controller, Seccomp, and VM-configuration
-  promotions plus Linux default-filesystem and runtime-lifecycle conformance
-  leave 566 enforced, 51 validated, seven conformant, 14 reviewed-external,
-  and 17 pending entries.
+  promotions plus Linux default-filesystem, runtime-lifecycle, common value,
+  file-descriptor, cgroup, rootfs, network-device, mount-label, and stable
+  feature-report evidence leave 578 enforced, 51 validated, 12 conformant, 14
+  reviewed-external, and zero pending entries.
 - [x] Compile and install pure-Rust x86_64/AArch64 seccomp BPF with OCI
   argument comparisons, stacked default/specific actions, and retained exec
   policy.
