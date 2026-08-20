@@ -98,7 +98,11 @@ impl OciVmTransportFaultCleanupReport {
 
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     pub(crate) fn unsupported(platform: HostPlatform, stage: AgentTransportFaultStage) -> Self {
         let mut report = Self::initial(platform, stage);
@@ -106,8 +110,8 @@ impl OciVmTransportFaultCleanupReport {
         report.bridge.status = CapabilityStatus::Unsupported;
         report.bridge.reason = Some("the authenticated guest bridge was not attempted".to_string());
         report.reason = Some(
-            "real utility-VM transport fault cleanup is implemented only for Windows \
-             x86_64/WHPX and macOS aarch64/HVF"
+            "real utility-VM transport fault cleanup is implemented only for Linux \
+             x86_64/aarch64 KVM, Windows x86_64/WHPX, and macOS aarch64/HVF"
                 .to_string(),
         );
         report
@@ -132,8 +136,10 @@ impl OciVmTransportFaultCleanupReport {
             },
         }
         .to_string();
-        let common = matches!(self.platform, HostPlatform::Macos | HostPlatform::Windows)
-            && self.platform == self.bridge.platform
+        let common = matches!(
+            self.platform,
+            HostPlatform::Linux | HostPlatform::Macos | HostPlatform::Windows
+        ) && self.platform == self.bridge.platform
             && self.bundle_loaded
             && self.requested_operation == AgentOperation::Create
             && self.qualification_operation_id.is_some()
@@ -299,6 +305,34 @@ mod tests {
     }
 
     #[test]
+    fn transport_report_accepts_complete_linux_kvm_cleanup_evidence() {
+        let stage = AgentTransportOperationStage::HostAfterRequestWrite;
+        let mut report =
+            OciVmTransportFaultCleanupReport::initial(HostPlatform::Linux, stage.into());
+        report.status = CapabilityStatus::Available;
+        report.bundle_loaded = true;
+        report.qualification_operation_id =
+            Some(OperationId::new("linux-transport-report-create").expect("operation ID"));
+        report.negotiated_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.injected_point = Some(format!(
+            "agent-v{AGENT_PROTOCOL_VERSION_MAX}.create-{}",
+            stage.as_str()
+        ));
+        report.fault_crossings = 1;
+        report.observed_error_code = Some(ErrorCode::Unavailable);
+        report.observed_error_operation = Some("oci-vm-transport-qualification-fault".to_string());
+        report.observed_error_retryable = true;
+        report.marker_absent_after_cleanup = true;
+        report.guest_runtime_clean = true;
+        report.bridge = complete_linux_bridge();
+
+        assert!(report.is_success());
+
+        report.bridge.shim_report = None;
+        assert!(!report.is_success());
+    }
+
+    #[test]
     fn transport_report_requires_nonce_bound_evidence_for_guest_stages() {
         let stage = AgentTransportOperationStage::GuestAfterDispatch;
         let mut report =
@@ -386,6 +420,27 @@ mod tests {
             descriptor_inventory_restored: true,
             reason: None,
         });
+        report
+    }
+
+    fn complete_linux_bridge() -> AgentVmSmokeReport {
+        let mut report = AgentVmSmokeReport::initial(HostPlatform::Linux);
+        report.status = CapabilityStatus::Available;
+        report.endpoint_bound = true;
+        report.endpoint_name = Some("a3s-oci-agent-linux-transport".into());
+        report.shim_spawned = true;
+        report.shim_process_id = Some(101);
+        report.bridge_process_id = Some(102);
+        report.shim_client_verified = true;
+        report.protocol_negotiated = true;
+        report.selected_protocol = Some(AGENT_PROTOCOL_VERSION_MAX);
+        report.agent_version = Some(env!("CARGO_PKG_VERSION").into());
+        report.guest_architecture = Some(std::env::consts::ARCH.into());
+        report.advertised_operations = AgentOperation::ALL.to_vec();
+        report.shim_report_verified = true;
+        report.shim_exit_code = Some(0);
+        report.console_created = true;
+        report.shim_report = Some(json!({"status": "available"}));
         report
     }
 }

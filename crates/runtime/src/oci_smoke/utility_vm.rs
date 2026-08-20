@@ -781,7 +781,11 @@ fn guest_path(vm_rootfs: &Path, bundle: &Path) -> Result<GuestPath, String> {
     }
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     let path = format!(
         "{}/{}",
@@ -790,7 +794,11 @@ fn guest_path(vm_rootfs: &Path, bundle: &Path) -> Result<GuestPath, String> {
     );
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     let path = format!("/{}", components.join("/"));
     GuestPath::new(path).map_err(|error| format!("failed to construct guest bundle path: {error}"))
@@ -941,4 +949,32 @@ fn append_reason(report: &mut OciVmSmokeReport, reason: impl Into<String>) {
 fn failed(mut report: OciVmSmokeReport, reason: impl Into<String>) -> OciVmSmokeReport {
     report.reason = Some(reason.into());
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::guest_path;
+
+    #[test]
+    fn guest_path_maps_runtime_share_descendants_to_the_fixed_guest_mount() {
+        let runtime_share = Path::new("/tmp/a3s-oci-runtime-share");
+        let bundle = runtime_share.join("var/lib/a3s-oci/bundle-a");
+
+        let guest = guest_path(runtime_share, &bundle).expect("guest bundle path");
+
+        assert_eq!(
+            guest.as_str(),
+            "/run/a3s-oci-runtime/var/lib/a3s-oci/bundle-a"
+        );
+    }
+
+    #[test]
+    fn guest_path_rejects_the_runtime_share_itself_and_outside_paths() {
+        let runtime_share = Path::new("/tmp/a3s-oci-runtime-share");
+
+        assert!(guest_path(runtime_share, runtime_share).is_err());
+        assert!(guest_path(runtime_share, Path::new("/tmp/other/bundle")).is_err());
+    }
 }

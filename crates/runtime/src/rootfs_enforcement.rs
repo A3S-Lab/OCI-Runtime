@@ -81,7 +81,11 @@ impl RootfsEnforcementFixture {
     #[cfg(any(
         test,
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     pub(crate) async fn prepare(base: &OciBundle, nonce: &str) -> Result<Self, String> {
         Self::prepare_inner(base, nonce, false).await

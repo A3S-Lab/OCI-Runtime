@@ -227,9 +227,33 @@ cases require exit code 2, no KVM access, bridge, protocol negotiation, or VM
 entry, and exact endpoint, shim-process, token-handoff, and runtime-share
 inventory restoration. The report schema is
 `a3s.oci.linux-kvm-compatibility-drift.v1`. CI runs both entry contracts and
-this matrix on x86_64 and AArch64. The driver remains `probe-only` until
-successful retained real-entry evidence and the later lifecycle, recovery,
-and soak gates pass on every advertised architecture.
+this matrix on x86_64 and AArch64.
+
+The next gate runs the shared Utility VM lifecycle only when the feature probe
+can open `/dev/kvm` and verify API version 12:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_LIFECYCLE_REPORT=/absolute/path/to/report.json \
+  bash .github/scripts/linux-kvm-lifecycle.sh
+```
+
+It creates a separate empty bootstrap root and UID-owned mode-`0700` runtime
+share, downloads the architecture-specific pinned Alpine archive, and prepares
+two ownership-normalized OCI bundles. Its 16 cases are the complete
+20-operation lifecycle, the two-container generation/namespace/rootfs/PID
+isolation lifecycle, three no-delete interruption boundaries, and all 11
+protocol-v10 Host/Guest transport fault points. Each case must restore the
+Unix endpoint and shim-process inventories, leave `run` unchanged, keep the
+bootstrap empty, and remove markers plus token and recovery handoffs. The
+aggregate schema is `a3s.oci.linux-kvm-lifecycle-matrix.v1`.
+
+If KVM is unavailable, the script does not download or unpack the Alpine
+fixture. It emits a versioned `unavailable` report with `case_count: 0` and the
+exact feature-probe reason. CI uploads that report, but it is not an
+`available` lifecycle result. The driver remains `probe-only` until fresh
+x86_64 and AArch64 KVM hosts retain all 16 cases and the remaining owner-death,
+service-restart, negative-isolation, and soak gates pass.
 
 ## Experimental lifecycle gate
 

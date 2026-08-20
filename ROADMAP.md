@@ -159,6 +159,10 @@ Completed:
 - isolated Linux libkrun create/configure/plain-vsock/release context evidence
   with runtime symlink and content-drift rejection, without opening `/dev/kvm`
   or entering a VM;
+- a shared Linux KVM lifecycle qualification entry for x86_64 and AArch64,
+  with 16 KVM-gated lifecycle, multi-container, lifecycle-fault, and
+  transport-fault cases plus an explicit zero-case `unavailable` report on
+  runners that cannot open KVM;
 - Apple Silicon and Hypervisor.framework capability reporting through a
   direct `kern.hv_support` query;
 - entitlement-aware direct Hypervisor.framework VM-object create/destroy
@@ -1480,6 +1484,16 @@ release-promotion gates above.
 - [ ] Run the same lifecycle, process I/O, filesystem, resource, namespace,
   multi-container, fault-cleanup, owner-death, and service-restart matrices
   used to qualify WHPX and HVF.
+  - [x] Wire the shared Utility VM lifecycle to Linux x86_64/AArch64 and add a
+    16-case CI entry for the complete 20-operation lifecycle, two-container
+    isolation, three lifecycle cleanup boundaries, and all 11 Host/Guest
+    transport interruption points. The versioned report retains endpoint,
+    shim-process, runtime-state, bootstrap, token/recovery, and marker cleanup.
+    Runners without usable KVM emit `unavailable` with zero cases and skip the
+    Alpine fixture rather than manufacturing a pass.
+  - [ ] Retain an `available` 16-case report on fresh x86_64 and AArch64 KVM
+    hosts, then complete owner-death and Host Service restart recovery plus the
+    remaining negative-isolation profiles.
 - [ ] Add a bounded real-host KVM soak for every advertised architecture and
   retain per-wave process, descriptor, marker, cgroup, endpoint, and
   runtime-root leak evidence.

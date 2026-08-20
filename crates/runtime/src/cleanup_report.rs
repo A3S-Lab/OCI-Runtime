@@ -241,7 +241,11 @@ impl OciVmFaultCleanupReport {
 
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     pub(crate) fn unsupported(platform: HostPlatform, fault: LifecycleFaultPoint) -> Self {
         let mut report = Self::initial(platform, fault);
@@ -249,8 +253,8 @@ impl OciVmFaultCleanupReport {
         report.bridge.status = CapabilityStatus::Unsupported;
         report.bridge.reason = Some("the authenticated guest bridge was not attempted".to_string());
         report.reason = Some(
-            "utility-VM fault cleanup is implemented only for Windows x86_64/WHPX and \
-             macOS aarch64/HVF"
+            "utility-VM fault cleanup is implemented only for Linux x86_64/aarch64 KVM, \
+             Windows x86_64/WHPX, and macOS aarch64/HVF"
                 .to_string(),
         );
         report
