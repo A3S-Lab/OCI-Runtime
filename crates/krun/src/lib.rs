@@ -606,7 +606,7 @@ pub fn run_linux_agent_vm_worker(
     guest_recovery_report: Option<&str>,
     transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
 ) -> bool {
-    linux_agent_smoke::run_worker(
+    linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
         system_image_manifest,
         runtime_share,
         guest_token_file,
@@ -614,7 +614,39 @@ pub fn run_linux_agent_vm_worker(
         socket,
         guest_recovery_report,
         transport_qualification,
-    )
+        qualify_kvm_post_probe_failure: false,
+    })
+}
+
+/// Run the private Linux KVM guest-agent worker with the qualification-only
+/// post-probe failure enabled.
+///
+/// This is exported only for the hidden shim process boundary.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+#[must_use]
+pub fn run_linux_agent_vm_worker_with_kvm_post_probe_failure(
+    system_image_manifest: &Path,
+    runtime_share: &Path,
+    guest_token_file: &str,
+    console: &Path,
+    socket: &Path,
+    guest_recovery_report: Option<&str>,
+    transport_qualification: Option<&a3s_oci_agent_protocol::AgentTransportQualificationRequest>,
+) -> bool {
+    linux_agent_smoke::run_worker(linux_agent_smoke::LinuxAgentVmWorkerConfig {
+        system_image_manifest,
+        runtime_share,
+        guest_token_file,
+        console,
+        socket,
+        guest_recovery_report,
+        transport_qualification,
+        qualify_kvm_post_probe_failure: true,
+    })
 }
 
 pub(crate) fn fallback_config() -> VmConfig {

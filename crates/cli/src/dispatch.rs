@@ -400,7 +400,39 @@ fn dispatch(
             system_image_manifest,
             runtime_share,
             console,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            qualify_kvm_post_probe_failure,
         } => command_future!({
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            let report = if qualify_kvm_post_probe_failure {
+                a3s_oci_runtime::qualify_kvm_post_probe_failure(
+                    &shim,
+                    &rootfs,
+                    system_image_manifest.as_deref(),
+                    runtime_share.as_deref(),
+                    &console,
+                )
+                .await
+            } else {
+                a3s_oci_runtime::agent_vm_smoke(
+                    &shim,
+                    &rootfs,
+                    system_image_manifest.as_deref(),
+                    runtime_share.as_deref(),
+                    &console,
+                )
+                .await
+            };
+            #[cfg(not(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )))]
             let report = a3s_oci_runtime::agent_vm_smoke(
                 &shim,
                 &rootfs,

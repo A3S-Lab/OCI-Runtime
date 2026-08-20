@@ -11,7 +11,7 @@ pub const KRUN_SYSTEM_IMAGE_CONTEXT_SMOKE_SCHEMA_VERSION: &str =
 /// Schema emitted by the real utility-VM entry smoke.
 pub const KRUN_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-vm-smoke.v2";
 /// Schema emitted while booting the negotiation-only guest agent.
-pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v6";
+pub const KRUN_AGENT_VM_SMOKE_SCHEMA_VERSION: &str = "a3s.oci.krun-agent-vm-smoke.v7";
 
 /// Exact immutable macOS boot assets observed by the isolated VM worker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,6 +425,9 @@ pub struct KrunAgentVmSmokeReport {
     pub runtime_share_configured: bool,
     pub kvm_device_opened: bool,
     pub kvm_api_verified: bool,
+    /// Whether the qualification worker stopped after real KVM device/API
+    /// verification and before calling the native VM-entry function.
+    pub kvm_post_probe_failure_injected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub linux_boot_assets: Option<LinuxBootAssetsEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -470,6 +473,7 @@ impl KrunAgentVmSmokeReport {
             runtime_share_configured: false,
             kvm_device_opened: false,
             kvm_api_verified: false,
+            kvm_post_probe_failure_injected: false,
             linux_boot_assets: None,
             macos_boot_assets: None,
             windows_boot_assets: None,
@@ -521,6 +525,7 @@ impl KrunAgentVmSmokeReport {
                     self.runtime_share_configured
                         && self.kvm_device_opened
                         && self.kvm_api_verified
+                        && !self.kvm_post_probe_failure_injected
                         && self
                             .linux_boot_assets
                             .as_ref()

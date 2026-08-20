@@ -21,6 +21,11 @@ pub struct AgentVmHandoff<'a> {
     guest_token_file: Option<&'a str>,
     guest_recovery_report: Option<&'a str>,
     transport_qualification: Option<&'a AgentTransportQualificationRequest>,
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    qualify_kvm_post_probe_failure: bool,
 }
 
 impl<'a> AgentVmHandoff<'a> {
@@ -36,6 +41,11 @@ impl<'a> AgentVmHandoff<'a> {
             guest_token_file,
             guest_recovery_report,
             transport_qualification: None,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            qualify_kvm_post_probe_failure: false,
         }
     }
 
@@ -46,6 +56,18 @@ impl<'a> AgentVmHandoff<'a> {
         request: Option<&'a AgentTransportQualificationRequest>,
     ) -> Self {
         self.transport_qualification = request;
+        self
+    }
+
+    /// Stop a Linux KVM qualification after real device/API verification and
+    /// before the native VM-entry function is called.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[must_use]
+    pub const fn with_kvm_post_probe_failure(mut self, enabled: bool) -> Self {
+        self.qualify_kvm_post_probe_failure = enabled;
         self
     }
 }
@@ -169,6 +191,7 @@ pub fn agent_vm_smoke(
             socket: socket_path,
             guest_recovery_report: handoff.guest_recovery_report,
             transport_qualification: handoff.transport_qualification,
+            qualify_kvm_post_probe_failure: handoff.qualify_kvm_post_probe_failure,
             vm: config,
         })
     }

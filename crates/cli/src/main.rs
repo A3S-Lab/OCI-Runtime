@@ -274,6 +274,13 @@ enum Command {
         /// New host file that receives the guest console stream.
         #[arg(long, value_name = "FILE")]
         console: PathBuf,
+        /// Stop after real KVM device/API verification and before VM entry.
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        #[arg(long, hide = true)]
+        qualify_kvm_post_probe_failure: bool,
     },
     /// Run a fixed OCI core lifecycle inside one utility VM.
     OciVmSmoke {

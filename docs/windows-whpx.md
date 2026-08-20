@@ -526,7 +526,8 @@ do not count as real WHPX evidence until the following two gates pass:
 1. rerun the complete WHPX SDK, soak, owner-death, and service-recovery
    matrices against the exact v1 manifest on a fresh WHPX-enabled Windows
    host, retaining the v4 boot evidence in every session;
-2. retain the v6 shim report from every matrix session and require its nonzero
+2. retain the current v7 shim report from every matrix session and require its
+   inherited v6 handle-reclamation fields, including nonzero
    `windows_handles_before_vm` and `windows_handles_after_vm` values to match,
    with `windows_handle_inventory_restored=true`.
 

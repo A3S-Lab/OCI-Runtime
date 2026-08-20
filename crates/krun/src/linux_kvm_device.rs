@@ -7,7 +7,7 @@ use a3s_oci_sdk::{Error, ErrorCode, Result};
 
 const KVM_DEVICE: &str = "/dev/kvm";
 const KVM_API_VERSION: i32 = 12;
-const KVM_GET_API_VERSION: libc::c_ulong = 0xAE00;
+const KVM_GET_API_VERSION: libc::Ioctl = 0xAE00;
 
 /// Descriptor-pinned KVM device prerequisite for one real Linux VM entry.
 #[derive(Debug)]

@@ -150,6 +150,13 @@ enum Command {
         ))]
         #[arg(long, value_name = "DIR")]
         runtime_share: PathBuf,
+        /// Stop after real KVM device/API verification and before VM entry.
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        #[arg(long, hide = true)]
+        qualify_kvm_post_probe_failure: bool,
     },
     /// Internal process-takeover boundary for the macOS VM smoke.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -200,6 +207,8 @@ enum Command {
         socket_path: PathBuf,
         #[arg(long, value_name = "FILE")]
         guest_recovery_report: Option<String>,
+        #[arg(long, hide = true)]
+        qualify_kvm_post_probe_failure: bool,
     },
 }
 
@@ -314,6 +323,11 @@ fn main() -> ExitCode {
                 )
             ))]
             runtime_share,
+            #[cfg(all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ))]
+            qualify_kvm_post_probe_failure,
         } => {
             let endpoint = match a3s_oci_krun::AgentVsockEndpoint::new(pipe_name) {
                 Ok(endpoint) => endpoint,
@@ -476,6 +490,17 @@ fn main() -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 };
+                let handoff = a3s_oci_krun::AgentVmHandoff::new(
+                    Some(&runtime_share),
+                    Some(bootstrap.guest_path()),
+                    recovery.as_ref().map(|recovery| recovery.guest_path()),
+                )
+                .with_transport_qualification(transport_qualification.as_ref());
+                #[cfg(all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                ))]
+                let handoff = handoff.with_kvm_post_probe_failure(qualify_kvm_post_probe_failure);
                 let mut report = a3s_oci_krun::agent_vm_smoke(
                     &rootfs,
                     Some(&system_image_manifest),
@@ -483,12 +508,7 @@ fn main() -> ExitCode {
                     &endpoint,
                     socket_path,
                     &token,
-                    a3s_oci_krun::AgentVmHandoff::new(
-                        Some(&runtime_share),
-                        Some(bootstrap.guest_path()),
-                        recovery.as_ref().map(|recovery| recovery.guest_path()),
-                    )
-                    .with_transport_qualification(transport_qualification.as_ref()),
+                    handoff,
                 );
                 if let Err(error) = bootstrap.cleanup() {
                     report.status = a3s_oci_core::CapabilityStatus::Unavailable;
@@ -593,6 +613,7 @@ fn main() -> ExitCode {
             console,
             socket_path,
             guest_recovery_report,
+            qualify_kvm_post_probe_failure,
         } => {
             let transport_qualification = match take_transport_qualification() {
                 Ok(request) => request,
@@ -601,15 +622,28 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            if a3s_oci_krun::run_linux_agent_vm_worker(
-                &system_image_manifest,
-                &runtime_share,
-                &guest_token_file,
-                &console,
-                &socket_path,
-                guest_recovery_report.as_deref(),
-                transport_qualification.as_ref(),
-            ) {
+            let succeeded = if qualify_kvm_post_probe_failure {
+                a3s_oci_krun::run_linux_agent_vm_worker_with_kvm_post_probe_failure(
+                    &system_image_manifest,
+                    &runtime_share,
+                    &guest_token_file,
+                    &console,
+                    &socket_path,
+                    guest_recovery_report.as_deref(),
+                    transport_qualification.as_ref(),
+                )
+            } else {
+                a3s_oci_krun::run_linux_agent_vm_worker(
+                    &system_image_manifest,
+                    &runtime_share,
+                    &guest_token_file,
+                    &console,
+                    &socket_path,
+                    guest_recovery_report.as_deref(),
+                    transport_qualification.as_ref(),
+                )
+            };
+            if succeeded {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(2)
