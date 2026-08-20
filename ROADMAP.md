@@ -143,6 +143,12 @@ Completed:
   per-generation runtime share mounted separately from the system root;
   owner-death restart reconciliation retains an exact-generation stopped
   tombstone and replays authenticated exit evidence when available;
+- one platform-neutral dedicated utility-VM lifecycle shared by the public
+  HVF driver and the Linux KVM candidate. It serializes Create per container,
+  owns one VM per exact generation, validates isolation before moving a
+  bundle, retains retryable handoffs, removes terminal and conflicting
+  generations, delegates all 20 workload operations and six OCI hook phases,
+  recovers stopped tombstones, and shuts down each live owner at most once;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;
@@ -433,7 +439,7 @@ Completed:
 Not yet complete:
 
 - equivalent real-host utility-VM transport/reopen qualification for WHPX and
-  the future KVM driver; the complete 180-path HVF matrix is retained;
+  the KVM backend; the complete 180-path HVF matrix is retained;
 - complete shared guest OCI executor;
 - a production workload driver;
 - OCI hook rollback, crash recovery, security-negative, and soak
@@ -1455,9 +1461,17 @@ release-promotion gates above.
   probe is available and otherwise retain explicit post-configuration KVM
   failure evidence. This parent remains open until both advertised
   architectures retain successful real-entry reports.
-- [ ] Implement a launch-ready KVM `RuntimeDriver` through the shared
-  twenty-operation adapter with exact-generation routing, bounded shutdown,
-  and complete process, endpoint, share, and runtime-root ownership.
+- [x] Implement the launch-capable KVM `RuntimeDriver` candidate through the
+  shared twenty-operation adapter with exact-generation routing, bounded
+  shutdown, and complete process, endpoint, share, and runtime-root ownership.
+  `KvmRuntimeDriver::open_candidate` verifies the KVM probe, immutable manifest,
+  private empty bootstrap root, and separate writable runtime share before a
+  launch. The shared lifecycle enforces `DedicatedVm`, atomic bundle handoff,
+  concurrent Create fencing, retryable and terminal cleanup, stopped recovery,
+  all 20 workload operations, and all six OCI hook phases. Candidate
+  capability remains `probe-only`, explicitly disables Native Linux fallback,
+  and cannot register with `HostRuntimeService` until the real-entry,
+  full-matrix, and soak gates pass.
 - [ ] Run the same lifecycle, process I/O, filesystem, resource, namespace,
   multi-container, fault-cleanup, owner-death, and service-restart matrices
   used to qualify WHPX and HVF.
