@@ -329,6 +329,68 @@ fn linux_kvm_recovery_smoke_fails_closed_without_creating_evidence() {
     assert!(!std::path::Path::new(&missing_parent).exists());
 }
 
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn linux_kvm_soak_host_service_requires_all_owner_paths_without_creating_root() {
+    let root = format!(
+        "/tmp/a3s-oci-cli-kvm-soak-host-contract-{}",
+        std::process::id()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "linux-kvm-soak-host-service",
+            "--root",
+            &root,
+            "--shim",
+            "/tmp/missing-a3s-oci-kvm-shim",
+        ])
+        .output()
+        .expect("Linux KVM soak Host Service command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--system-image-manifest"));
+    assert!(!std::path::Path::new(&root).exists());
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn linux_kvm_soak_fails_closed_without_creating_evidence() {
+    let missing_parent = format!("/tmp/a3s-oci-cli-kvm-soak-missing-{}", std::process::id());
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "linux-kvm-soak",
+            "--shim",
+            "/tmp/missing-a3s-oci-kvm-shim",
+            "--system-image-manifest",
+            "/tmp/missing-a3s-oci-system-image.json",
+            "--bundle",
+            "/tmp/missing-a3s-oci-bundle",
+            "--work-parent",
+            &missing_parent,
+            "--source-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--iterations",
+            "2",
+        ])
+        .output()
+        .expect("Linux KVM soak command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Linux KVM soak output must be valid JSON");
+    assert_eq!(report["schema_version"], "a3s.oci.linux-kvm-soak.v1");
+    assert_ne!(report["status"], "available");
+    assert_eq!(report["requested_iterations"], 2);
+    assert_eq!(report["waves"], serde_json::json!([]));
+    assert!(!std::path::Path::new(&missing_parent).exists());
+}
+
 #[test]
 fn native_linux_service_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))

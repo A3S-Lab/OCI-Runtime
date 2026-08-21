@@ -171,6 +171,12 @@ Completed:
   performs stopped-only Delete with descriptor, endpoint, handoff, share, and
   recovery-report cleanup. CI emits zero-case `unavailable` evidence when KVM
   cannot be opened; fresh-host `available` reports are still outstanding;
+- a separate `linux-kvm-bounded-soak-only-v1` Host Service entry that runs a
+  default 25 fresh generations through one durable owner. Every wave retains
+  exact generation and replay evidence plus process, descriptor, marker,
+  endpoint, bundle-handoff, runtime-share, recovery-report, and configured
+  Guest `cgroupsPath` lifetime checks. CI records zero completed iterations and
+  skips the Alpine fixture when KVM cannot be opened;
 - Apple Silicon and Hypervisor.framework capability reporting through a
   direct `kern.hv_support` query;
 - entitlement-aware direct Hypervisor.framework VM-object create/destroy
@@ -1507,12 +1513,16 @@ release-promotion gates above.
     verifies exact stopped/Wait replay plus stopped-only Delete and zero
     transient residue. Runners without KVM retain an explicit zero-case
     `a3s.oci.linux-kvm-recovery-matrix.v1` report without downloading Alpine.
-  - [ ] Retain both the `available` 16-case lifecycle report and the
-    `available` owner-death/restart report on fresh x86_64 and AArch64 KVM
-    hosts, then complete the remaining negative-isolation profiles.
-- [ ] Add a bounded real-host KVM soak for every advertised architecture and
-  retain per-wave process, descriptor, marker, cgroup, endpoint, and
-  runtime-root leak evidence.
+  - [x] Add a separately scoped bounded KVM soak for x86_64 and AArch64. One
+    durable Host Service runs 25 fresh exact generations by default and retains
+    per-wave generation/replay, process-incarnation, descriptor, marker,
+    endpoint, bundle-handoff, runtime-share, recovery-report, console, and
+    configured Guest `cgroupsPath` lifetime evidence. Unavailable runners emit
+    `a3s.oci.linux-kvm-soak-matrix.v1` with zero completed iterations and do not
+    download Alpine.
+  - [ ] Retain the `available` 16-case lifecycle, owner-death/restart, and
+    25-wave soak reports on fresh x86_64 and AArch64 KVM hosts, then complete
+    the remaining negative-isolation profiles.
 - [x] Retain fail-closed context evidence for invalid, missing, symbolic-link,
   or drifted Linux libkrun, firmware, and exported-kernel assets.
 - [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM

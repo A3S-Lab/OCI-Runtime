@@ -271,12 +271,34 @@ return to their baselines. The nested runtime schema is
 `a3s.oci.linux-kvm-recovery-smoke.v1`; the retained aggregate is
 `a3s.oci.linux-kvm-recovery-matrix.v1`.
 
-If KVM is unavailable, the script does not download or unpack the Alpine
-fixture for either gate. Each script emits a versioned `unavailable` report
-with `case_count: 0` and the exact feature-probe reason. CI uploads those
-reports, but neither is an `available` hardware result. The driver remains
-`probe-only` until fresh x86_64 and AArch64 KVM hosts retain both reports and
-the remaining negative-isolation and soak gates pass.
+The bounded soak has a different qualification owner and the exact
+`linux-kvm-bounded-soak-only-v1` scope:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_SOAK_REPORT=/absolute/path/to/soak.json \
+  A3S_OCI_LINUX_KVM_SOAK_ITERATIONS=25 \
+  bash .github/scripts/linux-kvm-soak.sh
+```
+
+One durable service reuses the same container ID across fresh, monotonically
+increasing generations. Each wave requires replay-safe Create, Kill, Wait, and
+Delete; stale-generation rejection; a verified Guest init marker; distinct
+shim and worker process incarnations; and restoration of the endpoint,
+descriptor, bundle-handoff, runtime-share, and recovery-report inventories.
+The configured Guest `cgroupsPath` is retained with every wave and its lifetime
+is bounded by the reaped per-generation VM kernel. This is Guest-lifetime
+evidence, not a claim that the Host directly observed a Guest cgroup. The
+nested schema is `a3s.oci.linux-kvm-soak.v1`; the aggregate schema is
+`a3s.oci.linux-kvm-soak-matrix.v1`.
+
+If KVM is unavailable, none of the lifecycle, recovery, or soak scripts
+downloads or unpacks the Alpine fixture. Lifecycle and recovery emit zero-case
+`unavailable` reports; soak emits `completed_iterations: 0` and
+`fixture_downloaded: false`. CI uploads those reports, but they are not
+`available` hardware results. The driver remains `probe-only` until fresh
+x86_64 and AArch64 KVM hosts retain all three available reports and the
+remaining negative-isolation profiles pass.
 
 ## Experimental lifecycle gate
 

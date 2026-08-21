@@ -200,6 +200,18 @@ fn dispatch(
             target_os = "linux",
             any(target_arch = "x86_64", target_arch = "aarch64")
         ))]
+        Command::LinuxKvmSoakHostService {
+            root,
+            shim,
+            system_image_manifest,
+        } => command_future!({
+            linux_kvm_service::run_soak(root, shim, system_image_manifest).await?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
         Command::LinuxKvmRecoverySmoke {
             shim,
             system_image_manifest,
@@ -219,6 +231,38 @@ fn dispatch(
                 },
             )
             .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::LinuxKvmSoak {
+            shim,
+            system_image_manifest,
+            bundle,
+            work_parent,
+            source_revision,
+            iterations,
+        } => command_future!({
+            let executable = std::env::current_exe().map_err(CliError::CurrentExecutable)?;
+            let report =
+                a3s_oci_runtime::linux_kvm_soak(a3s_oci_runtime::LinuxKvmSoakSmokeConfig {
+                    host_service_executable: executable,
+                    shim,
+                    system_image_manifest,
+                    bundle,
+                    work_parent,
+                    source_revision: Some(source_revision),
+                    iterations,
+                })
+                .await;
             let succeeded = report.is_success();
             write_json(&report)?;
             Ok(if succeeded {

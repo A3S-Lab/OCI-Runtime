@@ -179,15 +179,21 @@ pub use kvm_driver::{KvmRuntimeDriver, KvmRuntimeDriverConfig};
 ))]
 #[doc(hidden)]
 pub use linux_kvm_recovery_smoke::{
-    linux_kvm_recovery_smoke, LinuxKvmRecoveryEvidence, LinuxKvmRecoverySmokeConfig,
-    LinuxKvmRecoverySmokeReport, LinuxProcessIdentity, LINUX_KVM_RECOVERY_SMOKE_SCHEMA_VERSION,
+    linux_kvm_recovery_smoke, linux_kvm_soak, LinuxKvmRecoveryEvidence,
+    LinuxKvmRecoverySmokeConfig, LinuxKvmRecoverySmokeReport, LinuxKvmSoakReport,
+    LinuxKvmSoakSmokeConfig, LinuxKvmSoakWaveEvidence, LinuxProcessIdentity,
+    DEFAULT_LINUX_KVM_SOAK_ITERATIONS, LINUX_KVM_RECOVERY_SMOKE_SCHEMA_VERSION,
+    LINUX_KVM_SOAK_SCHEMA_VERSION, MAX_LINUX_KVM_SOAK_ITERATIONS,
 };
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 #[doc(hidden)]
-pub use linux_kvm_service::{LinuxKvmRecoveryHostService, LinuxKvmRecoveryHostServiceConfig};
+pub use linux_kvm_service::{
+    LinuxKvmRecoveryHostService, LinuxKvmRecoveryHostServiceConfig, LinuxKvmSoakHostService,
+    LinuxKvmSoakHostServiceConfig,
+};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use macos_hvf_host_smoke::{
     macos_hvf_host_service_smoke, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeConfig,

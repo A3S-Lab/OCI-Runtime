@@ -123,6 +123,23 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         system_image_manifest: PathBuf,
     },
+    /// Serve the KVM candidate only for bounded-soak qualification.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(hide = true)]
+    LinuxKvmSoakHostService {
+        /// Private absolute root containing runtime.sock, state, and runtime data.
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+    },
     /// Qualify KVM owner SIGKILL and replacement Host Service recovery.
     #[cfg(all(
         target_os = "linux",
@@ -145,6 +162,32 @@ enum Command {
         /// Exact source revision embedded in the qualification report.
         #[arg(long, value_name = "REVISION")]
         source_revision: String,
+    },
+    /// Run a bounded fresh-generation KVM soak through the qualification owner.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(hide = true)]
+    LinuxKvmSoak {
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// OCI bundle copied into each private runtime-owned handoff.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing private directory that retains soak evidence.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Exact source revision embedded in the qualification report.
+        #[arg(long, value_name = "REVISION")]
+        source_revision: String,
+        /// Number of fresh KVM generations exercised by this bounded run.
+        #[arg(long, default_value_t = 25)]
+        iterations: u32,
     },
     /// Serve dedicated Apple Silicon HVF VMs through one durable SDK owner.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

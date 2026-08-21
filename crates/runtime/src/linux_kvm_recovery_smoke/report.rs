@@ -16,7 +16,7 @@ pub struct LinuxProcessIdentity {
     pub command: String,
 }
 
-/// Immutable inputs bound to one recovery qualification report.
+/// Immutable inputs bound to one Linux KVM qualification report.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinuxKvmRecoveryArtifacts {
     pub host_service_executable: PathBuf,
@@ -31,7 +31,7 @@ pub struct LinuxKvmRecoveryArtifacts {
 }
 
 impl LinuxKvmRecoveryArtifacts {
-    fn is_complete(&self) -> bool {
+    pub(super) fn is_complete(&self) -> bool {
         [
             &self.host_service_executable,
             &self.shim,
@@ -201,7 +201,7 @@ fn canonical_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn canonical_sha256_digest(value: &str) -> bool {
+pub(super) fn canonical_sha256_digest(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(canonical_sha256)
 }
 

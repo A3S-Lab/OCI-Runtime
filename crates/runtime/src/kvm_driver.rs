@@ -17,6 +17,10 @@ use crate::utility_vm_driver::{
     UtilityVmRuntimeDriver,
 };
 
+pub(crate) const LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE: &str =
+    "linux-kvm-owner-death-restart-only-v1";
+pub(crate) const LINUX_KVM_SOAK_QUALIFICATION_SCOPE: &str = "linux-kvm-bounded-soak-only-v1";
+
 /// Runtime-owned host paths for the Linux KVM driver candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KvmRuntimeDriverConfig {
@@ -95,7 +99,20 @@ impl KvmRuntimeDriver {
     pub(crate) async fn open_recovery_qualification(
         config: KvmRuntimeDriverConfig,
     ) -> Result<Self> {
-        Self::open(config, KvmRegistration::RecoveryQualification).await
+        Self::open(
+            config,
+            KvmRegistration::Qualification(KvmQualification::OwnerDeathRestart),
+        )
+        .await
+    }
+
+    /// Open the candidate only for the bounded real-host soak owner.
+    pub(crate) async fn open_soak_qualification(config: KvmRuntimeDriverConfig) -> Result<Self> {
+        Self::open(
+            config,
+            KvmRegistration::Qualification(KvmQualification::BoundedSoak),
+        )
+        .await
     }
 
     async fn open(config: KvmRuntimeDriverConfig, registration: KvmRegistration) -> Result<Self> {
@@ -210,21 +227,36 @@ fn candidate_capability(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KvmRegistration {
     ProbeOnly,
-    RecoveryQualification,
+    Qualification(KvmQualification),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KvmQualification {
+    OwnerDeathRestart,
+    BoundedSoak,
+}
+
+impl KvmQualification {
+    const fn scope(self) -> &'static str {
+        match self {
+            Self::OwnerDeathRestart => LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE,
+            Self::BoundedSoak => LINUX_KVM_SOAK_QUALIFICATION_SCOPE,
+        }
+    }
 }
 
 impl KvmRegistration {
     const fn readiness(self) -> DriverReadiness {
         match self {
             Self::ProbeOnly => DriverReadiness::ProbeOnly,
-            Self::RecoveryQualification => DriverReadiness::Experimental,
+            Self::Qualification(_) => DriverReadiness::Experimental,
         }
     }
 
     const fn qualification_scope(self) -> Option<&'static str> {
         match self {
             Self::ProbeOnly => None,
-            Self::RecoveryQualification => Some("linux-kvm-owner-death-restart-only-v1"),
+            Self::Qualification(qualification) => Some(qualification.scope()),
         }
     }
 }
@@ -429,7 +461,7 @@ mod tests {
                 evidence: BTreeMap::new(),
             },
             "test-manifest-sha256",
-            KvmRegistration::RecoveryQualification,
+            KvmRegistration::Qualification(KvmQualification::OwnerDeathRestart),
         );
 
         assert_eq!(capability.readiness, DriverReadiness::Experimental);
@@ -439,11 +471,29 @@ mod tests {
                 .evidence
                 .get("qualification_scope")
                 .map(String::as_str),
-            Some("linux-kvm-owner-death-restart-only-v1")
+            Some(LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE)
         );
         assert_eq!(
             capability.evidence.get("opt_in").map(String::as_str),
             Some("qualification-only")
+        );
+
+        let soak = candidate_capability(
+            DriverCapability {
+                driver: DriverKind::LibkrunKvm,
+                status: CapabilityStatus::Available,
+                readiness: DriverReadiness::Supported,
+                isolation_classes: vec![IsolationClass::SharedHostKernel],
+                reason: None,
+                evidence: BTreeMap::new(),
+            },
+            "test-manifest-sha256",
+            KvmRegistration::Qualification(KvmQualification::BoundedSoak),
+        );
+        assert_eq!(soak.readiness, DriverReadiness::Experimental);
+        assert_eq!(
+            soak.evidence.get("qualification_scope").map(String::as_str),
+            Some(LINUX_KVM_SOAK_QUALIFICATION_SCOPE)
         );
     }
 

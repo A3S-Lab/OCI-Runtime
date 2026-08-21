@@ -29,11 +29,27 @@ impl LinuxKvmRecoveryHostServiceConfig {
         shim: impl Into<PathBuf>,
         system_image_manifest: impl Into<PathBuf>,
     ) -> Result<Self> {
+        Self::new_for_qualification(
+            root,
+            shim,
+            system_image_manifest,
+            "Linux KVM recovery Host Service",
+            "configure-linux-kvm-recovery-host-service",
+        )
+    }
+
+    fn new_for_qualification(
+        root: impl Into<PathBuf>,
+        shim: impl Into<PathBuf>,
+        system_image_manifest: impl Into<PathBuf>,
+        service_label: &str,
+        operation: &'static str,
+    ) -> Result<Self> {
         let root = root.into();
-        validate_absolute_normalized_path(&root, "Linux KVM recovery Host Service root")?;
+        validate_absolute_normalized_path(&root, &format!("{service_label} root"))?;
         validate_unix_socket_path(
             &root.join(SERVICE_SOCKET_NAME),
-            "Linux KVM recovery Host Service endpoint",
+            &format!("{service_label} endpoint"),
         )?;
         let shim = shim.into();
         validate_absolute_normalized_path(&shim, "Linux KVM libkrun shim")?;
@@ -52,7 +68,7 @@ impl LinuxKvmRecoveryHostServiceConfig {
                     system_image_manifest.display()
                 ),
             )
-            .for_operation("configure-linux-kvm-recovery-host-service"));
+            .for_operation(operation));
         }
         Ok(Self {
             root,
@@ -98,9 +114,89 @@ impl LinuxKvmRecoveryHostServiceConfig {
     }
 }
 
+/// Exact paths for the qualification-only bounded Linux KVM soak owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxKvmSoakHostServiceConfig {
+    inner: LinuxKvmRecoveryHostServiceConfig,
+}
+
+impl LinuxKvmSoakHostServiceConfig {
+    pub fn new(
+        root: impl Into<PathBuf>,
+        shim: impl Into<PathBuf>,
+        system_image_manifest: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        LinuxKvmRecoveryHostServiceConfig::new_for_qualification(
+            root,
+            shim,
+            system_image_manifest,
+            "Linux KVM soak Host Service",
+            "configure-linux-kvm-soak-host-service",
+        )
+        .map(|inner| Self { inner })
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.inner.root()
+    }
+
+    #[must_use]
+    pub fn socket_path(&self) -> PathBuf {
+        self.inner.socket_path()
+    }
+
+    #[must_use]
+    pub fn shim(&self) -> &Path {
+        self.inner.shim()
+    }
+
+    #[must_use]
+    pub fn system_image_manifest(&self) -> &Path {
+        self.inner.system_image_manifest()
+    }
+}
+
 /// Qualification-only same-UID SDK owner for one KVM VM per generation.
 pub struct LinuxKvmRecoveryHostService {
     inner: UtilityVmHostService<KvmRuntimeDriver>,
+}
+
+/// Qualification-only same-UID SDK owner for bounded KVM soak waves.
+pub struct LinuxKvmSoakHostService {
+    inner: UtilityVmHostService<KvmRuntimeDriver>,
+}
+
+impl LinuxKvmSoakHostService {
+    pub async fn bind(config: LinuxKvmSoakHostServiceConfig) -> Result<Self> {
+        LinuxKvmRecoveryHostService::prepare_layout(&config.inner).await?;
+        let driver = Arc::new(
+            KvmRuntimeDriver::open_soak_qualification(config.inner.driver_config()?).await?,
+        );
+        Self::bind_driver(config, driver).await
+    }
+
+    async fn bind_driver(
+        config: LinuxKvmSoakHostServiceConfig,
+        driver: Arc<KvmRuntimeDriver>,
+    ) -> Result<Self> {
+        let inner =
+            UtilityVmHostService::bind(&config.inner.root, &config.inner.state_root(), driver)
+                .await?;
+        Ok(Self { inner })
+    }
+
+    #[must_use]
+    pub fn socket_path(&self) -> &Path {
+        self.inner.socket_path()
+    }
+
+    pub async fn serve_until<F>(self, shutdown: F) -> Result<()>
+    where
+        F: Future<Output = ()> + Send,
+    {
+        self.inner.serve_until(shutdown).await
+    }
 }
 
 impl LinuxKvmRecoveryHostService {
@@ -113,15 +209,16 @@ impl LinuxKvmRecoveryHostService {
     }
 
     async fn prepare_layout(config: &LinuxKvmRecoveryHostServiceConfig) -> Result<()> {
-        prepare_private_directory(&config.root, "Linux KVM recovery Host Service root").await?;
+        prepare_private_directory(&config.root, "Linux KVM qualification Host Service root")
+            .await?;
         prepare_private_directory(
             &config.state_root(),
-            "Linux KVM recovery durable state root",
+            "Linux KVM qualification durable state root",
         )
         .await?;
         prepare_private_directory(
             &config.driver_runtime_root(),
-            "Linux KVM recovery driver runtime root",
+            "Linux KVM qualification driver runtime root",
         )
         .await
     }
@@ -154,7 +251,7 @@ impl UtilityVmHostDriver for KvmRuntimeDriver {
     }
 
     fn host_driver_label(&self) -> &'static str {
-        "KVM recovery qualification driver"
+        "KVM qualification driver"
     }
 }
 
@@ -208,7 +305,10 @@ mod tests {
             .expect("test Host Service config")
     }
 
-    fn driver(config: &LinuxKvmRecoveryHostServiceConfig) -> Arc<KvmRuntimeDriver> {
+    fn driver(
+        config: &LinuxKvmRecoveryHostServiceConfig,
+        qualification_scope: &str,
+    ) -> Arc<KvmRuntimeDriver> {
         let runtime_root = config.driver_runtime_root();
         let capability = DriverCapability {
             driver: DriverKind::LibkrunKvm,
@@ -220,7 +320,7 @@ mod tests {
                 ("opt_in".to_string(), "qualification-only".to_string()),
                 (
                     "qualification_scope".to_string(),
-                    "linux-kvm-owner-death-restart-only-v1".to_string(),
+                    qualification_scope.to_string(),
                 ),
             ]),
         };
@@ -235,6 +335,65 @@ mod tests {
             Arc::new(NoLaunchFactory),
         );
         Arc::new(KvmRuntimeDriver::from_test_inner(inner))
+    }
+
+    async fn assert_qualification_scope(
+        service: UtilityVmHostService<KvmRuntimeDriver>,
+        expected_scope: &str,
+    ) {
+        let socket_path = service.socket_path().to_path_buf();
+        let metadata = std::fs::symlink_metadata(&socket_path).expect("SDK socket metadata");
+        // SAFETY: geteuid has no preconditions or failure result.
+        let effective_uid = unsafe { libc::geteuid() };
+        assert!(metadata.file_type().is_socket());
+        assert_eq!(metadata.uid(), effective_uid);
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+        let endpoint = LocalIpcEndpoint::unix_socket(&socket_path).expect("SDK endpoint");
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            service
+                .serve_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            RuntimeClient::connect(&endpoint),
+        )
+        .await
+        .expect("SDK connection timed out")
+        .expect("SDK client");
+        let info = client.features().await.expect("public SDK features");
+        let launchable = info
+            .drivers
+            .drivers
+            .iter()
+            .filter(|capability| capability.can_launch())
+            .collect::<Vec<_>>();
+        assert_eq!(launchable.len(), 1);
+        let capability = launchable[0];
+        assert_eq!(capability.driver, DriverKind::LibkrunKvm);
+        assert_eq!(capability.readiness, DriverReadiness::Experimental);
+        assert_eq!(
+            capability
+                .evidence
+                .get("qualification_scope")
+                .map(String::as_str),
+            Some(expected_scope)
+        );
+        assert!(info.attachments.supports_extension(
+            RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+            RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
+        ));
+
+        shutdown_tx.send(()).expect("request graceful shutdown");
+        server
+            .await
+            .expect("service task")
+            .expect("clean KVM qualification Host Service shutdown");
+        assert!(!socket_path.exists());
     }
 
     #[test]
@@ -296,61 +455,45 @@ mod tests {
         LinuxKvmRecoveryHostService::prepare_layout(&config)
             .await
             .expect("private host layout");
-        let service = LinuxKvmRecoveryHostService::bind_driver(config.clone(), driver(&config))
-            .await
-            .expect("bind test KVM Host Service");
-        let socket_path = service.socket_path().to_path_buf();
-        let metadata = std::fs::symlink_metadata(&socket_path).expect("SDK socket metadata");
-        // SAFETY: geteuid has no preconditions or failure result.
-        let effective_uid = unsafe { libc::geteuid() };
-        assert!(metadata.file_type().is_socket());
-        assert_eq!(metadata.uid(), effective_uid);
-        assert_eq!(metadata.mode() & 0o777, 0o600);
-        let endpoint = LocalIpcEndpoint::unix_socket(&socket_path).expect("SDK endpoint");
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            service
-                .serve_until(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-        });
-
-        let client = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            RuntimeClient::connect(&endpoint),
+        let service = LinuxKvmRecoveryHostService::bind_driver(
+            config.clone(),
+            driver(
+                &config,
+                crate::kvm_driver::LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE,
+            ),
         )
         .await
-        .expect("SDK connection timed out")
-        .expect("SDK client");
-        let info = client.features().await.expect("public SDK features");
-        let launchable = info
-            .drivers
-            .drivers
-            .iter()
-            .filter(|capability| capability.can_launch())
-            .collect::<Vec<_>>();
-        assert_eq!(launchable.len(), 1);
-        let capability = launchable[0];
-        assert_eq!(capability.driver, DriverKind::LibkrunKvm);
-        assert_eq!(capability.readiness, DriverReadiness::Experimental);
-        assert_eq!(
-            capability
-                .evidence
-                .get("qualification_scope")
-                .map(String::as_str),
-            Some("linux-kvm-owner-death-restart-only-v1")
-        );
-        assert!(info.attachments.supports_extension(
-            RUNTIME_BUNDLE_HANDOFF_EXTENSION,
-            RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
-        ));
+        .expect("bind test KVM recovery Host Service");
+        assert_qualification_scope(
+            service.inner,
+            crate::kvm_driver::LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE,
+        )
+        .await;
+    }
 
-        shutdown_tx.send(()).expect("request graceful shutdown");
-        server
+    #[tokio::test]
+    async fn soak_socket_advertises_only_the_bounded_soak_route() {
+        let temporary = tempfile::tempdir().expect("temporary Host Service fixture");
+        let recovery_config = config(&temporary);
+        LinuxKvmRecoveryHostService::prepare_layout(&recovery_config)
             .await
-            .expect("service task")
-            .expect("clean KVM qualification Host Service shutdown");
-        assert!(!socket_path.exists());
+            .expect("private host layout");
+        let soak_config = LinuxKvmSoakHostServiceConfig {
+            inner: recovery_config.clone(),
+        };
+        let service = LinuxKvmSoakHostService::bind_driver(
+            soak_config,
+            driver(
+                &recovery_config,
+                crate::kvm_driver::LINUX_KVM_SOAK_QUALIFICATION_SCOPE,
+            ),
+        )
+        .await
+        .expect("bind test KVM soak Host Service");
+        assert_qualification_scope(
+            service.inner,
+            crate::kvm_driver::LINUX_KVM_SOAK_QUALIFICATION_SCOPE,
+        )
+        .await;
     }
 }
