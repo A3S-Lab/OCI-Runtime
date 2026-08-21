@@ -6,6 +6,17 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A qualification-only Linux KVM owner-death and Host Service restart gate for
+  x86_64 and AArch64. The public KVM candidate remains non-registerable and
+  `probe-only`; the new Unix service accepts only the exact
+  `linux-kvm-owner-death-restart-only-v1` override. On real KVM it starts one
+  generation, SIGKILLs the owning service, requires pidfd-bound shim/worker
+  reap plus authenticated SIGKILL recovery, and opens a distinct
+  kernel-authenticated replacement that replays stopped state and Wait before
+  stopped-only Delete. The report rejects descriptor, endpoint, bundle
+  handoff, runtime-share, recovery-report, and socket residue. CI runners
+  without KVM skip the Alpine fixture and retain an explicit zero-case
+  `unavailable` matrix rather than claiming hardware recovery.
 - A Linux KVM utility-VM lifecycle qualification entry for x86_64 and AArch64.
   When the KVM probe is available, its 16 cases run the complete 20-operation
   OCI lifecycle, two-container generation and namespace isolation, three

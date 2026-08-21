@@ -515,6 +515,14 @@ A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
   bash .github/scripts/linux-kvm-lifecycle.sh
 ```
 
+The separate owner-death/restart entry exercises that candidate through an
+explicitly scoped Unix Host Service without making it normally registerable:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  bash .github/scripts/linux-kvm-recovery.sh
+```
+
 With KVM available it downloads the pinned Alpine fixture, prepares two
 bundles under a private runtime share, and runs 16 cases: one full lifecycle,
 one multi-container lifecycle, three no-delete cleanup boundaries, and all 11
@@ -523,9 +531,12 @@ retains every nested runtime report plus endpoint, process, runtime-state,
 bootstrap, token/recovery, and marker cleanup checks. Without usable KVM it
 skips the fixture download and emits `status: unavailable` with zero cases.
 That keeps CI honest about runner capability; it does not count as a hardware
-pass. Available reports are still required from fresh x86_64 and AArch64 KVM
-hosts, followed by owner-death, service-restart, negative-isolation, and soak
-qualification.
+pass. The recovery entry likewise skips Alpine when KVM is unavailable. With
+KVM it kills the live Host Service, requires authenticated SIGKILL recovery,
+opens a distinct replacement socket owner, replays exact stopped state and
+Wait, and proves stopped-only Delete plus transient cleanup. Available
+lifecycle and recovery reports are still required from fresh x86_64 and
+AArch64 KVM hosts, followed by negative-isolation and soak qualification.
 
 | Owner | Keeps | Must not absorb |
 | --- | --- | --- |
@@ -661,6 +672,7 @@ The repository turns release claims into checked inventories:
 | Real HVF immutable-system-image soak | 25 / 25 fresh VMs (75 primary generations) |
 | macOS HVF R2M implementation gates | 15 / 15 |
 | Public macOS HVF Host Service implementation | Complete; revision `a5a6b53` passed 23/23 operations, owner replacement, and 25/25 fresh VMs |
+| Linux KVM owner-death/restart entry | Implemented for x86_64 and AArch64; fresh-host `available` evidence remains 0 / 2 architectures |
 | Guest operations behind protocol v10 | 21 (20 public workload operations + 1 maintenance acknowledgement) |
 
 The locks prove inventory and exercised boundaries, not full conformance by

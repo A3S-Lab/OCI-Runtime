@@ -248,12 +248,35 @@ Unix endpoint and shim-process inventories, leave `run` unchanged, keep the
 bootstrap empty, and remove markers plus token and recovery handoffs. The
 aggregate schema is `a3s.oci.linux-kvm-lifecycle-matrix.v1`.
 
+The recovery gate uses a separate qualification-only Host Service. The normal
+KVM candidate remains `probe-only` and cannot register with
+`HostRuntimeService`; only this entry carries the exact
+`linux-kvm-owner-death-restart-only-v1` scope:
+
+```bash
+A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST=/absolute/path/to/system-image.json \
+  A3S_OCI_LINUX_KVM_RECOVERY_REPORT=/absolute/path/to/recovery.json \
+  bash .github/scripts/linux-kvm-recovery.sh
+```
+
+On a KVM-capable host it starts one live generation through the Unix SDK
+service, verifies the one-shot authenticated endpoint was consumed, and sends
+SIGKILL to the exact service process. The pidfd-bound shim and worker must
+exit, retain an authenticated SIGKILL recovery record, and restore the
+endpoint inventory. A distinct kernel-authenticated replacement service then
+must recover exact stopped state, empty process inventory, and replayable
+Wait status before stopped-only Delete. Its descriptor inventory, bundle
+handoffs, runtime shares, recovery reports, endpoints, and service socket all
+return to their baselines. The nested runtime schema is
+`a3s.oci.linux-kvm-recovery-smoke.v1`; the retained aggregate is
+`a3s.oci.linux-kvm-recovery-matrix.v1`.
+
 If KVM is unavailable, the script does not download or unpack the Alpine
-fixture. It emits a versioned `unavailable` report with `case_count: 0` and the
-exact feature-probe reason. CI uploads that report, but it is not an
-`available` lifecycle result. The driver remains `probe-only` until fresh
-x86_64 and AArch64 KVM hosts retain all 16 cases and the remaining owner-death,
-service-restart, negative-isolation, and soak gates pass.
+fixture for either gate. Each script emits a versioned `unavailable` report
+with `case_count: 0` and the exact feature-probe reason. CI uploads those
+reports, but neither is an `available` hardware result. The driver remains
+`probe-only` until fresh x86_64 and AArch64 KVM hosts retain both reports and
+the remaining negative-isolation and soak gates pass.
 
 ## Experimental lifecycle gate
 

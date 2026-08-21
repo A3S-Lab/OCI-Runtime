@@ -163,6 +163,14 @@ Completed:
   with 16 KVM-gated lifecycle, multi-container, lifecycle-fault, and
   transport-fault cases plus an explicit zero-case `unavailable` report on
   runners that cannot open KVM;
+- a qualification-only Linux KVM Host Service entry that keeps the public
+  candidate `probe-only`, but permits one explicitly scoped owner-death and
+  restart gate to register the exact driver. The gate SIGKILLs a live service,
+  requires pidfd-bound shim/worker cleanup and authenticated SIGKILL evidence,
+  opens a distinct replacement service, replays stopped state and Wait, and
+  performs stopped-only Delete with descriptor, endpoint, handoff, share, and
+  recovery-report cleanup. CI emits zero-case `unavailable` evidence when KVM
+  cannot be opened; fresh-host `available` reports are still outstanding;
 - Apple Silicon and Hypervisor.framework capability reporting through a
   direct `kern.hv_support` query;
 - entitlement-aware direct Hypervisor.framework VM-object create/destroy
@@ -1491,9 +1499,17 @@ release-promotion gates above.
     shim-process, runtime-state, bootstrap, token/recovery, and marker cleanup.
     Runners without usable KVM emit `unavailable` with zero cases and skip the
     Alpine fixture rather than manufacturing a pass.
-  - [ ] Retain an `available` 16-case report on fresh x86_64 and AArch64 KVM
-    hosts, then complete owner-death and Host Service restart recovery plus the
-    remaining negative-isolation profiles.
+  - [x] Add a qualification-only Unix Host Service and real-process recovery
+    entry. It binds the override to
+    `linux-kvm-owner-death-restart-only-v1`, kills the exact live service with
+    SIGKILL, requires the shim and worker to exit with authenticated recovery
+    evidence, reopens through a distinct kernel-authenticated socket peer, and
+    verifies exact stopped/Wait replay plus stopped-only Delete and zero
+    transient residue. Runners without KVM retain an explicit zero-case
+    `a3s.oci.linux-kvm-recovery-matrix.v1` report without downloading Alpine.
+  - [ ] Retain both the `available` 16-case lifecycle report and the
+    `available` owner-death/restart report on fresh x86_64 and AArch64 KVM
+    hosts, then complete the remaining negative-isolation profiles.
 - [ ] Add a bounded real-host KVM soak for every advertised architecture and
   retain per-wave process, descriptor, marker, cgroup, endpoint, and
   runtime-root leak evidence.

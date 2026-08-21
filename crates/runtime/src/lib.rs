@@ -54,6 +54,16 @@ mod hvf_driver;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod kvm_driver;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_kvm_recovery_smoke;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_kvm_service;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_hvf_host_smoke;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -92,6 +102,14 @@ mod unix_service;
     )
 ))]
 mod utility_vm_driver;
+#[cfg(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+mod utility_vm_host_service;
 mod utility_vm_soak_report;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whpx_driver;
@@ -155,6 +173,21 @@ pub use hvf_driver::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 pub use kvm_driver::{KvmRuntimeDriver, KvmRuntimeDriverConfig};
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+pub use linux_kvm_recovery_smoke::{
+    linux_kvm_recovery_smoke, LinuxKvmRecoveryEvidence, LinuxKvmRecoverySmokeConfig,
+    LinuxKvmRecoverySmokeReport, LinuxProcessIdentity, LINUX_KVM_RECOVERY_SMOKE_SCHEMA_VERSION,
+};
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[doc(hidden)]
+pub use linux_kvm_service::{LinuxKvmRecoveryHostService, LinuxKvmRecoveryHostServiceConfig};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use macos_hvf_host_smoke::{
     macos_hvf_host_service_smoke, MacosHvfArtifactEvidence, MacosHvfHostServiceSmokeConfig,
