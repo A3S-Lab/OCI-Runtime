@@ -146,6 +146,9 @@ jobs:
           retention-days: 14
       - run: cargo run -p a3s-oci-cli -- features
       - if: runner.os == 'Linux'
+        name: KVM-independent dedicated-VM isolation preflight
+        run: cargo test -p a3s-oci-runtime utility_vm_driver::tests
+      - if: runner.os == 'Linux'
         name: Isolated Linux libkrun compatibility-set lifecycle
         run: |
           cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- context-smoke
@@ -1086,6 +1089,8 @@ jobs:
           cargo run -p a3s-oci-krun --bin a3s-oci-krun-shim -- \
             system-image-context-smoke \
             --system-image-manifest "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
+      - name: KVM-independent dedicated-VM isolation preflight
+        run: cargo test -p a3s-oci-runtime utility_vm_driver::tests
       - name: Authenticated Linux KVM guest agent or fail-closed entry
         timeout-minutes: 5
         env:

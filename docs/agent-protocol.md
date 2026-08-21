@@ -440,6 +440,13 @@ private process group. A pidfd pins the runtime-owner incarnation; owner death
 cleans the token handoff and terminates the exact shim/worker group after the
 bounded recovery grace.
 
+Before that endpoint or worker can exist, the shared Unix utility-VM driver checks
+dedicated-VM isolation, exact generation, and atomic bundle-handoff ownership.
+It validates the source directory, ancestry, `config.json` digest, portable
+rootfs, and relative bind sources before creating the exact Guest-visible
+generation share. A terminal preflight rejection therefore leaves neither a
+share nor a launchable VM attachment.
+
 The Linux real-host gate also has a hidden qualification-only failure path. It
 uses the normal Host endpoint and one-time token setup, creates the isolated
 worker, opens and pins the real `/dev/kvm`, and requires API version 12. Shim

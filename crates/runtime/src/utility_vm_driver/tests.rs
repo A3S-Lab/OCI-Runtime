@@ -42,6 +42,8 @@ const TEST_CONFIG: &str = concat!(
     "}\n",
 );
 
+mod isolation;
+
 #[derive(Default)]
 struct FakeGuest {
     create_calls: AtomicUsize,
@@ -702,42 +704,6 @@ async fn terminal_launch_failure_removes_the_unowned_generation() {
     assert!(!error.retryable);
     assert_eq!(fixture.driver.active_session_count().await, 0);
     assert!(!fixture.generation_share().exists());
-}
-
-#[tokio::test]
-async fn create_requires_dedicated_vm_and_an_exact_generation_before_handoff() {
-    let fixture = Fixture::new();
-    let shared = fixture.handoff_request_for(
-        "shared-guest-kernel",
-        target(),
-        IsolationRequest::SharedGuestKernel {
-            trust_domain: a3s_oci_sdk::TrustDomainId::new("test-domain").expect("trust domain"),
-        },
-    );
-    let shared_source = shared.bundle.directory().to_path_buf();
-    let error = fixture
-        .driver
-        .prepare_create_bundle(&shared)
-        .await
-        .expect_err("shared guest kernel must fail before handoff");
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert!(shared_source.is_dir());
-    assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 0);
-
-    let current = fixture.handoff_request_for(
-        "current-generation",
-        ContainerTarget::current(target().id),
-        IsolationRequest::DedicatedVm,
-    );
-    let current_source = current.bundle.directory().to_path_buf();
-    let error = fixture
-        .driver
-        .prepare_create_bundle(&current)
-        .await
-        .expect_err("current generation must fail before handoff");
-    assert_eq!(error.code, ErrorCode::InvalidArgument);
-    assert!(current_source.is_dir());
-    assert_eq!(fixture.factory.launches.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

@@ -800,6 +800,14 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Fixed
 
+- Validate a utility-VM bundle handoff completely before creating its exact
+  `shares/<container>/<generation>` directory. Missing, symbolic-link,
+  non-private, digest-drifted, rootfs-link, and absolute-bind sources now fail
+  without leaving a Guest-visible generation share or launching a VM. The
+  same pre-mutation boundary also covers both shared-kernel isolation classes,
+  targets without an exact generation, and requests that omit the atomic
+  bundle-handoff contract. This closes a common KVM/HVF cleanup gap and
+  gives Linux x86_64 and AArch64 a KVM-independent isolation preflight.
 - On Windows, run CLI parsing, the Tokio runtime, and command dispatch on an
   explicit 8 MiB worker stack. Debug binaries no longer overflow the
   platform's 1 MiB main-thread stack before even `features` or fail-closed

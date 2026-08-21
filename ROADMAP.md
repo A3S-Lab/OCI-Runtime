@@ -146,9 +146,11 @@ Completed:
 - one platform-neutral dedicated utility-VM lifecycle shared by the public
   HVF driver and the Linux KVM candidate. It serializes Create per container,
   owns one VM per exact generation, validates isolation before moving a
-  bundle, retains retryable handoffs, removes terminal and conflicting
-  generations, delegates all 20 workload operations and six OCI hook phases,
-  recovers stopped tombstones, and shuts down each live owner at most once;
+  bundle, validates missing, linked, non-private, drifted, escaping-rootfs,
+  and absolute-bind handoff sources before creating a Guest-visible share,
+  retains retryable handoffs, removes terminal and conflicting generations,
+  delegates all 20 workload operations and six OCI hook phases, recovers
+  stopped tombstones, and shuts down each live owner at most once;
 - secure WHPX DLL loading and hypervisor capability probe;
 - native Linux namespace, cgroup v2, and pidfd signaling prerequisite
   reporting that does not touch `/dev/kvm`;
@@ -1520,9 +1522,17 @@ release-promotion gates above.
     configured Guest `cgroupsPath` lifetime evidence. Unavailable runners emit
     `a3s.oci.linux-kvm-soak-matrix.v1` with zero completed iterations and do not
     download Alpine.
+  - [x] Close the KVM-independent driver isolation preflight before any Guest
+    share or VM exists. Dedicated-VM Create now rejects `SharedHostKernel`,
+    `SharedGuestKernel`, an inexact generation, or a missing atomic handoff
+    contract before mutation. Missing, linked, non-private, digest-drifted,
+    escaping-rootfs, and absolute-bind handoff sources are fully validated
+    before `shares/<container>/<generation>` is created. The same production
+    path and cleanup assertions run on Linux x86_64 and AArch64 CI without
+    requiring `/dev/kvm`.
   - [ ] Retain the `available` 16-case lifecycle, owner-death/restart, and
     25-wave soak reports on fresh x86_64 and AArch64 KVM hosts, then complete
-    the remaining negative-isolation profiles.
+    the remaining real-entry Guest negative-isolation profiles.
 - [x] Retain fail-closed context evidence for invalid, missing, symbolic-link,
   or drifted Linux libkrun, firmware, and exported-kernel assets.
 - [ ] Retain real-entry fail-closed evidence for an initialization-failing KVM
