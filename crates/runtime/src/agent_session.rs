@@ -258,7 +258,11 @@ impl UtilityVmSession {
 
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     pub(crate) async fn connect_with_separate_runtime_share_and_host_fault_injector(
         shim: &Path,
@@ -295,7 +299,11 @@ impl UtilityVmSession {
 
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     pub(crate) async fn connect_with_separate_runtime_share_and_guest_qualification(
         shim: &Path,
@@ -369,7 +377,11 @@ impl UtilityVmSession {
 
     #[cfg(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     ))]
     pub(crate) async fn shutdown_with_failure(
         &self,

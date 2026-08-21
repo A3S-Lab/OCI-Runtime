@@ -487,7 +487,7 @@ archive without `sudo` or ownership mutation:
 ```sh
 runtime_share="$asset_dir/runtime-share"
 bundle="$runtime_share/var/lib/a3s-oci-smoke/bundle"
-scripts/prepare-macos-utility-vm-bundle.sh \
+scripts/prepare-utility-vm-bundle.sh \
   --alpine-archive "$archive" \
   --config fixtures/utility-vm/config.json \
   --bundle "$bundle"

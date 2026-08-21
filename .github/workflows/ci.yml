@@ -165,6 +165,12 @@ jobs:
         env:
           A3S_OCI_LINUX_KVM_COMPATIBILITY_DRIFT_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
         run: bash .github/scripts/linux-kvm-compatibility-drift.sh
+      - if: runner.os == 'Linux'
+        name: Linux KVM OCI lifecycle and fault-cleanup matrix
+        timeout-minutes: 45
+        env:
+          A3S_OCI_LINUX_KVM_LIFECYCLE_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
+        run: bash .github/scripts/linux-kvm-lifecycle.sh
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
         shell: bash
@@ -461,7 +467,7 @@ jobs:
           console="$RUNNER_TEMP/a3s-oci-fixed-lifecycle.log"
           unsigned_console="$RUNNER_TEMP/a3s-oci-fixed-lifecycle-unsigned.log"
           system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
-          scripts/prepare-macos-utility-vm-bundle.sh \
+          scripts/prepare-utility-vm-bundle.sh \
             --alpine-archive "$rootfs_archive" \
             --config fixtures/utility-vm/config.json \
             --bundle "$bundle_dir"
@@ -620,7 +626,7 @@ jobs:
           marker_b="$bundle_b/rootfs/.a3s-oci-create-start-smoke"
           console="$RUNNER_TEMP/a3s-oci-multi-container.log"
           system_image_manifest="$A3S_OCI_MACOS_SYSTEM_IMAGE_MANIFEST"
-          scripts/prepare-macos-utility-vm-bundle.sh \
+          scripts/prepare-utility-vm-bundle.sh \
             --alpine-archive "$rootfs_archive" \
             --config fixtures/utility-vm/config.json \
             --bundle "$bundle_b" \
@@ -932,6 +938,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-agent-entry.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-post-probe-failure.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
@@ -1025,7 +1032,7 @@ jobs:
     name: native-linux-lifecycle (aarch64)
     needs: guest-agent-musl
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -1073,6 +1080,11 @@ jobs:
         env:
           A3S_OCI_LINUX_KVM_COMPATIBILITY_DRIFT_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
         run: bash .github/scripts/linux-kvm-compatibility-drift.sh
+      - name: Linux KVM OCI lifecycle and fault-cleanup matrix
+        timeout-minutes: 45
+        env:
+          A3S_OCI_LINUX_KVM_LIFECYCLE_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
+        run: bash .github/scripts/linux-kvm-lifecycle.sh
       - name: Rootless generated-cgroup device boundary
         env:
           A3S_OCI_NATIVE_FOCUS: rootless-device-boundary
@@ -1097,6 +1109,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-agent-entry.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-post-probe-failure.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -685,7 +685,11 @@ impl OciVmMultiContainerSmokeReport {
 
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
     )))]
     pub(crate) fn unsupported(platform: HostPlatform) -> Self {
         let mut report = Self::initial(platform);
@@ -694,7 +698,7 @@ impl OciVmMultiContainerSmokeReport {
         report.bridge.reason = Some("the authenticated guest bridge was not attempted".into());
         report.reason = Some(
             "the utility-VM multi-container diagnostic is implemented only for \
-             Windows x86_64/WHPX and macOS aarch64/HVF"
+             Linux x86_64/aarch64 KVM, Windows x86_64/WHPX, and macOS aarch64/HVF"
                 .into(),
         );
         report

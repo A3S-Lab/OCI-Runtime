@@ -6,6 +6,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A Linux KVM utility-VM lifecycle qualification entry for x86_64 and AArch64.
+  When the KVM probe is available, its 16 cases run the complete 20-operation
+  OCI lifecycle, two-container generation and namespace isolation, three
+  no-delete lifecycle cleanup boundaries, and all 11 Host/Guest transport
+  interruption points through the same authenticated Guest implementation
+  used by HVF. Every case restores endpoint, shim-process, runtime-state,
+  bootstrap, token/recovery, and marker inventories. Hosts without usable KVM
+  emit a versioned `unavailable` report with zero executed cases and skip the
+  Alpine fixture download; that report is retained evidence, not a successful
+  hardware qualification. The portable Utility VM bundle preparer now
+  verifies the pinned Alpine archive and normalizes ownership on both Linux
+  and macOS.
 - A 14-case Linux KVM compatibility-drift matrix at the configured worker
   boundary on x86_64 and AArch64. The worker now reverifies the runtime,
   libkrun, firmware-exported kernel, immutable manifest and root image, Guest

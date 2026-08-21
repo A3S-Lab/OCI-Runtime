@@ -2,7 +2,11 @@ use std::time::Duration;
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 use a3s_oci_agent_protocol::AgentClient;
 #[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "aarch64")))]
@@ -15,7 +19,11 @@ use a3s_oci_sdk::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
@@ -50,7 +58,11 @@ impl FilesystemSmokeClient for RuntimeClient {
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 #[async_trait]
 impl<T> FilesystemSmokeClient for AgentClient<T>
@@ -81,7 +93,11 @@ pub(crate) async fn exercise_runtime(
 
 #[cfg(any(
     all(target_os = "windows", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
 ))]
 pub(crate) async fn exercise_agent<T>(
     client: &AgentClient<T>,
