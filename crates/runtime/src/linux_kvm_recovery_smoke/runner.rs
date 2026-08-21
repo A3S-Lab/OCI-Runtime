@@ -1,35 +1,26 @@
-use std::future::Future;
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use a3s_oci_agent_protocol::AgentRecoveryReport;
-use a3s_oci_core::{CapabilityStatus, DriverKind, DriverReadiness};
+use a3s_oci_core::CapabilityStatus;
 use a3s_oci_sdk::oci_spec::runtime::ContainerState;
 use a3s_oci_sdk::{
-    ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, Error, ErrorCode,
-    ExitStatus, FileOp, FileRequest, IsolationRequest, ListRequest, OciBundle, OperationContext,
-    OperationId, ProcessesRequest, RuntimeClient, StartRequest, StateRequest, WaitRequest,
+    ContainerId, ContainerTarget, CreateRequest, DeleteMode, DeleteRequest, ExitStatus,
+    IsolationRequest, ListRequest, ProcessesRequest, StartRequest, StateRequest, WaitRequest,
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use sha2::{Digest, Sha256};
-use tokio::time::{sleep, timeout, Instant};
+use tokio::time::{sleep, Instant};
 
 use super::bundle;
-use super::host::{self, HostServiceProcess};
-use super::report::{
-    canonical_git_revision, LinuxKvmRecoveryArtifacts, LinuxKvmRecoveryEvidence,
-    LinuxKvmRecoverySmokeReport,
+use super::host::{self, HostServiceKind, HostServiceProcess};
+use super::prepare::{persist_report, PreparedQualification, QualificationInputs};
+use super::qualification::{
+    call, operation, verify_qualification_scope, wait_for_marker, wait_for_vm_descendants,
 };
-use crate::unix_service::validate_unix_socket_path;
+use super::report::{LinuxKvmRecoveryEvidence, LinuxKvmRecoverySmokeReport};
 
-const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(25);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
-const MARKER_PATH: &str = "/.a3s-oci-create-start-smoke";
-const MARKER_CONTENTS: &[u8] = b"a3s-oci-create-start-user-time-v1\n";
-const QUALIFICATION_SCOPE: &str = "linux-kvm-owner-death-restart-only-v1";
 
 /// Exact artifacts and private parent for one real KVM recovery run.
 #[derive(Debug, Clone)]
@@ -46,7 +37,20 @@ pub struct LinuxKvmRecoverySmokeConfig {
 pub async fn run(config: LinuxKvmRecoverySmokeConfig) -> LinuxKvmRecoverySmokeReport {
     let architecture = std::env::consts::ARCH.to_string();
     let mut report = LinuxKvmRecoverySmokeReport::initial(config.work_parent.clone(), architecture);
-    let prepared = match PreparedRun::open(config).await {
+    let prepared = match PreparedQualification::open(
+        QualificationInputs {
+            host_service_executable: config.host_service_executable,
+            shim: config.shim,
+            system_image_manifest: config.system_image_manifest,
+            bundle: config.bundle,
+            work_parent: config.work_parent,
+            source_revision: config.source_revision,
+        },
+        "kvm-recovery",
+        "Linux KVM recovery qualification endpoint",
+    )
+    .await
+    {
         Ok(prepared) => prepared,
         Err(reason) => {
             report.reason = Some(reason);
@@ -55,7 +59,7 @@ pub async fn run(config: LinuxKvmRecoverySmokeConfig) -> LinuxKvmRecoverySmokeRe
     };
     report.evidence_root = prepared.evidence_root.clone();
     report.artifacts = prepared.artifacts.clone();
-    if let Err(reason) = persist_report(&report) {
+    if let Err(reason) = persist_report(&report.evidence_root, &report, "KVM recovery report") {
         report.reason = Some(reason);
         return report;
     }
@@ -63,14 +67,14 @@ pub async fn run(config: LinuxKvmRecoverySmokeConfig) -> LinuxKvmRecoverySmokeRe
     if let Err(reason) = run_recovery(&prepared, &mut report.recovery).await {
         report.recovery.reason = Some(reason.clone());
         report.reason = Some(reason);
-        let _ = persist_report(&report);
+        let _ = persist_report(&report.evidence_root, &report, "KVM recovery report");
         return report;
     }
     if !report.recovery.is_success() {
         let reason = "Linux KVM recovery evidence failed its completeness audit".to_string();
         report.recovery.reason = Some(reason.clone());
         report.reason = Some(reason);
-        let _ = persist_report(&report);
+        let _ = persist_report(&report.evidence_root, &report, "KVM recovery report");
         return report;
     }
     report.status = CapabilityStatus::Available;
@@ -80,7 +84,7 @@ pub async fn run(config: LinuxKvmRecoverySmokeConfig) -> LinuxKvmRecoverySmokeRe
         report.case_count = 0;
         report.reason = Some("Linux KVM recovery report failed its final audit".to_string());
     }
-    if let Err(reason) = persist_report(&report) {
+    if let Err(reason) = persist_report(&report.evidence_root, &report, "KVM recovery report") {
         report.status = CapabilityStatus::Unavailable;
         report.case_count = 0;
         report.reason = Some(reason);
@@ -88,86 +92,14 @@ pub async fn run(config: LinuxKvmRecoverySmokeConfig) -> LinuxKvmRecoverySmokeRe
     report
 }
 
-struct PreparedRun {
-    executable: PathBuf,
-    shim: PathBuf,
-    manifest: PathBuf,
-    bundle: PathBuf,
-    service_root: PathBuf,
-    evidence_root: PathBuf,
-    nonce: String,
-    artifacts: LinuxKvmRecoveryArtifacts,
-}
-
-impl PreparedRun {
-    async fn open(config: LinuxKvmRecoverySmokeConfig) -> Result<Self, String> {
-        if !matches!(std::env::consts::ARCH, "x86_64" | "aarch64") {
-            return Err(format!(
-                "unsupported Linux KVM recovery architecture: {}",
-                std::env::consts::ARCH
-            ));
-        }
-        let work_parent = canonical_plain_directory(&config.work_parent, "work parent").await?;
-        let executable = canonical_plain_file(
-            &config.host_service_executable,
-            "Host Service executable",
-            true,
-        )?;
-        let shim = canonical_plain_file(&config.shim, "isolated libkrun shim", true)?;
-        let manifest = canonical_plain_file(
-            &config.system_image_manifest,
-            "Linux KVM system-image manifest",
-            false,
-        )?;
-        let bundle = canonical_plain_directory(&config.bundle, "source OCI bundle").await?;
-        let loaded = OciBundle::load(&bundle)
-            .await
-            .map_err(|error| format!("failed to validate source OCI bundle: {error}"))?;
-        let source_revision = config
-            .source_revision
-            .filter(|revision| canonical_git_revision(revision))
-            .ok_or_else(|| "source revision must be 40 lowercase hexadecimal digits".to_string())?;
-        let nonce = unique_nonce()?;
-        let evidence_root = work_parent.join(format!("kvm-recovery-{nonce}"));
-        let service_root = evidence_root.join("service");
-        validate_unix_socket_path(
-            &service_root.join("runtime.sock"),
-            "Linux KVM recovery qualification endpoint",
-        )
-        .map_err(|error| error.to_string())?;
-        create_private_directory(&evidence_root)?;
-        create_private_directory(&service_root)?;
-        let artifacts = LinuxKvmRecoveryArtifacts {
-            host_service_executable: executable.clone(),
-            host_service_executable_sha256: sha256_file(&executable)?,
-            shim: shim.clone(),
-            shim_sha256: sha256_file(&shim)?,
-            system_image_manifest: manifest.clone(),
-            system_image_manifest_sha256: sha256_file(&manifest)?,
-            source_bundle: bundle.clone(),
-            source_bundle_config_digest: loaded.config_digest().to_string(),
-            source_revision,
-        };
-        Ok(Self {
-            executable,
-            shim,
-            manifest,
-            bundle,
-            service_root,
-            evidence_root,
-            nonce,
-            artifacts,
-        })
-    }
-}
-
 async fn run_recovery(
-    prepared: &PreparedRun,
+    prepared: &PreparedQualification,
     evidence: &mut LinuxKvmRecoveryEvidence,
 ) -> Result<(), String> {
     let runtime_root = prepared.service_root.join("runtime");
     let endpoint_baseline = host::endpoint_inventory()?;
     let mut first = HostServiceProcess::spawn(
+        HostServiceKind::Recovery,
         &prepared.executable,
         &prepared.service_root,
         &prepared.shim,
@@ -223,6 +155,7 @@ async fn run_recovery(
     }
 
     let mut replacement = HostServiceProcess::spawn(
+        HostServiceKind::Recovery,
         &prepared.executable,
         &prepared.service_root,
         &prepared.shim,
@@ -246,7 +179,7 @@ async fn run_recovery(
 }
 
 async fn run_first_owner(
-    prepared: &PreparedRun,
+    prepared: &PreparedQualification,
     runtime_root: &Path,
     endpoint_baseline: &std::collections::BTreeSet<PathBuf>,
     first: &HostServiceProcess,
@@ -256,11 +189,15 @@ async fn run_first_owner(
     evidence.first_host_service = Some(identity);
     evidence.first_socket_peer = Some(first.socket_peer()?.clone());
     let client = first.connect().await?;
-    verify_qualification_scope(&client).await?;
+    verify_qualification_scope(
+        &client,
+        crate::kvm_driver::LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE,
+    )
+    .await?;
     evidence.qualification_scope_verified = true;
     let id = ContainerId::new(format!("kvm-owner-death-{}", prepared.nonce))
         .map_err(|error| format!("failed to construct recovery container ID: {error}"))?;
-    let context = operation(&prepared.nonce, "create")?;
+    let context = operation("kvm-recovery", &prepared.nonce, "create")?;
     let staged = bundle::stage(&prepared.bundle, runtime_root, &id, &context.operation_id).await?;
     let create = CreateRequest {
         context,
@@ -281,7 +218,7 @@ async fn run_first_owner(
     let started = call(
         "KVM recovery start",
         client.start(StartRequest {
-            context: operation(&prepared.nonce, "start")?,
+            context: operation("kvm-recovery", &prepared.nonce, "start")?,
             target: target.clone(),
         }),
     )
@@ -303,7 +240,7 @@ async fn run_first_owner(
 }
 
 async fn run_replacement(
-    prepared: &PreparedRun,
+    prepared: &PreparedQualification,
     runtime_root: &Path,
     endpoint_baseline: &std::collections::BTreeSet<PathBuf>,
     replacement: &mut HostServiceProcess,
@@ -319,7 +256,11 @@ async fn run_replacement(
     }
     let client = replacement.connect().await?;
     evidence.replacement_connected = true;
-    verify_qualification_scope(&client).await?;
+    verify_qualification_scope(
+        &client,
+        crate::kvm_driver::LINUX_KVM_RECOVERY_QUALIFICATION_SCOPE,
+    )
+    .await?;
     let descriptors_before = host::descriptor_inventory(replacement.pid()?)?;
     evidence.open_descriptors_before = u32::try_from(descriptors_before.len()).ok();
     let target = evidence
@@ -368,7 +309,7 @@ async fn run_replacement(
     call(
         "replacement stopped-only delete",
         client.delete(DeleteRequest {
-            context: operation(&prepared.nonce, "delete")?,
+            context: operation("kvm-recovery", &prepared.nonce, "delete")?,
             target: target.clone(),
             mode: DeleteMode::StoppedOnly,
         }),
@@ -414,88 +355,6 @@ async fn run_replacement(
         return Err("replacement Host Service did not shut down cleanly".to_string());
     }
     Ok(())
-}
-
-async fn verify_qualification_scope(client: &RuntimeClient) -> Result<(), String> {
-    let features = call("KVM recovery features", client.features()).await?;
-    let launchable = features
-        .drivers
-        .drivers
-        .iter()
-        .filter(|capability| capability.can_launch())
-        .collect::<Vec<_>>();
-    if launchable.len() != 1 {
-        return Err(format!(
-            "KVM recovery Host Service advertised {} launchable drivers, expected one",
-            launchable.len()
-        ));
-    }
-    let capability = launchable[0];
-    if capability.driver != DriverKind::LibkrunKvm
-        || capability.status != CapabilityStatus::Available
-        || capability.readiness != DriverReadiness::Experimental
-        || capability
-            .evidence
-            .get("qualification_scope")
-            .map(String::as_str)
-            != Some(QUALIFICATION_SCOPE)
-    {
-        return Err("KVM recovery Host Service did not retain its narrow scope".to_string());
-    }
-    Ok(())
-}
-
-async fn wait_for_marker(client: &RuntimeClient, target: &ContainerTarget) -> Result<(), String> {
-    let deadline = Instant::now() + RECOVERY_TIMEOUT;
-    loop {
-        match client
-            .file(FileRequest {
-                target: target.clone(),
-                op: FileOp::Download,
-                path: MARKER_PATH.to_string(),
-                data: None,
-                user: None,
-                context: None,
-            })
-            .await
-        {
-            Ok(response) => {
-                let decoded = response
-                    .data
-                    .as_deref()
-                    .map(|value| STANDARD.decode(value))
-                    .transpose()
-                    .map_err(|error| format!("KVM marker was not base64: {error}"))?;
-                return if decoded.as_deref() == Some(MARKER_CONTENTS) {
-                    Ok(())
-                } else {
-                    Err("KVM marker contents were unexpected".to_string())
-                };
-            }
-            Err(error) if error.code == ErrorCode::NotFound => {}
-            Err(error) => return Err(call_error("read KVM marker", &error)),
-        }
-        if Instant::now() >= deadline {
-            return Err("timed out waiting for KVM init marker".to_string());
-        }
-        sleep(POLL_INTERVAL).await;
-    }
-}
-
-async fn wait_for_vm_descendants(
-    host_pid: u32,
-) -> Result<Vec<super::report::LinuxProcessIdentity>, String> {
-    let deadline = Instant::now() + RECOVERY_TIMEOUT;
-    loop {
-        let processes = host::process_descendants(host_pid)?;
-        if processes.len() >= 2 {
-            return Ok(processes);
-        }
-        if Instant::now() >= deadline {
-            return Err("Host Service did not expose KVM shim and worker descendants".to_string());
-        }
-        sleep(POLL_INTERVAL).await;
-    }
 }
 
 async fn verify_recovery_report(
@@ -546,114 +405,4 @@ fn recovery_report_path(runtime_root: &Path, target: &ContainerTarget) -> Result
     Ok(runtime_root
         .join("recovery")
         .join(format!("{}-{}.json", target.id, generation.0)))
-}
-
-fn operation(nonce: &str, suffix: &str) -> Result<OperationContext, String> {
-    OperationId::new(format!("kvm-recovery-{nonce}-{suffix}"))
-        .map(OperationContext::new)
-        .map_err(|error| format!("failed to construct recovery operation ID: {error}"))
-}
-
-async fn call<T>(
-    label: &str,
-    future: impl Future<Output = a3s_oci_sdk::Result<T>>,
-) -> Result<T, String> {
-    match timeout(CALL_TIMEOUT, future).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => Err(call_error(label, &error)),
-        Err(_) => Err(format!("{label} timed out")),
-    }
-}
-
-fn call_error(label: &str, error: &Error) -> String {
-    format!("{label} failed with {:?}: {}", error.code, error.message)
-}
-
-fn persist_report(report: &LinuxKvmRecoverySmokeReport) -> Result<(), String> {
-    let encoded = serde_json::to_vec_pretty(report)
-        .map_err(|error| format!("failed to encode KVM recovery report: {error}"))?;
-    let path = report.evidence_root.join("report.json");
-    let pending = report.evidence_root.join("report.json.pending");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-        .open(&pending)
-        .map_err(|error| format!("failed to create report pending file: {error}"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .and_then(|()| file.sync_all())
-        .map_err(|error| format!("failed to persist KVM recovery report: {error}"))?;
-    drop(file);
-    std::fs::rename(&pending, &path)
-        .map_err(|error| format!("failed to publish KVM recovery report: {error}"))
-}
-
-fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|error| format!("failed to open {} for hashing: {error}", path.display()))?;
-    let mut digest = Sha256::new();
-    std::io::copy(&mut file, &mut digest)
-        .map_err(|error| format!("failed to hash {}: {error}", path.display()))?;
-    Ok(format!("{:x}", digest.finalize()))
-}
-
-fn canonical_plain_file(path: &Path, label: &str, executable: bool) -> Result<PathBuf, String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(format!("{label} is not a plain file: {}", path.display()));
-    }
-    if executable && metadata.permissions().mode() & 0o111 == 0 {
-        return Err(format!("{label} is not executable: {}", path.display()));
-    }
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|error| format!("failed to resolve {label} {}: {error}", path.display()))?;
-    if canonical != path {
-        return Err(format!(
-            "{label} must be an absolute canonical path: {} -> {}",
-            path.display(),
-            canonical.display()
-        ));
-    }
-    Ok(canonical)
-}
-
-async fn canonical_plain_directory(path: &Path, label: &str) -> Result<PathBuf, String> {
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(format!(
-            "{label} is not a plain directory: {}",
-            path.display()
-        ));
-    }
-    let canonical = tokio::fs::canonicalize(path)
-        .await
-        .map_err(|error| format!("failed to resolve {label} {}: {error}", path.display()))?;
-    if canonical != path {
-        return Err(format!(
-            "{label} must be an absolute canonical path: {} -> {}",
-            path.display(),
-            canonical.display()
-        ));
-    }
-    Ok(canonical)
-}
-
-fn create_private_directory(path: &Path) -> Result<(), String> {
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(path)
-        .map_err(|error| format!("failed to create {}: {error}", path.display()))
-}
-
-fn unique_nonce() -> Result<String, String> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("system clock precedes Unix epoch: {error}"))?
-        .as_nanos();
-    Ok(format!("{}-{nanos}", std::process::id()))
 }

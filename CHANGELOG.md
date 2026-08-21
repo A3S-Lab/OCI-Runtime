@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A separately scoped bounded Linux KVM soak for x86_64 and AArch64. The
+  qualification-only `linux-kvm-bounded-soak-only-v1` Host Service runs 25
+  fresh exact generations by default without promoting the public `probe-only`
+  candidate. Every wave retains generation and stale-target fencing, replayed
+  Create/Kill/Wait/Delete, Guest marker, unique shim/worker process identities,
+  descriptor and endpoint restoration, bundle-handoff/runtime-share/recovery
+  cleanup, console retention, and configured Guest `cgroupsPath` lifetime.
+  CI emits `a3s.oci.linux-kvm-soak-matrix.v1` on both architectures; a host
+  without usable KVM records zero completed iterations and does not download
+  Alpine. Fresh-host `available` reports remain outstanding.
 - A qualification-only Linux KVM owner-death and Host Service restart gate for
   x86_64 and AArch64. The public KVM candidate remains non-registerable and
   `probe-only`; the new Unix service accepts only the exact
@@ -64,8 +74,8 @@ All notable changes to A3S OCI Runtime are documented in this file.
   then configures VM resources and a plain agent vsock and releases the
   context without opening `/dev/kvm` or entering a VM. Linux x86_64 and
   AArch64 CI retain positive lifecycle plus tampered-asset and symlink-negative
-  coverage. KVM remains `probe-only`; the immutable system root, authenticated
-  guest boot, workload driver, recovery matrices, and soak gates remain open.
+  coverage. KVM remains `probe-only`; fresh-host lifecycle, recovery, and soak
+  reports plus the remaining promotion gates are still required.
 - Complete classification of the OCI 1.3 normative inventory. The final 17
   common, Linux, and Features entries now bind invalid-value rejection,
   explicit supported subsets, typed additional file descriptors, deliberate

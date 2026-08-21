@@ -19,14 +19,38 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(45);
 const REAP_TIMEOUT: Duration = Duration::from_secs(25);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HostServiceKind {
+    Recovery,
+    Soak,
+}
+
+impl HostServiceKind {
+    const fn command(self) -> &'static str {
+        match self {
+            Self::Recovery => "linux-kvm-recovery-host-service",
+            Self::Soak => "linux-kvm-soak-host-service",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Recovery => "Linux KVM recovery Host Service",
+            Self::Soak => "Linux KVM soak Host Service",
+        }
+    }
+}
+
 pub(super) struct HostServiceProcess {
     child: Child,
     socket: PathBuf,
     socket_peer: Option<LinuxProcessIdentity>,
+    kind: HostServiceKind,
 }
 
 impl HostServiceProcess {
     pub(super) async fn spawn(
+        kind: HostServiceKind,
         executable: &Path,
         root: &Path,
         shim: &Path,
@@ -37,7 +61,7 @@ impl HostServiceProcess {
         let stdout = create_private_log(stdout, "Host Service stdout")?;
         let stderr = create_private_log(stderr, "Host Service stderr")?;
         let child = Command::new(executable)
-            .arg("linux-kvm-recovery-host-service")
+            .arg(kind.command())
             .arg("--root")
             .arg(root)
             .arg("--shim")
@@ -50,11 +74,12 @@ impl HostServiceProcess {
             .stderr(Stdio::from(stderr))
             .kill_on_drop(true)
             .spawn()
-            .map_err(|error| format!("failed to start Linux KVM recovery Host Service: {error}"))?;
+            .map_err(|error| format!("failed to start {}: {error}", kind.label()))?;
         let mut process = Self {
             child,
             socket: root.join("runtime.sock"),
             socket_peer: None,
+            kind,
         };
         match process.wait_for_private_socket().await {
             Ok(()) => Ok(process),
@@ -75,7 +100,7 @@ impl HostServiceProcess {
     pub(super) fn pid(&self) -> Result<u32, String> {
         self.child
             .id()
-            .ok_or_else(|| "Linux KVM recovery Host Service has no live PID".to_string())
+            .ok_or_else(|| format!("{} has no live PID", self.kind.label()))
     }
 
     pub(super) fn socket_path(&self) -> &Path {
@@ -93,8 +118,8 @@ impl HostServiceProcess {
             .map_err(|error| format!("failed to configure Host Service endpoint: {error}"))?;
         timeout(START_TIMEOUT, RuntimeClient::connect(&endpoint))
             .await
-            .map_err(|_| "timed out connecting to Linux KVM recovery Host Service".to_string())?
-            .map_err(|error| format!("failed to connect Linux KVM recovery Host Service: {error}"))
+            .map_err(|_| format!("timed out connecting to {}", self.kind.label()))?
+            .map_err(|error| format!("failed to connect {}: {error}", self.kind.label()))
     }
 
     pub(super) async fn terminate(&mut self) -> Result<bool, String> {

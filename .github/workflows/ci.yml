@@ -178,6 +178,14 @@ jobs:
           A3S_OCI_LINUX_KVM_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash .github/scripts/linux-kvm-recovery.sh
+      - if: runner.os == 'Linux'
+        name: Linux KVM bounded fresh-generation soak
+        timeout-minutes: 45
+        env:
+          A3S_OCI_LINUX_KVM_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
+          A3S_OCI_LINUX_KVM_SOAK_ITERATIONS: 25
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash .github/scripts/linux-kvm-soak.sh
       - if: runner.os == 'macOS'
         name: Hypervisor.framework VM object lifecycle
         shell: bash
@@ -947,6 +955,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14
       - if: runner.os == 'Windows'
@@ -1099,6 +1108,13 @@ jobs:
           A3S_OCI_LINUX_KVM_RECOVERY_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
           A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash .github/scripts/linux-kvm-recovery.sh
+      - name: Linux KVM bounded fresh-generation soak
+        timeout-minutes: 45
+        env:
+          A3S_OCI_LINUX_KVM_SOAK_REPORT: ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
+          A3S_OCI_LINUX_KVM_SOAK_ITERATIONS: 25
+          A3S_QUALIFICATION_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash .github/scripts/linux-kvm-soak.sh
       - name: Rootless generated-cgroup device boundary
         env:
           A3S_OCI_NATIVE_FOCUS: rootless-device-boundary
@@ -1125,6 +1141,7 @@ jobs:
             ${{ runner.temp }}/a3s-oci-linux-kvm-compatibility-drift.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-lifecycle.json
             ${{ runner.temp }}/a3s-oci-linux-kvm-recovery.json
+            ${{ runner.temp }}/a3s-oci-linux-kvm-soak.json
           if-no-files-found: warn
           retention-days: 14
 
