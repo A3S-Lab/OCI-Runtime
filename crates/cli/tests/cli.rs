@@ -265,6 +265,70 @@ fn macos_hvf_host_service_smoke_fails_closed_without_creating_evidence() {
     assert!(!std::path::Path::new(&missing_parent).exists());
 }
 
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn linux_kvm_recovery_host_service_requires_all_owner_paths_without_creating_root() {
+    let root = format!(
+        "/tmp/a3s-oci-cli-kvm-recovery-host-contract-{}",
+        std::process::id()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "linux-kvm-recovery-host-service",
+            "--root",
+            &root,
+            "--shim",
+            "/tmp/missing-a3s-oci-kvm-shim",
+        ])
+        .output()
+        .expect("Linux KVM recovery Host Service command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--system-image-manifest"));
+    assert!(!std::path::Path::new(&root).exists());
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+#[test]
+fn linux_kvm_recovery_smoke_fails_closed_without_creating_evidence() {
+    let missing_parent = format!(
+        "/tmp/a3s-oci-cli-kvm-recovery-smoke-missing-{}",
+        std::process::id()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))
+        .args([
+            "linux-kvm-recovery-smoke",
+            "--shim",
+            "/tmp/missing-a3s-oci-kvm-shim",
+            "--system-image-manifest",
+            "/tmp/missing-a3s-oci-system-image.json",
+            "--bundle",
+            "/tmp/missing-a3s-oci-bundle",
+            "--work-parent",
+            &missing_parent,
+            "--source-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+        .output()
+        .expect("Linux KVM recovery smoke command must start");
+
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("Linux KVM recovery smoke output must be valid JSON");
+    assert_eq!(
+        report["schema_version"],
+        "a3s.oci.linux-kvm-recovery-smoke.v1"
+    );
+    assert_ne!(report["status"], "available");
+    assert!(!std::path::Path::new(&missing_parent).exists());
+}
+
 #[test]
 fn native_linux_service_smoke_fails_closed_with_versioned_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_a3s-oci"))

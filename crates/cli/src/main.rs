@@ -7,6 +7,11 @@ use serde::Serialize;
 use thiserror::Error;
 
 mod dispatch;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod linux_kvm_service;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod macos_hvf_service;
 #[cfg(target_os = "linux")]
@@ -100,6 +105,46 @@ enum Command {
         /// Absolute matching a3s-oci-agent executable used for prepared init.
         #[arg(long, value_name = "FILE")]
         agent: PathBuf,
+    },
+    /// Serve the KVM candidate only for owner-death/restart qualification.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(hide = true)]
+    LinuxKvmRecoveryHostService {
+        /// Private absolute root containing runtime.sock, state, and runtime data.
+        #[arg(long, value_name = "DIR")]
+        root: PathBuf,
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+    },
+    /// Qualify KVM owner SIGKILL and replacement Host Service recovery.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[command(hide = true)]
+    LinuxKvmRecoverySmoke {
+        /// Absolute isolated libkrun shim executable.
+        #[arg(long, value_name = "FILE")]
+        shim: PathBuf,
+        /// Absolute immutable Linux KVM utility-VM system-image manifest.
+        #[arg(long, value_name = "FILE")]
+        system_image_manifest: PathBuf,
+        /// OCI bundle copied into the private runtime-owned handoff.
+        #[arg(long, value_name = "DIR")]
+        bundle: PathBuf,
+        /// Existing private directory that retains recovery evidence.
+        #[arg(long, value_name = "DIR")]
+        work_parent: PathBuf,
+        /// Exact source revision embedded in the qualification report.
+        #[arg(long, value_name = "REVISION")]
+        source_revision: String,
     },
     /// Serve dedicated Apple Silicon HVF VMs through one durable SDK owner.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -619,7 +664,13 @@ enum CliError {
     Runtime(#[from] a3s_oci_sdk::Error),
     #[error("failed to serialize command output: {0}")]
     Serialize(#[from] serde_json::Error),
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
     #[error("failed to resolve the current a3s-oci executable: {0}")]
     CurrentExecutable(std::io::Error),
 }

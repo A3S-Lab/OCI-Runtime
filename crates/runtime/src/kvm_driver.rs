@@ -88,6 +88,17 @@ impl fmt::Debug for KvmRuntimeDriver {
 impl KvmRuntimeDriver {
     /// Open the non-registerable KVM candidate around verified private paths.
     pub async fn open_candidate(config: KvmRuntimeDriverConfig) -> Result<Self> {
+        Self::open(config, KvmRegistration::ProbeOnly).await
+    }
+
+    /// Open the candidate only for the real-host recovery qualification owner.
+    pub(crate) async fn open_recovery_qualification(
+        config: KvmRuntimeDriverConfig,
+    ) -> Result<Self> {
+        Self::open(config, KvmRegistration::RecoveryQualification).await
+    }
+
+    async fn open(config: KvmRuntimeDriverConfig, registration: KvmRegistration) -> Result<Self> {
         let capability = crate::platform::kvm_driver_capability();
         if capability.status != CapabilityStatus::Available {
             return Err(Error::new(
@@ -108,7 +119,11 @@ impl KvmRuntimeDriver {
         .await?;
         let bootstrap_root = prepared.bootstrap_root.clone();
 
-        let capability = candidate_capability(capability, &prepared.system_image_manifest_sha256);
+        let capability = candidate_capability(
+            capability,
+            &prepared.system_image_manifest_sha256,
+            registration,
+        );
 
         let recovery = RecoveryStore::new(prepared.recovery_directory.clone());
         let factory: Arc<dyn UtilityVmFactory> = Arc::new(LiveKvmVmFactory {
@@ -152,8 +167,9 @@ impl KvmRuntimeDriver {
 fn candidate_capability(
     mut capability: DriverCapability,
     system_image_manifest_sha256: &str,
+    registration: KvmRegistration,
 ) -> DriverCapability {
-    capability.readiness = DriverReadiness::ProbeOnly;
+    capability.readiness = registration.readiness();
     capability.isolation_classes = vec![IsolationClass::DedicatedVm];
     capability.evidence.extend([
         (
@@ -183,7 +199,34 @@ fn candidate_capability(
         ("native_linux_fallback".to_string(), "disabled".to_string()),
         ("opt_in".to_string(), "qualification-only".to_string()),
     ]);
+    if let Some(scope) = registration.qualification_scope() {
+        capability
+            .evidence
+            .insert("qualification_scope".to_string(), scope.to_string());
+    }
     capability
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KvmRegistration {
+    ProbeOnly,
+    RecoveryQualification,
+}
+
+impl KvmRegistration {
+    const fn readiness(self) -> DriverReadiness {
+        match self {
+            Self::ProbeOnly => DriverReadiness::ProbeOnly,
+            Self::RecoveryQualification => DriverReadiness::Experimental,
+        }
+    }
+
+    const fn qualification_scope(self) -> Option<&'static str> {
+        match self {
+            Self::ProbeOnly => None,
+            Self::RecoveryQualification => Some("linux-kvm-owner-death-restart-only-v1"),
+        }
+    }
 }
 
 delegate_utility_vm_runtime_driver!(KvmRuntimeDriver, inner);
@@ -304,6 +347,7 @@ mod tests {
                 evidence: BTreeMap::new(),
             },
             "test-manifest-sha256",
+            KvmRegistration::ProbeOnly,
         );
         let runtime_root = root.join("runtime");
         let inner = UtilityVmRuntimeDriver::new(
@@ -371,6 +415,36 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert!(!state_root.exists());
+    }
+
+    #[test]
+    fn recovery_qualification_is_explicit_and_does_not_promote_the_candidate() {
+        let capability = candidate_capability(
+            DriverCapability {
+                driver: DriverKind::LibkrunKvm,
+                status: CapabilityStatus::Available,
+                readiness: DriverReadiness::Supported,
+                isolation_classes: vec![IsolationClass::SharedHostKernel],
+                reason: None,
+                evidence: BTreeMap::new(),
+            },
+            "test-manifest-sha256",
+            KvmRegistration::RecoveryQualification,
+        );
+
+        assert_eq!(capability.readiness, DriverReadiness::Experimental);
+        assert!(capability.can_launch());
+        assert_eq!(
+            capability
+                .evidence
+                .get("qualification_scope")
+                .map(String::as_str),
+            Some("linux-kvm-owner-death-restart-only-v1")
+        );
+        assert_eq!(
+            capability.evidence.get("opt_in").map(String::as_str),
+            Some("qualification-only")
+        );
     }
 
     #[tokio::test]

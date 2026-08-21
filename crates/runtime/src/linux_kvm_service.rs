@@ -9,49 +9,50 @@ use crate::unix_service::{
     SERVICE_SOCKET_NAME,
 };
 use crate::utility_vm_host_service::{UtilityVmHostDriver, UtilityVmHostService};
-use crate::{HvfRuntimeDriver, HvfRuntimeDriverConfig};
+use crate::{KvmRuntimeDriver, KvmRuntimeDriverConfig};
 
 const STATE_DIRECTORY_NAME: &str = "state";
 const DRIVER_RUNTIME_DIRECTORY_NAME: &str = "runtime";
 
-/// Filesystem and immutable-asset contract for one Apple Silicon HVF owner.
+/// Exact paths for the qualification-only Linux KVM recovery owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MacosHvfHostServiceConfig {
+pub struct LinuxKvmRecoveryHostServiceConfig {
     root: PathBuf,
     shim: PathBuf,
     system_image_manifest: PathBuf,
 }
 
-impl MacosHvfHostServiceConfig {
-    /// Configure one same-UID SDK owner around the launch-ready HVF driver.
+impl LinuxKvmRecoveryHostServiceConfig {
+    /// Configure a private SDK owner without promoting the public KVM driver.
     pub fn new(
         root: impl Into<PathBuf>,
         shim: impl Into<PathBuf>,
         system_image_manifest: impl Into<PathBuf>,
     ) -> Result<Self> {
         let root = root.into();
-        validate_absolute_normalized_path(&root, "macOS HVF host service root")?;
+        validate_absolute_normalized_path(&root, "Linux KVM recovery Host Service root")?;
         validate_unix_socket_path(
             &root.join(SERVICE_SOCKET_NAME),
-            "macOS HVF Host Service endpoint",
+            "Linux KVM recovery Host Service endpoint",
         )?;
         let shim = shim.into();
-        validate_absolute_normalized_path(&shim, "macOS HVF libkrun shim")?;
+        validate_absolute_normalized_path(&shim, "Linux KVM libkrun shim")?;
         let system_image_manifest = system_image_manifest.into();
         validate_absolute_normalized_path(
             &system_image_manifest,
-            "macOS HVF system-image manifest",
+            "Linux KVM system-image manifest",
         )?;
         if system_image_manifest.starts_with(&root) || root.starts_with(&system_image_manifest) {
             return Err(Error::new(
                 ErrorCode::InvalidArgument,
                 format!(
-                    "immutable macOS HVF system-image manifest must be outside writable host service root {}: {}",
+                    "immutable Linux KVM system-image manifest must be outside writable Host \
+                     Service root {}: {}",
                     root.display(),
                     system_image_manifest.display()
                 ),
             )
-            .for_operation("configure-macos-hvf-host-service"));
+            .for_operation("configure-linux-kvm-recovery-host-service"));
         }
         Ok(Self {
             root,
@@ -60,25 +61,21 @@ impl MacosHvfHostServiceConfig {
         })
     }
 
-    /// Private owner root containing only the endpoint and writable state.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Unix socket consumed by [`a3s_oci_sdk::RuntimeClient::connect`].
     #[must_use]
     pub fn socket_path(&self) -> PathBuf {
         self.root.join(SERVICE_SOCKET_NAME)
     }
 
-    /// Entitlement-signed isolated libkrun shim.
     #[must_use]
     pub fn shim(&self) -> &Path {
         &self.shim
     }
 
-    /// Immutable manifest binding the system image and runtime provenance.
     #[must_use]
     pub fn system_image_manifest(&self) -> &Path {
         &self.system_image_manifest
@@ -92,8 +89,8 @@ impl MacosHvfHostServiceConfig {
         self.root.join(DRIVER_RUNTIME_DIRECTORY_NAME)
     }
 
-    fn driver_config(&self) -> Result<HvfRuntimeDriverConfig> {
-        HvfRuntimeDriverConfig::new(
+    fn driver_config(&self) -> Result<KvmRuntimeDriverConfig> {
+        KvmRuntimeDriverConfig::new(
             self.shim.clone(),
             self.driver_runtime_root(),
             self.system_image_manifest.clone(),
@@ -101,44 +98,47 @@ impl MacosHvfHostServiceConfig {
     }
 }
 
-/// Same-UID SDK service owning one dedicated HVF VM per exact generation.
-pub struct MacosHvfHostService {
-    inner: UtilityVmHostService<HvfRuntimeDriver>,
+/// Qualification-only same-UID SDK owner for one KVM VM per generation.
+pub struct LinuxKvmRecoveryHostService {
+    inner: UtilityVmHostService<KvmRuntimeDriver>,
 }
 
-impl MacosHvfHostService {
-    /// Open the HVF driver and durable state before publishing `runtime.sock`.
-    pub async fn bind(config: MacosHvfHostServiceConfig) -> Result<Self> {
+impl LinuxKvmRecoveryHostService {
+    /// Bind only with the narrow owner-death/restart registration override.
+    pub async fn bind(config: LinuxKvmRecoveryHostServiceConfig) -> Result<Self> {
         Self::prepare_layout(&config).await?;
-        let driver = Arc::new(HvfRuntimeDriver::open(config.driver_config()?).await?);
+        let driver =
+            Arc::new(KvmRuntimeDriver::open_recovery_qualification(config.driver_config()?).await?);
         Self::bind_driver(config, driver).await
     }
 
-    async fn prepare_layout(config: &MacosHvfHostServiceConfig) -> Result<()> {
-        prepare_private_directory(&config.root, "macOS HVF host service root").await?;
-        prepare_private_directory(&config.state_root(), "macOS HVF durable state root").await?;
+    async fn prepare_layout(config: &LinuxKvmRecoveryHostServiceConfig) -> Result<()> {
+        prepare_private_directory(&config.root, "Linux KVM recovery Host Service root").await?;
+        prepare_private_directory(
+            &config.state_root(),
+            "Linux KVM recovery durable state root",
+        )
+        .await?;
         prepare_private_directory(
             &config.driver_runtime_root(),
-            "macOS HVF driver runtime root",
+            "Linux KVM recovery driver runtime root",
         )
         .await
     }
 
     async fn bind_driver(
-        config: MacosHvfHostServiceConfig,
-        driver: Arc<HvfRuntimeDriver>,
+        config: LinuxKvmRecoveryHostServiceConfig,
+        driver: Arc<KvmRuntimeDriver>,
     ) -> Result<Self> {
         let inner = UtilityVmHostService::bind(&config.root, &config.state_root(), driver).await?;
         Ok(Self { inner })
     }
 
-    /// Bound SDK endpoint, available only after driver recovery completes.
     #[must_use]
     pub fn socket_path(&self) -> &Path {
         self.inner.socket_path()
     }
 
-    /// Serve concurrent authenticated clients until shutdown, then reap each VM once.
     pub async fn serve_until<F>(self, shutdown: F) -> Result<()>
     where
         F: Future<Output = ()> + Send,
@@ -148,33 +148,53 @@ impl MacosHvfHostService {
 }
 
 #[async_trait]
-impl UtilityVmHostDriver for HvfRuntimeDriver {
+impl UtilityVmHostDriver for KvmRuntimeDriver {
     async fn shutdown_host_driver(&self) -> Result<()> {
         self.shutdown().await
     }
 
     fn host_driver_label(&self) -> &'static str {
-        "HVF driver"
+        "KVM recovery qualification driver"
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 
-    use a3s_oci_core::DriverKind;
+    use a3s_oci_core::{
+        CapabilityStatus, DriverCapability, DriverKind, DriverReadiness, IsolationClass,
+    };
     use a3s_oci_sdk::{
-        LocalIpcEndpoint, RuntimeClient, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
+        async_trait, LocalIpcEndpoint, RuntimeClient, RUNTIME_BUNDLE_HANDOFF_EXTENSION,
         RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
     };
 
     use super::*;
+    use crate::utility_vm_driver::{LaunchedUtilityVm, UtilityVmFactory, UtilityVmRuntimeDriver};
+
+    struct NoLaunchFactory;
+
+    #[async_trait]
+    impl UtilityVmFactory for NoLaunchFactory {
+        async fn launch(
+            &self,
+            _target: &a3s_oci_sdk::ContainerTarget,
+            _runtime_share: &Path,
+        ) -> Result<LaunchedUtilityVm> {
+            Err(Error::new(
+                ErrorCode::Internal,
+                "KVM Host Service contract fixture must not launch",
+            ))
+        }
+    }
 
     fn canonical_temporary_root(temporary: &tempfile::TempDir) -> PathBuf {
         std::fs::canonicalize(temporary.path()).expect("canonical temporary root")
     }
 
-    fn config(temporary: &tempfile::TempDir) -> MacosHvfHostServiceConfig {
+    fn config(temporary: &tempfile::TempDir) -> LinuxKvmRecoveryHostServiceConfig {
         let temporary = canonical_temporary_root(temporary);
         let assets = temporary.join("assets");
         std::fs::create_dir(&assets).expect("asset directory");
@@ -184,27 +204,60 @@ mod tests {
         let manifest = assets.join("system-image.json");
         std::fs::write(&shim, b"test shim").expect("test shim");
         std::fs::write(&manifest, b"{}\n").expect("test manifest");
-        MacosHvfHostServiceConfig::new(temporary.join("owner"), shim, manifest)
-            .expect("test host service config")
+        LinuxKvmRecoveryHostServiceConfig::new(temporary.join("owner"), shim, manifest)
+            .expect("test Host Service config")
+    }
+
+    fn driver(config: &LinuxKvmRecoveryHostServiceConfig) -> Arc<KvmRuntimeDriver> {
+        let runtime_root = config.driver_runtime_root();
+        let capability = DriverCapability {
+            driver: DriverKind::LibkrunKvm,
+            status: CapabilityStatus::Available,
+            readiness: DriverReadiness::Experimental,
+            isolation_classes: vec![IsolationClass::DedicatedVm],
+            reason: None,
+            evidence: BTreeMap::from([
+                ("opt_in".to_string(), "qualification-only".to_string()),
+                (
+                    "qualification_scope".to_string(),
+                    "linux-kvm-owner-death-restart-only-v1".to_string(),
+                ),
+            ]),
+        };
+        let inner = UtilityVmRuntimeDriver::new(
+            capability,
+            "KVM qualification fixture",
+            runtime_root.clone(),
+            runtime_root.join("shares"),
+            config.system_image_manifest.clone(),
+            "fixture-manifest-sha256".to_string(),
+            runtime_root.join("recovery"),
+            Arc::new(NoLaunchFactory),
+        );
+        Arc::new(KvmRuntimeDriver::from_test_inner(inner))
     }
 
     #[test]
     fn config_rejects_relative_ambiguous_and_overlapping_paths() {
-        assert!(
-            MacosHvfHostServiceConfig::new("relative", "/tmp/shim", "/tmp/system-image.json")
-                .is_err()
-        );
-        assert!(MacosHvfHostServiceConfig::new(
+        assert!(LinuxKvmRecoveryHostServiceConfig::new(
+            "relative",
+            "/tmp/shim",
+            "/tmp/system-image.json"
+        )
+        .is_err());
+        assert!(LinuxKvmRecoveryHostServiceConfig::new(
             "/tmp/a/../owner",
             "/tmp/shim",
             "/tmp/system-image.json"
         )
         .is_err());
-        assert!(
-            MacosHvfHostServiceConfig::new("/tmp/owner", "relative", "/tmp/system-image.json")
-                .is_err()
-        );
-        assert!(MacosHvfHostServiceConfig::new(
+        assert!(LinuxKvmRecoveryHostServiceConfig::new(
+            "/tmp/owner",
+            "relative",
+            "/tmp/system-image.json"
+        )
+        .is_err());
+        assert!(LinuxKvmRecoveryHostServiceConfig::new(
             "/tmp/owner",
             "/tmp/shim",
             "/tmp/owner/system-image.json"
@@ -213,58 +266,39 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_a_socket_path_that_cannot_fit_sockaddr_un() {
-        let root = Path::new("/private/tmp").join("x".repeat(104));
-        let error = MacosHvfHostServiceConfig::new(
-            root,
-            "/tmp/a3s-oci-hvf-shim",
-            "/tmp/a3s-oci-hvf-system-image.json",
-        )
-        .expect_err("an unbindable Host Service socket path must fail during configuration");
-        assert_eq!(error.code, a3s_oci_sdk::ErrorCode::InvalidArgument);
-        assert!(error.message.contains("Unix socket path"), "{error}");
-    }
-
-    #[test]
     fn config_separates_durable_state_from_driver_runtime() {
-        let config = MacosHvfHostServiceConfig::new(
-            "/tmp/a3s-oci-hvf-owner",
-            "/tmp/a3s-oci-hvf-shim",
-            "/tmp/a3s-oci-hvf-system-image.json",
+        let config = LinuxKvmRecoveryHostServiceConfig::new(
+            "/tmp/a3s-oci-kvm-owner",
+            "/tmp/a3s-oci-kvm-shim",
+            "/tmp/a3s-oci-kvm-system-image.json",
         )
-        .expect("valid macOS HVF host config");
+        .expect("valid Linux KVM recovery config");
 
-        assert_eq!(config.root(), Path::new("/tmp/a3s-oci-hvf-owner"));
         assert_eq!(
             config.socket_path(),
-            Path::new("/tmp/a3s-oci-hvf-owner/runtime.sock")
+            Path::new("/tmp/a3s-oci-kvm-owner/runtime.sock")
         );
         assert_eq!(
             config.state_root(),
-            Path::new("/tmp/a3s-oci-hvf-owner/state")
+            Path::new("/tmp/a3s-oci-kvm-owner/state")
         );
         assert_eq!(
             config.driver_runtime_root(),
-            Path::new("/tmp/a3s-oci-hvf-owner/runtime")
+            Path::new("/tmp/a3s-oci-kvm-owner/runtime")
         );
         assert_ne!(config.state_root(), config.driver_runtime_root());
     }
 
     #[tokio::test]
-    async fn public_socket_advertises_hvf_and_graceful_shutdown_reaps_once() {
-        let temporary = tempfile::tempdir().expect("temporary host service fixture");
+    async fn qualification_socket_advertises_only_the_explicit_kvm_route() {
+        let temporary = tempfile::tempdir().expect("temporary Host Service fixture");
         let config = config(&temporary);
-        MacosHvfHostService::prepare_layout(&config)
+        LinuxKvmRecoveryHostService::prepare_layout(&config)
             .await
             .expect("private host layout");
-        let fixture = crate::utility_vm_driver::tests::shutdown_fixture(
-            config.driver_runtime_root(),
-            config.system_image_manifest.clone(),
-        )
-        .await;
-        let service = MacosHvfHostService::bind_driver(config.clone(), fixture.driver.clone())
+        let service = LinuxKvmRecoveryHostService::bind_driver(config.clone(), driver(&config))
             .await
-            .expect("bind test HVF host service");
+            .expect("bind test KVM Host Service");
         let socket_path = service.socket_path().to_path_buf();
         let metadata = std::fs::symlink_metadata(&socket_path).expect("SDK socket metadata");
         // SAFETY: geteuid has no preconditions or failure result.
@@ -290,24 +324,23 @@ mod tests {
         .expect("SDK connection timed out")
         .expect("SDK client");
         let info = client.features().await.expect("public SDK features");
-        assert_eq!(info.drivers.drivers.len(), 1);
-        assert_eq!(info.drivers.drivers[0].driver, DriverKind::LibkrunHvf);
-        for operation in crate::agent_driver::AGENT_DRIVER_OPERATIONS {
-            assert!(
-                info.operations.contains(&operation),
-                "public HVF service did not advertise {operation:?}"
-            );
-        }
-        assert!(info
-            .operations
-            .contains(&a3s_oci_sdk::RuntimeOperation::Features));
-        assert!(info
-            .operations
-            .contains(&a3s_oci_sdk::RuntimeOperation::List));
-        assert!(info
-            .operations
-            .contains(&a3s_oci_sdk::RuntimeOperation::Events));
-        assert_eq!(info.operations.len(), 23);
+        let launchable = info
+            .drivers
+            .drivers
+            .iter()
+            .filter(|capability| capability.can_launch())
+            .collect::<Vec<_>>();
+        assert_eq!(launchable.len(), 1);
+        let capability = launchable[0];
+        assert_eq!(capability.driver, DriverKind::LibkrunKvm);
+        assert_eq!(capability.readiness, DriverReadiness::Experimental);
+        assert_eq!(
+            capability
+                .evidence
+                .get("qualification_scope")
+                .map(String::as_str),
+            Some("linux-kvm-owner-death-restart-only-v1")
+        );
         assert!(info.attachments.supports_extension(
             RUNTIME_BUNDLE_HANDOFF_EXTENSION,
             RUNTIME_BUNDLE_HANDOFF_EXTENSION_VERSION,
@@ -317,13 +350,7 @@ mod tests {
         server
             .await
             .expect("service task")
-            .expect("clean HVF host shutdown");
-        assert_eq!(
-            fixture
-                .shutdown_calls
-                .load(std::sync::atomic::Ordering::Relaxed),
-            1
-        );
+            .expect("clean KVM qualification Host Service shutdown");
         assert!(!socket_path.exists());
     }
 }

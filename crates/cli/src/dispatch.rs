@@ -4,6 +4,11 @@ use std::process::ExitCode;
 
 use a3s_oci_sdk::RuntimeClient;
 
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use crate::linux_kvm_service;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::macos_hvf_service;
 #[cfg(target_os = "linux")]
@@ -178,6 +183,49 @@ fn dispatch(
         Command::NativeLinuxHostService { root, agent } => command_future!({
             native_service::run_host(root, agent).await?;
             Ok(ExitCode::SUCCESS)
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::LinuxKvmRecoveryHostService {
+            root,
+            shim,
+            system_image_manifest,
+        } => command_future!({
+            linux_kvm_service::run(root, shim, system_image_manifest).await?;
+            Ok(ExitCode::SUCCESS)
+        }),
+        #[cfg(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ))]
+        Command::LinuxKvmRecoverySmoke {
+            shim,
+            system_image_manifest,
+            bundle,
+            work_parent,
+            source_revision,
+        } => command_future!({
+            let executable = std::env::current_exe().map_err(CliError::CurrentExecutable)?;
+            let report = a3s_oci_runtime::linux_kvm_recovery_smoke(
+                a3s_oci_runtime::LinuxKvmRecoverySmokeConfig {
+                    host_service_executable: executable,
+                    shim,
+                    system_image_manifest,
+                    bundle,
+                    work_parent,
+                    source_revision: Some(source_revision),
+                },
+            )
+            .await;
+            let succeeded = report.is_success();
+            write_json(&report)?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
         }),
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         Command::MacosHvfHostService {

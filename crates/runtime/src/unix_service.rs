@@ -2,7 +2,11 @@ use std::future::Future;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(any(
+    test,
+    target_os = "linux",
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::time::Duration;
 
 use a3s_oci_sdk::{serve_transport_connection, Error, ErrorCode, OciRuntimeService, Result};
@@ -14,7 +18,11 @@ pub(crate) const SERVICE_SOCKET_NAME: &str = "runtime.sock";
 const MAX_CLIENT_CONNECTIONS: usize = 32;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_SOCKET_MODE: u32 = 0o600;
-#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(any(
+    test,
+    target_os = "linux",
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const STALE_SOCKET_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// One inode-pinned, same-UID Unix SDK endpoint.
@@ -60,7 +68,11 @@ impl UnixServiceEndpoint {
     /// The caller must already own the durable service-state lock. That lock
     /// is the race boundary proving that another legitimate service owner
     /// cannot publish this endpoint while stale-path recovery is in progress.
-    #[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
+    #[cfg(any(
+        test,
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     pub(crate) async fn bind_recovering_stale(path: &Path) -> Result<Self> {
         validate_unix_socket_path(path, "Unix SDK service socket")?;
         recover_stale_socket(path).await?;
@@ -163,7 +175,11 @@ impl UnixServiceEndpoint {
     }
 }
 
-#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
+#[cfg(any(
+    test,
+    target_os = "linux",
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 async fn recover_stale_socket(path: &Path) -> Result<()> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
