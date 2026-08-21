@@ -35,34 +35,43 @@ impl BundleHandoffStore {
     }
 
     pub(super) async fn prepare(&self, request: &DriverCreateRequest) -> Result<OciBundle> {
-        let runtime_share =
-            ensure_exact_runtime_share_path(&self.runtime_share_root, &request.target).await?;
-        let destination = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
         let source = runtime_bundle_handoff_directory(
             &self.runtime_root,
             &request.target.id,
             &request.context.operation_id,
         )?;
 
-        if path_metadata(&destination).await?.is_some() {
-            if path_metadata(&source).await?.is_some() {
-                return Err(handoff_error(
-                    ErrorCode::Conflict,
-                    format!(
-                        "both the utility-VM operation handoff and exact-generation bundle exist: {} and {}",
-                        source.display(),
-                        destination.display()
-                    ),
-                ));
+        let existing_runtime_share = super::layout::existing_exact_runtime_share_path(
+            &self.runtime_share_root,
+            &request.target,
+            "prepare-utility-vm-bundle-handoff",
+        )
+        .await?;
+        if let Some(runtime_share) = existing_runtime_share.as_ref() {
+            let destination = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
+            if path_metadata(&destination).await?.is_some() {
+                if path_metadata(&source).await?.is_some() {
+                    return Err(handoff_error(
+                        ErrorCode::Conflict,
+                        format!(
+                            "both the utility-VM operation handoff and exact-generation bundle exist: {} and {}",
+                            source.display(),
+                            destination.display()
+                        ),
+                    ));
+                }
+                let bundle = load_exact_bundle(&destination, &request.bundle).await?;
+                ensure_marker(runtime_share, &request.target, bundle.config_digest()).await?;
+                cleanup_empty_source_parents(&source, &self.runtime_root)
+                    .await
+                    .map_err(|error| error.retryable(true))?;
+                return Ok(bundle);
             }
-            let bundle = load_exact_bundle(&destination, &request.bundle).await?;
-            ensure_marker(&runtime_share, &request.target, bundle.config_digest()).await?;
-            cleanup_empty_source_parents(&source, &self.runtime_root)
-                .await
-                .map_err(|error| error.retryable(true))?;
-            return Ok(bundle);
         }
 
+        // Validate the complete caller-owned handoff before creating any path
+        // that will become visible to a guest. A missing, linked, insecure, or
+        // drifted source must not leave an empty exact-generation share behind.
         let source =
             canonical_private_directory(&source, "utility-VM operation bundle handoff").await?;
         validate_source_ancestry(
@@ -73,6 +82,13 @@ impl BundleHandoffStore {
         )
         .await?;
         let source_bundle = load_exact_bundle(&source, &request.bundle).await?;
+        let runtime_share = match existing_runtime_share {
+            Some(runtime_share) => runtime_share,
+            None => {
+                ensure_exact_runtime_share_path(&self.runtime_share_root, &request.target).await?
+            }
+        };
+        let destination = runtime_share.join(RUNTIME_BUNDLE_HANDOFF_BUNDLE_DIRECTORY);
         ensure_marker(
             &runtime_share,
             &request.target,

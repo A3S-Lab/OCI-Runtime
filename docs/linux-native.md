@@ -229,6 +229,17 @@ inventory restoration. The report schema is
 `a3s.oci.linux-kvm-compatibility-drift.v1`. CI runs both entry contracts and
 this matrix on x86_64 and AArch64.
 
+The driver also has a KVM-independent isolation preflight on both Linux
+architectures. It rejects `SharedHostKernel`, `SharedGuestKernel`, targets
+without an exact generation, and Create requests without the atomic
+bundle-handoff contract before touching a handoff. For a dedicated-VM request,
+the runtime validates the complete caller-owned source before it creates
+`shares/<container>/<generation>`. A missing source, linked or mode-open
+handoff, changed `config.json`, linked rootfs, or absolute bind source leaves
+no exact-generation share and cannot reach the VM factory. This gate exercises
+the production handoff path and does not treat an unavailable KVM probe as a
+pass for real Guest isolation.
+
 The next gate runs the shared Utility VM lifecycle only when the feature probe
 can open `/dev/kvm` and verify API version 12:
 
@@ -298,7 +309,7 @@ downloads or unpacks the Alpine fixture. Lifecycle and recovery emit zero-case
 `fixture_downloaded: false`. CI uploads those reports, but they are not
 `available` hardware results. The driver remains `probe-only` until fresh
 x86_64 and AArch64 KVM hosts retain all three available reports and the
-remaining negative-isolation profiles pass.
+remaining real-entry Guest negative-isolation profiles pass.
 
 ## Experimental lifecycle gate
 
