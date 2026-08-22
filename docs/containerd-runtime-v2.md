@@ -213,21 +213,37 @@ container ID.
 The adapter uses the public `a3s-oci-sdk`; it does not call A3S Box or import a
 driver implementation.
 
+A code-owned translation table freezes 23 exact Task and FIFO-pump routes.
+Their deduplicated union is the 18 public SDK operations required by the shim,
+and endpoint admission fails closed before task dispatch if any operation is
+absent. RuntimeInfo publishes that union under
+`dev.a3s.oci.containerd-sdk-operations`, and `--version` prints every route.
+Manifest contract tests prohibit dependencies on A3S Box, the Host Runtime
+implementation, the Agent, or Core internals.
+
+Four implemented routes remain local to the shim. `Exec(stage)` validates and
+durably allocates an exec incarnation without dispatching an SDK operation;
+`Start(exec)` first calls `processes` and then dispatches the public SDK `exec`
+operation. `Delete(exec)` removes a stopped exec incarnation locally, while
+`Connect` and `Shutdown` only coordinate the shim process. `Checkpoint` is the
+sole unimplemented Task method and is not part of the required SDK-operation
+union.
+
 | containerd Tasks operation | SDK/runtime action |
 | --- | --- |
 | Create | Validate the OCI bundle and typed create options, mount the supplied rootfs, then `create` |
-| Start | `start` for init or the exact exec process |
-| Get | Exact-generation `state` or `process` plus durable exit evidence |
+| Start | `start` for init; for exec, inspect `processes` and then dispatch `exec` for the exact staged incarnation |
+| State | Exact-generation `state` or process inventory plus durable exit evidence |
 | Wait | `wait` or `wait_process` |
 | Kill | `kill` for init, `signal_process` for exec |
 | Delete / DeleteProcess | Stopped lifecycle `delete`, or durable removal of the current exec while retaining its allocation sequence |
-| Exec | Decode the OCI `Process`, durably allocate a fresh incarnation, then `exec` on Start |
+| Exec | Decode the OCI `Process` and durably allocate a fresh incarnation; defer the SDK `exec` call until Start |
 | ResizePty | Exact-process `resize` |
 | CloseIO | Drain the FIFO and call `close_stdin` once |
 | Pause / Resume | `pause` / `resume` |
 | Update | Decode OCI `LinuxResources`, then `update` |
-| ListPids | Exact-generation `processes` |
-| Metrics | `stats`, encoded as containerd cgroup-v2 metrics |
+| Pids | Exact-generation `processes` |
+| Stats | `stats`, encoded as containerd cgroup-v2 metrics |
 | Connect / Shutdown | Shim process coordination; no second lifecycle state |
 | Checkpoint | Unimplemented; checkpoint/restore remains an optional future extension |
 

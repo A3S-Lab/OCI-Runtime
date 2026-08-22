@@ -6,6 +6,15 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A code-owned containerd-to-SDK translation contract. Twenty-three exact
+  Task and FIFO-pump routes collapse to the 18 public `a3s-oci-sdk` operations
+  required by the shim; endpoint admission now derives directly from that
+  table and fails before task dispatch when any operation is absent. Shim
+  version output and RuntimeInfo expose the same contract, while manifest
+  tests prohibit dependencies on A3S Box, the Host Runtime implementation, the
+  Agent, or Core internals. This closes the R7 public-SDK translation gate;
+  complete I/O, restart-boundary, cross-driver, and published-artifact gates
+  remain separate.
 - One frozen OCI Linux support profile from driver registration through
   execution. The SDK now owns `OciLinuxSupport`; every runtime driver must
   publish an exact profile, mixed-driver services reject profile drift while

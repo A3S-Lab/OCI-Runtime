@@ -1,5 +1,9 @@
 //! Versioned containerd Runtime V2 compatibility and package contract.
 
+use std::collections::BTreeSet;
+
+use a3s_oci_sdk::RuntimeOperation;
+
 pub(crate) const CONTRACT_VERSION: u32 = 1;
 pub(crate) const RUNTIME_TYPE: &str = "io.containerd.a3s-oci.v2";
 pub(crate) const SHIM_BINARY: &str = "containerd-shim-a3s-oci-v2";
@@ -8,6 +12,7 @@ pub(crate) const SHIM_INSTALL_DIRECTORY: &str = "/usr/local/bin";
 pub(crate) const DEFAULT_UNIX_ENDPOINT: &str = "/run/a3s-oci/runtime.sock";
 pub(crate) const RUNTIME_ENDPOINT_ENV: &str = "A3S_OCI_RUNTIME_ENDPOINT";
 pub(crate) const LEGACY_RUNTIME_ENDPOINT_ENV: &str = "A3S_OCI_RUNTIME_SOCKET";
+pub(crate) const SDK_OPERATIONS_ANNOTATION: &str = "dev.a3s.oci.containerd-sdk-operations";
 
 pub(crate) const OCI_FEATURES_TYPE_URL: &str =
     "types.containerd.io/opencontainers/runtime-spec/1/features/Features";
@@ -169,6 +174,194 @@ pub(crate) const TASK_METHODS: &[TaskMethod] = &[
     },
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SdkTranslation {
+    pub(crate) source: &'static str,
+    pub(crate) task_method: Option<&'static str>,
+    pub(crate) sdk_operations: &'static [RuntimeOperation],
+}
+
+pub(crate) const SDK_TRANSLATIONS: &[SdkTranslation] = &[
+    SdkTranslation {
+        source: "Create",
+        task_method: Some("Create"),
+        sdk_operations: &[RuntimeOperation::Create],
+    },
+    SdkTranslation {
+        source: "Start(init)",
+        task_method: Some("Start"),
+        sdk_operations: &[RuntimeOperation::Start],
+    },
+    SdkTranslation {
+        source: "Start(exec)",
+        task_method: Some("Start"),
+        sdk_operations: &[RuntimeOperation::Processes, RuntimeOperation::Exec],
+    },
+    SdkTranslation {
+        source: "State(init-or-exec)",
+        task_method: Some("State"),
+        sdk_operations: &[RuntimeOperation::State],
+    },
+    SdkTranslation {
+        source: "Exec(stage)",
+        task_method: Some("Exec"),
+        sdk_operations: &[],
+    },
+    SdkTranslation {
+        source: "Wait(init)",
+        task_method: Some("Wait"),
+        sdk_operations: &[RuntimeOperation::Wait],
+    },
+    SdkTranslation {
+        source: "Wait(exec)",
+        task_method: Some("Wait"),
+        sdk_operations: &[RuntimeOperation::WaitProcess],
+    },
+    SdkTranslation {
+        source: "Kill(init)",
+        task_method: Some("Kill"),
+        sdk_operations: &[RuntimeOperation::Kill],
+    },
+    SdkTranslation {
+        source: "Kill(exec)",
+        task_method: Some("Kill"),
+        sdk_operations: &[RuntimeOperation::SignalProcess],
+    },
+    SdkTranslation {
+        source: "Delete(init)",
+        task_method: Some("Delete"),
+        sdk_operations: &[RuntimeOperation::Delete],
+    },
+    SdkTranslation {
+        source: "Delete(exec)",
+        task_method: Some("Delete"),
+        sdk_operations: &[],
+    },
+    SdkTranslation {
+        source: "Pids",
+        task_method: Some("Pids"),
+        sdk_operations: &[RuntimeOperation::Processes],
+    },
+    SdkTranslation {
+        source: "Pause",
+        task_method: Some("Pause"),
+        sdk_operations: &[RuntimeOperation::Pause],
+    },
+    SdkTranslation {
+        source: "Resume",
+        task_method: Some("Resume"),
+        sdk_operations: &[RuntimeOperation::Resume],
+    },
+    SdkTranslation {
+        source: "Checkpoint",
+        task_method: Some("Checkpoint"),
+        sdk_operations: &[],
+    },
+    SdkTranslation {
+        source: "Update",
+        task_method: Some("Update"),
+        sdk_operations: &[RuntimeOperation::Update],
+    },
+    SdkTranslation {
+        source: "ResizePty",
+        task_method: Some("ResizePty"),
+        sdk_operations: &[RuntimeOperation::Resize],
+    },
+    SdkTranslation {
+        source: "CloseIO",
+        task_method: Some("CloseIO"),
+        sdk_operations: &[RuntimeOperation::CloseStdin],
+    },
+    SdkTranslation {
+        source: "Stats",
+        task_method: Some("Stats"),
+        sdk_operations: &[RuntimeOperation::Stats],
+    },
+    SdkTranslation {
+        source: "Connect",
+        task_method: Some("Connect"),
+        sdk_operations: &[],
+    },
+    SdkTranslation {
+        source: "Shutdown",
+        task_method: Some("Shutdown"),
+        sdk_operations: &[],
+    },
+    SdkTranslation {
+        source: "stdin-pump",
+        task_method: None,
+        sdk_operations: &[
+            RuntimeOperation::WriteStdin,
+            RuntimeOperation::CloseStdin,
+            RuntimeOperation::Processes,
+        ],
+    },
+    SdkTranslation {
+        source: "output-pump",
+        task_method: None,
+        sdk_operations: &[RuntimeOperation::ReadOutput],
+    },
+];
+
+pub(crate) fn required_sdk_operations() -> Vec<RuntimeOperation> {
+    SDK_TRANSLATIONS
+        .iter()
+        .flat_map(|translation| translation.sdk_operations.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+pub(crate) const fn sdk_operation_name(operation: RuntimeOperation) -> &'static str {
+    match operation {
+        RuntimeOperation::Create => "create",
+        RuntimeOperation::State => "state",
+        RuntimeOperation::Start => "start",
+        RuntimeOperation::Kill => "kill",
+        RuntimeOperation::Delete => "delete",
+        RuntimeOperation::Exec => "exec",
+        RuntimeOperation::Wait => "wait",
+        RuntimeOperation::Pause => "pause",
+        RuntimeOperation::Resume => "resume",
+        RuntimeOperation::Update => "update",
+        RuntimeOperation::Processes => "processes",
+        RuntimeOperation::Stats => "stats",
+        RuntimeOperation::ReadOutput => "read-output",
+        RuntimeOperation::WriteStdin => "write-stdin",
+        RuntimeOperation::CloseStdin => "close-stdin",
+        RuntimeOperation::Resize => "resize",
+        RuntimeOperation::SignalProcess => "signal-process",
+        RuntimeOperation::WaitProcess => "wait-process",
+        _ => "outside-containerd-contract",
+    }
+}
+
+pub(crate) fn sdk_operation_names(operations: &[RuntimeOperation]) -> String {
+    operations
+        .iter()
+        .copied()
+        .map(sdk_operation_name)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub(crate) fn sdk_translation_action(translation: &SdkTranslation) -> String {
+    if !translation.sdk_operations.is_empty() {
+        return sdk_operation_names(translation.sdk_operations);
+    }
+
+    let is_unimplemented = translation
+        .task_method
+        .and_then(|name| TASK_METHODS.iter().find(|method| method.name == name))
+        .map(|method| method.status == MethodStatus::Unimplemented)
+        .unwrap_or(false);
+    if is_unimplemented {
+        "unimplemented".to_string()
+    } else {
+        "local-only".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +382,63 @@ mod tests {
                 .iter()
                 .filter(|method| method.status == MethodStatus::Unimplemented)
                 .map(|method| method.name)
+                .collect::<Vec<_>>(),
+            ["Checkpoint"]
+        );
+    }
+
+    #[test]
+    fn sdk_translation_routes_cover_every_task_method_and_exact_required_operations() {
+        let methods = TASK_METHODS
+            .iter()
+            .map(|method| method.name)
+            .collect::<BTreeSet<_>>();
+        let routed_methods = SDK_TRANSLATIONS
+            .iter()
+            .filter_map(|translation| translation.task_method)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(SDK_TRANSLATIONS.len(), 23);
+        assert_eq!(routed_methods, methods);
+        assert_eq!(
+            required_sdk_operations(),
+            vec![
+                RuntimeOperation::Create,
+                RuntimeOperation::State,
+                RuntimeOperation::Start,
+                RuntimeOperation::Kill,
+                RuntimeOperation::Delete,
+                RuntimeOperation::Exec,
+                RuntimeOperation::Wait,
+                RuntimeOperation::Pause,
+                RuntimeOperation::Resume,
+                RuntimeOperation::Update,
+                RuntimeOperation::Processes,
+                RuntimeOperation::Stats,
+                RuntimeOperation::ReadOutput,
+                RuntimeOperation::WriteStdin,
+                RuntimeOperation::CloseStdin,
+                RuntimeOperation::Resize,
+                RuntimeOperation::SignalProcess,
+                RuntimeOperation::WaitProcess,
+            ]
+        );
+        assert!(required_sdk_operations()
+            .into_iter()
+            .all(|operation| sdk_operation_name(operation) != "outside-containerd-contract"));
+        assert_eq!(
+            SDK_TRANSLATIONS
+                .iter()
+                .filter(|translation| sdk_translation_action(translation) == "local-only")
+                .map(|translation| translation.source)
+                .collect::<Vec<_>>(),
+            ["Exec(stage)", "Delete(exec)", "Connect", "Shutdown"]
+        );
+        assert_eq!(
+            SDK_TRANSLATIONS
+                .iter()
+                .filter(|translation| sdk_translation_action(translation) == "unimplemented")
+                .map(|translation| translation.source)
                 .collect::<Vec<_>>(),
             ["Checkpoint"]
         );
@@ -216,9 +466,19 @@ mod tests {
         let install_path = format!("{SHIM_INSTALL_DIRECTORY}/{SHIM_BINARY}");
 
         assert!(cargo_manifest.contains(&binary_declaration));
+        assert!(cargo_manifest.contains("a3s-oci-sdk ="));
+        for forbidden_dependency in [
+            "a3s-oci-runtime",
+            "a3s-oci-core",
+            "a3s-oci-agent",
+            "a3s-box",
+        ] {
+            assert!(!cargo_manifest.contains(forbidden_dependency));
+        }
         assert!(release_workflow.contains("-p a3s-oci-containerd-shim"));
         assert!(release_workflow.contains(&release_binary));
         assert!(release_workflow.contains("docs/containerd-runtime-v2.md"));
+        assert!(documentation.contains(SDK_OPERATIONS_ANNOTATION));
         for document in [readme, documentation] {
             assert!(document.contains(RUNTIME_TYPE));
             assert!(document.contains(SHIM_BINARY));

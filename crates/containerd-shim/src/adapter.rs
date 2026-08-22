@@ -12,7 +12,7 @@ use a3s_oci_sdk::{
     UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
 };
 
-use crate::identity;
+use crate::{contract, identity};
 
 const DEFAULT_TERMINAL_WIDTH: u16 = 80;
 const DEFAULT_TERMINAL_HEIGHT: u16 = 24;
@@ -127,33 +127,7 @@ impl RuntimeAdapter {
         let endpoint = LocalIpcEndpoint::windows_named_pipe(endpoint)?;
         let client = RuntimeClient::connect(&endpoint).await?;
         let features = client.features().await?;
-        for required in [
-            a3s_oci_sdk::RuntimeOperation::Create,
-            a3s_oci_sdk::RuntimeOperation::State,
-            a3s_oci_sdk::RuntimeOperation::Start,
-            a3s_oci_sdk::RuntimeOperation::Kill,
-            a3s_oci_sdk::RuntimeOperation::Delete,
-            a3s_oci_sdk::RuntimeOperation::Wait,
-            a3s_oci_sdk::RuntimeOperation::Exec,
-            a3s_oci_sdk::RuntimeOperation::SignalProcess,
-            a3s_oci_sdk::RuntimeOperation::WaitProcess,
-            a3s_oci_sdk::RuntimeOperation::Pause,
-            a3s_oci_sdk::RuntimeOperation::Resume,
-            a3s_oci_sdk::RuntimeOperation::Update,
-            a3s_oci_sdk::RuntimeOperation::Processes,
-            a3s_oci_sdk::RuntimeOperation::Stats,
-            a3s_oci_sdk::RuntimeOperation::ReadOutput,
-            a3s_oci_sdk::RuntimeOperation::WriteStdin,
-            a3s_oci_sdk::RuntimeOperation::CloseStdin,
-            a3s_oci_sdk::RuntimeOperation::Resize,
-        ] {
-            if !features.operations.contains(&required) {
-                return Err(adapter_error(
-                    ErrorCode::Unsupported,
-                    format!("runtime endpoint does not advertise required operation {required:?}"),
-                ));
-            }
-        }
+        validate_sdk_operations(&features)?;
         Ok(Self { client, isolation })
     }
 
@@ -614,6 +588,21 @@ fn adapter_error(code: ErrorCode, message: impl Into<String>) -> Error {
     Error::new(code, message).for_operation("containerd-shim")
 }
 
+fn validate_sdk_operations(features: &a3s_oci_sdk::RuntimeInfo) -> Result<()> {
+    for required in contract::required_sdk_operations() {
+        if !features.operations.contains(&required) {
+            return Err(adapter_error(
+                ErrorCode::Unsupported,
+                format!(
+                    "runtime endpoint does not advertise required containerd SDK operation {}",
+                    contract::sdk_operation_name(required)
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,7 +643,7 @@ mod tests {
             Ok(RuntimeInfo {
                 oci: Features::default(),
                 drivers: RuntimeFeatures::current(Vec::new()),
-                operations: required_operations(),
+                operations: contract::required_sdk_operations(),
                 attachments: AttachmentCapabilities::base_v1(),
             })
         }
@@ -714,29 +703,6 @@ mod tests {
         }
     }
 
-    fn required_operations() -> Vec<RuntimeOperation> {
-        vec![
-            RuntimeOperation::Create,
-            RuntimeOperation::State,
-            RuntimeOperation::Start,
-            RuntimeOperation::Kill,
-            RuntimeOperation::Delete,
-            RuntimeOperation::Wait,
-            RuntimeOperation::Exec,
-            RuntimeOperation::SignalProcess,
-            RuntimeOperation::WaitProcess,
-            RuntimeOperation::Pause,
-            RuntimeOperation::Resume,
-            RuntimeOperation::Update,
-            RuntimeOperation::Processes,
-            RuntimeOperation::Stats,
-            RuntimeOperation::ReadOutput,
-            RuntimeOperation::WriteStdin,
-            RuntimeOperation::CloseStdin,
-            RuntimeOperation::Resize,
-        ]
-    }
-
     fn record(target: &ContainerTarget) -> Result<ContainerRecord> {
         let generation = target.generation.unwrap_or(Generation(7));
         let state = StateBuilder::default()
@@ -787,6 +753,24 @@ mod tests {
             exit_code(&ExitStatus::signaled(9, false).expect("signal")),
             137
         );
+    }
+
+    #[test]
+    fn endpoint_admission_requires_the_exact_sdk_translation_contract() {
+        let mut features = RuntimeInfo {
+            oci: Features::default(),
+            drivers: RuntimeFeatures::current(Vec::new()),
+            operations: contract::required_sdk_operations(),
+            attachments: AttachmentCapabilities::base_v1(),
+        };
+        validate_sdk_operations(&features).expect("complete SDK contract");
+
+        features
+            .operations
+            .retain(|operation| *operation != RuntimeOperation::Resize);
+        let error = validate_sdk_operations(&features).expect_err("missing resize must fail");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains("resize"));
     }
 
     #[tokio::test]

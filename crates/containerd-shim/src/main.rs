@@ -92,6 +92,11 @@ fn write_version() {
     for method in contract::TASK_METHODS {
         println!("    {}: {}", method.name, method.status.label());
     }
+    println!("  SDK translations:");
+    for translation in contract::SDK_TRANSLATIONS {
+        let operations = contract::sdk_translation_action(translation);
+        println!("    {}: {operations}", translation.source);
+    }
     println!("  Compatibility:");
     for claim in contract::COMPATIBILITY_MATRIX {
         println!(
@@ -165,6 +170,11 @@ fn encode_runtime_info(feature_json: &[u8], endpoint: &str) -> Result<Vec<u8>, S
         "dev.a3s.oci.generation-mapping".to_string(),
         contract::GENERATION_MAPPING.to_string(),
     );
+    let required_sdk_operations = contract::required_sdk_operations();
+    annotations.insert(
+        contract::SDK_OPERATIONS_ANNOTATION.to_string(),
+        contract::sdk_operation_names(&required_sdk_operations),
+    );
     let qualified = &contract::DEVELOPMENT_QUALIFICATION;
     annotations.insert(
         "dev.a3s.oci.containerd-development-qualification".to_string(),
@@ -237,6 +247,10 @@ mod tests {
         assert_eq!(
             info.annotations()["dev.a3s.oci.identity-encoding"],
             contract::IDENTITY_ENCODING
+        );
+        assert_eq!(
+            info.annotations()[contract::SDK_OPERATIONS_ANNOTATION],
+            contract::sdk_operation_names(&contract::required_sdk_operations())
         );
         assert_eq!(info.features().type_url, contract::OCI_FEATURES_TYPE_URL);
         assert_eq!(info.features().value, feature_json);
