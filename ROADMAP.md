@@ -2174,7 +2174,14 @@ cleanup after shim
 pre-generation create intent now also replays an in-flight Create through its
 exact incarnation and operation identity after shim `SIGKILL`, obtains the one
 runtime generation, and force-cleans it without task, process, bundle, or
-runtime-state residue. A post-commit Start boundary runs the exact stable Start
+runtime-state residue. The post-commit Create boundary stops the Host before
+dispatch, stops the shim after that intent is durable, submits the exact same
+Create identity directly through the public SDK, and kills the shim after the
+Runtime returns its generation but before full shim metadata exists. DeleteShim
+must join and remove that exact generation; exact-generation plus current-state
+checks expose any duplicate generation or driver reroute, while bundle,
+rootfs, process, shim, and caller-owned metadata checks freeze the ownership
+boundary. A post-commit Start boundary runs the exact stable Start
 identity while shim metadata still records Created, then kills the shim and
 proves bounded DeleteShim cleanup terminates and deletes that running exact
 generation. A separate post-commit Delete boundary removes the exact runtime

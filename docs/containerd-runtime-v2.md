@@ -378,6 +378,18 @@ original operation, delete its one resulting generation, and leave no runtime
 state, task, workload process, bundle, or shim while preserving caller-owned
 container metadata.
 
+The post-commit Create gate stops the Host before dispatch, waits for the
+complete create intent, and stops the shim before resuming the Host. It then
+loads the recorded bundle, derives the same attachment and process-I/O
+contract, and submits the exact namespace, task incarnation, container ID,
+isolation request, and stable Create operation identity directly through the
+public SDK. After the Runtime returns a Created record, the gate verifies its
+exact generation, driver, isolation, and PID, kills the still-stopped shim,
+and requires DeleteShim to join that committed result. Both the original exact
+generation and the current container identity must become NotFound, exposing
+any duplicate generation or reroute, while process, rootfs, bundle, shim, and
+task state disappear and caller-owned container metadata remains.
+
 The post-commit Start gate submits the shim's exact stable Start identity while
 durable shim metadata still records Created, then kills the shim after the
 runtime reports that generation Running. DeleteShim must bound its kill/wait
@@ -455,7 +467,7 @@ test fails if any matching task or container remains.
 - qualify the supported containerd version range from exact release packages;
 - publish signed or checksummed shim, host-service, agent, and driver assets;
 - retain a machine-readable compatibility record;
-- extend forced cleanup from the qualified in-flight Create and post-commit
+- extend forced cleanup from the qualified in-flight and post-commit Create,
   Start/Kill/Delete/Exec/SignalProcess/Pause/Resume/Update boundaries to every
   remaining lifecycle and process-I/O mutation boundary;
 - run the same suite for every driver profile advertised through containerd;
