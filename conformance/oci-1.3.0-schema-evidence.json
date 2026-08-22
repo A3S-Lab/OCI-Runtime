@@ -1,0 +1,902 @@
+{
+  "schemaVersion": "a3s.oci.schema-evidence.v1",
+  "ociRuntimeSpec": "1.3.0",
+  "upstreamCommit": "92249139eea7161e13745abd4cb6d0ea02a3227a",
+  "bindings": [
+    {
+      "description": "OCI State fields and the four standard lifecycle values",
+      "itemIds": [
+        "sha256:e7e38bdb35fd57790169da8bd48dd931b88baec042b6ee11e8fb447a9c99a082",
+        "sha256:019806653396d6dac0172fde7f245860b3b16a3242586a6efbf843eb408db308",
+        "sha256:fbe6c61193cf75f52a204ebd50387c5d09701fb0931229a05b4e0e8d25ada1fb",
+        "sha256:788c7d1a6719585e1f625dfbf3c75d359cd50157d852163964343b17d40637ba",
+        "sha256:5b953c07834b18d82d35a131880a679f2d7edb1f418f5c58ec406c2133d21c52",
+        "sha256:00ced87188818a733933c22df314ab6d5d82ab12668c5baf4fc7d4623ced1210",
+        "sha256:0e0fe2380bb0963cb7dfb2968de9c864587338c91e9b7165a21e00861645455a",
+        "sha256:f1faf9f70b3a087e528534565ff02f7b777c2566c64494cd43204ec3dcb35059",
+        "sha256:8df466acbcbe5985b0931a92388a5664ba0fb9f5f6e118707143bc1d19ec4e25",
+        "sha256:048a6a78f6e6dad71f2c936379ee37df43a2a956339c336dd4ac9299b82a2ea9"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-lifecycle",
+      "ruleIds": [
+        "oci.runtime.state.annotations",
+        "oci.runtime.state.extensions.omitted",
+        "oci.runtime.state.id.unique",
+        "oci.runtime.state.pid.lifecycle",
+        "oci.runtime.state.required-fields",
+        "oci.runtime.state.schema",
+        "oci.runtime.state.standard-domain"
+      ],
+      "testIds": [
+        "schema::tests::invalid_state_returns_stable_sdk_error",
+        "state::oci_state::tests::builds_schema_valid_state_from_exact_bundle_contract",
+        "state::oci_state::tests::resume_preserves_non_freezer_annotations",
+        "state::tests::core_lifecycle_is_idempotent_and_generation_safe",
+        "state::tests::expired_deadline_and_invalid_pid_do_not_commit_state"
+      ]
+    },
+    {
+      "description": "OCI Features document and Linux capability report",
+      "itemIds": [
+        "sha256:f9767af7aacce01a0859e6e76f69178b5bc37cab4845a7fe5e068278160d04c4",
+        "sha256:b3e78e6ebd8205f46756adcd61ee8ad3f5a68daa9506ffbfefa0afa55331a8dc",
+        "sha256:9dacef9580824acb8d5de1be47d4b800b83ca3791a56ee0d92dc045ed4291902",
+        "sha256:d48dfb0a50960016a85241320a08eb4d3e3cb1e247f1b466f8b4efc20acb7976",
+        "sha256:d3cca4864665222d16de02dbd471996fc96a84fa15178feeb8fff03d57f3b776",
+        "sha256:d2520064997905466f3cd8c721d4bc1fb0043ba84909172a7ac4204ff409e528",
+        "sha256:d4d4218fc14775c2b8024b04c8a760a3916d9cb30d1f9ec67119007e931db9d9",
+        "sha256:5c4f3c32850e729c8567ed21a16bcc68a4f6b95f743af35cb61998f573374469",
+        "sha256:7062847c01f695c1ffeb80d69bbe2757252653f20489e78bedb2237a5163f833",
+        "sha256:9e5caf04395bb28c069327674a95393a5b4ff18691027ff1917dbbeca69a7631",
+        "sha256:e6d5727192ce41676ff41b0153aaf4327468981a79920d7b01f7798aea541902",
+        "sha256:6e1a5d98e3b2d1b6efbe563820ec604fb2df292c82f3b7d7afff17becae373ec",
+        "sha256:eb8f0f5b65b8edbebfe7987c664d0abfd52d302cdb138983272f762af072a8a9",
+        "sha256:67fd61f56f5f20b97e0bb44492de465d8bf5de5018cedcc697c0b6248f74e589",
+        "sha256:2cdedc4120a11393a07319a602dba5febf3e1309a120c1e04d30606af131905e",
+        "sha256:1ea3269fd247382f2271c3c1fbceb2230be0e2cfed9da4a2551e7d3dbf1f2ce5",
+        "sha256:e4b00b046458fd75dc8849260f8b5c1f5d69dae603a4fc1fdfdad1761ca0ceb2",
+        "sha256:6d02e82d60fae20e4e4b438fbfbb72c9805c4d6c381c4ac2a643dc364e217be6",
+        "sha256:564b7cd74d405c31bc42a1a7d7c3eda844ec93fa4a0528e77addbdc886af18fc",
+        "sha256:0c174f80b4fbb58107315e1fb04be90f38c2e87a745d8d3493005ba7a5495687",
+        "sha256:28eb16c8959d4b0434b3f68bb62d3e53fda56f7e0c2463aaf202e3a464e17a49",
+        "sha256:bc8cefc25dfafa002897baa05dfaa033d5bfcee98f3822f5711129f1bc374a3b",
+        "sha256:2b68528322b17b8981d3abace8c955400a79229496ad2fd9a7b0df6a843eaf99",
+        "sha256:dde69f6cb16f7e3685716d8ac92dd880d16ae2d1aed83fb3aac6995107b9fe02",
+        "sha256:59fd3bd884e4d154f4258072d14fc5f63d120430bae806798667cf818c6fdbb5",
+        "sha256:03afe45f3d911b6710bc065c314ace416b474dbc85ca45f407f4fc1bdb9cdfc4",
+        "sha256:e08860006469996f9a5c01760e2e62938f1730a24ff3ce8dda94162842e5ccb3",
+        "sha256:31a5968c10e83f5ccfd2bec9b0795836c726e71c76e1c712aac52391c006df09",
+        "sha256:5d30c4e550d79e5e2f43a8d60bf8244ad0483c6e92536e3b674060568c2b3e85",
+        "sha256:4555ba2f57ae079342312296f101bf24a19f4cae60949e8f4d99ab448fd6421d",
+        "sha256:7e827b4d49444e16e052e1e402d24fc8cd065f840ff65ef6f339aea4021b15c1",
+        "sha256:94abc0d310ff93bf2ae1e0c4e36a79bbd3d33149c6ec34cb192462d8a03df7ab",
+        "sha256:16ef4bc4f43a8b9829ea6fe4e6fcd97effc449436c8ca8a39afb7bc8aba3def9"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-feature-report",
+      "ruleIds": [
+        "oci.features.document.schema",
+        "oci.features.hooks.accurate",
+        "oci.features.linux.available",
+        "oci.features.potentially-unsafe-config-annotations.accurate",
+        "oci.features.service-stable-capabilities",
+        "oci.features.version-range"
+      ],
+      "testIds": [
+        "schema::tests::matches_upstream_v1_3_fixture_expectations",
+        "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
+        "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
+        "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
+        "service::tests::reports_only_operations_that_are_currently_implemented"
+      ]
+    },
+    {
+      "description": "Caller-provided OCI VM launch configuration",
+      "itemIds": [
+        "sha256:06f4b057fbe4e6b509fa4f52b7b88bf239f7ad9939351e7487115ecff733139b",
+        "sha256:5a064c9185c04f26dff9909f496b0037ca45f588aebdc4ff8956a65956b53d85",
+        "sha256:bff5aff53a3ffd2c61c8f35e55ab1128ef132a01aa3e0e062b8d4862438e2946",
+        "sha256:6a29179bb3c457bab8dfa66284e9efd7f2eef2721e94c43b8fce9bd6942d4557",
+        "sha256:5d86cb2a39f91750f8a059cd90c6c17c740a50cf95e48887a4582d1a911243bf",
+        "sha256:8b982e762f5b561c98cf0a9575f7347cde919269979244f89bc7586bb53c4452",
+        "sha256:295af9f53ffe36ada2f3d1deedcc93e31be9fe26c0896806bc736027f89de15d",
+        "sha256:1272c02f8bf27df0306c1203980aa9640d0fd877fe5d3f671412186d00341376",
+        "sha256:24bcf85429384947b44862a306bad473abba6c99bb91b08d7710d8b82d6c2bdb",
+        "sha256:b24567880e9b2bc46ec76f51da76322615af723718aa6b1607b907648d5bf236",
+        "sha256:89e7eaca4692bcf9f31e2d53b7587c1de8dde528909851a752913ca9c0b19943",
+        "sha256:0a131e708fa148cc452495a60a075e61ddb4a3e035c99d0bf8cb5d42af45c125",
+        "sha256:759f6a6cd2816f258e78e5ce9a528c1cd5225033a0d8ef0820c7ed6ef5635c63",
+        "sha256:d41518cb1fb318d99a3a2c3dbc967f452d9330f009e3ca6760d6afd48288ee82",
+        "sha256:eb6a6c1c5a4285ab970c607accc4df1b85e56ed5b791089a088f609a993f8542",
+        "sha256:5a8fc82c98256b601c9b3c832e50500c1450e6c5ed14b215cbc7b5230495726a",
+        "sha256:35d748d6c08361bff52d72f4a5e5051822969f2ee010cd476e30415a63c0f6f9",
+        "sha256:d9f2a5e99260a2dd6abe368e5acf071eeb227688a9eabc8b519b6d867dd7e155",
+        "sha256:6b3a54e11bed7e7d7b7fd4035ec45b118dd277d3d60d88075f50f07febd93579",
+        "sha256:7149448828ce25eb59076d833312988cd69564ecea0f87e57d0d8f5cd5b9dcef",
+        "sha256:97db5be5c5842634a7afa166441b20f12b46139d670128410866933dfb77e0f6",
+        "sha256:156997482ebe380675c77fdcee556984d7a7aa3b90b45925b0f750a3364610c7",
+        "sha256:bf63c59ba0c81d865621a8ba7ceedc55aba03a2af3d673669aeb2952db9d74e7",
+        "sha256:8ab77202e3fade1e03383e3c2be7fbe13d27bfb2e4888f780f55608a46cbcded",
+        "sha256:f14b467e74050326d17459e4a46245071197ff4f1ddab3ec213a2d5782c60f62",
+        "sha256:7a96c7f43605ea1f627805b4509658ebfc4340defaa59cfdea1c4f22cd7fbaf1"
+      ],
+      "disposition": "rejected-unsupported",
+      "owner": "vm-driver",
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned",
+        "oci.vm.parameter.no-nul",
+        "oci.vm.path.absolute"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ],
+      "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
+    },
+    {
+      "description": "Configuration annotation map preservation",
+      "itemIds": [
+        "sha256:bb4b0ede3907d989bcd47a3164d5907ff628e53e0c24368ae663f070d35fd94e"
+      ],
+      "disposition": "enforced",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.common.annotations.unknown-preserved"
+      ],
+      "testIds": [
+        "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "schema::tests::validates_annotation_contracts_for_configuration_and_features"
+      ]
+    },
+    {
+      "description": "OCI configuration version admission",
+      "itemIds": [
+        "sha256:6110d9d15db5e3a14c4c60532d29492f96ace166f4d8a1d4a6684acc19699999"
+      ],
+      "disposition": "validated",
+      "owner": "runtime-bundle",
+      "ruleIds": [
+        "oci.bundle.config.version.required",
+        "oci.bundle.config.version.semver"
+      ],
+      "testIds": [
+        "bundle::tests::accepts_both_advertised_specification_version_boundaries",
+        "bundle::tests::rejects_future_specification_version"
+      ]
+    },
+    {
+      "description": "Applicable Linux workload platform section",
+      "itemIds": [
+        "sha256:c3091c6e4d668416f7c4a2525030ef86658e79fd4cc7b0d4e06df9df2d99109b"
+      ],
+      "disposition": "validated",
+      "owner": "sdk-semantic-validation",
+      "ruleIds": [
+        "oci.common.platform-sections.accepted"
+      ],
+      "testIds": [
+        "semantic::tests::accepts_applicable_linux_and_vm_platform_sections_together",
+        "semantic::tests::rejects_native_non_linux_workload_sections_as_unsupported"
+      ]
+    },
+    {
+      "description": "All six POSIX hook phases and hook command fields",
+      "itemIds": [
+        "sha256:8598da57d359ce18538692aa4f73cf090cc86b279cee977784699fb9e4b17e64",
+        "sha256:dbe91289aa4fcc97d917a684408eb01c0936ccd9df9ec52f4d4a500d1829b95a",
+        "sha256:2b639bd8728618f63337ebff728c69e6ca906218693151e5ac18832217ae6b4e",
+        "sha256:4fba78ea01749ef8b6cb92eaccdf02473e184c741e94b5d7baaaba778278ceb1",
+        "sha256:f9f902c304e40fba8ad7c5ee3006c23a7d6415f2126c924ad03e90452eec29a2",
+        "sha256:38dda6fc5be7a7990d9ba0ec4f5e5e42f9a93514016a52808a04568115878ba1",
+        "sha256:f57568cb01eaf79cd612f132127d150aa7d3c42d0936fd23008112b96520585c",
+        "sha256:1afdec727ab393f9bdecd6ff335a26f8d38fd5781715214c4a8b8afd148f0aa9",
+        "sha256:c26c8a7faf7bf74f3d461251b8f3b8a0855246929ef76d332a83880e852b88b9",
+        "sha256:62ab2fa6f18a26b4683259be4d426143152950069d200637d0869f979d32e412",
+        "sha256:bc5602b41048adf54da36b1767a9c20f274e456bdd5d1a62af36fefc105fcaae"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.hook.path.absolute",
+        "oci.hooks.command",
+        "oci.hooks.container-namespace",
+        "oci.hooks.failure-policy",
+        "oci.hooks.lifecycle-order",
+        "oci.hooks.runtime-namespace",
+        "oci.hooks.state-stdin"
+      ],
+      "testIds": [
+        "executor::hook::tests::hook_planning_accepts_every_phase_and_rejects_unsafe_inputs",
+        "executor::hook::tests::hooks_receive_state_environment_and_exact_order",
+        "executor::hook::tests::hook_timeout_kills_the_supervised_process_group",
+        "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates"
+      ]
+    },
+    {
+      "description": "Linux hostname and domainname enforcement",
+      "itemIds": [
+        "sha256:86ce29631eb687ef69d662401e6ceca3a6eb38d7858eb3a1e18e94dd2837f0a6",
+        "sha256:06fdb4f0553b7bd8e24a738103b7a480fd53677745634adbab524a0298a3a6eb"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.uts-names.exact",
+        "oci.linux.domainname.requires-uts-namespace",
+        "oci.linux.hostname.requires-uts-namespace"
+      ],
+      "testIds": [
+        "executor::plan_tests::accepts_a_new_uts_namespace_and_bounded_uts_names",
+        ".github/scripts/native-linux-smoke.sh::hostname-domainname-readback"
+      ]
+    },
+    {
+      "description": "Ordered mounts and exact ID-mapped mount fields",
+      "itemIds": [
+        "sha256:18e9010eccbaffaf4fa0489a7538124491b5bab4e02d0d0431ba7cda30c2b784",
+        "sha256:7766b3a7ae9cd8ec42e041b1f77e579d00941f1b9c34b39f79f7ac63ce7c8b92",
+        "sha256:ea305af09855dfba5cd008f8bd25a77ccb92c617aa53683382e811903add6da6",
+        "sha256:d5ea63be7258bb04e52c0c0f39b409b483099fe3bfbc957e640bbd71ce871e30",
+        "sha256:d00cf9b074bea2307c600c742804317705b7f7cd814a47e4f7cab314894ac82c",
+        "sha256:5b144b8a785ff46a53fde274d77d6b416f3c7d420b4f1e1cfdefade23d661956",
+        "sha256:de91f27321542111b8274c2b71fe581ac79a5021193fafd611a84d4338e981ac",
+        "sha256:e26c29e6f06e31a92624973959c6f7bf76cd4095ecab6e9991a283cefc03832f",
+        "sha256:e154494a964505baec571cf035be57f020cb0d863366ed2fc6b11573ebf50594",
+        "sha256:ecce98b5a0caca1526f70264bdc97f928edc716e8e87a6286aa4d5c3ba84bffd"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.mount.destination.non-empty",
+        "oci.common.mount.destination.root-relative",
+        "oci.common.mount.id-mappings.paired",
+        "oci.common.mount.listed-order",
+        "oci.common.mount.optional-fields",
+        "oci.linux.mount-options.idmap"
+      ],
+      "testIds": [
+        "executor::mount_tests::preserves_mount_order_and_normalizes_relative_destinations",
+        "executor::mount_tests::plans_explicit_idmapped_mounts_even_without_an_option_hint",
+        "multi_container_report::tests::rootfs_mount_success_requires_enforcement_and_cleanup_evidence",
+        "semantic::tests::accepts_validated_normative_cross_field_boundaries",
+        "semantic::tests::reports_common_cross_field_violations_with_stable_rules"
+      ]
+    },
+    {
+      "description": "Declared root filesystem path and read-only contract",
+      "itemIds": [
+        "sha256:f5c2871d31d53d3a4859a956e4a59abe68104530558067f291cd4507c606a80f",
+        "sha256:ec867f64ddc56066f516c8aced265cdbc792e58a2963841a749a288055080532",
+        "sha256:85346078bf4f02034561dbf32abd9f0fbec088c065fb23a4067152e56d9f9d71"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.root.directory",
+        "oci.common.root.path.non-empty",
+        "oci.common.root.readonly",
+        "oci.common.root.required"
+      ],
+      "testIds": [
+        "executor::init::tests::rejects_missing_or_non_directory_rootfs_before_namespace_entry",
+        "executor::rootfs_tests::accepts_complete_rootfs_enforcement_in_a_new_mount_namespace"
+      ]
+    },
+    {
+      "description": "Supported Linux init and exec process fields",
+      "itemIds": [
+        "sha256:20978bb6af1ee245e6fd937fa5d0668d278fc40f85a03f29399d183415147553",
+        "sha256:2ee635bf17e5fbaacf3732a80902e4ff97172cfb38664249f15c70671735503c",
+        "sha256:fe0fcc4d1cd1cdc1f80044cf8363019d2ae57f41c24c7882d590018ca17a9058",
+        "sha256:369e52a893294055c2d544381a7ddf4bca4eb6c01951963afb939972b04a2457",
+        "sha256:8b8d1a2fa962c0795479afd006e8b310e6815e11119ac9bf08923f54ca5dc7ae",
+        "sha256:f93a7982ce5aa185c14af867647e155faf8b8f2c0efbd805f683623f92ad2529",
+        "sha256:71ba53301d1f2438a17ad8b54097f82339aa3fb68f89e87a6e5dcc8039cdfd03",
+        "sha256:93f8086c28b359f5979331afe94a72f76a27e495dbaf36f951e51ca3c66e49c7",
+        "sha256:34f87ac2e5d75144cf6ea3c77a819660708ac56e72d3e236505fde9a6163ff26",
+        "sha256:460b4415272e2da00e4489bcddb30d4de5bc0bdd980476326c8bfb95b3a4efc1",
+        "sha256:62f77d114ea4adc30f2547860779e1e2dcc623f88caf9cff103d8be5ca92c625",
+        "sha256:6e8a6cb67b4d24e9dbe9714c79bf304e4fd9139287965fd993aeec540aac0efa",
+        "sha256:c4524c15d23facc3ad79635fc1c8cbf2e045660ea798f404b1ec281d38a13975",
+        "sha256:ad6894def8d4d5476e4385b0b9cda1814c40faa8c7cd721451bf2fbe17694cc9",
+        "sha256:26ef111d3c1eec8a89919ff22ce0a7b71fd721a46420f11ea05ca83cacbe0919",
+        "sha256:3b300466da9bf6991deb5a595b124e892180e0e8feb9c9e38d8e914afd7ff229",
+        "sha256:569c79509f4752f5d6f562c477c695061ade2088b62b6abdc27399d237129149",
+        "sha256:b36e556d72bcc3562ef49f2fa56b83737541e8d5a0b1f2192f0beb4146d7606b",
+        "sha256:b3ca0c569b37aacd69f979e0c2853ce52a54a511b8f751cf1932738e7b4532c7",
+        "sha256:c38f634f3fe0845d84483f237c0b72d569d64da7e9acd318cc5d51399345895d",
+        "sha256:68c64d891d62d727fc308575fd27965b64de73261ff4b3ad0f8cef9ae71436c1",
+        "sha256:9e2a12f42793681d607449c6a7a7f5f2b412803bc65e6c71808ba2effa3b79be",
+        "sha256:b15a492a043d7c11ec8fc1b4d399de13ae47144cb9176ad441583cccb7a5286a",
+        "sha256:983e98d9a7a357ddfaa70ac1297f26e275e41b93721548a9a015deb752b52150",
+        "sha256:56912e6d9304db468cf883eefd70bdea48dd4021ef9601a741e7ca97d3574284",
+        "sha256:59125d58aaabbbd508ef1a80c91566cc4f7ccf9c440f8d17257adddc00e5638c",
+        "sha256:279d4545cea5fbd6247c5af788a2800169cc35a3153d1fa70aa57450da7c4c64",
+        "sha256:6cb2439aa570e26da8d35be3499278c45aeea8acb6527c76a916841da89229c6",
+        "sha256:bbbcf644d6c1a475c393e99019efebf0235dfa44c8153973e75ad06eacd3be4c",
+        "sha256:4d91ff1f9a1202bf5670303f34392846aa59d7f59dc7f795681fddddf2ff85ca",
+        "sha256:08783dfc338a8bcecb80c1be4a4e1e51fbf9e5e0fd3d05c9359d89653b8e74d5",
+        "sha256:ad884ebb7539a14883cd2cc449eec7df889d541d30f1e5b3f86c0af60da512d2",
+        "sha256:1df3f7a0b685567d567c51d37de4c78385df5306707d05ca7f96561467989a13",
+        "sha256:841e6eb3c103dff5b2a505e90c3f7c223cd5677c522ecc2e4fd5bc6f354aa611",
+        "sha256:2ea5c1f95abdfc2035741950aecf84af840f7306c6415429859a2888415102d7",
+        "sha256:aaa88b73b497e8cb2ea7672733bb3b9ca1e9f63afa268f387ca32e97bad2f9e3",
+        "sha256:4c79eb01450e66f610c8fcd5a83967d7bd9d66d7e30752f979d5fb71bf564d45",
+        "sha256:010d8b954e9b42c812b20c1b5b6f265df9bd24347184c7bccb7149bcb77c4eca",
+        "sha256:2af802fb98fb4ef52c6f36fad6069b2648e6b0cc3c31190ab376c0192dd48c96",
+        "sha256:2db6b21b82fab53b522830bd7889be523576e0707eeef3a3bc1055af60b1dda4",
+        "sha256:6abe2de2e8154119412a6c7632daf9349f2b15f4d4e5e7ca504b2a850c6a19cf",
+        "sha256:47f0873b52601ea743e0577d17f1f24ed7b19b53cc8d8f28c9d20ed40aec5e7a"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.common.process.args.required-linux",
+        "oci.common.process.arguments.exact",
+        "oci.common.process.capabilities.exact-sets",
+        "oci.common.process.console-size.applied-with-terminal",
+        "oci.common.process.console-size.ignored-without-terminal",
+        "oci.common.process.credentials.exact",
+        "oci.common.process.cwd.applied",
+        "oci.common.process.environment.exact",
+        "oci.common.process.no-new-privileges",
+        "oci.common.process.oom-score-adj.kernel-range",
+        "oci.common.process.supplementary-groups.exact",
+        "oci.common.process.terminal.default",
+        "oci.common.process.umask.exact",
+        "oci.common.rlimit.exact-values",
+        "oci.common.rlimit.kernel-mapping",
+        "oci.linux.io-priority.idle-class-data-zero",
+        "oci.linux.io-priority.range",
+        "oci.linux.process.exec-cpu-affinity.applied-around-cgroup",
+        "oci.linux.scheduler.deadline-fields.policy",
+        "oci.linux.scheduler.deadline-order",
+        "oci.linux.scheduler.flag.policy",
+        "oci.linux.scheduler.flags.unique",
+        "oci.linux.scheduler.nice.range",
+        "oci.linux.scheduler.priority.policy"
+      ],
+      "testIds": [
+        "executor::plan_tests::plans_exact_common_process_fields_for_init_and_exec",
+        "executor::capability::tests::plans_the_exact_a3s_box_capability_profile",
+        "executor::cpu_affinity::tests::applies_exact_affinity_in_an_isolated_process",
+        "executor::io_priority::tests::plans_every_kernel_class_without_silent_normalization",
+        "executor::no_new_privileges::tests::applies_and_reads_back_in_isolated_process",
+        "executor::oom::tests::applies_exact_value_in_an_isolated_process",
+        "executor::rlimit::tests::maps_every_oci_resource_to_the_architecture_libc_constant",
+        "executor::scheduler::tests::plans_every_policy_and_flag_without_silent_normalization",
+        ".github/scripts/native-linux-smoke.sh::common-process-readback"
+      ]
+    },
+    {
+      "description": "Known process controls unavailable to Linux workloads",
+      "itemIds": [
+        "sha256:5d03aafe5cbea0c8abba2710603f85b25f7d24a0d98803da0df1cc09dfa69cbb",
+        "sha256:e2cf818a86e8396fb2b7ca0c7efd1fc4403edfd85cb064a30c9e8309811a945e",
+        "sha256:cad8328d94fd8b7daba8d410dd374dff3ec6a09af607d1adf620ae7bd5b6a383",
+        "sha256:35da5e3d0659496a17acbee06195bfcc266a8bcdb7f43266c81de17a0d9d7ab0"
+      ],
+      "disposition": "rejected-unsupported",
+      "owner": "sdk-semantic-and-runtime",
+      "ruleIds": [
+        "oci.config.values.invalid-or-unsupported-rejected",
+        "oci.platform.windows-process-field"
+      ],
+      "testIds": [
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "semantic::tests::rejects_windows_process_fields_as_unsupported"
+      ],
+      "rationale": "Linux workloads reject Windows commandLine and username fields plus unadvertised AppArmor and SELinux process labels before execution."
+    },
+    {
+      "description": "Linux cgroup v2 path and resources root",
+      "itemIds": [
+        "sha256:d6e32b14521b5ec63fa7bf8c5748e97cac8317440c8f51c49c8f1d17b3f75a11",
+        "sha256:04903b68c37ef0aa1af9c4d7e774431ee0f17a103c79b56cf61276c9c6fa3b26"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cgroup.fit-check",
+        "oci.linux.cgroup.v1-to-v2-conversion",
+        "oci.linux.cgroups-path.absolute-mountpoint",
+        "oci.linux.cgroups-path.safe-path",
+        "oci.linux.cgroups-path.stable-location"
+      ],
+      "testIds": [
+        "executor::cgroup::manager::tests::resolves_absolute_and_relative_paths_from_distinct_stable_bases",
+        "executor::cgroup::tests::reports_an_unavailable_cgroup_control_as_unsupported",
+        "multi_container_report::tests::cgroup_path_success_requires_exact_absolute_relative_repeat_and_cleanup_evidence"
+      ]
+    },
+    {
+      "description": "Linux cgroup v2 Block I/O controls",
+      "itemIds": [
+        "sha256:560f6575310ba90601088a6cc96da49490c5f1e3a8f5c656b7897669c556f8de",
+        "sha256:41c3df3a0e5c4cc970c253d0f27bc3de179d7a9bfc98fb390e48f35ad4be5b8b",
+        "sha256:67ef08d662ed097b687bbab3b86e530b8009b42788e5b83bc71535917ff91804",
+        "sha256:c06179990a324265881f700b9aea4b21ee2f3dda2901c1663c142d9c5880ae39",
+        "sha256:4b8b61b7e765dc3d708527dbc5ba71b997dd08d8d3cf43834f4e10605b74f68f",
+        "sha256:95af99517de7acf8627a365f2dc0cf5fa74631b494d446bdbc4e07bf27822e5c",
+        "sha256:8a041b397599d223e43bf66cfb1ed9985e7b7d67505d4ae1a5cb4f83b10f68c7",
+        "sha256:3afd86ecd19b94a93ad3d97306a015f8dce9e96a1a5a61c3a8216d7657fc61e7",
+        "sha256:732ca41437295eb9ae4556b9a1496f90e56e5da77173606605bd5ae0e5685aa3",
+        "sha256:bd440818cb38dccb83519dbb57a912decc34d20f069ce285fafbed17521b042e",
+        "sha256:1b373dd705c6b292721f6fedce13d0f6b17469c28f919f50ffbdf915a637e242"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.block-io.cgroup-v2-controls",
+        "oci.linux.block-io.device-identity",
+        "oci.linux.block-io.throttle.rate-required",
+        "oci.linux.block-io.weight-device.weight-required"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::plans_complete_cgroup_v2_block_io_controls",
+        "executor::cgroup::io::tests::prepares_exact_keyed_rollback_commands",
+        "executor::cgroup::io::tests::applies_reads_back_and_rolls_back_real_io_max_when_requested",
+        "schema::tests::requires_block_io_device_identity"
+      ]
+    },
+    {
+      "description": "Linux cgroup v2 CPU controls",
+      "itemIds": [
+        "sha256:18dfd547a6b54ce28a4919fc3da66abfed342e3c660a8007d6394e6a84aa46f9",
+        "sha256:ef9cc38a6dbc0a8437b4483426fda86aae68ea5c8c3cc1ca22511d79a283e5ef",
+        "sha256:c2b8a49bff33ec62935db1691b9732396bcd620617f2842f28f4dbecc3cfe6a0",
+        "sha256:ac99c12dacf80e4af1dc96035c1f33934725787e2ae855ea47e8878f84ecf422",
+        "sha256:3eff81815352e831fa3d573e2b88cfece2244f03358f7e3b5a1a0796614a8423",
+        "sha256:17fab4f299d248675777a82cb6092b109f6f69a914b55ba018108d21857c4199",
+        "sha256:1c8b2faa7ee667cb00d42d00e61b33ac6dd735f7c774723fd08a2591d173de65",
+        "sha256:0582c45887c2f9d43ef7c27d40fcd6252c3bfe290507f3beb0949f6d3cd0c687"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.cpu.burst-at-most-quota",
+        "oci.linux.cpu.cgroup-v2-controls",
+        "oci.linux.cpu.idle-range"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_complete_cgroup_v2_cpu_controls",
+        "executor::cgroup::update::tests::orders_cpu_quota_and_burst_updates_without_transient_invalid_state",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "description": "Linux cgroup v2 memory controls",
+      "itemIds": [
+        "sha256:40b1ec343052218db4ec58faad1a1e65bd3494866aa4243069739469f1b92e4b",
+        "sha256:f769e83dd4d92c8c83b936716ef75f0a300e4a19dfa36e4ed3ac990cd81930a2",
+        "sha256:b2073ca7aecd87ae3b22fb392ab90e79ca21fa571c988b46f1993a57f574da8b",
+        "sha256:7160f89cfd59ed5cb3f32ec3c912131b588f0cd931aa7f956c9504224317ab4c"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.memory.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_memory_controls",
+        "executor::cgroup::update::tests::plans_zero_and_unlimited_memory_updates",
+        "executor::cgroup::update::tests::resolves_partial_updates_against_current_cgroup_values"
+      ]
+    },
+    {
+      "description": "Linux cgroup v2 PID controls",
+      "itemIds": [
+        "sha256:09b2c9162b469132f5e2a706f9c938e34fefcf3909db77e7ac3a8765e64c1d85",
+        "sha256:9acf0b94e24f88872deb8a67b9bc9e001940f5db11cf9f112eacaf4a9c399fc5"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.pids.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::plan::tests::plans_zero_and_unlimited_pids_limits",
+        "service::tests::control_plane_operations_are_durable_and_processes_are_exact"
+      ]
+    },
+    {
+      "description": "Linux cgroup v2 HugeTLB controls",
+      "itemIds": [
+        "sha256:0d5dc33f3091fb15d50e12b458378ed5c2d46548f3cd40775ec606a153d417ed",
+        "sha256:9200db95d8db702ea59d49d5e523771eaae426100c05b4609025962bfa9e3287",
+        "sha256:d559cbf884db25aea6201029235a5c8814ac25c5a930c5674eccacceb2bf0002"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.hugetlb.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "bundle::tests::preserves_the_full_normative_hugetlb_uint64_range",
+        "executor::cgroup::hugetlb::tests::plans_exact_fault_and_reservation_limits_for_available_page_sizes",
+        "executor::cgroup::hugetlb::tests::applies_hugetlb_limits_with_exact_read_back",
+        "executor::cgroup::update::tests::rolls_back_owned_dynamic_cgroup_settings_in_reverse_order"
+      ]
+    },
+    {
+      "description": "Linux cgroup v2 RDMA controls",
+      "itemIds": [
+        "sha256:6f98d7586917daa99b46abed1f1391edce5cea83c2ada467d72d57248de2e936",
+        "sha256:e5fae329f793f852c66875b732b5c7ba172e99e49daca1ee3dbc1fe827fc2385",
+        "sha256:ecca3c327228292671f3184a9204fce79342f6dee253b9f157a810aca38a50d3"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.rdma.cgroup-v2-controls",
+        "oci.linux.rdma.limit-required"
+      ],
+      "testIds": [
+        "executor::cgroup::rdma::tests::applies_and_rolls_back_complete_live_updates",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "description": "Linux cgroup v2 unified controls",
+      "itemIds": [
+        "sha256:8dcbdd27df4a54ff027227b89c4bde283526b84641469bd311dd9cc393180dc4"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.unified.cgroup-v2-controls"
+      ],
+      "testIds": [
+        "executor::cgroup::tests::preflights_and_applies_unified_create_without_requiring_read_back",
+        "executor::cgroup::update::tests::applies_partial_unified_updates_and_skips_readable_noops",
+        "executor::cgroup::update::tests::rolls_back_readable_unified_settings_after_a_later_policy_failure"
+      ]
+    },
+    {
+      "description": "Linux device nodes and ordered access policy",
+      "itemIds": [
+        "sha256:e4f3d3d81e6537febbd6e6c2e75322cd25b1897281bc61611f8384f9b717f203",
+        "sha256:be74091b617c02f7d527d32937296b04b96e7c07638d7123d6ce7c548e319fe8",
+        "sha256:52dd3c38c46c696e35c95ffd66e66eda11299904f1f85a2d2062aa424395ca45",
+        "sha256:334a01ebb4e0709ed3c401b024fd5e49165c0bd3c071d9ba2527aa9fdeff5191",
+        "sha256:5de6691d7dd68f0a73a6ee4c93f63bb7c18db6c7e590c2eb29e3992dba07333b",
+        "sha256:d5f1372f89a869d3f0d5a0d9ecb3eeed5de1ae8ca396f06b99c2e5a5547be0b0",
+        "sha256:9dd8970b20dc4cd0983440da6471435e32b0f4c48e475dfdbe96876e3a082ab3",
+        "sha256:3d83355bc5c0b74e5436d33f6887ae49a42642b5c0548dbaa8d8e9d3fe2fbfbd",
+        "sha256:1f3b4999b527d17cb831b2fd3f084b21b8d6d00ed35edbcfda807438c83cf588",
+        "sha256:629c80465ff349b47e1ec1ec4da1b07b7f87a8f9eaab4d86777bffbacbfcc31d",
+        "sha256:cbb2140850d44b6967caee84d4ef0a9698f0c3c149b4f67015bad26875c6ffd5",
+        "sha256:e0dfc90edf4c59a66c74e14f871004ac3ed0a43c30acbb2e7465559a5c688030",
+        "sha256:4e8b6ca1a96014f786776b3ec92e9c1a2546d13bee4c8ee1a67a677e848e335d",
+        "sha256:89093d803ae49ced44ccd43762694bf64a89d4c7bfcf70b8b1438eef20709a6a"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.device-access.mask",
+        "oci.linux.device-access.ordered",
+        "oci.linux.device-access.type",
+        "oci.linux.device.inventory.closed",
+        "oci.linux.device.nodes.exact"
+      ],
+      "testIds": [
+        "executor::device::tests::plans_all_oci_device_types_outside_dev_with_exact_metadata",
+        "executor::device::access::tests::oci_inventory_is_a_fail_closed_upper_bound_for_every_device_operation",
+        "schema::tests::validates_linux_device_schema_shapes"
+      ]
+    },
+    {
+      "description": "Linux namespaces, user mappings, and time offsets",
+      "itemIds": [
+        "sha256:a2ec22c7e2c8401e32ab9950ac0514d5e5627e459bc9ef5e263c01190e0532b4",
+        "sha256:78a42c255d106425eb2db8f29f391faa1272e624d1e815c909b1017af3de7ba5",
+        "sha256:9833c051f92941b5b89a6d8f54a4fc82ff7df216608fefb4403762a6744a2c7e",
+        "sha256:2480449d4641f178f0672e931371c6c992495cda54b4a35f0390a4be3f8156ec",
+        "sha256:c48aa883d917bdc4d125661931f2d1ebd6fc126451f81269a6d5808e83ecbaf9",
+        "sha256:79e481f4e8f29d4ae2c2db0e79ab8eebfddba92705289114f3b18a24ca6a52db",
+        "sha256:975832529c6c1dba84bbc1651e839b2612c69f8007ea73a3b830f1c45c9de9b8",
+        "sha256:43d9d7cf9d69cfd93b5627f8bf7bca987ccf4416a9fda1e88c7fd632ddfa6cb3",
+        "sha256:c0b09c1f3e0bd4fa507808fc6186eef562afdcfde328f7a6fe889c33d6ae73c9",
+        "sha256:e70939bbda6661152a5ccb187a2d4aede57fc820030b8510722f5a8cf73a4a70",
+        "sha256:031b28653476a289ac187fd11f8c16c231954f0799d0adee99a680126eeb0655",
+        "sha256:a29d38de0447725139ed3644141c7428c56ebb098db057edbb75c5b07f4288d0",
+        "sha256:299d84f6024493478a4b40b79529bc6f70e9f72c37bb94f09704109231b500e9",
+        "sha256:0ad0a6bb75204ca802f523ef1a9514879360f68fe6491998615235026b5d03a8",
+        "sha256:5068ff51a00f227b1ffdfadc958cbd3f0635a5d0bf45d6a18c4f2392b7c52537",
+        "sha256:d06f2ee98eac8dad83ebf24e1f18b681da84f2bfe185c952af5da963bb61b505",
+        "sha256:584f3254b0aebd07a01cf257f7cbc64d459c463b7507b30ebcc9c4df4c8232c9",
+        "sha256:49859d70bcbfd1f0d58afa1fe5571290acfc6e7796d50cf01fd3e4091eb5daf7"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.namespace.create-join-inherit",
+        "oci.linux.namespace.join.exact",
+        "oci.linux.namespace.join.type-checked",
+        "oci.linux.namespace.path.absolute",
+        "oci.linux.namespace.supported-types",
+        "oci.linux.namespace.type.required",
+        "oci.linux.namespace.type.unique",
+        "oci.linux.time-offset.exact",
+        "oci.linux.time-offset.requires-new-time-namespace",
+        "oci.linux.user-mapping.bounded",
+        "oci.linux.user-mapping.exact",
+        "oci.linux.user-mapping.no-chown"
+      ],
+      "testIds": [
+        "executor::namespace_tests::namespace_plan_preserves_inherit_create_and_join_for_every_type",
+        "executor::namespace::joined_user::tests::namespace_identity_rejects_a_different_namespace_type_descriptor",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships",
+        ".github/scripts/native-linux-smoke.sh::namespace-user-mapping-time-offset-readback"
+      ]
+    },
+    {
+      "description": "Linux rootfs propagation and restricted paths",
+      "itemIds": [
+        "sha256:48d69b2c8a876ccae752762346f0c36db373f0bf041abbcfae8559107d3f7373",
+        "sha256:3c25d35387dfc72ef2f90ef7921f67b5888a12605ff912cbb9d59253c51d2e66",
+        "sha256:69262ac19b1fe9e9e607a058ca39e4ec65355d6abe5aac15c6a65e17ee51d8ce",
+        "sha256:5a43286cf4588bab5b39d29bda13680ca6f0f7e4a180cf9d532a16888bf30f08",
+        "sha256:9d670b75a7e117b8f4d54ef6a7b6ed08ffecc08102ff88311e4ab9ddd3fc5b74",
+        "sha256:92e98cc8139ab566de45e0a2ff5fe5ac667fe9dceaadb706ee32c5c512443c73",
+        "sha256:ea3bda7ceaac259cdc3aa78f93079088e6f3cf4e98d946559f0b95ded1124288"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.masked-paths.enforced",
+        "oci.linux.readonly-paths.enforced",
+        "oci.linux.restricted-path.requires-mount-namespace",
+        "oci.linux.rootfs-propagation.exact"
+      ],
+      "testIds": [
+        "executor::rootfs_tests::accepts_every_oci_rootfs_propagation_mode",
+        "multi_container_report::tests::rootfs_mount_success_requires_enforcement_and_cleanup_evidence",
+        "semantic::tests::reports_linux_namespace_security_and_resource_relationships"
+      ]
+    },
+    {
+      "description": "Linux memory policy, personality, and scheduler values",
+      "itemIds": [
+        "sha256:af3adfbab747240843c4f4e5e82564abaf5a628e73f005c4d6764d0f42922b3f",
+        "sha256:735b64f878fe50be27d5d2c21777aa4ac9b5d54deda9112f2168c11412784399",
+        "sha256:f45542d6663bd2877ad31ece5c8ff71e058d89ea0a858d18d6abc61694108ae1",
+        "sha256:fc410bb1d63b7e7cdbdbafd05c432713969d5cf79dcdf7c70bdbaf1abd8b7cfc",
+        "sha256:1bd69cbf8fdef6b0d0ec2d6b68a8e34398a5df451079d9d729ddaed763086379",
+        "sha256:da9c079151b0bed16387b06136b084a77bc8abf2f54826de1af10b057a99e47a",
+        "sha256:2e24d96439e4e94ac0fc0e014ea22f11574018142d8824a01393165388e95d78",
+        "sha256:a1ab48a2808f55586f8208aa46c7cfff91e2f536789d7960ba0092ef33f8e149",
+        "sha256:cf63858b8cb277ecfe70fed5fe9235d971c1c17c903c5b7c405f7ce09f48231c",
+        "sha256:1fd4380ab39e85ee3dc1fbf5ef5bc800844234afda23ab24d281de8e83ba0969",
+        "sha256:6ee26387694afdd9107be2af63eb734b8ab11d06363bb0c6383f0ea3ca3a3afd",
+        "sha256:f1a0d42ccdeaab18ab9aca112ff2f536fbf5bfa6b24c23920e39abbb6dac710c",
+        "sha256:ce9a1832cbca8f5b1b35909ff19d4a8c28f33febc3448857a98aa4a767d75fb0",
+        "sha256:54702f61c32a8c37e2865f22e3752d23a30db10748492ccefc4cc4f06aaf4759",
+        "sha256:d393b9029b666622949bd4cf402e227cbca84d1e959807474dfc6f25d3ab40a4",
+        "sha256:d9338e5aa6e605f0880a4d6dd821788608a43f7afada97f6ef2fceb214b4deef",
+        "sha256:b3873fd2f88d21fbf914e2811d56687116cdaa22c56f5d5ea2244f3c7f1cfe41",
+        "sha256:273c2136f24a6394895e34c4975769d5801f94af91bc9e931274060d98513afa",
+        "sha256:47df0d53d2750df9de8acafd282318e0bf848cafc0ddc0821cff3de7c4bdb697",
+        "sha256:d4ecd23ed272d87579479b40ebde38ea1519835815af1e5b860bfb564dfac897",
+        "sha256:d627efbe6036ec16b6a6b96a8040bcf93bd6407ee51641624111260ae39fb6bd",
+        "sha256:65239c7c7ae35bfbac92d3700cb9ad4137b61eb15e7c0d80200412c7cc25ccbb",
+        "sha256:4e876dd4f0c5f0b32580c8f541c65dac5e401a28aa18e12bb16b2d678dd475d2",
+        "sha256:f5142866623b84e19c45336b804f3919d9518e61b692ba62279dd4362237ee99",
+        "sha256:b22a2bde361b58d74cbc1c2e562f9b9e3c4e3d6163172c97072535e2c61883d4",
+        "sha256:05a4c14ff5ea19f20928fda93561c8609911ef1746bfdbf1bed19bfd49664187",
+        "sha256:73bad23e1ee681b7645bc7bb7c35fcd7d957390662ca8e29a9e884890e4e5718",
+        "sha256:3b82fe2ddd30a985df0acc993eccda334f884996b2e17cc2fb26afc06a6993da",
+        "sha256:f43500e50ad3cdee7fcc76e5456864378ad433721bc7efcc27deb97e529bdbfd",
+        "sha256:7bac1a991ecf43ec152f5bc533399268f9b54bc7748885bfde8ea4644a4730a3",
+        "sha256:ef6adf59fa430f4824af07ef0ee33c90bc7a3187526944e2a577aaf1cc3002cd",
+        "sha256:3b6e0b3b96936d69c620af11a1deaac090e5140708660c88bd70d2ef26b923fe",
+        "sha256:19ab75419b6da192dd4bf9183d3452d7c77581550e5878e3bf0a616efe1dcbb7"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.memory-policy.exact-policy",
+        "oci.linux.memory-policy.flags-compatible",
+        "oci.linux.memory-policy.mode.required",
+        "oci.linux.personality.domain.required",
+        "oci.linux.personality.exact-domain",
+        "oci.linux.personality.flags-empty",
+        "oci.linux.scheduler.deadline-fields.policy",
+        "oci.linux.scheduler.deadline-order",
+        "oci.linux.scheduler.flag.policy",
+        "oci.linux.scheduler.flags.unique",
+        "oci.linux.scheduler.nice.range",
+        "oci.linux.scheduler.priority.policy"
+      ],
+      "testIds": [
+        "executor::memory_policy::tests::applies_and_reads_back_bind_in_an_isolated_process",
+        "executor::personality::tests::applies_and_reads_back_linux32_in_an_isolated_process",
+        "executor::scheduler::tests::plans_every_policy_and_flag_without_silent_normalization",
+        "semantic::tests::scheduler_semantics_match_the_linux_sched_attr_boundary"
+      ]
+    },
+    {
+      "description": "Linux Intel RDT CLOS, schemata, and monitoring",
+      "itemIds": [
+        "sha256:c34b7a1ed70669c771d27fc23c8388e5f79c4205a914a1ef72989899bd7c856d",
+        "sha256:deecbdda3d25bd4209f10c03214224475af31d9e3e4c300857b433ec0f32a10d",
+        "sha256:3a4afa0a8297ac5dba6a141b04e5b4e8fc141850b7b2e81d2a7dfcc78e6a0fe7",
+        "sha256:281f193e8df8130bde6d614e26f60c31f231d764208f84cc1c79ece6515c200b",
+        "sha256:f711f184f8c387395376426fb61d8fc023046d695df9286b424cf9eb8d46e1ed",
+        "sha256:2b19adaaddac67ae00eb52f96d5c169f3a32ebdb56a4482a56d71c09853ce1ff"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.intel-rdt.clos-id.safe-name",
+        "oci.linux.intel-rdt.clos-lifecycle",
+        "oci.linux.intel-rdt.monitoring-lifecycle",
+        "oci.linux.intel-rdt.process-assignment",
+        "oci.linux.intel-rdt.schemata-order-and-readback"
+      ],
+      "testIds": [
+        "executor::intel_rdt::tests::creates_assigns_and_cleans_runtime_owned_groups_in_normative_order",
+        "semantic::tests::bounds_intel_rdt_names_and_schemata_without_rejecting_new_resource_lines"
+      ]
+    },
+    {
+      "description": "Linux network-device move and rename contract",
+      "itemIds": [
+        "sha256:0cebdeeac9a53ac5254cf222715da88b8298063d67896c0f30b751568fd9d7ee",
+        "sha256:0bc22248c0dbe59c9061ae956ffff558db97107112e3477461be6cf3d7713d2f"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.net-device.container-name.valid",
+        "oci.linux.net-device.host-name.valid",
+        "oci.linux.net-device.move-and-rename",
+        "oci.linux.net-device.target-conflict"
+      ],
+      "testIds": [
+        "executor::network_device::tests::normalizes_empty_names_and_accepts_only_appended_templates",
+        "executor::network_device::tests::rejects_duplicate_exact_targets_and_unbounded_names",
+        "semantic::tests::validates_linux_network_device_names_templates_and_exact_targets",
+        ".github/scripts/native-linux-smoke.sh::network-device-move-readback"
+      ]
+    },
+    {
+      "description": "Namespaced Linux sysctl application",
+      "itemIds": [
+        "sha256:a4423c8b80632bbfa97f44c06afe1a53d316df96861bfae567539f7f4c0d695c"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.sysctl.namespaced-apply",
+        "oci.linux.sysctl.not-namespaced"
+      ],
+      "testIds": [
+        "executor::sysctl::tests::applies_reads_back_and_commits_exact_values",
+        "executor::sysctl::tests::an_uncommitted_transaction_restores_original_values",
+        "linux_sysctl::tests::classifies_only_known_namespaced_sysctl_families"
+      ]
+    },
+    {
+      "description": "Advertised x86_64 and AArch64 seccomp policy subset",
+      "itemIds": [
+        "sha256:bd9cf79cf33082c18771e8e2ae9933d5c90f2f4cb0f77a7e74d7816b18ecd261",
+        "sha256:7afd62ffe3d87a3a4cfd4b3342cddfcc5343292c6ea4f6ee391f5a47ebfd68ad",
+        "sha256:ef60fc75861108bd04fe2959fe82dfa222e1f608eb834ca9cb010d40c57eef65",
+        "sha256:e69b8df52f50ee0357e33cce0e5a947f6d965c762445c49d82a8bc7c6b392902",
+        "sha256:b11103cbf79ba0199ad4270d87f36e4691aeeccb4d8596066a62c21e899ba1bc",
+        "sha256:81ef5ad4274cdd8877401734a85edb5170933a75dd68b94f9155b86a1c5c0e4f",
+        "sha256:029ff28d1de18406517c9d5ad42bc07197671a492919d149c91b0e23b449dab5",
+        "sha256:553ec3f93952784555a97cb504f736e0a7c5e5f7cf32ab3a0a97f50d3329434c",
+        "sha256:9240b1ca49da8e32d3e2b577ef64d872b452f800eb209e7778fc1f8604c28775",
+        "sha256:9b33bd6dd75558669036363b2da72d09c7097e04e10b6fcb62c58acaef4b49f0",
+        "sha256:efcc69935b5bc0684e8ec81f2233536d5166252a9bb188702ce521320e5a4a29",
+        "sha256:85aa2bb0a569cae9a38d2d157deee464ca111cc3f965944076a48ea5258841e5",
+        "sha256:bdb956dbfb77fe42358d635b1ca151c080462559eb4ec503ec5614922db4ef88",
+        "sha256:41783b7c63f9e58d4108e018c775d360ef1bad5a02d08d4fa609e886d24ddb7e",
+        "sha256:c26e289127a6bec2051f28febacfd74a61ef1afef4611563dddb4c3f05c907b1",
+        "sha256:9a1030e091e0ca592b1470d55a85d73d9baa4c92d1bed580147da5ae1b0585f3",
+        "sha256:4df6c11b2d280dc42b3aedbfd6a25d150b8e53c097ef7d2b471c504594b3aab6",
+        "sha256:42cb9d2b82015da69e97bcc27d7f4db362feae8a978c2c628c6f6170f2e00183",
+        "sha256:706bb0e915ed056b26464844fb1e8ae74ce834474580722366d87ede15bcef94",
+        "sha256:b8f4444aca98316fd34798fa06570f4da3b539169b806410a8974ced0a3b52b6",
+        "sha256:79c8cc18f0e7181f8762c6f2c7acbc92c63d7cbd160530db5ecd32567b9fffca",
+        "sha256:44de96fbc63a011f42c3a1376b2b2402031a708fe4dc0bfac8b9e4b0ff1c0236",
+        "sha256:4813fd9d3b91fb1f793b751308d7bf89df532dc91bc3c37bd223e49f7aff456e",
+        "sha256:4b350f726fc3812d25fdae1e04c137e13ff95071f919c9794262d6cb10078c03",
+        "sha256:d6cfe04a4465dffe2cec42bd0a33ec4262944ab0e0c4a9e9e838f1a22d7506a2",
+        "sha256:ca0d4eb094a7caa60b7a6d45dac2e4de70ee0c01a840826ff235270d7164a47e",
+        "sha256:90dd1ddb8b8b214a5b0f91b562b1690704884ae8b73182c92bd202174e78e100",
+        "sha256:1c8d0b4ffa2097e02f48876978a9ed554ccb5c067a682dad11358b33f3ec25e6",
+        "sha256:55d011d74190627b6ab3863e0aebfad644cd80cdcbe9bffa9e975e6ba6a4c248",
+        "sha256:57278790dc978265e3481e46890d17c1187fb4dc4410ed9cfe47025fa4623612"
+      ],
+      "disposition": "enforced",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.seccomp.errno-action",
+        "oci.linux.seccomp.policy.enforced"
+      ],
+      "testIds": [
+        "executor::seccomp_tests::plans_every_advertised_seccomp_action_and_operator",
+        "executor::seccomp_tests::plans_the_supported_seccomp_architectures",
+        "executor::seccomp_tests::stacked_seccomp_filters_enforce_default_and_specific_errno_actions",
+        "linux_seccomp::tests::registries_are_exact_and_unique"
+      ]
+    },
+    {
+      "description": "Known Linux controls outside the cgroup v2 and advertised seccomp or LSM profiles",
+      "itemIds": [
+        "sha256:40ece37cf9d42b8eff3f2a19e3a9c1d9900c66a9cbf07090dd43a0d3656e68a6",
+        "sha256:429dc366c9232040f548bc5b37f2474f21a50bce0e3d08364200660903522cdf",
+        "sha256:929848265481566581d5b4c68f7d94fc2d8de484e78eee2eb89afbd03676cc9c",
+        "sha256:c45330749c3cb9ad15f1f420ce2d6bc4d0024152112a5c240c2b426af0516584",
+        "sha256:a4b114ab33d2504239d7e487c9421a2959b133da26cc4326dd5a1c7da0e211c6",
+        "sha256:d0447160f6b17305f5e22e83772aac0b574b29b72076201094f7876a52e9c10c",
+        "sha256:d8968e73fe9b2034f1bae766b1565e2c753a6b158de3a4646b05fa8fedd0b1c8",
+        "sha256:0f9d5fd47150ec0b42d0794b61002610544ed5cbe070a27a98be78d9473a39eb",
+        "sha256:3a8eee94a971d08de541cd00ebb3bd1b5584f47ca51470bdc35a8268a8edc139",
+        "sha256:2e9a38e722106f802f507214bde29aec94f17140355a3aac3be7c7368be50374",
+        "sha256:0d15082c0470adabbd1ae2b6abb3f8357ca8f0181309a94f8dbc543e1b948812",
+        "sha256:2987b55006194e618033a9bd70e1263050f1cfb44b3d0ca83f588dfd0ad14846",
+        "sha256:fa44ec076699d097f199d958f6856c462c341789a83a507648f301c850c753bf",
+        "sha256:7cf26b41c5be4c3329fe44a7c088788d8a4c74408db79ea9ca99969e683d437f",
+        "sha256:087339f7e917077e0336114efa5ac746e78e11a3db4a55fd97857a39267db78a",
+        "sha256:63a1db7f9da66ad6f283ecf5d88be1d4ef3a8c753fd3a1928d81cbd59749969a",
+        "sha256:aef38caa7c531624ef8bcbe14f155b61d41eb740230bb484e9d63bce89b18ef5",
+        "sha256:2a9d10b5aab5cf42a9a96730ae72140a6a1458897f058b508b776c8f92373f72",
+        "sha256:de04e128360b2d2ed0125c2184f95036fd0a944b865edcb8125995c358214f09",
+        "sha256:ce05608f6c01ce9e596137fc7f6efde2fb7164f32b561e86b43c8fcf761442ce",
+        "sha256:8c0f4efbb8acf640250ae1d961f5cf893719ab491686e1678a6bf8cb9ac81113",
+        "sha256:b6f608fc9d963c373780cb378c43abd60916ecf06f77d3a5e4f6c4fec0221a5d",
+        "sha256:6bc3d9b45a3f892f5a3a8b0693bcce2b68f95d9e2393c495e997e831175220a8",
+        "sha256:496dd688e5f08342a10d2cb6267941ab5715f9eb977e8cbcaf301395a90ccf20",
+        "sha256:22ece905569d7a873c8dd6e07673381589dce9f317429dfc06c55172e506b14b",
+        "sha256:b918f56bb59bb4e505ff87157bf6c1ecfe96b3b4e7775517942c490977a96991",
+        "sha256:eac0a8d189eb4d6a457ea57bc710e2c9413ea264c88c1e4722aedb5432484725",
+        "sha256:96c823aa2e1f8a8e145e41c7d0a3a02d50c7f7035a582d6564eeef42911ac06f",
+        "sha256:aef67f7ab96345b59f45d580a50d9e571359e204ec662543d6e1edb370619462",
+        "sha256:0e7320cbda914c8323cbc9bd39761be6d63565baf44c5754fe7253b688945e18",
+        "sha256:ad6056528629d650c6391db33287abaf4cbd59da403389e6c95f1f7d25ea1e0a",
+        "sha256:9625ffb1c53d0dca3eee5e4dfd1344e3c443a4d73c540e78511a0278c26ecfdc",
+        "sha256:ff641bd5d96cab2e28822237293ffe517f0c8837d3e408a43e88322384d1b485",
+        "sha256:55b7fc7fb5ada5faee912701a6e7ba7a441d189f65f417b63409abae546d9a11",
+        "sha256:3c86bc7a298120ba3fa8c69ebff61e05f3b297534c4f21e28b614fa16f9e19d6",
+        "sha256:e35437c2a61ff413982b401ae753dfe693c62ba0dd1a19267a8b69cdd5aa50b1",
+        "sha256:60cb89b02b64b6d7e0e6e937996c08fbb36a877d0d084db8545c3af5823f2236",
+        "sha256:c0cf5aeea5b591e23e8c9ca7b470295dcf718c9c5dcd134c46e7cb6089b268dd",
+        "sha256:a980b74306295949d3b44a503542b9f22f94378fddb05e21a90c523b1442eb1a",
+        "sha256:0afd1473ccd1f646e3f3b7bd2d40acb4494bdaf9f20b79a6857075fcf31d8cc1",
+        "sha256:d66708a8e63c0c9e905f2677f8d6ee9f92686e8bc596faaa5805df3b4691d134",
+        "sha256:cfce3b3c7c72d9de7b307feeda0ef8981128932e62a3925fc42d5a5b46a65cfc",
+        "sha256:e565d6470490d9385faf1c65342ab25ece0515da28a02638ac73ce48fa01af78",
+        "sha256:df9b15b399ec2278786b6b810fdc4796faa6c5086bc6d658c132deaf4139e1ae",
+        "sha256:2060c5f95a8d8de48e27150fbdce4273f63514d2bc9a732e646e0efa7dcc036b"
+      ],
+      "disposition": "rejected-unsupported",
+      "owner": "linux-executor",
+      "ruleIds": [
+        "oci.linux.block-io.leaf-weight.rejected",
+        "oci.linux.cpu.realtime-controls.rejected",
+        "oci.linux.memory.unsupported-controls-rejected",
+        "oci.linux.mount-label.unsupported",
+        "oci.linux.network.cgroup-v1-controls-rejected",
+        "oci.linux.seccomp.notification.rejected",
+        "oci.linux.seccomp.unsupported-controls.rejected"
+      ],
+      "testIds": [
+        "executor::cgroup::io::tests::rejects_unrepresentable_and_ambiguous_block_io_values",
+        "executor::cgroup::plan::tests::rejects_invalid_cpu_burst_idle_and_realtime_controls",
+        "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
+        "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+      ],
+      "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
+    }
+  ]
+}

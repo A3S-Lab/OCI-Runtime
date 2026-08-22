@@ -1074,53 +1074,20 @@ fn verify_evidence_binding(binding: &OciNormativeEvidenceBinding) -> Result<()> 
 }
 
 fn verify_rule_coverage(manifest: &OciNormativeCoverageManifest) -> Result<()> {
-    let semantic_rules = crate::OciSemanticValidator::rules();
-    let mut registered = BTreeMap::new();
-    for rule in semantic_rules {
-        if registered.insert(rule.id, None).is_some() {
-            return Err(coverage_error(
-                "normative rule registry contains duplicate rule IDs",
-            ));
-        }
-    }
-    for rule in NON_SEMANTIC_RULES {
-        if registered.insert(rule.id, Some(rule.owner)).is_some() {
-            return Err(coverage_error(
-                "normative rule registry contains duplicate rule IDs",
-            ));
-        }
-    }
-    if registered.len() != semantic_rules.len() + NON_SEMANTIC_RULES.len() {
-        return Err(coverage_error(
-            "normative rule registry contains duplicate rule IDs",
-        ));
-    }
+    verify_conformance_rule_references(
+        manifest
+            .items
+            .iter()
+            .map(|item| (item.owner.as_str(), item.rule_ids.as_slice())),
+    )
+    .map_err(coverage_error)?;
 
     let referenced = manifest
         .items
         .iter()
         .flat_map(|item| item.rule_ids.iter().map(String::as_str))
         .collect::<BTreeSet<_>>();
-    if let Some(unknown) = referenced
-        .iter()
-        .find(|rule_id| !registered.contains_key(**rule_id))
-    {
-        return Err(coverage_error(format!(
-            "normative coverage references unknown rule {unknown}"
-        )));
-    }
-    for item in &manifest.items {
-        for rule_id in &item.rule_ids {
-            if let Some(Some(owner)) = registered.get(rule_id.as_str()) {
-                if item.owner != *owner {
-                    return Err(coverage_error(format!(
-                        "normative rule {rule_id} belongs to {owner}, not {}",
-                        item.owner
-                    )));
-                }
-            }
-        }
-    }
+    let semantic_rules = crate::OciSemanticValidator::rules();
     if let Some(orphan) = semantic_rules.iter().find(|rule| {
         rule.kind == crate::OciSemanticRuleKind::Normative && !referenced.contains(rule.id)
     }) {
@@ -1137,6 +1104,42 @@ fn verify_rule_coverage(manifest: &OciNormativeCoverageManifest) -> Result<()> {
             "normative non-semantic rule {} has no specification evidence binding",
             orphan.id
         )));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_conformance_rule_references<'a>(
+    references: impl IntoIterator<Item = (&'a str, &'a [String])>,
+) -> std::result::Result<(), String> {
+    let semantic_rules = crate::OciSemanticValidator::rules();
+    let mut registered = BTreeMap::new();
+    for rule in semantic_rules {
+        if registered.insert(rule.id, None).is_some() {
+            return Err("conformance rule registry contains duplicate rule IDs".to_string());
+        }
+    }
+    for rule in NON_SEMANTIC_RULES {
+        if registered.insert(rule.id, Some(rule.owner)).is_some() {
+            return Err("conformance rule registry contains duplicate rule IDs".to_string());
+        }
+    }
+    if registered.len() != semantic_rules.len() + NON_SEMANTIC_RULES.len() {
+        return Err("conformance rule registry contains duplicate rule IDs".to_string());
+    }
+
+    for (owner, rule_ids) in references {
+        for rule_id in rule_ids {
+            let Some(registered_owner) = registered.get(rule_id.as_str()) else {
+                return Err(format!("coverage references unknown rule {rule_id}"));
+            };
+            if let Some(registered_owner) = registered_owner {
+                if owner != *registered_owner {
+                    return Err(format!(
+                        "conformance rule {rule_id} belongs to {registered_owner}, not {owner}"
+                    ));
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -16,6 +16,47 @@ Every document is embedded from `vendor/runtime-spec/v1.3.0/`. The checked-in
 manifest records its SHA-256 digest, so CI fails if the source changes without
 an explicit specification update.
 
+## Schema Support Manifest
+
+The schema inventory and the normative inventory are separate locks. The
+schema inventory contains every named property and enum value in the pinned
+OCI 1.3.0 JSON Schemas. Each item has a SHA-256 identity derived from the OCI
+version, schema name, JSON pointer, inventory kind, and exact value.
+
+`conformance/oci-1.3.0-schema-evidence.json` is the reviewed source of truth
+for applicable items. Its 29 bindings cover 334 unique item IDs with exact
+owners, rule IDs, test IDs, and rejection rationales. The Linux-only workload
+boundary generates the remaining 89 native-platform rejections. Applying that
+evidence to a fresh inventory produces the checked-in
+`conformance/oci-1.3.0-schema-coverage.json` v2 lock:
+
+| Disposition | Count | Meaning |
+| --- | ---: | --- |
+| `rejected-inapplicable-platform` | 89 | Native FreeBSD, Solaris, Windows, or z/OS workload fields rejected at the Linux workload boundary |
+| `rejected-unsupported` | 75 | Known fields or values rejected before durable or platform mutation |
+| `validated` | 2 | Static schema or semantic validation owns the complete current behavior |
+| `enforced` | 257 | Runtime, executor, or driver behavior has direct rule and test evidence |
+| `conformant` | 0 | No schema item is promoted solely by this classification audit to release conformance |
+| `pending-review` | 0 | Every one of the 423 schema inventory items has an exact disposition |
+
+The verifier rejects unknown or duplicate evidence bindings, generated
+platform-disposition overrides, inventory drift, missing owners, missing or
+duplicate rule and test IDs, unknown or wrongly owned rules, pending items,
+and rejected items without a rationale. The checked-in lock must equal a fresh
+generation from the reviewed evidence byte for byte at the data-model level.
+Regenerate it with:
+
+```sh
+cargo run -q -p a3s-oci-sdk --example generate_schema_coverage -- \
+  conformance/oci-1.3.0-schema-evidence.json \
+  conformance/oci-1.3.0-schema-coverage.json
+```
+
+Zero pending schema items means the field inventory is classified. It does
+not mean the runtime has passed release conformance; the manifest deliberately
+contains zero `conformant` items while lifecycle, security-negative,
+cross-driver, packaged-artifact, and upstream-tool gates remain open.
+
 ## Inventory
 
 `OciNormativeInventory` scans outside fenced examples and HTML comments. It

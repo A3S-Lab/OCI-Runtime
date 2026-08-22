@@ -666,6 +666,8 @@ The repository turns release claims into checked inventories:
 | Evidence | Current lock |
 | --- | ---: |
 | Named OCI schema properties and enum values classified | 423 |
+| OCI schema dispositions | 257 enforced · 2 validated · 75 rejected unsupported · 89 rejected inapplicable · 0 pending · 0 conformant |
+| Reviewed schema evidence | 334 applicable items in 29 bindings · 131 rules · 95 tests |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 95 |
 | Owner-bound non-semantic rules | 156 |

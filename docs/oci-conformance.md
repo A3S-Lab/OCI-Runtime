@@ -24,6 +24,13 @@ contents are also vendored without modification. Their document digests and
 all 764 RFC 2119 keyword occurrences are locked in
 `conformance/oci-1.3.0-normative-coverage.json`.
 
+The separate schema-support v2 lock classifies all 423 named properties and
+enum values: 257 are enforced, two validated, 75 rejected as unsupported, and
+89 rejected as inapplicable native workload platforms. It has zero pending
+items and zero conformant items. The 334 applicable entries come from 29
+reviewed evidence bindings; this is exact field classification, not a release
+conformance declaration.
+
 ## Meaning Of Complete
 
 There are five separate states for an OCI property:
@@ -187,8 +194,9 @@ These additions do not replace or reinterpret OCI configuration fields.
 
 The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
 
-1. a generated and checked-in inventory of all 423 named JSON Schema
-   properties and enum values;
+1. a generated and checked-in v2 support manifest for all 423 named JSON
+   Schema properties and enum values, regenerated from reviewed evidence and
+   rejected on unknown, duplicate, stale, pending, or incomplete bindings;
 2. a generated and checked-in inventory of all 764 RFC 2119 occurrences from
    the 15 normative source documents, including source-document SHA-256
    digests and stable requirement IDs;
@@ -200,8 +208,8 @@ The conformance pipeline pins the OCI 1.3.0 release. It currently provides:
 7. in-memory end-to-end transport tests plus real Windows named-pipe and Unix
    socket connector tests.
 
-The generated normative ledger has zero pending entries. Remaining conformance
-evidence includes:
+Both generated inventories have zero pending entries. The schema manifest has
+zero `conformant` items, so remaining release-conformance evidence includes:
 
 1. positive decode/round-trip fixtures for every applicable property;
 2. negative cross-field and semantic fixtures;

@@ -10,75 +10,18 @@ use serde_json::Value;
 
 use crate::{Error, ErrorCode, Result};
 
+mod coverage;
+mod embedded;
+
+use embedded::EMBEDDED_SCHEMAS;
+
+pub use coverage::{
+    OciSchemaCoverageItem, OciSchemaCoverageManifest, OciSchemaDisposition,
+    OciSchemaEvidenceBinding, OciSchemaEvidenceManifest,
+};
+
 const SCHEMA_BASE_URI: &str = "https://schema.a3s.dev/oci/runtime-spec/v1.3.0/";
 const MAX_REPORTED_VIOLATIONS: usize = 64;
-
-const EMBEDDED_SCHEMAS: &[(&str, &str)] = &[
-    (
-        "config-freebsd.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/config-freebsd.json"),
-    ),
-    (
-        "config-linux.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/config-linux.json"),
-    ),
-    (
-        "config-schema.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/config-schema.json"),
-    ),
-    (
-        "config-solaris.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/config-solaris.json"),
-    ),
-    (
-        "config-vm.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/config-vm.json"),
-    ),
-    (
-        "config-windows.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/config-windows.json"),
-    ),
-    (
-        "config-zos.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/config-zos.json"),
-    ),
-    (
-        "defs-freebsd.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/defs-freebsd.json"),
-    ),
-    (
-        "defs-linux.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/defs-linux.json"),
-    ),
-    (
-        "defs-vm.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/defs-vm.json"),
-    ),
-    (
-        "defs-windows.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/defs-windows.json"),
-    ),
-    (
-        "defs-zos.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/defs-zos.json"),
-    ),
-    (
-        "defs.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/defs.json"),
-    ),
-    (
-        "features-linux.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/features-linux.json"),
-    ),
-    (
-        "features-schema.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/features-schema.json"),
-    ),
-    (
-        "state-schema.json",
-        include_str!("../../../vendor/runtime-spec/v1.3.0/schema/state-schema.json"),
-    ),
-];
 
 /// Official OCI JSON document validated by the SDK.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,32 +88,6 @@ pub struct OciSchemaInventoryItem {
     pub pointer: String,
     pub kind: OciSchemaInventoryKind,
     pub value: String,
-}
-
-/// Current implementation disposition for one pinned schema inventory item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum OciSchemaDisposition {
-    SchemaValidatedPendingEnforcement,
-    SchemaValidatedRejectedInapplicablePlatform,
-}
-
-/// Classified property or enum value in the checked-in OCI coverage manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OciSchemaCoverageItem {
-    #[serde(flatten)]
-    pub inventory: OciSchemaInventoryItem,
-    pub disposition: OciSchemaDisposition,
-}
-
-/// Machine-readable coverage lock for the pinned OCI schema release.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OciSchemaCoverageManifest {
-    pub schema_version: String,
-    pub oci_runtime_spec: String,
-    pub upstream_commit: String,
-    pub items: Vec<OciSchemaCoverageItem>,
 }
 
 /// Offline validator for the pinned OCI Runtime Specification 1.3.0 schemas.
@@ -279,53 +196,6 @@ impl OciSchemaValidator {
         inventory.sort();
         inventory.dedup();
         Ok(inventory)
-    }
-
-    /// Build the review baseline used to update the checked-in coverage lock.
-    ///
-    /// Unsupported native workload-platform schemas are classified as
-    /// rejected. Every other item remains pending enforcement until a later
-    /// reviewed manifest update promotes it.
-    pub fn coverage_baseline(self) -> Result<OciSchemaCoverageManifest> {
-        let items = self
-            .inventory()?
-            .into_iter()
-            .map(|inventory| OciSchemaCoverageItem {
-                disposition: disposition_for(&inventory),
-                inventory,
-            })
-            .collect();
-        Ok(OciSchemaCoverageManifest {
-            schema_version: "a3s.oci.schema-coverage.v1".to_string(),
-            oci_runtime_spec: "1.3.0".to_string(),
-            upstream_commit: "92249139eea7161e13745abd4cb6d0ea02a3227a".to_string(),
-            items,
-        })
-    }
-}
-
-fn disposition_for(item: &OciSchemaInventoryItem) -> OciSchemaDisposition {
-    const INAPPLICABLE_SCHEMAS: &[&str] = &[
-        "config-freebsd.json",
-        "config-solaris.json",
-        "config-windows.json",
-        "config-zos.json",
-        "defs-freebsd.json",
-        "defs-windows.json",
-        "defs-zos.json",
-    ];
-    const INAPPLICABLE_ROOT_PROPERTIES: &[&str] = &["freebsd", "solaris", "windows", "zos"];
-
-    if INAPPLICABLE_SCHEMAS.contains(&item.schema.as_str())
-        || (item.schema == "config-schema.json"
-            && item.kind == OciSchemaInventoryKind::Property
-            && item.pointer.starts_with("/properties/")
-            && !item.pointer["/properties/".len()..].contains('/')
-            && INAPPLICABLE_ROOT_PROPERTIES.contains(&item.value.as_str()))
-    {
-        OciSchemaDisposition::SchemaValidatedRejectedInapplicablePlatform
-    } else {
-        OciSchemaDisposition::SchemaValidatedPendingEnforcement
     }
 }
 
@@ -537,14 +407,13 @@ fn escape_pointer(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use oci_spec::runtime::{Features, State};
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
     use super::{
-        OciSchemaCoverageManifest, OciSchemaDocument, OciSchemaInventoryKind, OciSchemaValidator,
+        OciSchemaCoverageManifest, OciSchemaDocument, OciSchemaEvidenceManifest,
+        OciSchemaInventoryKind, OciSchemaValidator,
     };
     use crate::ErrorCode;
 
@@ -1010,32 +879,30 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_coverage_manifest_classifies_every_inventory_item() {
+    fn checked_in_coverage_manifest_matches_reviewed_evidence() {
         let validator = OciSchemaValidator::new().expect("compile pinned schemas");
-        let expected = validator.inventory().expect("inventory pinned schemas");
-        let manifest: OciSchemaCoverageManifest = serde_json::from_str(include_str!(
+        let evidence: OciSchemaEvidenceManifest = serde_json::from_str(include_str!(
+            "../../../conformance/oci-1.3.0-schema-evidence.json"
+        ))
+        .expect("decode checked-in schema evidence");
+        let expected = validator
+            .coverage_with_evidence(&evidence)
+            .expect("generate coverage from reviewed evidence");
+        let actual: OciSchemaCoverageManifest = serde_json::from_str(include_str!(
             "../../../conformance/oci-1.3.0-schema-coverage.json"
         ))
         .expect("decode checked-in coverage manifest");
 
-        assert_eq!(manifest.schema_version, "a3s.oci.schema-coverage.v1");
-        assert_eq!(manifest.oci_runtime_spec, "1.3.0");
+        assert_eq!(actual.schema_version, "a3s.oci.schema-coverage.v2");
+        assert_eq!(actual.oci_runtime_spec, "1.3.0");
         assert_eq!(
-            manifest.upstream_commit,
+            actual.upstream_commit,
             "92249139eea7161e13745abd4cb6d0ea02a3227a"
         );
-
-        let actual = manifest
-            .items
-            .iter()
-            .map(|item| item.inventory.clone())
-            .collect::<Vec<_>>();
         assert_eq!(actual, expected, "coverage lock is stale");
-        assert_eq!(
-            actual.iter().collect::<BTreeSet<_>>().len(),
-            actual.len(),
-            "coverage lock contains duplicate entries"
-        );
+        validator
+            .verify_coverage(&actual)
+            .expect("checked-in coverage must pass strict verification");
     }
 
     #[test]
