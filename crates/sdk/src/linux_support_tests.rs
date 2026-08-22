@@ -168,6 +168,27 @@ fn support_profile_rejects_every_unadvertised_linux_feature_class() {
 }
 
 #[test]
+fn shared_profile_preserves_precise_reasons_for_executor_rejections() {
+    let support = OciLinuxSupport::shared_executor().expect("shared Linux support");
+    for (mutation, expected_reason) in [
+        (
+            json!({"mounts": [{"destination": "/tmp", "type": "tmpfs", "source": "tmpfs", "options": ["tmpcopyup"]}]}),
+            "tmpfs copy-up is not implemented",
+        ),
+        (
+            json!({"linux": {"resources": {"network": {"classID": 1}}}}),
+            "net_cls",
+        ),
+    ] {
+        let error = support
+            .validate_spec(&spec_with(mutation), TEST_OPERATION)
+            .expect_err("unadvertised executor control must be rejected");
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.message.contains(expected_reason), "{error}");
+    }
+}
+
+#[test]
 fn resource_update_uses_the_same_cgroup_support_profile() {
     let support = OciLinuxSupport::shared_executor().expect("shared Linux support");
     let resources: LinuxResources = serde_json::from_value(json!({

@@ -32,11 +32,12 @@ impl OciLinuxSupport {
         })?;
         if !supports_v1 {
             if let Some(field) = first_cgroup_v1_only_field(&value) {
-                return Err(unsupported(
-                    &field,
-                    "the selected driver does not advertise cgroup v1",
-                    operation,
-                ));
+                let reason = if field == "linux.resources.network" {
+                    "cgroup v1 net_cls and net_prio controls are not advertised because the selected driver does not advertise cgroup v1"
+                } else {
+                    "the selected driver does not advertise cgroup v1"
+                };
+                return Err(unsupported(&field, reason, operation));
             }
         }
         if resources.unified().is_some() && !supports_v2 {

@@ -60,9 +60,15 @@ impl OciLinuxSupport {
                 .any(|known| known.name() == option)
                 || A3S_CUSTOM_LINUX_MOUNT_OPTIONS.contains(&option.as_str());
             if standardized && !self.mount_options.iter().any(|known| known == option) {
+                let reason = if option == "tmpcopyup" {
+                    "Linux mount option \"tmpcopyup\" is not advertised because tmpfs copy-up is not implemented"
+                        .to_string()
+                } else {
+                    format!("Linux mount option {option:?} is not advertised")
+                };
                 return Err(unsupported(
                     &format!("mounts[{index}].options"),
-                    &format!("Linux mount option {option:?} is not advertised"),
+                    &reason,
                     operation,
                 ));
             }
