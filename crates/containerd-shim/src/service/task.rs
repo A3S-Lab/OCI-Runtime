@@ -3,6 +3,8 @@ use a3s_oci_sdk::oci_spec::runtime::LinuxResources;
 use containerd_shim::{TtrpcContext, TtrpcResult};
 use containerd_shim_protos::shim_async::Task;
 
+use crate::contract::{OCI_LINUX_RESOURCES_TYPE_URL, OCI_PROCESS_TYPE_URL};
+
 #[async_trait]
 impl Task for Service {
     async fn create(
@@ -476,10 +478,9 @@ impl Task for Service {
                 "containerd exec ID must not be empty".to_string(),
             ));
         }
-        const OCI_PROCESS_TYPE: &str = "types.containerd.io/opencontainers/runtime-spec/1/Process";
-        if req.spec().type_url != OCI_PROCESS_TYPE {
+        if req.spec().type_url != OCI_PROCESS_TYPE_URL {
             return Err(ttrpc_invalid_argument(format!(
-                "unsupported containerd exec process type {}; expected {OCI_PROCESS_TYPE}",
+                "unsupported containerd exec process type {}; expected {OCI_PROCESS_TYPE_URL}",
                 req.spec().type_url
             )));
         }
@@ -734,8 +735,6 @@ impl Task for Service {
         _ctx: &TtrpcContext,
         req: api::UpdateTaskRequest,
     ) -> TtrpcResult<api::Empty> {
-        const LINUX_RESOURCES_TYPE: &str =
-            "types.containerd.io/opencontainers/runtime-spec/1/LinuxResources";
         if !req.annotations().is_empty() {
             return Err(ttrpc_invalid_argument(
                 "containerd update annotations are not part of the A3S OCI resource contract"
@@ -745,9 +744,9 @@ impl Task for Service {
         let resources_any = req.resources.as_ref().ok_or_else(|| {
             ttrpc_invalid_argument("containerd update omitted LinuxResources".to_string())
         })?;
-        if resources_any.type_url != LINUX_RESOURCES_TYPE {
+        if resources_any.type_url != OCI_LINUX_RESOURCES_TYPE_URL {
             return Err(ttrpc_invalid_argument(format!(
-                "unsupported containerd resource type {}; expected {LINUX_RESOURCES_TYPE}",
+                "unsupported containerd resource type {}; expected {OCI_LINUX_RESOURCES_TYPE_URL}",
                 resources_any.type_url
             )));
         }

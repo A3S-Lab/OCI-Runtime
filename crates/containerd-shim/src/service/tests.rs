@@ -1233,9 +1233,8 @@ fn exec_request(exec_id: &str) -> api::ExecProcessRequest {
 }
 
 fn exec_request_with_process(exec_id: &str, process: serde_json::Value) -> api::ExecProcessRequest {
-    const OCI_PROCESS_TYPE: &str = "types.containerd.io/opencontainers/runtime-spec/1/Process";
     let mut spec = protobuf::well_known_types::any::Any::new();
-    spec.type_url = OCI_PROCESS_TYPE.to_string();
+    spec.type_url = crate::contract::OCI_PROCESS_TYPE_URL.to_string();
     spec.value = serde_json::to_vec(&process).expect("encode exec process");
     let mut request = api::ExecProcessRequest::new();
     request.set_id("task-a".to_string());

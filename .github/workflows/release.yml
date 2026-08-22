@@ -65,7 +65,11 @@ jobs:
           key: release-${{ matrix.name }}
       - name: Build Linux host runtime
         if: runner.os == 'Linux'
-        run: cargo build --release -p a3s-oci-cli -p a3s-oci-agent
+        run: >-
+          cargo build --release
+          -p a3s-oci-cli
+          -p a3s-oci-agent
+          -p a3s-oci-containerd-shim
       - name: Build macOS or Windows host runtime
         if: runner.os != 'Linux'
         run: cargo build --release -p a3s-oci-cli -p a3s-oci-krun
@@ -87,7 +91,12 @@ jobs:
           cp README.md CHANGELOG.md LICENSE "$package/"
           case "${{ runner.os }}" in
             Linux)
-              cp target/release/a3s-oci target/release/a3s-oci-agent "$package/"
+              cp target/release/a3s-oci \
+                target/release/a3s-oci-agent \
+                target/release/containerd-shim-a3s-oci-v2 \
+                "$package/"
+              mkdir -p "$package/docs"
+              cp docs/containerd-runtime-v2.md "$package/docs/"
               ;;
             macOS)
               cp target/release/a3s-oci target/release/a3s-oci-krun-shim "$package/"

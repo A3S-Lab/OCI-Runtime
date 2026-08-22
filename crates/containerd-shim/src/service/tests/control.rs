@@ -15,10 +15,8 @@ use tokio::sync::Barrier;
 
 use super::{metadata_from_task, recovery_service_instance, task_state};
 use crate::adapter::RuntimeAdapter;
+use crate::contract::OCI_LINUX_RESOURCES_TYPE_URL;
 use crate::metadata::{ControlOperationKind, ShimMetadata};
-
-const LINUX_RESOURCES_TYPE: &str =
-    "types.containerd.io/opencontainers/runtime-spec/1/LinuxResources";
 
 #[derive(Debug, Clone)]
 struct ControlCall {
@@ -407,7 +405,7 @@ async fn request_update(service: &super::Service, resources: &[u8]) -> TtrpcResu
     let mut request = api::UpdateTaskRequest::new();
     request.set_id("task-a".to_string());
     let mut resources_any = protobuf::well_known_types::any::Any::new();
-    resources_any.type_url = LINUX_RESOURCES_TYPE.to_string();
+    resources_any.type_url = OCI_LINUX_RESOURCES_TYPE_URL.to_string();
     resources_any.value = resources.to_vec();
     request.set_resources(resources_any);
     Task::update(service, &ttrpc_context(), request)

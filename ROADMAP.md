@@ -1993,7 +1993,7 @@ pass on supported x86_64 and aarch64 Linux hosts without KVM.
   incorrectly treated as C strings. Empty keys and bounded resource limits
   still fail closed. This closes common configuration semantics, not Linux
   configuration, cross-driver lifecycle, security, or release conformance.
-- [ ] Complete Linux configuration enforcement and generate feature reporting
+- [x] Complete Linux configuration enforcement and generate feature reporting
   from the same driver-specific support data used by validation and execution.
 - [x] Complete applicable VM configuration semantics without executing
   untrusted hypervisor, kernel, or firmware paths during validation. The
@@ -2107,7 +2107,7 @@ evidence.
 
 ### R7 — containerd Runtime V2
 
-- [ ] Define the supported containerd runtime-v2 API and version matrix, the
+- [x] Define the supported containerd runtime-v2 API and version matrix, the
   shim binary and package layout, and the exact mapping from containerd
   namespace and task identity to OCI container ID and runtime generation.
 - [ ] Load the containerd-provided OCI bundle and translate create, start,
@@ -2126,6 +2126,14 @@ evidence.
   tasks against every advertised driver profile.
 - [ ] Publish the shim with signed or checksummed runtime packages and retain
   the exact containerd, shim, SDK, runtime, and driver compatibility record.
+
+Contract v1 now freezes `containerd.task.v2.Task`, the exact 16 implemented
+methods and explicit Checkpoint gap, runtime type `io.containerd.a3s-oci.v2`,
+binary and Linux archive entry `containerd-shim-a3s-oci-v2`, installation at
+`/usr/local/bin/containerd-shim-a3s-oci-v2`, the exact compatibility matrix,
+and `sha256-length-framed-u64be-v1` identity vectors. Tagged Linux archives
+include the shim and contract document; RuntimeInfo exposes the contract,
+identity, generation, and exact development-qualification annotations.
 
 Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
@@ -2211,9 +2219,9 @@ and `be0b13215c21a2312f8a3e8d79cc9a39ed1a4b07b539f3d557e0f4e168c3345a`.
 The qualification recreates the killed task ID with a new incarnation and
 generation and leaves no matching task, container, shim, agent child,
 workload process, bundle, live runtime record, prepared Host operation,
-session, marker, workload cgroup, or zombie. The R7 items remain open until
-the version and package contract, remaining failure boundaries, every
-advertised driver profile, and release-artifact record pass.
+session, marker, workload cgroup, or zombie. The remaining R7 items stay open
+until the remaining failure boundaries, every advertised driver profile, and
+the published release-artifact compatibility record pass.
 
 Exit gate: containerd task, restart, I/O, and cleanup suites pass through the
 public SDK without the Box CLI, a direct VMM path, duplicate lifecycle state,
