@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 : "${A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST:?set the exact Linux KVM system-image manifest}"
 
+source .github/scripts/lib/linux-kvm-provenance.sh
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   printf 'Linux KVM compatibility-drift qualification requires a Linux host\n' >&2
   exit 2
@@ -21,12 +23,19 @@ if [[ "$target_dir" != /* ]]; then
   target_dir="$PWD/$target_dir"
 fi
 profile="${A3S_OCI_BUILD_PROFILE:-debug}"
+build_arguments=(build -p a3s-oci-cli -p a3s-oci-krun)
+case "$profile" in
+  debug) ;;
+  release) build_arguments+=(--release) ;;
+  *) build_arguments+=(--profile "$profile") ;;
+esac
 binary_dir="$target_dir/$profile"
 cli="$binary_dir/a3s-oci"
 shim="$binary_dir/a3s-oci-krun-shim"
 runtime_dir="$binary_dir/a3s-oci-krun-runtime"
+runtime_assets_manifest="crates/krun/runtime/runtime-assets.json"
 
-cargo build -p a3s-oci-cli -p a3s-oci-krun
+cargo "${build_arguments[@]}"
 test -x "$cli"
 test -x "$shim"
 test -d "$runtime_dir"
@@ -52,6 +61,13 @@ case "$architecture" in
     exit 2
     ;;
 esac
+
+provenance="$(
+  linux_kvm_provenance \
+    linux-kvm-compatibility-drift-14-case-v1 "$profile" \
+    "$cli" "$shim" "$runtime_dir" "$runtime_assets_manifest" \
+    "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
+)"
 
 temporary_root="${RUNNER_TEMP:-/tmp}"
 test -d "$temporary_root"
@@ -461,19 +477,29 @@ run_pre_load_case kernel-provenance-drift \
   'manifest runtime bundle does not match the checked-in target bundle'
 
 jq --slurp --arg architecture "$architecture" \
+  --argjson provenance "$provenance" \
   '{
-    schema_version: "a3s.oci.linux-kvm-compatibility-drift.v1",
+    schema_version: "a3s.oci.linux-kvm-compatibility-drift.v2",
     platform: "linux",
     architecture: $architecture,
     status: "available",
     kvm_required: false,
+    provenance: $provenance,
     case_count: length,
     cases: .
   }' "$cases_path" | tee "$report_path"
 
 jq --exit-status \
-  '.schema_version == "a3s.oci.linux-kvm-compatibility-drift.v1"
+  '.schema_version == "a3s.oci.linux-kvm-compatibility-drift.v2"
    and .status == "available" and (.kvm_required | not)
+   and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
+   and .provenance.platform == .platform
+   and .provenance.architecture == .architecture
+   and .provenance.qualification_profile
+     == "linux-kvm-compatibility-drift-14-case-v1"
+   and .provenance.driver == "libkrun-kvm"
+   and .provenance.isolation == "dedicated-vm"
+   and .provenance.source_tree_clean
    and .case_count == 14
    and ([.cases[] | select(
      .status == "rejected"

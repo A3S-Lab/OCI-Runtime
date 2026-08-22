@@ -179,6 +179,15 @@ Completed:
   endpoint, bundle-handoff, runtime-share, recovery-report, and configured
   Guest `cgroupsPath` lifetime checks. CI records zero completed iterations and
   skips the Alpine fixture when KVM cannot be opened;
+- one fail-closed `a3s.oci.linux-kvm-provenance.v1` contract shared by the
+  authenticated entry, post-probe failure, compatibility-drift, lifecycle,
+  owner-restart, and soak reports. It requires a clean exact checkout, rejects
+  a claimed revision that differs from the built checkout, and binds the Git
+  object format, commit/tree, Linux platform/architecture, CLI and shim bytes,
+  runtime manifest and selected runtime files, immutable system-image manifest,
+  build/test profiles, `libkrun-kvm`, and `DedicatedVm`. PR qualification now
+  records the actual checked-out merge commit rather than a different
+  branch-head revision;
 - Apple Silicon and Hypervisor.framework capability reporting through a
   direct `kern.hv_support` query;
 - entitlement-aware direct Hypervisor.framework VM-object create/destroy
@@ -1503,7 +1512,8 @@ release-promotion gates above.
   - [x] Wire the shared Utility VM lifecycle to Linux x86_64/AArch64 and add a
     16-case CI entry for the complete 20-operation lifecycle, two-container
     isolation, three lifecycle cleanup boundaries, and all 11 Host/Guest
-    transport interruption points. The versioned report retains endpoint,
+    transport interruption points. The
+    `a3s.oci.linux-kvm-lifecycle-matrix.v2` report retains endpoint,
     shim-process, runtime-state, bootstrap, token/recovery, and marker cleanup.
     Runners without usable KVM emit `unavailable` with zero cases and skip the
     Alpine fixture rather than manufacturing a pass.
@@ -1514,13 +1524,13 @@ release-promotion gates above.
     evidence, reopens through a distinct kernel-authenticated socket peer, and
     verifies exact stopped/Wait replay plus stopped-only Delete and zero
     transient residue. Runners without KVM retain an explicit zero-case
-    `a3s.oci.linux-kvm-recovery-matrix.v1` report without downloading Alpine.
+    `a3s.oci.linux-kvm-recovery-matrix.v2` report without downloading Alpine.
   - [x] Add a separately scoped bounded KVM soak for x86_64 and AArch64. One
     durable Host Service runs 25 fresh exact generations by default and retains
     per-wave generation/replay, process-incarnation, descriptor, marker,
     endpoint, bundle-handoff, runtime-share, recovery-report, console, and
     configured Guest `cgroupsPath` lifetime evidence. Unavailable runners emit
-    `a3s.oci.linux-kvm-soak-matrix.v1` with zero completed iterations and do not
+    `a3s.oci.linux-kvm-soak-matrix.v2` with zero completed iterations and do not
     download Alpine.
   - [x] Close the KVM-independent driver isolation preflight before any Guest
     share or VM exists. Dedicated-VM Create now rejects `SharedHostKernel`,
@@ -1550,7 +1560,7 @@ release-promotion gates above.
     runtime-share inventory restoration.
   - [x] Run the complete system-root and guest-agent compatibility-drift matrix
     at the configured real-entry worker boundary on x86_64 and AArch64. The
-    14-case `a3s.oci.linux-kvm-compatibility-drift.v1` gate covers manifest and
+    14-case `a3s.oci.linux-kvm-compatibility-drift.v2` gate covers manifest and
     raw-image replacement, same-size mutation, and symlinks; architecture and
     runtime-target mismatch; Guest Agent version and digest drift; and runtime
     archive, libkrun, firmware, and exported-kernel provenance drift. Every

@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 : "${A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST:?set the exact Linux KVM system-image manifest}"
 
+source .github/scripts/lib/linux-kvm-provenance.sh
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   printf 'Linux KVM soak qualification requires a Linux host\n' >&2
   exit 2
@@ -54,6 +56,8 @@ esac
 binary_dir="$target_dir/$profile"
 cli="$binary_dir/a3s-oci"
 shim="$binary_dir/a3s-oci-krun-shim"
+runtime_dir="$binary_dir/a3s-oci-krun-runtime"
+runtime_assets_manifest="crates/krun/runtime/runtime-assets.json"
 
 temporary_root="${RUNNER_TEMP:-/tmp}"
 test -d "$temporary_root"
@@ -100,7 +104,15 @@ test ! -L "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
 cargo "${build_arguments[@]}"
 test -x "$cli"
 test -x "$shim"
-test -d "$binary_dir/a3s-oci-krun-runtime"
+test -d "$runtime_dir"
+
+provenance="$(
+  linux_kvm_provenance \
+    linux-kvm-bounded-soak-only-v1 "$profile" \
+    "$cli" "$shim" "$runtime_dir" "$runtime_assets_manifest" \
+    "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST"
+)"
+source_revision="$(jq --raw-output '.source_revision' <<<"$provenance")"
 
 features="$($cli features)"
 kvm_driver="$(
@@ -113,27 +125,17 @@ kvm_status="$(jq --raw-output '.status' <<<"$kvm_driver")"
 manifest_sha256="$(
   sha256sum "$A3S_OCI_LINUX_KVM_SYSTEM_IMAGE_MANIFEST" | cut -d ' ' -f 1
 )"
-source_revision="${A3S_QUALIFICATION_SOURCE_COMMIT:-}"
-if [[ -z "$source_revision" ]]; then
-  if ! command -v git >/dev/null 2>&1; then
-    printf 'set A3S_QUALIFICATION_SOURCE_COMMIT when git is unavailable\n' >&2
-    exit 1
-  fi
-  source_revision="$(git rev-parse HEAD)"
-fi
-[[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
 
 if [[ "$kvm_status" == "unavailable" ]]; then
   reason="$(jq --raw-output '.reason // "Linux KVM is unavailable"' <<<"$kvm_driver")"
   jq --null-input \
     --arg architecture "$architecture" \
-    --arg manifest_sha256 "$manifest_sha256" \
-    --arg source_revision "$source_revision" \
     --arg reason "$reason" \
     --argjson iterations "$iterations" \
     --argjson kvm_driver "$kvm_driver" \
+    --argjson provenance "$provenance" \
     '{
-      schema_version: "a3s.oci.linux-kvm-soak-matrix.v1",
+      schema_version: "a3s.oci.linux-kvm-soak-matrix.v2",
       platform: "linux",
       architecture: $architecture,
       status: "unavailable",
@@ -141,19 +143,25 @@ if [[ "$kvm_status" == "unavailable" ]]; then
       requested_iterations: $iterations,
       completed_iterations: 0,
       fixture_downloaded: false,
-      system_image_manifest_sha256: $manifest_sha256,
       rootfs_archive_sha256: null,
-      source_revision: $source_revision,
+      provenance: $provenance,
       kvm_driver: $kvm_driver,
       report: null,
       reason: $reason
     }' | tee "$report_path"
   jq --exit-status --argjson iterations "$iterations" \
-    '.schema_version == "a3s.oci.linux-kvm-soak-matrix.v1"
+    '.schema_version == "a3s.oci.linux-kvm-soak-matrix.v2"
      and .platform == "linux" and .status == "unavailable"
      and .kvm_required and .requested_iterations == $iterations
      and .completed_iterations == 0 and (.fixture_downloaded | not)
      and .rootfs_archive_sha256 == null
+     and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
+     and .provenance.platform == .platform
+     and .provenance.architecture == .architecture
+     and .provenance.qualification_profile == "linux-kvm-bounded-soak-only-v1"
+     and .provenance.driver == "libkrun-kvm"
+     and .provenance.isolation == "dedicated-vm"
+     and .provenance.source_tree_clean
      and .kvm_driver.status == "unavailable" and .report == null
      and (.reason | length > 0)' "$report_path" >/dev/null
   exit 0
@@ -231,14 +239,13 @@ jq --exit-status \
 
 jq --null-input \
   --arg architecture "$architecture" \
-  --arg manifest_sha256 "$manifest_sha256" \
   --arg rootfs_archive_sha256 "$rootfs_archive_sha256" \
-  --arg source_revision "$source_revision" \
   --argjson iterations "$iterations" \
   --argjson kvm_driver "$kvm_driver" \
+  --argjson provenance "$provenance" \
   --slurpfile report "$runtime_report" \
   '{
-    schema_version: "a3s.oci.linux-kvm-soak-matrix.v1",
+    schema_version: "a3s.oci.linux-kvm-soak-matrix.v2",
     platform: "linux",
     architecture: $architecture,
     status: "available",
@@ -246,19 +253,31 @@ jq --null-input \
     requested_iterations: $iterations,
     completed_iterations: ($report[0].waves | length),
     fixture_downloaded: true,
-    system_image_manifest_sha256: $manifest_sha256,
     rootfs_archive_sha256: $rootfs_archive_sha256,
-    source_revision: $source_revision,
+    provenance: $provenance,
     kvm_driver: $kvm_driver,
     report: $report[0],
     reason: null
   }' | tee "$report_path"
 
 jq --exit-status --argjson iterations "$iterations" \
-  '.schema_version == "a3s.oci.linux-kvm-soak-matrix.v1"
+  '.schema_version == "a3s.oci.linux-kvm-soak-matrix.v2"
    and .platform == "linux" and .status == "available"
    and .kvm_required and .requested_iterations == $iterations
    and .completed_iterations == $iterations and .fixture_downloaded
+   and .provenance.schema_version == "a3s.oci.linux-kvm-provenance.v1"
+   and .provenance.platform == .platform
+   and .provenance.architecture == .architecture
+   and .provenance.qualification_profile == "linux-kvm-bounded-soak-only-v1"
+   and .provenance.driver == "libkrun-kvm"
+   and .provenance.isolation == "dedicated-vm"
+   and .provenance.source_tree_clean
+   and .report.artifacts.host_service_executable_sha256
+     == .provenance.host_executable_sha256
+   and .report.artifacts.shim_sha256 == .provenance.shim_executable_sha256
+   and .report.artifacts.system_image_manifest_sha256
+     == .provenance.system_image_manifest_sha256
+   and .report.artifacts.source_revision == .provenance.source_revision
    and .kvm_driver.status == "available"
    and .report.status == "available"
    and (.report.waves | length) == $iterations

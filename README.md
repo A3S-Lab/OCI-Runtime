@@ -376,6 +376,11 @@ reattachment remains open for the Box B2 cutover.
 | macOS arm64/HVF | Public same-UID SDK host service; one dedicated VM per exact generation; manifest-bound immutable ext4 system image with pinned A3S Linux kernel and agent; read-only root disk plus separate writable runtime share; Guest-local devtmpfs sources for privileged OCI device nodes; a real protocol-v10 bridge with all 21 Guest operations; retained full protocol-v9 lifecycle, multi-container, namespace/rootfs enforcement, 3 no-delete cleanup points, 11 transport fault points, 180/180 workload-operation replacement paths, negative asset/authentication gates, and 25 fresh-VM waves; source revision `a5a6b53` passed the revision-bound public-path gate across all 20 driver operations plus `features`/`list`/`events`, Host Service `SIGKILL` recovery, and a separate 25/25 fresh-VM soak with zero transient leaks | `experimental` on Apple Silicon. Every currently advertised public macOS/HVF function is implemented and the protocol-v10 public path is qualified at the recorded revision. Signed release-package qualification, OCI conformance, security review, upgrade/rollback compatibility, and longer release soak remain before `supported` |
 | Windows x86_64/WHPX | Real partition/context/guest gates, protocol-v9 lifecycle and filesystem sessions, direct driver qualification, protected per-generation shares, exact exit replay, owner death at both recovery fault boundaries, host-service reopen, stopped-only delete, and complete transient cleanup. The current implementation also builds a reproducible x86_64 ext4 system image, pins Linux 6.12.91 and all native boot assets, attaches the root read-only, and keeps the runtime share separate | `probe-only`; the complete SDK/recovery matrix must still pass with those exact assets on a fresh WHPX host. The v7 shim and Host retain the v6 in-process handle-restoration contract, but the complete fresh-host matrix has not retained that evidence yet |
 
+All retained Linux KVM entry, compatibility, lifecycle, recovery, and soak
+artifacts carry the shared provenance contract described below. This closes
+artifact identity ambiguity; it does not substitute unavailable-runner output
+for successful real-KVM evidence.
+
 Linux discovery and Native Linux development must work when `/dev/kvm` is
 missing or unusable. KVM is an optional utility-VM driver, never a prerequisite
 for host-kernel execution.
@@ -493,7 +498,7 @@ version and digest drift; and runtime archive, libkrun, firmware, and exported
 kernel provenance drift. Every case must fail with no KVM-device access or VM
 entry and restore endpoint, shim-process, token-handoff, and runtime-share
 inventories. The machine-readable result uses
-`a3s.oci.linux-kvm-compatibility-drift.v1`.
+`a3s.oci.linux-kvm-compatibility-drift.v2`.
 
 On a host without usable KVM the authenticated entry command must fail after
 non-KVM setup, retain nested KVM evidence, and restore endpoint, process, and
@@ -505,6 +510,18 @@ that exact boundary and the script rejects any endpoint, process, token, or
 runtime-share residue. This implementation does not promote the driver:
 successful real-entry evidence on both x86_64 and AArch64 plus the
 complete lifecycle, recovery, and soak matrices remain required.
+
+The script retains normal entry in
+`a3s.oci.linux-kvm-agent-entry.v1` and the injected boundary in
+`a3s.oci.linux-kvm-post-probe-failure.v1`. Both wrap the raw v10/v7 Host and
+shim reports with `a3s.oci.linux-kvm-provenance.v1`. The common object requires
+a clean checkout, binds the Git object format, actual checkout commit and tree,
+Linux platform and target architecture, and hashes the CLI, shim, runtime-assets
+manifest, selected runtime files, and system-image manifest. It also records
+the exact build profile, qualification profile, `libkrun-kvm` driver, and
+`dedicated-vm` isolation class. The other KVM gates reuse the same contract, so
+an otherwise green report from different source or runtime bytes cannot satisfy
+a promotion gate.
 
 The KVM-gated lifecycle entry reuses the same Utility VM implementation as the
 Apple Silicon qualification instead of maintaining a second Linux-only test
@@ -534,16 +551,18 @@ When KVM is available, the lifecycle entry downloads the pinned Alpine fixture,
 prepares two bundles under a private runtime share, and runs 16 cases: one full
 lifecycle, one multi-container lifecycle, three no-delete cleanup boundaries,
 and all 11 transport fault points. The
-`a3s.oci.linux-kvm-lifecycle-matrix.v1` report
+`a3s.oci.linux-kvm-lifecycle-matrix.v2` report
 retains every nested runtime report plus endpoint, process, runtime-state,
 bootstrap, token/recovery, and marker cleanup checks. Without usable KVM it
 skips the fixture download and emits `status: unavailable` with zero cases.
 That keeps CI honest about runner capability; it does not count as a hardware
-pass. The recovery entry likewise skips Alpine when KVM is unavailable. With
-KVM it kills the live Host Service, requires authenticated SIGKILL recovery,
+pass. The `a3s.oci.linux-kvm-recovery-matrix.v2` entry likewise skips Alpine
+when KVM is unavailable. With KVM it kills the live Host Service, requires
+authenticated SIGKILL recovery,
 opens a distinct replacement socket owner, replays exact stopped state and
 Wait, and proves stopped-only Delete plus transient cleanup. The soak also
-skips Alpine on an unavailable host; on KVM it runs 25 fresh generations and
+skips Alpine on an unavailable host; its retained aggregate schema is
+`a3s.oci.linux-kvm-soak-matrix.v2`. On KVM it runs 25 fresh generations and
 requires every process, descriptor, endpoint, handoff, share, recovery record,
 and Guest marker to return to baseline after each wave. Available lifecycle,
 recovery, and soak reports are still required from fresh x86_64 and AArch64
