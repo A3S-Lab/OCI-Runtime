@@ -2114,7 +2114,7 @@ evidence.
   state, wait, kill, delete, exec, resize, close-I/O, and stats operations into
   public `a3s-oci-sdk` calls without invoking A3S Box or importing driver
   internals.
-- [ ] Preserve containerd stdin/stdout/stderr and terminal semantics through
+- [x] Preserve containerd stdin/stdout/stderr and terminal semantics through
   the SDK's bounded process-I/O contract, including reconnect, EOF, resize,
   exact exit status, and cancellation cleanup.
 - [ ] Reconcile shim and containerd restart at every lifecycle boundary using
@@ -2139,6 +2139,14 @@ and derives their 18-operation public-SDK union. Endpoint admission consumes
 that union directly, version and RuntimeInfo output expose it, and manifest
 tests reject A3S Box, Runtime implementation, Agent, or Core dependencies in
 the shim crate.
+The bounded process-I/O gate is also complete. Stdin and output requests use
+64 KiB shim bounds below the public SDK maxima; non-terminal stdout and stderr
+remain distinct, terminal output remains PTY-merged, and durable EOF, resize,
+exit-status, and reconnect evidence is retained. Each kernel-accepted output
+FIFO prefix now commits its exact byte cursor before another write, so
+cancellation cannot advance over an unwritten suffix and replacement resumes
+from the first undelivered byte. Missing cursor persistence, malformed chunks,
+cursor gaps, and output after EOF fail closed.
 
 Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
