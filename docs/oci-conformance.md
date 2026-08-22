@@ -30,7 +30,7 @@ all 764 RFC 2119 keyword occurrences are locked in
 The separate schema-support v2 lock classifies all 423 named properties and
 enum values: 257 are enforced, two validated, 75 rejected as unsupported, and
 89 rejected as inapplicable native workload platforms. It has zero pending
-items and zero conformant items. The 334 applicable entries come from 29
+items and zero conformant items. The 334 applicable entries come from 31
 reviewed evidence bindings; this is exact field classification, not a release
 conformance declaration.
 
@@ -99,6 +99,16 @@ poststop warnings are logged while successful operation and cleanup flow
 continue unchanged. Optional nonstandard State values and properties remain
 unadvertised, and optional remaining process properties are deliberately
 deferred until Start.
+
+The common configuration gate now freezes all 79 non-VM items in
+`config-schema.json` and `defs.json`: 69 enforced, two validated, four rejected
+unsupported, and four rejected as inapplicable. Its normative companion
+freezes all 278 `config.md` requirements as 227 enforced, 35 validated, 13
+reviewed external, and three conformant entries. OCI annotations remain exact
+JSON metadata through bundle and Linux executor planning, including escaped
+NUL and control characters, while empty keys and resource bounds still fail
+closed. This closes common field semantics only; Linux, lifecycle, security,
+cross-driver, and release conformance remain separate gates.
 
 ## Current Matrix
 

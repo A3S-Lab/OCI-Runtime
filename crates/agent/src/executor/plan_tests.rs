@@ -146,6 +146,32 @@ fn plans_exact_common_process_fields_for_init_and_exec() {
 }
 
 #[test]
+fn preserves_arbitrary_annotation_strings_without_c_string_restrictions() {
+    let mut config: serde_json::Value =
+        serde_json::from_str(FIXED_CONFIG).expect("decode fixed configuration");
+    config["annotations"] = serde_json::json!({
+        "com.example.control\u{0}key": "prefix\u{0}\u{1f}suffix",
+        "com.example.empty": ""
+    });
+    let encoded = serde_json::to_string(&config).expect("encode annotation configuration");
+
+    let plan = InitPlan::from_bundle(&bundle(&encoded), &null_io())
+        .expect("OCI annotations are JSON metadata, not C strings");
+    assert_eq!(
+        plan.annotations
+            .get("com.example.control\u{0}key")
+            .map(String::as_str),
+        Some("prefix\u{0}\u{1f}suffix")
+    );
+    assert_eq!(
+        plan.annotations
+            .get("com.example.empty")
+            .map(String::as_str),
+        Some("")
+    );
+}
+
+#[test]
 fn ignores_unknown_configuration_properties_during_planning() {
     let mut config: serde_json::Value =
         serde_json::from_str(FIXED_CONFIG).expect("decode fixed configuration");

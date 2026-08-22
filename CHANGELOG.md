@@ -6,6 +6,18 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A closed OCI 1.3 common configuration and process semantics gate. It freezes
+  all 79 common configuration schema items outside the separately reviewed VM
+  section as 69 enforced, two validated, four rejected unsupported, and four
+  rejected inapplicable entries. A second exact gate freezes all 278
+  `config.md` requirements as 227 enforced, 35 validated, 13 reviewed
+  external, and three conformant entries with zero pending ownership. The
+  Linux executor no longer applies a C-string restriction to arbitrary OCI
+  annotation metadata: escaped NUL, control characters, empty values, and
+  unknown keys survive bundle decoding and executor planning exactly, while
+  empty keys and bounded resource limits remain fail-closed. Linux-specific,
+  lifecycle, security, cross-driver, and packaged-artifact conformance remain
+  open.
 - A closed OCI 1.3 VM configuration semantics gate. It freezes all 26
   VM-related schema items as explicitly unsupported by current drivers and all
   24 normative VM requirements as four validated absolute runtime paths plus
