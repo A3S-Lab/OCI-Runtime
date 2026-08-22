@@ -12,6 +12,8 @@ use crate::{Error, ErrorCode, Result};
 
 mod coverage;
 mod embedded;
+#[cfg(test)]
+mod suite_tests;
 
 use embedded::EMBEDDED_SCHEMAS;
 
@@ -794,88 +796,6 @@ mod tests {
                 && item.value == "\"running\""
                 && item.schema == "state-schema.json"
         }));
-    }
-
-    #[test]
-    fn matches_upstream_v1_3_fixture_expectations() {
-        const GOOD_CONFIGS: &[&str] = &[
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/freebsd-example.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/freebsd-minimal.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-netdevice.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/linux-rdma.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal-for-start.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/minimal.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/spec-example.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/zos-example.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/good/zos-minimal.json"
-            ),
-        ];
-        const BAD_CONFIGS: &[&str] = &[
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/bad/freebsd-vnet-disable.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/bad/linux-hugepage.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/bad/linux-netdevice.json"
-            ),
-            include_str!(
-                "../../../vendor/runtime-spec/v1.3.0/schema/test/config/bad/linux-rdma.json"
-            ),
-        ];
-
-        let validator = OciSchemaValidator::new().expect("compile pinned schemas");
-        for source in GOOD_CONFIGS {
-            let value: serde_json::Value =
-                serde_json::from_str(source).expect("upstream good fixture must be JSON");
-            validator
-                .validate(OciSchemaDocument::Configuration, &value)
-                .expect("upstream good fixture must pass");
-        }
-        for source in BAD_CONFIGS {
-            let value: serde_json::Value =
-                serde_json::from_str(source).expect("upstream bad fixture must be JSON");
-            assert!(
-                validator
-                    .validate(OciSchemaDocument::Configuration, &value)
-                    .is_err(),
-                "upstream bad fixture unexpectedly passed: {value}"
-            );
-        }
-
-        let good_state: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../vendor/runtime-spec/v1.3.0/schema/test/state/good/spec-example.json"
-        ))
-        .expect("upstream state fixture must be JSON");
-        validator
-            .validate(OciSchemaDocument::State, &good_state)
-            .expect("upstream state fixture must pass");
-
-        let good_features: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../vendor/runtime-spec/v1.3.0/schema/test/features/good/runc.json"
-        ))
-        .expect("upstream features fixture must be JSON");
-        validator
-            .validate(OciSchemaDocument::Features, &good_features)
-            .expect("upstream features fixture must pass");
     }
 
     #[test]

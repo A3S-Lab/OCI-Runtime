@@ -1978,8 +1978,16 @@ pass on supported x86_64 and aarch64 Linux hosts without KVM.
   from the same driver-specific support data used by validation and execution.
 - [ ] Complete applicable VM configuration semantics without executing
   untrusted hypervisor, kernel, or firmware paths during validation.
-- [ ] Pass the pinned OCI JSON schema suites for config, state, and features
-  using fixtures emitted by every advertised driver profile.
+- [x] Pass the pinned OCI JSON schema suites for config, state, and features
+  using fixtures emitted by every advertised driver profile. The exhaustive
+  SDK gate runs all 19 vendored positive, schema-negative, and malformed-JSON
+  cases and SHA-256-binds the exact fixture inventory and canonical LF text. A
+  separate Host Service matrix validates the checked-in Native Linux, Linux
+  KVM, macOS HVF, and Windows WHPX configurations, each generated Features
+  document, and
+  created, running, and stopped State documents. This closes schema
+  compatibility only, not the remaining semantic, lifecycle, security, or
+  release-artifact gates.
 - [ ] Pass upstream lifecycle validation tools on every supported platform and
   architecture using the exact packaged runtime binaries.
 - [ ] Cross-check supported bundles with upstream OCI lifecycle validation
