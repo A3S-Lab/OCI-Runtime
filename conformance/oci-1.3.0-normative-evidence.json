@@ -1102,7 +1102,10 @@
       ],
       "testIds": [
         "executor::cgroup::plan::tests::rejects_unsupported_memory_controls",
-        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls"
+        "executor::cgroup::update::tests::rejects_unsupported_memory_update_controls",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ]
     },
     {
@@ -2532,7 +2535,10 @@
       ],
       "testIds": [
         "service::tests::reports_only_operations_that_are_currently_implemented",
-        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ]
     },
     {
@@ -2548,7 +2554,9 @@
       ],
       "testIds": [
         "service::tests::reports_only_operations_that_are_currently_implemented",
-        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it"
+        "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation"
       ]
     },
     {
@@ -3140,7 +3148,9 @@
         "linux_seccomp::tests::registries_are_exact_and_unique",
         "service::tests::reports_only_operations_that_are_currently_implemented",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation"
       ]
     },
     {
@@ -3332,6 +3342,7 @@
       ],
       "testIds": [
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
         "service::tests::rejects_unsupported_mount_labels_before_durable_reservation_and_create_dispatch",
         "service::tests::reports_only_operations_that_are_currently_implemented"
       ],
@@ -3467,11 +3478,14 @@
         "oci.features.service-stable-capabilities"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_only_operations_that_are_currently_implemented",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures"
       ],
-      "rationale": "Feature content is built from compile-time registries and the immutable driver set selected when a host service opens. It does not vary with an individual container operation or workload input."
+      "rationale": "Feature content is built from the immutable Linux support profile frozen when the host service registers its driver set. Every driver must publish the same profile, and Create, Exec, Update, and the Linux executor consume that same contract, so reporting cannot vary by workload input or drift from admission."
     }
   ]
 }

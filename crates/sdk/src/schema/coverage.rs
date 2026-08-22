@@ -642,6 +642,53 @@ mod tests {
     }
 
     #[test]
+    fn linux_configuration_schema_items_have_the_exact_support_profile() {
+        let manifest = checked_in_manifest();
+        let items = manifest
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.inventory.schema.as_str(),
+                    "config-linux.json" | "defs-linux.json"
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(items.len(), 190);
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| {
+                    item.disposition == OciSchemaDisposition::Enforced
+                        && item.owner == "linux-executor"
+                })
+                .count(),
+            145
+        );
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| {
+                    item.disposition == OciSchemaDisposition::RejectedUnsupported
+                        && item.owner == "linux-executor"
+                })
+                .count(),
+            45
+        );
+        assert!(items.iter().all(|item| {
+            item.disposition != OciSchemaDisposition::PendingReview
+                && !item.rule_ids.is_empty()
+                && !item.test_ids.is_empty()
+                && (item.disposition != OciSchemaDisposition::RejectedUnsupported
+                    || item
+                        .rationale
+                        .as_deref()
+                        .is_some_and(|rationale| !rationale.trim().is_empty()))
+        }));
+    }
+
+    #[test]
     fn vm_schema_items_have_the_exact_fail_closed_profile() {
         const VM_PATH_POINTERS: &[&str] = &[
             "/vm/properties/hypervisor/properties/path",

@@ -336,6 +336,10 @@ impl RuntimeDriver for UtilityVmRuntimeDriver {
         self.capability.clone()
     }
 
+    fn linux_support(&self) -> Result<a3s_oci_sdk::OciLinuxSupport> {
+        a3s_oci_sdk::OciLinuxSupport::shared_executor()
+    }
+
     fn operations(&self) -> &[RuntimeOperation] {
         &AGENT_DRIVER_OPERATIONS
     }
@@ -758,6 +762,10 @@ macro_rules! delegate_utility_vm_runtime_driver {
         impl $crate::RuntimeDriver for $driver {
             fn capability(&self) -> a3s_oci_core::DriverCapability {
                 $crate::RuntimeDriver::capability(&self.$inner)
+            }
+
+            fn linux_support(&self) -> a3s_oci_sdk::Result<a3s_oci_sdk::OciLinuxSupport> {
+                $crate::RuntimeDriver::linux_support(&self.$inner)
             }
 
             fn operations(&self) -> &[a3s_oci_sdk::RuntimeOperation] {

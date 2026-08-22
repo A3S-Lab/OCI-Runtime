@@ -19,6 +19,7 @@ mod linux_intel_rdt;
 mod linux_memory_policy;
 mod linux_mount_option;
 mod linux_seccomp;
+mod linux_support;
 mod linux_sysctl;
 mod model;
 mod process_io;
@@ -80,6 +81,7 @@ pub use linux_seccomp::{
     OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES, OCI_LINUX_SECCOMP_KNOWN_FLAGS,
     OCI_LINUX_SECCOMP_OPERATORS,
 };
+pub use linux_support::OciLinuxSupport;
 pub use linux_sysctl::{
     OciLinuxSysctlKey, OciLinuxSysctlKeyError, OciLinuxSysctlKeyErrorKind, OciLinuxSysctlNamespace,
 };

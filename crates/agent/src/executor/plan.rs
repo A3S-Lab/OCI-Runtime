@@ -16,6 +16,7 @@ use super::device::DevicePlan;
 use super::hook::HookSet;
 use super::intel_rdt::IntelRdtPlan;
 use super::io_priority::IoPriorityPlan;
+use super::linux_support;
 use super::memory_policy::MemoryPolicyPlan;
 use super::mount::{self, DefaultFilesystemPlan, MountPlan};
 use super::namespace::NamespacePlan;
@@ -70,6 +71,7 @@ impl ProcessPlan {
     }
 
     fn build(process: &Process, io: &ProcessIo, include_exec_affinity: bool) -> Result<Self> {
+        linux_support::shared()?.validate_process(process, "plan-guest-init")?;
         let terminal = process.terminal().unwrap_or(false);
         let resolved_io = io.resolve_for_process(process)?;
         validate_process_io(&resolved_io, terminal)?;
@@ -186,6 +188,7 @@ pub(super) struct InitPlan {
 impl InitPlan {
     pub(super) fn from_bundle(bundle: &OciBundle, io: &ProcessIo) -> Result<Self> {
         let spec = bundle.spec();
+        linux_support::shared()?.validate_spec(spec, "plan-guest-init")?;
         let projection = serde_json::to_value(spec).map_err(|error| {
             Error::new(
                 ErrorCode::Internal,

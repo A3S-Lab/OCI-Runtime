@@ -262,6 +262,59 @@ fn seccomp_requirements_are_all_owner_bound() {
 }
 
 #[test]
+fn linux_configuration_requirements_have_the_exact_support_profile() {
+    let manifest = checked_in_manifest();
+    let requirements = manifest
+        .items
+        .iter()
+        .filter(|item| item.requirement.document == "config-linux.md")
+        .collect::<Vec<_>>();
+
+    assert_eq!(requirements.len(), 218);
+    for (disposition, owner, expected) in [
+        (OciNormativeDisposition::Conformant, "linux-executor", 3),
+        (OciNormativeDisposition::Enforced, "linux-executor", 206),
+        (
+            OciNormativeDisposition::Validated,
+            "sdk-semantic-validation",
+            9,
+        ),
+    ] {
+        assert_eq!(
+            requirements
+                .iter()
+                .filter(|item| item.disposition == disposition && item.owner == owner)
+                .count(),
+            expected,
+            "unexpected {disposition:?} Linux requirement count for {owner}"
+        );
+    }
+    assert!(requirements.iter().all(|item| {
+        item.disposition != OciNormativeDisposition::PendingReview
+            && !item.rule_ids.is_empty()
+            && !item.test_ids.is_empty()
+    }));
+}
+
+#[test]
+fn linux_features_requirements_are_all_enforced_by_the_feature_report() {
+    let manifest = checked_in_manifest();
+    let requirements = manifest
+        .items
+        .iter()
+        .filter(|item| item.requirement.document == "features-linux.md")
+        .collect::<Vec<_>>();
+
+    assert_eq!(requirements.len(), 41);
+    assert!(requirements.iter().all(|item| {
+        item.disposition == OciNormativeDisposition::Enforced
+            && item.owner == "runtime-feature-report"
+            && !item.rule_ids.is_empty()
+            && !item.test_ids.is_empty()
+    }));
+}
+
+#[test]
 fn vm_requirements_have_the_exact_fail_closed_profile() {
     let manifest = checked_in_manifest();
     let requirements = manifest

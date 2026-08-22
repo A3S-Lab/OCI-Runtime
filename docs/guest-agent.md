@@ -274,6 +274,15 @@ returns it from every repeated wait. A bounded wait returns
 releases its registry lock between observations so another container remains
 independently queryable.
 
+Linux admission and planning share one SDK-owned support contract. The Host
+freezes each driver's `OciLinuxSupport` profile when the service opens and uses
+it for Features plus pre-durable Create, Exec, and Update checks. The Agent
+freezes the shared-executor profile in-process and validates the full init
+configuration, each exec process, and every cgroup update before constructing
+their enforcement plans. Unsupported LSM, Seccomp, mount, namespace, and
+cgroup-v1-only controls therefore fail against the same capability set on both
+sides of the transport.
+
 Exec accepts one exact `(container ID, generation, process ID)` target while
 the configured process is running. `init` is reserved, duplicate process IDs
 fail, and exact mutation retries replay their original process or signal

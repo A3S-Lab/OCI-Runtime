@@ -24,7 +24,7 @@ OCI 1.3.0 JSON Schemas. Each item has a SHA-256 identity derived from the OCI
 version, schema name, JSON pointer, inventory kind, and exact value.
 
 `conformance/oci-1.3.0-schema-evidence.json` is the reviewed source of truth
-for applicable items. Its 29 bindings cover 334 unique item IDs with exact
+for applicable items. Its 31 bindings cover 334 unique item IDs with exact
 owners, rule IDs, test IDs, and rejection rationales. The Linux-only workload
 boundary generates the remaining 89 native-platform rejections. Applying that
 evidence to a fresh inventory produces the checked-in
@@ -56,6 +56,14 @@ Zero pending schema items means the field inventory is classified. It does
 not mean the runtime has passed release conformance; the manifest deliberately
 contains zero `conformant` items while lifecycle, security-negative,
 cross-driver, packaged-artifact, and upstream-tool gates remain open.
+
+Two scoped Linux gates prevent the global totals from hiding drift. The 190
+configuration items in `config-linux.json` and `defs-linux.json` are exactly
+145 enforced and 45 rejected unsupported. The 218 `config-linux.md`
+requirements are exactly 206 enforced, nine validated, and three conformant;
+all 41 `features-linux.md` requirements are enforced. Their evidence now binds
+one driver-published support profile to feature generation, pre-durable Create,
+Exec, and Update admission, and Linux Agent planning.
 
 ## Inventory
 

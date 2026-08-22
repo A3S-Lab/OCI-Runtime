@@ -6,6 +6,20 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- One frozen OCI Linux support profile from driver registration through
+  execution. The SDK now owns `OciLinuxSupport`; every runtime driver must
+  publish an exact profile, mixed-driver services reject profile drift while
+  opening, and OCI `Features` is generated from the retained value. Create,
+  Exec, and Update enforce it before durable operation claims, while the Linux
+  Agent consumes the same shared profile again at init, process, and cgroup
+  planning. AppArmor, SELinux, unadvertised Seccomp controls, mount labels, and
+  cgroup-v1-only resources therefore fail at the same advertised boundary. New
+  exact gates freeze the 190 Linux configuration schema items as 145 enforced
+  and 45 rejected unsupported, all 218 `config-linux.md` requirements as 206
+  enforced, nine validated, and three conformant, and all 41
+  `features-linux.md` requirements as enforced. This closes report/admission
+  drift; platform, lifecycle, security, and packaged release conformance remain
+  separate gates.
 - A closed OCI 1.3 common configuration and process semantics gate. It freezes
   all 79 common configuration schema items outside the separately reviewed VM
   section as 69 enforced, two validated, four rejected unsupported, and four

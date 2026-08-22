@@ -754,7 +754,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -923,7 +926,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1210,7 +1216,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1238,7 +1247,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1377,7 +1389,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1405,7 +1420,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1433,7 +1451,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1461,7 +1482,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1540,7 +1564,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1568,7 +1595,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1596,7 +1626,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1624,7 +1657,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1652,7 +1688,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1842,7 +1881,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1870,7 +1912,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -1898,7 +1943,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -2409,6 +2457,9 @@
       ],
       "testIds": [
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims",
         "semantic::tests::rejects_windows_process_fields_as_unsupported"
       ],
       "rationale": "Linux workloads reject Windows commandLine and username fields plus unadvertised AppArmor and SELinux process labels before execution."
@@ -2749,6 +2800,9 @@
       ],
       "testIds": [
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims",
         "semantic::tests::rejects_windows_process_fields_as_unsupported"
       ],
       "rationale": "Linux workloads reject Windows commandLine and username fields plus unadvertised AppArmor and SELinux process labels before execution."
@@ -4055,6 +4109,9 @@
       ],
       "testIds": [
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims",
         "semantic::tests::rejects_windows_process_fields_as_unsupported"
       ],
       "rationale": "Linux workloads reject Windows commandLine and username fields plus unadvertised AppArmor and SELinux process labels before execution."
@@ -4349,6 +4406,9 @@
       ],
       "testIds": [
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims",
         "semantic::tests::rejects_windows_process_fields_as_unsupported"
       ],
       "rationale": "Linux workloads reject Windows commandLine and username fields plus unadvertised AppArmor and SELinux process labels before execution."
@@ -6477,7 +6537,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -6505,7 +6568,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7321,7 +7387,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7349,7 +7418,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7396,7 +7468,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7424,7 +7499,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7452,7 +7530,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7480,7 +7561,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7508,7 +7592,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7536,7 +7623,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7564,7 +7654,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7592,7 +7685,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7620,7 +7716,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7648,7 +7747,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7676,7 +7778,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7704,7 +7809,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7732,7 +7840,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7760,7 +7871,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7788,7 +7902,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7835,7 +7952,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7863,7 +7983,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7891,7 +8014,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7919,7 +8045,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7947,7 +8076,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -7975,7 +8107,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -8003,7 +8138,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -8031,7 +8169,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -8059,7 +8200,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -8493,7 +8637,10 @@
         "executor::cgroup::plan::tests::rejects_cgroup_v1_network_controls_during_create_planning",
         "executor::plan_tests::rejects_every_unimplemented_property_instead_of_ignoring_it",
         "executor::seccomp_tests::rejects_every_unadvertised_seccomp_control_before_mutation",
-        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions"
+        "executor::seccomp_tests::rejects_unsupported_seccomp_architectures_and_notify_actions",
+        "linux_support::tests::support_profile_rejects_every_unadvertised_linux_feature_class",
+        "service::tests::linux_support::create_rejects_unadvertised_linux_features_before_durable_mutation",
+        "service::tests::linux_support::exec_and_update_linux_support_checks_run_before_operation_claims"
       ],
       "rationale": "The selected cgroup v2 profile rejects cgroup v1-only memory, network, realtime CPU, and Block I/O leaf-weight controls; the Linux executor also rejects SELinux mount labels plus unadvertised seccomp architectures, flags, notification transport, and notify actions before mutation."
     },
@@ -9127,9 +9274,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9152,9 +9302,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9177,9 +9330,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9202,9 +9358,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9227,9 +9386,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9252,9 +9414,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9277,9 +9442,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9302,9 +9470,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9327,9 +9498,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9352,9 +9526,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9377,9 +9554,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9402,9 +9582,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9427,9 +9610,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9452,9 +9638,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9477,9 +9666,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9502,9 +9694,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9527,9 +9722,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9552,9 +9750,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9577,9 +9778,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9602,9 +9806,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9627,9 +9834,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9652,9 +9862,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9677,9 +9890,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9702,9 +9918,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9727,9 +9946,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9752,9 +9974,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9777,9 +10002,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9802,9 +10030,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9827,9 +10058,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9852,9 +10086,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9877,9 +10114,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9902,9 +10142,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"
@@ -9927,9 +10170,12 @@
         "oci.features.version-range"
       ],
       "testIds": [
+        "linux_support::tests::shared_executor_profile_is_complete_deterministic_and_self_consistent",
         "schema::tests::matches_upstream_v1_3_fixture_expectations",
         "schema::tests::typed_sdk_models_preserve_upstream_state_and_features_fixtures",
         "service::tests::advertised_oci_version_boundaries_are_accepted_as_bundle_versions",
+        "service::tests::linux_support::configured_features_are_built_from_the_frozen_driver_linux_support",
+        "service::tests::linux_support::service_open_rejects_drivers_with_different_linux_support_profiles",
         "service::tests::reports_builtin_and_driver_unsafe_config_annotations_for_configured_services",
         "service::tests::reports_driver_hook_phases_in_normative_order_and_rejects_duplicates",
         "service::tests::reports_only_operations_that_are_currently_implemented"

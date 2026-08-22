@@ -649,6 +649,15 @@ optional `tmpcopyup` behavior. Feature discovery reports the 60 implemented
 OCI names plus the `rnodev` extension, in sorted order, and does not advertise
 `tmpcopyup`.
 
+All remaining OCI Linux capability reporting follows the same rule. Each
+`RuntimeDriver` supplies one validated `OciLinuxSupport` value when the Host
+Service opens. The registry freezes that value, rejects a multi-driver set if
+any profile differs, and builds `Features` from it. Create, Exec, and Update
+check the same value before durable mutation; the Linux Agent reuses the shared
+profile at init, process, and cgroup planning. AppArmor, SELinux, mount labels,
+unadvertised Seccomp controls, and cgroup-v1-only resources therefore cannot be
+reported one way and admitted another.
+
 Configured host services also report every built-in annotation that can alter
 runtime behavior, together with annotation-backed extensions implemented by
 their active drivers. Probe-only discovery stays empty, and driver-specific
@@ -667,7 +676,8 @@ The repository turns release claims into checked inventories:
 | --- | ---: |
 | Named OCI schema properties and enum values classified | 423 |
 | OCI schema dispositions | 257 enforced · 2 validated · 75 rejected unsupported · 89 rejected inapplicable · 0 pending · 0 conformant |
-| Reviewed schema evidence | 334 applicable items in 31 bindings · 131 rules · 96 tests |
+| Reviewed schema evidence | 334 applicable items in 31 bindings · 132 rules · 103 tests |
+| OCI Linux configuration and Features profile | 190 / 190 schema items: 145 enforced · 45 rejected unsupported; 218 / 218 `config-linux.md`: 206 enforced · 9 validated · 3 conformant; 41 / 41 `features-linux.md` enforced |
 | OCI VM configuration profile | 26 / 26 schema items · 24 / 24 normative requirements · 4 validated absolute paths · 20 fail-closed runtime-owned controls |
 | Pinned OCI JSON Schema suites | 19 / 19 upstream fixtures · 4 / 4 launch profiles with configuration, Features, and created/running/stopped State documents |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |

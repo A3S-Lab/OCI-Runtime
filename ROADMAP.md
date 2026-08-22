@@ -525,10 +525,11 @@ driver implements.
     inventory, while keeping probe-only discovery empty.
   - [x] Validate every emitted feature document against the pinned schema and
     bind its version range, hooks, Linux availability, namespaces, cgroup,
-    seccomp, AppArmor, SELinux, and ID-mapped-mount claims to the same SDK
-    registries and executor tests. Resolve the compile-time recommendation by
-    freezing the driver-specific report when the configured service is built,
-    rather than varying capabilities per workload execution.
+    seccomp, AppArmor, SELinux, and ID-mapped-mount claims to one validated SDK
+    `OciLinuxSupport` profile. Require every driver to publish it, freeze it at
+    registration, reject mixed-driver profile drift, and consume the retained
+    value in Features plus pre-durable Create, Exec, and Update admission. The
+    Linux Agent consumes the same shared profile again during planning.
   - [x] Bind common Root, Mounts, POSIX-platform Mounts, Process, and
     POSIX-platform User behavior to exact admission, planning, init/exec, and
     native workload evidence. The 37 promoted entries cover declared-root
@@ -648,6 +649,12 @@ driver implements.
     executor-plan, selected-driver, and feature-report evidence. Invalid or
     unsupported values fail before durable mutation, and each configured
     service publishes the exact supported subset it will enforce.
+  - [x] Freeze the complete Linux configuration and feature-report ownership
+    profile. The exact gates cover 190 `config-linux.json` and `defs-linux.json`
+    items as 145 enforced and 45 rejected unsupported, all 218
+    `config-linux.md` requirements as 206 enforced, nine validated, and three
+    conformant, and all 41 `features-linux.md` requirements as enforced by the
+    runtime feature report.
   - [x] Bind the two Linux runtime file-descriptor entries to the typed,
     collision-safe inherited-descriptor planner. A3S passes only the exact
     advertised control descriptors and deliberately adds no optional
@@ -666,8 +673,9 @@ driver implements.
     selected-driver preflight before durable reservation because SELinux mount
     labeling is not advertised.
   - [x] Bind the final Features recommendation to the stable configured-service
-    capability report. Runtime driver selection happens when the service is
-    constructed, and per-container execution cannot alter that report.
+    capability report. Runtime driver selection and its Linux support profile
+    are frozen when the service is constructed; opening fails closed for
+    mismatched drivers, and per-container execution cannot alter that report.
   - [x] Classify every entry by common/process, Linux, VM, state, or feature
     semantics and record whether it is applicable to each driver profile.
   - [x] Bind every applicable entry to an exact validator, enforcement owner,

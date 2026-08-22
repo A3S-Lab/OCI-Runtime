@@ -15,6 +15,7 @@ use super::{
     shares_to_weight, validate_cpuset, validate_memory_value, validate_pids_limit,
     validate_supported_resource_fields, CgroupHandle, CgroupSetting, ControlHeadroom,
 };
+use crate::executor::linux_support;
 
 const UPDATE_OPERATION: &str = "update-container-cgroup";
 
@@ -134,6 +135,7 @@ struct CgroupUpdatePlan {
 
 impl CgroupUpdatePlan {
     fn from_resources(resources: &LinuxResources) -> Result<Self> {
+        linux_support::shared()?.validate_resources(resources, UPDATE_OPERATION)?;
         validate_supported_resource_fields(resources)?;
         let memory = resources.memory().as_ref();
         let cpu = resources.cpu().as_ref();

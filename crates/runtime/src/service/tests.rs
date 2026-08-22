@@ -22,11 +22,11 @@ use a3s_oci_sdk::{
     DeleteMode, DeleteRequest, Error, ErrorCode, EventsRequest, ExecRequest, ExitStatus, FileOp,
     FileRequest, FileResponse, FilesystemEntry, FilesystemEntryKind, FilesystemOp,
     FilesystemRequest, FilesystemResponse, Generation, IoMode, IsolationRequest, KillRequest,
-    ListRequest, MemoryStats, OciBundle, OciRuntimeService, OciSchemaValidator, OperationContext,
-    OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord, ProcessTarget,
-    ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind, RuntimeOperation,
-    Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest, TerminalSize,
-    TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
+    ListRequest, MemoryStats, OciBundle, OciLinuxSupport, OciRuntimeService, OciSchemaValidator,
+    OperationContext, OperationId, OutputChunk, OutputStream, ProcessId, ProcessIo, ProcessRecord,
+    ProcessTarget, ProcessesRequest, ReadOutputRequest, ResizeRequest, Result, RuntimeEventKind,
+    RuntimeOperation, Signal, SignalProcessRequest, StartRequest, StateRequest, StatsRequest,
+    TerminalSize, TrustDomainId, UpdateRequest, WaitProcessRequest, WaitRequest, WriteStdinRequest,
     ATTACHMENT_SCHEMA_V1, BUILTIN_POTENTIALLY_UNSAFE_CONFIG_ANNOTATIONS,
     OCI_LINUX_CAPABILITY_NAMES, OCI_LINUX_MEMORY_POLICY_FLAGS, OCI_LINUX_MEMORY_POLICY_MODES,
     OCI_LINUX_MOUNT_OPTIONS, OCI_LINUX_SECCOMP_ACTIONS, OCI_LINUX_SECCOMP_ARCHITECTURES,
@@ -50,6 +50,7 @@ mod fault_matrix;
 mod filesystem_operations;
 mod io_durability;
 mod io_operations;
+mod linux_support;
 mod process_operations;
 mod resource_operations;
 mod schema_profiles;
@@ -106,6 +107,7 @@ struct DurableProcessFixture {
 #[derive(Debug)]
 struct RecordingDriver {
     capability: DriverCapability,
+    linux_support: OciLinuxSupport,
     operations: Vec<RuntimeOperation>,
     hooks: Vec<OciHookPhase>,
     attachments: AttachmentCapabilities,
@@ -140,6 +142,7 @@ impl RecordingDriver {
                 reason: None,
                 evidence: BTreeMap::from([("test-driver".to_string(), "in-process".to_string())]),
             },
+            linux_support: OciLinuxSupport::shared_executor().expect("shared Linux support"),
             operations: vec![
                 RuntimeOperation::Create,
                 RuntimeOperation::State,
@@ -536,6 +539,10 @@ impl RecordingDriver {
 impl RuntimeDriver for RecordingDriver {
     fn capability(&self) -> DriverCapability {
         self.capability.clone()
+    }
+
+    fn linux_support(&self) -> Result<OciLinuxSupport> {
+        Ok(self.linux_support.clone())
     }
 
     fn operations(&self) -> &[RuntimeOperation] {

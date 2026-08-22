@@ -4,9 +4,9 @@ use a3s_oci_sdk::oci_spec::runtime::{ContainerState, LinuxResources, Process};
 use a3s_oci_sdk::{
     async_trait, AttachmentCapabilities, ContainerRecord, ContainerStats, ContainerTarget,
     CreateAttachments, DeleteMode, Error, ErrorCode, ExitStatus, FileRequest, FileResponse,
-    FilesystemRequest, FilesystemResponse, IsolationRequest, OciBundle, OperationContext,
-    OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result, RuntimeOperation,
-    Signal, TerminalSize,
+    FilesystemRequest, FilesystemResponse, IsolationRequest, OciBundle, OciLinuxSupport,
+    OperationContext, OperationId, OutputChunk, ProcessIo, ProcessRecord, ProcessTarget, Result,
+    RuntimeOperation, Signal, TerminalSize,
 };
 
 const CORE_DRIVER_OPERATIONS: [RuntimeOperation; 5] = [
@@ -600,6 +600,14 @@ pub trait RuntimeDriver: Send + Sync {
     /// Current availability, maturity, isolation, and probe evidence.
     fn capability(&self) -> DriverCapability;
 
+    /// Exact Linux configuration and OCI Features support for this driver.
+    ///
+    /// The host freezes this value during driver registration and rejects a
+    /// mixed driver set whose profiles differ. Every in-tree driver returns
+    /// the shared Linux executor profile because native and utility-VM
+    /// workloads use the same enforcement implementation.
+    fn linux_support(&self) -> Result<OciLinuxSupport>;
+
     /// Runtime operations implemented by this exact driver.
     ///
     /// The five core lifecycle operations are required by the current host
@@ -624,26 +632,14 @@ pub trait RuntimeDriver: Send + Sync {
     ///
     /// In-tree drivers boot runtime-pinned utility VMs or share an existing
     /// Linux kernel, so caller-provided `vm` launch configuration is rejected
-    /// by default. A future driver may override this only when it validates
-    /// and enforces every accepted OCI VM field itself.
+    /// by default. Linux support is enforced separately from the frozen
+    /// [`OciLinuxSupport`] value. A future driver may override this method only
+    /// when it validates and enforces every accepted OCI VM field itself.
     fn validate_create_bundle(&self, bundle: &OciBundle) -> Result<()> {
         if bundle.spec().vm().is_some() {
             return Err(Error::new(
                 ErrorCode::Unsupported,
                 "selected runtime driver does not support caller-provided OCI vm configuration; hypervisor, kernel, image, and hardware configuration remain runtime-owned",
-            )
-            .for_operation("create"));
-        }
-        if bundle
-            .spec()
-            .linux()
-            .as_ref()
-            .and_then(|linux| linux.mount_label().as_ref())
-            .is_some()
-        {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                "selected runtime driver does not support linux.mountLabel; SELinux mount labeling is not advertised",
             )
             .for_operation("create"));
         }
