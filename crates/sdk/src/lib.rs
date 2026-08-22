@@ -97,8 +97,8 @@ pub use rootfs_metadata::{
 };
 pub use schema::{
     OciSchemaCoverageItem, OciSchemaCoverageManifest, OciSchemaDisposition, OciSchemaDocument,
-    OciSchemaInventoryItem, OciSchemaInventoryKind, OciSchemaValidationReport, OciSchemaValidator,
-    OciSchemaViolation,
+    OciSchemaEvidenceBinding, OciSchemaEvidenceManifest, OciSchemaInventoryItem,
+    OciSchemaInventoryKind, OciSchemaValidationReport, OciSchemaValidator, OciSchemaViolation,
 };
 pub use semantic::{
     OciSemanticPhase, OciSemanticRule, OciSemanticRuleKind, OciSemanticValidationReport,

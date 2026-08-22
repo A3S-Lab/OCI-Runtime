@@ -371,7 +371,9 @@ Completed:
 - strict, bounded OCI 1.0.0 through 1.3.0 bundle decoding;
 - pinned OCI Runtime Specification 1.3.0 schemas and upstream fixtures;
 - offline configuration, state, and features schema validation;
-- a CI-checked coverage lock for all 423 schema properties and enum values;
+- a CI-checked v2 support lock for all 423 schema properties and enum values:
+  257 enforced, two validated, 75 rejected as unsupported, 89 rejected as
+  inapplicable native workload platforms, and zero pending or conformant;
 - a CI-checked inventory of all 764 RFC 2119 occurrences across the 15
   normative OCI 1.3.0 documents;
 - rejection of unknown configuration properties;
@@ -501,7 +503,9 @@ driver implements.
 - [x] Strictly load and digest-bind OCI bundles.
 - [x] Import the pinned OCI 1.3.0 JSON schemas and fixture inventory.
 - [x] Generate and verify a schema-property and enum-value coverage manifest
-  in CI.
+  in CI. The v2 lock is rebuilt from 29 reviewed evidence bindings for 334
+  applicable items plus 89 generated platform rejections and must exactly
+  classify all 423 inventory items.
 - [x] Generate and verify a SHA-256-bound normative requirement inventory in
   CI.
 - [x] Add phase-aware semantic validators for common, Linux, and VM
@@ -1982,7 +1986,12 @@ pass on supported x86_64 and aarch64 Linux hosts without KVM.
   tools without shipping a second runtime backend.
 - [ ] Run hook-order, rollback, crash-recovery, security-negative, and
   long-running soak suites on every advertised driver profile.
-- [ ] Publish an exact, generated support manifest with no unclassified field.
+- [x] Publish an exact, generated support manifest with no unclassified field.
+  The schema-support v2 lock records 257 enforced, two validated, 75 rejected
+  unsupported, 89 rejected inapplicable, zero pending, and zero conformant
+  items. This closes field classification only; release conformance still
+  requires the remaining lifecycle, security, cross-driver, upstream-tool,
+  and packaged-artifact gates above.
 
 Exit gate: the release report contains retained evidence for every applicable
 normative MUST and MUST NOT requirement in OCI Runtime Specification 1.3.0.
