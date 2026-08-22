@@ -170,8 +170,11 @@ and the retained Native Linux workload now checks both values through procfs.
 The common configuration and runtime-feature annotation maps now have pinned
 positive and negative schema evidence for omission, empty maps, string keys,
 empty and non-empty string values, and structured or unstructured metadata.
-Bundle round-trip evidence separately proves that unknown annotation keys and
-their exact values are preserved. The OCI Image Specification reference used
+Bundle round-trip and Linux executor planning evidence separately prove that
+unknown annotation keys and their exact values are preserved. Annotation
+metadata is carried as JSON rather than a C-string interface, so escaped NUL
+and control characters remain exact while empty keys still fail validation.
+The OCI Image Specification reference used
 by Runtime Specification 1.3.0 is pinned at
 `v1.1.0-rc2@19a74bcb54ba211005a68d85c6b359c2947721ce`, with its configuration,
 conversion, schema, definitions, and license sources retained verbatim. The
@@ -184,6 +187,16 @@ provenance, reverse-domain and reserved-namespace authoring policy, default
 stop orchestration, and future specification-key reservation are classified
 as external responsibilities with explicit rationales. Unknown annotation
 keys remain preserved under the separate runtime extensibility requirement.
+
+The completed common configuration gate freezes the 79 common schema items in
+`config-schema.json` and `defs.json`, excluding the separately reviewed VM
+section. Its exact owner profile is 69 enforced, two validated, four rejected
+unsupported, and four rejected as inapplicable native workload platforms. A
+second scoped gate freezes all 278 `config.md` requirements as 227 enforced,
+35 validated, 13 reviewed external, and three conformant entries. Both gates
+require nonempty rule and test evidence for every runtime-owned item and an
+explicit rationale for every external boundary; neither substitutes for the
+remaining Linux, lifecycle, security, cross-driver, or release gates.
 
 The runtime feature report now derives `potentiallyUnsafeConfigAnnotations`
 from one SDK-owned registry of exact built-in keys and the active drivers'

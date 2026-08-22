@@ -181,6 +181,7 @@
       ],
       "testIds": [
         "bundle::tests::loads_v1_3_fields_without_losing_them",
+        "executor::plan_tests::preserves_arbitrary_annotation_strings_without_c_string_restrictions",
         "schema::tests::validates_annotation_contracts_for_configuration_and_features"
       ]
     },

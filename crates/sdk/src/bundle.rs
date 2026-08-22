@@ -513,6 +513,7 @@ mod tests {
             },
             "annotations": {
                 "dev.a3s.test": "full-spec-pass-through",
+                "com.example.control\u{0}key": "prefix\u{0}\u{1f}suffix",
                 "com.example.empty": "",
                 "com.example.structured": "{\"nested\":true}"
             }
@@ -538,6 +539,10 @@ mod tests {
         assert_eq!(
             encoded["annotations"]["dev.a3s.test"],
             json!("full-spec-pass-through")
+        );
+        assert_eq!(
+            encoded["annotations"]["com.example.control\u{0}key"],
+            json!("prefix\u{0}\u{1f}suffix")
         );
         assert_eq!(encoded["annotations"]["com.example.empty"], json!(""));
         assert_eq!(

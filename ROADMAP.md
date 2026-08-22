@@ -475,7 +475,7 @@ Not yet complete:
 - a production workload driver;
 - OCI hook rollback, crash recovery, security-negative, and soak
   certification;
-- OCI configuration enforcement;
+- complete Linux configuration enforcement and driver feature parity;
 - production-ready native Linux execution;
 - real-driver live process and filesystem session reattachment;
 - A3S Box default routing and cross-platform real-host cutover;
@@ -503,7 +503,7 @@ driver implements.
 - [x] Strictly load and digest-bind OCI bundles.
 - [x] Import the pinned OCI 1.3.0 JSON schemas and fixture inventory.
 - [x] Generate and verify a schema-property and enum-value coverage manifest
-  in CI. The v2 lock is rebuilt from 29 reviewed evidence bindings for 334
+  in CI. The v2 lock is rebuilt from 31 reviewed evidence bindings for 334
   applicable items plus 89 generated platform rejections and must exactly
   classify all 423 inventory items.
 - [x] Generate and verify a SHA-256-bound normative requirement inventory in
@@ -1972,8 +1972,19 @@ pass on supported x86_64 and aarch64 Linux hosts without KVM.
 
 ### R5 — Full OCI 1.3 Conformance
 
-- [ ] Complete common configuration and process semantics and bind every
+- [x] Complete common configuration and process semantics and bind every
   accepted or rejected field to the zero-pending normative evidence ledger.
+  The pinned gate freezes all 79 common configuration schema items outside the
+  separately reviewed VM section: 69 are enforced, two are validated, four
+  unsupported Linux process fields are rejected, and four native non-Linux
+  sections are rejected as inapplicable. All 278 `config.md` requirements are
+  frozen as 227 enforced, 35 validated, 13 reviewed external, and three
+  conformant entries with no pending owner. Arbitrary annotation keys and
+  values remain exact JSON metadata through bundle decoding and Linux executor
+  planning, including escaped NUL and control characters; they are not
+  incorrectly treated as C strings. Empty keys and bounded resource limits
+  still fail closed. This closes common configuration semantics, not Linux
+  configuration, cross-driver lifecycle, security, or release conformance.
 - [ ] Complete Linux configuration enforcement and generate feature reporting
   from the same driver-specific support data used by validation and execution.
 - [x] Complete applicable VM configuration semantics without executing

@@ -567,6 +567,81 @@ mod tests {
     }
 
     #[test]
+    fn common_configuration_schema_items_have_the_exact_owner_profile() {
+        let manifest = checked_in_manifest();
+        let items = manifest
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.inventory.schema.as_str(),
+                    "config-schema.json" | "defs.json"
+                ) && !(item.inventory.schema == "config-schema.json"
+                    && item.inventory.pointer == "/properties/vm")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(items.len(), 79);
+        for (disposition, owner, expected) in [
+            (OciSchemaDisposition::Enforced, "linux-executor", 68),
+            (OciSchemaDisposition::Enforced, "runtime-bundle", 1),
+            (
+                OciSchemaDisposition::RejectedInapplicablePlatform,
+                "sdk-semantic-validation",
+                4,
+            ),
+            (
+                OciSchemaDisposition::RejectedUnsupported,
+                "sdk-semantic-and-runtime",
+                4,
+            ),
+            (OciSchemaDisposition::Validated, "runtime-bundle", 1),
+            (
+                OciSchemaDisposition::Validated,
+                "sdk-semantic-validation",
+                1,
+            ),
+        ] {
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item.disposition == disposition && item.owner == owner)
+                    .count(),
+                expected,
+                "unexpected {disposition:?} schema-item count for {owner}"
+            );
+        }
+        assert!(items.iter().all(|item| {
+            item.disposition != OciSchemaDisposition::PendingReview
+                && !item.rule_ids.is_empty()
+                && !item.test_ids.is_empty()
+                && (!matches!(
+                    item.disposition,
+                    OciSchemaDisposition::RejectedInapplicablePlatform
+                        | OciSchemaDisposition::RejectedUnsupported
+                ) || item
+                    .rationale
+                    .as_deref()
+                    .is_some_and(|rationale| !rationale.trim().is_empty()))
+        }));
+        let annotations = items
+            .iter()
+            .find(|item| {
+                item.inventory.schema == "config-schema.json"
+                    && item.inventory.pointer == "/properties/annotations"
+            })
+            .expect("configuration annotations schema item");
+        assert_eq!(
+            annotations.test_ids,
+            [
+                "bundle::tests::loads_v1_3_fields_without_losing_them",
+                "executor::plan_tests::preserves_arbitrary_annotation_strings_without_c_string_restrictions",
+                "schema::tests::validates_annotation_contracts_for_configuration_and_features",
+            ]
+        );
+    }
+
+    #[test]
     fn vm_schema_items_have_the_exact_fail_closed_profile() {
         const VM_PATH_POINTERS: &[&str] = &[
             "/vm/properties/hypervisor/properties/path",

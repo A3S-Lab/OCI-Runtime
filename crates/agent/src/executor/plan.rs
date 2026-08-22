@@ -599,10 +599,8 @@ fn plan_annotations(
     let mut total_bytes = 0_usize;
     let mut planned = BTreeMap::new();
     for (key, value) in annotations {
-        if key.is_empty() || key.as_bytes().contains(&0) || value.as_bytes().contains(&0) {
-            return Err(invalid(
-                "annotations keys must be non-empty and annotations must not contain NUL bytes",
-            ));
+        if key.is_empty() {
+            return Err(invalid("annotation keys must not be empty"));
         }
         total_bytes = total_bytes
             .checked_add(key.len())

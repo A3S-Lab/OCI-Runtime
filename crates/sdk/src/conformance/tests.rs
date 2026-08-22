@@ -104,6 +104,118 @@ fn normative_manifest_has_no_pending_review() {
 }
 
 #[test]
+fn common_configuration_requirements_have_the_exact_owner_profile() {
+    let manifest = checked_in_manifest();
+    let requirements = manifest
+        .items
+        .iter()
+        .filter(|item| item.requirement.document == "config.md")
+        .collect::<Vec<_>>();
+
+    assert_eq!(requirements.len(), 278);
+    for (disposition, owner, expected) in [
+        (OciNormativeDisposition::Conformant, "linux-executor", 2),
+        (
+            OciNormativeDisposition::Conformant,
+            "sdk-semantic-and-runtime",
+            1,
+        ),
+        (OciNormativeDisposition::Enforced, "linux-executor", 200),
+        (OciNormativeDisposition::Enforced, "runtime-bundle", 3),
+        (
+            OciNormativeDisposition::Enforced,
+            "runtime-feature-report",
+            2,
+        ),
+        (
+            OciNormativeDisposition::Enforced,
+            "sdk-semantic-and-runtime",
+            1,
+        ),
+        (
+            OciNormativeDisposition::Enforced,
+            "sdk-semantic-validation",
+            21,
+        ),
+        (
+            OciNormativeDisposition::ReviewedExternal,
+            "bundle-author",
+            1,
+        ),
+        (
+            OciNormativeDisposition::ReviewedExternal,
+            "oci-configuration-author",
+            2,
+        ),
+        (
+            OciNormativeDisposition::ReviewedExternal,
+            "oci-image-converter",
+            8,
+        ),
+        (
+            OciNormativeDisposition::ReviewedExternal,
+            "oci-specification-author",
+            1,
+        ),
+        (
+            OciNormativeDisposition::ReviewedExternal,
+            "runtime-caller",
+            1,
+        ),
+        (OciNormativeDisposition::Validated, "runtime-bundle", 2),
+        (
+            OciNormativeDisposition::Validated,
+            "sdk-image-annotation-validation",
+            8,
+        ),
+        (
+            OciNormativeDisposition::Validated,
+            "sdk-schema-validation",
+            8,
+        ),
+        (
+            OciNormativeDisposition::Validated,
+            "sdk-semantic-validation",
+            17,
+        ),
+    ] {
+        assert_eq!(
+            requirements
+                .iter()
+                .filter(|item| item.disposition == disposition && item.owner == owner)
+                .count(),
+            expected,
+            "unexpected {disposition:?} requirement count for {owner}"
+        );
+    }
+    assert!(requirements.iter().all(|item| {
+        item.disposition != OciNormativeDisposition::PendingReview
+            && !item.rule_ids.is_empty()
+            && !item.test_ids.is_empty()
+            && (item.disposition != OciNormativeDisposition::ReviewedExternal
+                || item
+                    .rationale
+                    .as_deref()
+                    .is_some_and(|rationale| !rationale.trim().is_empty()))
+    }));
+    let annotation_extensibility = requirements
+        .iter()
+        .find(|item| {
+            item.rule_ids
+                .iter()
+                .any(|rule| rule == "oci.common.annotations.unknown-preserved")
+        })
+        .expect("unknown-annotation extensibility requirement");
+    assert_eq!(
+        annotation_extensibility.test_ids,
+        [
+            "bundle::tests::loads_v1_3_fields_without_losing_them",
+            "executor::plan_tests::preserves_arbitrary_annotation_strings_without_c_string_restrictions",
+        ]
+    );
+}
+
+#[test]
 fn namespace_mapping_and_time_requirements_are_all_owner_bound() {
     let manifest = checked_in_manifest();
     let headings = [
