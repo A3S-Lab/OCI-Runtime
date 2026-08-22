@@ -2110,7 +2110,7 @@ evidence.
 - [x] Define the supported containerd runtime-v2 API and version matrix, the
   shim binary and package layout, and the exact mapping from containerd
   namespace and task identity to OCI container ID and runtime generation.
-- [ ] Load the containerd-provided OCI bundle and translate create, start,
+- [x] Load the containerd-provided OCI bundle and translate create, start,
   state, wait, kill, delete, exec, resize, close-I/O, and stats operations into
   public `a3s-oci-sdk` calls without invoking A3S Box or importing driver
   internals.
@@ -2134,6 +2134,11 @@ binary and Linux archive entry `containerd-shim-a3s-oci-v2`, installation at
 and `sha256-length-framed-u64be-v1` identity vectors. Tagged Linux archives
 include the shim and contract document; RuntimeInfo exposes the contract,
 identity, generation, and exact development-qualification annotations.
+The same code-owned contract now freezes 23 exact Task and FIFO-pump routes
+and derives their 18-operation public-SDK union. Endpoint admission consumes
+that union directly, version and RuntimeInfo output expose it, and manifest
+tests reject A3S Box, Runtime implementation, Agent, or Core dependencies in
+the shim crate.
 
 Current Native Linux development evidence covers containerd 2.2.2 lifecycle,
 exec, pause/resume, update, stats, PID inventory, exact init and exec exits,
