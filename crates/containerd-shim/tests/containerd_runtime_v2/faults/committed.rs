@@ -15,9 +15,12 @@ use crate::support::*;
 use super::shared::{containerd_operation_id, runtime_client};
 use super::{find_exact_shim_pid, signal_kill, wait_for_runtime_absence, wait_for_shim_cleanup};
 
+#[path = "committed/create.rs"]
+mod create;
 #[path = "committed/process.rs"]
 mod process;
 
+pub(super) use create::qualify_create_effect_committed_shim_sigkill;
 pub(super) use process::{
     qualify_exec_effect_committed_shim_sigkill,
     qualify_signal_process_effect_committed_shim_sigkill,

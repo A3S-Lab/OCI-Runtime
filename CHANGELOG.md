@@ -6,6 +6,16 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A real post-commit containerd Create fault gate. It stops the Host before
+  dispatch, waits for the shim's complete create intent, stops that shim,
+  submits the exact same public-SDK Create identity, and kills the shim only
+  after the Runtime returns the committed generation. DeleteShim must replay
+  that identity, join and remove the original generation, and leave no task,
+  process, runtime state, rootfs, bundle, or shim while preserving caller-owned
+  containerd metadata. Exact-generation and current-state checks expose a
+  duplicate generation or driver reroute instead of accepting apparent local
+  cleanup. The broader restart-boundary gate remains open pending the remaining
+  mutation audit and retained real-host evidence.
 - Byte-exact containerd output cancellation and reconnect handling. The shim
   now commits the durable output cursor after every kernel-accepted FIFO write
   instead of after an entire SDK chunk, so cancellation preserves the exact

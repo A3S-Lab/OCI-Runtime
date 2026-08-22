@@ -90,6 +90,7 @@ pub(crate) async fn qualify_shim_sigkill(
     prefix: &str,
 ) -> TestResult<()> {
     qualify_create_in_flight_shim_sigkill(config, prefix).await?;
+    committed::qualify_create_effect_committed_shim_sigkill(config, prefix).await?;
     committed::qualify_start_effect_committed_shim_sigkill(config, prefix).await?;
     committed::qualify_kill_effect_committed_shim_sigkill(config, prefix).await?;
     committed::qualify_delete_effect_committed_shim_sigkill(config, prefix).await?;
