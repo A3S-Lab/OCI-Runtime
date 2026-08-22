@@ -11,6 +11,7 @@ use a3s_oci_sdk::{
 use serde::{Deserialize, Serialize};
 
 use crate::adapter::TaskIdentity;
+use crate::contract::TASK_INCARNATION_BYTES;
 use crate::identity::IncarnationId;
 
 mod create_intent;
@@ -22,7 +23,7 @@ const INCARNATION_FILE_NAME: &str = "a3s-oci-shim-incarnation-v1";
 const METADATA_SCHEMA_VERSION: u32 = 8;
 const MIN_METADATA_SCHEMA_VERSION: u32 = 1;
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
-const MAX_INCARNATION_BYTES: u64 = 64;
+const MAX_INCARNATION_BYTES: u64 = (TASK_INCARNATION_BYTES * 2) as u64;
 const MAX_PENDING_STDIN_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

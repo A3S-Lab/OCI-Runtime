@@ -2,7 +2,7 @@ use a3s_oci_sdk::{Error, ErrorCode, IsolationRequest};
 use containerd_shim_protos::protobuf::well_known_types::any::Any;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const CREATE_OPTIONS_TYPE_URL: &str = "dev.a3s.oci.runtime.v1.CreateOptions";
+use crate::contract::{CREATE_OPTIONS_SCHEMA_VERSION, CREATE_OPTIONS_TYPE_URL};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -38,12 +38,12 @@ pub(crate) fn decode(options: Option<&Any>) -> Result<IsolationRequest, Error> {
             format!("invalid A3S containerd create options: {error}"),
         )
     })?;
-    if options.schema_version != 1 {
+    if options.schema_version != CREATE_OPTIONS_SCHEMA_VERSION {
         return Err(options_error(
             ErrorCode::Unsupported,
             format!(
-                "unsupported A3S containerd create options schema {}; expected 1",
-                options.schema_version
+                "unsupported A3S containerd create options schema {}; expected {CREATE_OPTIONS_SCHEMA_VERSION}",
+                options.schema_version,
             ),
         ));
     }

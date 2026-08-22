@@ -6,6 +6,8 @@ use std::io::{stdin, stdout, Read, Write};
 #[cfg(unix)]
 mod adapter;
 #[cfg(unix)]
+mod contract;
+#[cfg(unix)]
 mod identity;
 #[cfg(unix)]
 mod io;
@@ -22,27 +24,28 @@ mod stats;
 use service::Service;
 
 #[cfg(unix)]
-const RUNTIME_TYPE: &str = "io.containerd.a3s-oci.v2";
-
-#[cfg(unix)]
 fn main() {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     let flags = match containerd_shim::parse(&arguments) {
         Ok(flags) => flags,
         Err(error) => {
-            eprintln!("{RUNTIME_TYPE}: failed to parse shim arguments: {error}");
+            eprintln!(
+                "{}: failed to parse shim arguments: {error}",
+                contract::RUNTIME_TYPE
+            );
             std::process::exit(1);
         }
     };
     if flags.version {
-        println!("containerd-shim-a3s-oci-v2:");
-        println!("  Runtime: {RUNTIME_TYPE}");
-        println!("  Version: {}", env!("CARGO_PKG_VERSION"));
+        write_version();
         return;
     }
     if flags.info {
         if let Err(error) = write_runtime_info() {
-            eprintln!("{RUNTIME_TYPE}: failed to report runtime info: {error}");
+            eprintln!(
+                "{}: failed to report runtime info: {error}",
+                contract::RUNTIME_TYPE
+            );
             std::process::exit(1);
         }
         return;
@@ -53,7 +56,10 @@ fn main() {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("{RUNTIME_TYPE}: failed to start Tokio runtime: {error}");
+            eprintln!(
+                "{}: failed to start Tokio runtime: {error}",
+                contract::RUNTIME_TYPE
+            );
             std::process::exit(1);
         }
     };
@@ -63,9 +69,39 @@ fn main() {
         ..Default::default()
     };
     runtime.block_on(containerd_shim::asynchronous::run::<Service>(
-        RUNTIME_TYPE,
+        contract::RUNTIME_TYPE,
         Some(config),
     ));
+}
+
+#[cfg(unix)]
+fn write_version() {
+    println!("{}:", contract::SHIM_BINARY);
+    println!("  Runtime: {}", contract::RUNTIME_TYPE);
+    println!("  Version: {}", env!("CARGO_PKG_VERSION"));
+    println!("  Contract: {}", contract::CONTRACT_VERSION);
+    println!("  Task API: {}", contract::TASK_API_SERVICE);
+    println!(
+        "  Package: {}/{}",
+        contract::SHIM_INSTALL_DIRECTORY,
+        contract::SHIM_BINARY
+    );
+    println!("  Identity: {}", contract::IDENTITY_ENCODING);
+    println!("  Generation: {}", contract::GENERATION_MAPPING);
+    println!("  Task methods:");
+    for method in contract::TASK_METHODS {
+        println!("    {}: {}", method.name, method.status.label());
+    }
+    println!("  Compatibility:");
+    for claim in contract::COMPATIBILITY_MATRIX {
+        println!(
+            "    {} | {} | {} | {}",
+            claim.containerd,
+            claim.host,
+            claim.profile,
+            claim.status.label()
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -78,9 +114,9 @@ fn write_runtime_info() -> Result<(), String> {
     if request.len() > 1024 * 1024 {
         return Err("RuntimeInfo request exceeds the 1 MiB limit".to_string());
     }
-    let endpoint = std::env::var("A3S_OCI_RUNTIME_ENDPOINT")
-        .or_else(|_| std::env::var("A3S_OCI_RUNTIME_SOCKET"))
-        .unwrap_or_else(|_| "/run/a3s-oci/runtime.sock".to_string());
+    let endpoint = std::env::var(contract::RUNTIME_ENDPOINT_ENV)
+        .or_else(|_| std::env::var(contract::LEGACY_RUNTIME_ENDPOINT_ENV))
+        .unwrap_or_else(|_| contract::DEFAULT_UNIX_ENDPOINT.to_string());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -110,16 +146,43 @@ fn encode_runtime_info(feature_json: &[u8], endpoint: &str) -> Result<Vec<u8>, S
     let mut annotations = std::collections::HashMap::new();
     annotations.insert(
         "dev.a3s.oci.runtime-type".to_string(),
-        RUNTIME_TYPE.to_string(),
+        contract::RUNTIME_TYPE.to_string(),
     );
     annotations.insert("dev.a3s.oci.sdk-endpoint".to_string(), endpoint.to_string());
+    annotations.insert(
+        "dev.a3s.oci.containerd-contract-version".to_string(),
+        contract::CONTRACT_VERSION.to_string(),
+    );
+    annotations.insert(
+        "dev.a3s.oci.containerd-task-api".to_string(),
+        contract::TASK_API_SERVICE.to_string(),
+    );
+    annotations.insert(
+        "dev.a3s.oci.identity-encoding".to_string(),
+        contract::IDENTITY_ENCODING.to_string(),
+    );
+    annotations.insert(
+        "dev.a3s.oci.generation-mapping".to_string(),
+        contract::GENERATION_MAPPING.to_string(),
+    );
+    let qualified = &contract::DEVELOPMENT_QUALIFICATION;
+    annotations.insert(
+        "dev.a3s.oci.containerd-development-qualification".to_string(),
+        format!(
+            "{};{};{};{}",
+            qualified.containerd,
+            qualified.host,
+            qualified.profile,
+            qualified.status.label()
+        ),
+    );
     let features = containerd_shim_protos::protobuf::well_known_types::any::Any {
-        type_url: "types.containerd.io/opencontainers/runtime-spec/1/features/Features".to_string(),
+        type_url: contract::OCI_FEATURES_TYPE_URL.to_string(),
         value: feature_json.to_vec(),
         ..Default::default()
     };
     let info = RuntimeInfo {
-        name: "containerd-shim-a3s-oci-v2".to_string(),
+        name: contract::SHIM_BINARY.to_string(),
         version: MessageField::some(RuntimeVersion {
             version: env!("CARGO_PKG_VERSION").to_string(),
             revision: option_env!("A3S_OCI_GIT_REVISION")
@@ -153,17 +216,29 @@ mod tests {
     #[test]
     fn runtime_info_is_a3s_identified_and_carries_oci_features() {
         let feature_json = br#"{"ociVersionMin":"1.0.2","ociVersionMax":"1.3.0"}"#;
-        let encoded = encode_runtime_info(feature_json, "/run/a3s-oci/runtime.sock")
+        let encoded = encode_runtime_info(feature_json, contract::DEFAULT_UNIX_ENDPOINT)
             .expect("encode RuntimeInfo");
         let info = RuntimeInfo::parse_from_bytes(&encoded).expect("decode RuntimeInfo");
 
-        assert_eq!(info.name(), "containerd-shim-a3s-oci-v2");
+        assert_eq!(info.name(), contract::SHIM_BINARY);
         assert_eq!(info.version().version(), env!("CARGO_PKG_VERSION"));
-        assert_eq!(info.annotations()["dev.a3s.oci.runtime-type"], RUNTIME_TYPE);
         assert_eq!(
-            info.features().type_url,
-            "types.containerd.io/opencontainers/runtime-spec/1/features/Features"
+            info.annotations()["dev.a3s.oci.runtime-type"],
+            contract::RUNTIME_TYPE
         );
+        assert_eq!(
+            info.annotations()["dev.a3s.oci.containerd-contract-version"],
+            contract::CONTRACT_VERSION.to_string()
+        );
+        assert_eq!(
+            info.annotations()["dev.a3s.oci.containerd-task-api"],
+            contract::TASK_API_SERVICE
+        );
+        assert_eq!(
+            info.annotations()["dev.a3s.oci.identity-encoding"],
+            contract::IDENTITY_ENCODING
+        );
+        assert_eq!(info.features().type_url, contract::OCI_FEATURES_TYPE_URL);
         assert_eq!(info.features().value, feature_json);
     }
 }

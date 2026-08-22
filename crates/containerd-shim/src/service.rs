@@ -16,6 +16,7 @@ use containerd_shim_protos::{api, protobuf, ttrpc};
 use tokio::sync::{Mutex, Notify};
 
 use crate::adapter::{self, ExecIdentity, RuntimeAdapter, TaskIdentity};
+use crate::contract::{DEFAULT_UNIX_ENDPOINT, LEGACY_RUNTIME_ENDPOINT_ENV, RUNTIME_ENDPOINT_ENV};
 use crate::io::{self, ProcessIoEndpoints, ProcessPumps};
 use crate::metadata::{
     ControlOperationKind, ExecMetadata, ExecStage, NewShimCreateIntent, NewShimMetadata,
@@ -31,10 +32,6 @@ mod task;
 #[cfg(test)]
 mod tests;
 
-#[cfg(unix)]
-const DEFAULT_ENDPOINT: &str = "/run/a3s-oci/runtime.sock";
-#[cfg(windows)]
-const DEFAULT_ENDPOINT: &str = r"\\.\pipe\a3s-oci-runtime";
 const DELETE_SHIM_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
@@ -529,9 +526,9 @@ fn stdin_journal_error(
 
 impl Service {
     fn endpoint_from_environment() -> String {
-        std::env::var("A3S_OCI_RUNTIME_ENDPOINT")
-            .or_else(|_| std::env::var("A3S_OCI_RUNTIME_SOCKET"))
-            .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string())
+        std::env::var(RUNTIME_ENDPOINT_ENV)
+            .or_else(|_| std::env::var(LEGACY_RUNTIME_ENDPOINT_ENV))
+            .unwrap_or_else(|_| DEFAULT_UNIX_ENDPOINT.to_string())
     }
 
     async fn adapter(&self) -> Result<RuntimeAdapter, RuntimeError> {

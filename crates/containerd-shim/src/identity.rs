@@ -1,18 +1,18 @@
 use a3s_oci_sdk::{ContainerId, OperationContext, OperationId, ProcessId, Result};
 use sha2::{Digest, Sha256};
 
-const CONTAINER_PREFIX: &str = "ctrd-";
-const PROCESS_PREFIX: &str = "exec-";
-const OPERATION_PREFIX: &str = "ctrd-op-";
-const INCARNATION_BYTES: usize = 32;
-const INCARNATION_HEX_BYTES: usize = INCARNATION_BYTES * 2;
+use crate::contract::{
+    CONTAINER_ID_PREFIX, OPERATION_ID_PREFIX, PROCESS_ID_PREFIX, TASK_INCARNATION_BYTES,
+};
+
+const INCARNATION_HEX_BYTES: usize = TASK_INCARNATION_BYTES * 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IncarnationId(String);
 
 impl IncarnationId {
     pub(crate) fn generate() -> Result<Self> {
-        let mut bytes = [0_u8; INCARNATION_BYTES];
+        let mut bytes = [0_u8; TASK_INCARNATION_BYTES];
         getrandom::fill(&mut bytes).map_err(|error| {
             a3s_oci_sdk::Error::new(
                 a3s_oci_sdk::ErrorCode::Unavailable,
@@ -51,7 +51,7 @@ impl IncarnationId {
 
 pub(crate) fn container_id(namespace: &str, task_id: &str) -> Result<ContainerId> {
     ContainerId::new(format!(
-        "{CONTAINER_PREFIX}{}",
+        "{CONTAINER_ID_PREFIX}{}",
         digest_components(&[namespace.as_bytes(), task_id.as_bytes()])
     ))
 }
@@ -68,7 +68,7 @@ pub(crate) fn process_id(
         components.push(&incarnation);
     }
     ProcessId::new(format!(
-        "{PROCESS_PREFIX}{}",
+        "{PROCESS_ID_PREFIX}{}",
         digest_components(&components)
     ))
 }
@@ -93,7 +93,7 @@ pub(crate) fn operation(
     }
     components.push(action.as_bytes());
     Ok(OperationContext::new(OperationId::new(format!(
-        "{OPERATION_PREFIX}{}",
+        "{OPERATION_ID_PREFIX}{}",
         digest_components(&components)
     ))?))
 }
@@ -119,13 +119,14 @@ mod tests {
 
         assert_eq!(first, replay);
         assert_ne!(first, other_namespace);
-        assert!(first.as_str().starts_with(CONTAINER_PREFIX));
+        assert!(first.as_str().starts_with(CONTAINER_ID_PREFIX));
         assert!(first.as_str().len() <= 128);
     }
 
     #[test]
     fn operation_identity_includes_action_and_exec_scope() {
-        let incarnation = IncarnationId::new("01".repeat(INCARNATION_BYTES)).expect("incarnation");
+        let incarnation =
+            IncarnationId::new("01".repeat(TASK_INCARNATION_BYTES)).expect("incarnation");
         let start = operation("k8s.io", "task", Some(&incarnation), None, "start")
             .expect("start operation");
         let kill = operation("k8s.io", "task", Some(&incarnation), None, "kill-15")
@@ -157,8 +158,8 @@ mod tests {
 
     #[test]
     fn separate_task_incarnations_have_separate_operation_identities() {
-        let first = IncarnationId::new("01".repeat(INCARNATION_BYTES)).expect("first");
-        let second = IncarnationId::new("02".repeat(INCARNATION_BYTES)).expect("second");
+        let first = IncarnationId::new("01".repeat(TASK_INCARNATION_BYTES)).expect("first");
+        let second = IncarnationId::new("02".repeat(TASK_INCARNATION_BYTES)).expect("second");
 
         assert_ne!(
             operation("default", "task", Some(&first), None, "create")
@@ -182,7 +183,7 @@ mod tests {
     #[test]
     fn process_identity_does_not_embed_untrusted_path_text() {
         let process = process_id("k8s.io", "../task", "exec/../../x", 1).expect("process ID");
-        assert!(process.as_str().starts_with(PROCESS_PREFIX));
+        assert!(process.as_str().starts_with(PROCESS_ID_PREFIX));
         assert!(!process.as_str().contains('/'));
         assert!(!process.as_str().contains(".."));
     }
@@ -190,7 +191,7 @@ mod tests {
     #[test]
     fn deleted_exec_id_reuse_allocates_fresh_process_and_operation_identities() {
         let task_incarnation =
-            IncarnationId::new("03".repeat(INCARNATION_BYTES)).expect("task incarnation");
+            IncarnationId::new("03".repeat(TASK_INCARNATION_BYTES)).expect("task incarnation");
         let first_process = process_id("default", "task", "shell", 1).expect("first process");
         let second_process = process_id("default", "task", "shell", 2).expect("second process");
         let first_operation = operation(
@@ -218,11 +219,36 @@ mod tests {
     fn zero_exec_incarnation_preserves_the_legacy_identity_encoding() {
         let legacy = process_id("default", "task", "shell", 0).expect("legacy process");
         let expected = ProcessId::new(format!(
-            "{PROCESS_PREFIX}{}",
+            "{PROCESS_ID_PREFIX}{}",
             digest_components(&[b"default", b"task", b"shell"])
         ))
         .expect("expected legacy process");
 
         assert_eq!(legacy, expected);
+    }
+
+    #[test]
+    fn identity_encoding_matches_the_published_v1_vectors() {
+        assert_eq!(
+            container_id("k8s.io", "task/a")
+                .expect("container identity")
+                .as_str(),
+            "ctrd-9e87b4d0ad12d991219bcd3bb40312c1e1abce101b71be36752f3b7de9550106"
+        );
+        assert_eq!(
+            process_id("k8s.io", "task", "shell", 1)
+                .expect("process identity")
+                .as_str(),
+            "exec-3e8eaef01bc980653a2a276d5b11463dc2714fbe1673bd871108180d4d6473b2"
+        );
+        let incarnation =
+            IncarnationId::new("03".repeat(TASK_INCARNATION_BYTES)).expect("incarnation");
+        assert_eq!(
+            operation("default", "task", Some(&incarnation), None, "create")
+                .expect("operation identity")
+                .operation_id
+                .as_str(),
+            "ctrd-op-b11d3a221643d0eceb13a794acba2dc2b3163b5d570c5bce007899e6b7611b88"
+        );
     }
 }

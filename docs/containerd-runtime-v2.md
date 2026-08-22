@@ -17,6 +17,15 @@ runtime-v2 contract is stable. That is not a support claim. Add a release to
 the table only after the same ignored real-host qualification passes against
 the packaged shim, SDK, host service, agent, and selected driver.
 
+Contract v1 owns this matrix in code and exposes it through the shim's version
+output and RuntimeInfo annotations. The accepted ttrpc service is
+`containerd.task.v2.Task`. State, Create, Start, Delete, Pids, Pause, Resume,
+Kill, Exec, ResizePty, CloseIO, Update, Wait, Stats, Connect, and Shutdown are
+implemented. Checkpoint is part of that API but deliberately returns
+Unimplemented; Create requests containing checkpoint restore fields do the
+same. The contract also freezes the OCI Features, Process, LinuxResources, and
+versioned A3S CreateOptions type URLs consumed by those methods.
+
 The August 14, 2026 arm64 requalification used containerd 2.2.2 and Linux
 7.0.11. Three complete 46.92, 47.39, and 47.23-second matrices ran
 consecutively through the same Host PID. The release-built shim SHA-256 was
@@ -63,6 +72,24 @@ daemon's `PATH`. The qualified development host currently uses
 required when standard runtime-v2 binary discovery is available; callers can
 select it with `--runtime io.containerd.a3s-oci.v2`.
 
+Tagged Linux host archives have this contract-v1 layout:
+
+```text
+a3s-oci-runtime-v<version>-linux-<architecture>/
+├── a3s-oci
+├── a3s-oci-agent
+├── containerd-shim-a3s-oci-v2
+├── README.md
+├── CHANGELOG.md
+├── LICENSE
+└── docs/
+    └── containerd-runtime-v2.md
+```
+
+The archive entry is installed at
+`/usr/local/bin/containerd-shim-a3s-oci-v2`; it is not renamed or wrapped.
+The release workflow includes the complete archive in `SHA256SUMS`.
+
 The shim does not execute a driver directly. It connects to the long-lived
 A3S OCI host service through the SDK endpoint. The default Unix socket is:
 
@@ -76,10 +103,10 @@ static agent, and their immutable assets are separate package entries; the
 runtime socket and containerd task bundles are runtime state and must not be
 shipped in a package.
 
-The final release layout and checksums remain open. A release is not qualified
-until it records at least the containerd version, shim checksum, OCI Runtime
-commit, Cargo lock digest, SDK protocol, agent protocol, driver, kernel, and
-host architecture.
+The layout is frozen, but published-artifact qualification remains open. A
+release is not qualified until it records at least the containerd version,
+shim checksum, OCI Runtime commit, Cargo lock digest, SDK protocol, agent
+protocol, driver, kernel, and host architecture.
 
 ## Guest replay-journal lifetime
 
@@ -118,6 +145,22 @@ containerd and the SDK keep separate identity domains:
 | Runtime create | Monotonic runtime generation returned by the host service |
 | namespace + task ID + exec ID + exec incarnation | `exec-` plus a length-framed SHA-256 digest |
 | Mutation | `ctrd-op-` plus namespace, task ID, task incarnation, optional exec ID and exec incarnation, and action digest |
+
+The named encoding is `sha256-length-framed-u64be-v1`. For each component, the
+shim feeds an unsigned 64-bit big-endian byte length followed by the exact
+component bytes into SHA-256, then adds the identity-domain prefix outside the
+digest. Fixed compatibility vectors are:
+
+| Input | Output |
+| --- | --- |
+| namespace `k8s.io`, task ID `task/a` | `ctrd-9e87b4d0ad12d991219bcd3bb40312c1e1abce101b71be36752f3b7de9550106` |
+| namespace `k8s.io`, task ID `task`, exec ID `shell`, exec incarnation 1 | `exec-3e8eaef01bc980653a2a276d5b11463dc2714fbe1673bd871108180d4d6473b2` |
+
+Generation mapping is `runtime-assigned-monotonic-exact`. Create sends the
+stable derived container ID and receives a monotonic generation from the Host;
+the shim stores that returned generation in its metadata. It never derives a
+generation from containerd input, looks up an unqualified current generation,
+or changes generation on a later task request.
 
 Recreating the same namespace and task ID intentionally keeps the derived SDK
 container ID while allocating a new incarnation and runtime generation. The
