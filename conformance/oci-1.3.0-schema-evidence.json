@@ -104,15 +104,9 @@
         "sha256:295af9f53ffe36ada2f3d1deedcc93e31be9fe26c0896806bc736027f89de15d",
         "sha256:1272c02f8bf27df0306c1203980aa9640d0fd877fe5d3f671412186d00341376",
         "sha256:24bcf85429384947b44862a306bad473abba6c99bb91b08d7710d8b82d6c2bdb",
-        "sha256:b24567880e9b2bc46ec76f51da76322615af723718aa6b1607b907648d5bf236",
-        "sha256:89e7eaca4692bcf9f31e2d53b7587c1de8dde528909851a752913ca9c0b19943",
         "sha256:0a131e708fa148cc452495a60a075e61ddb4a3e035c99d0bf8cb5d42af45c125",
         "sha256:759f6a6cd2816f258e78e5ce9a528c1cd5225033a0d8ef0820c7ed6ef5635c63",
-        "sha256:d41518cb1fb318d99a3a2c3dbc967f452d9330f009e3ca6760d6afd48288ee82",
         "sha256:eb6a6c1c5a4285ab970c607accc4df1b85e56ed5b791089a088f609a993f8542",
-        "sha256:5a8fc82c98256b601c9b3c832e50500c1450e6c5ed14b215cbc7b5230495726a",
-        "sha256:35d748d6c08361bff52d72f4a5e5051822969f2ee010cd476e30415a63c0f6f9",
-        "sha256:d9f2a5e99260a2dd6abe368e5acf071eeb227688a9eabc8b519b6d867dd7e155",
         "sha256:6b3a54e11bed7e7d7b7fd4035ec45b118dd277d3d60d88075f50f07febd93579",
         "sha256:7149448828ce25eb59076d833312988cd69564ecea0f87e57d0d8f5cd5b9dcef",
         "sha256:97db5be5c5842634a7afa166441b20f12b46139d670128410866933dfb77e0f6",
@@ -125,13 +119,52 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
+        "oci.vm.configuration.runtime-owned"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ],
+      "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
+    },
+    {
+      "description": "Caller-provided OCI VM executable paths",
+      "itemIds": [
+        "sha256:89e7eaca4692bcf9f31e2d53b7587c1de8dde528909851a752913ca9c0b19943",
+        "sha256:d41518cb1fb318d99a3a2c3dbc967f452d9330f009e3ca6760d6afd48288ee82",
+        "sha256:5a8fc82c98256b601c9b3c832e50500c1450e6c5ed14b215cbc7b5230495726a",
+        "sha256:d9f2a5e99260a2dd6abe368e5acf071eeb227688a9eabc8b519b6d867dd7e155"
+      ],
+      "disposition": "rejected-unsupported",
+      "owner": "vm-driver",
+      "ruleIds": [
         "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
+        "oci.common.path.no-nul",
         "oci.vm.path.absolute"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
+        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+      ],
+      "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
+    },
+    {
+      "description": "Caller-provided OCI VM command parameters",
+      "itemIds": [
+        "sha256:b24567880e9b2bc46ec76f51da76322615af723718aa6b1607b907648d5bf236",
+        "sha256:35d748d6c08361bff52d72f4a5e5051822969f2ee010cd476e30415a63c0f6f9"
+      ],
+      "disposition": "rejected-unsupported",
+      "owner": "vm-driver",
+      "ruleIds": [
+        "oci.vm.configuration.runtime-owned",
+        "oci.vm.parameter.no-nul"
+      ],
+      "testIds": [
+        "schema::tests::validates_complete_vm_schema_shapes",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."

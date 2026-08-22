@@ -565,4 +565,107 @@ mod tests {
         unknown_rule.items[0].rule_ids = vec!["oci.unknown.rule".to_string()];
         assert_invalid(validator.verify_coverage(&unknown_rule), "unknown rule");
     }
+
+    #[test]
+    fn vm_schema_items_have_the_exact_fail_closed_profile() {
+        const VM_PATH_POINTERS: &[&str] = &[
+            "/vm/properties/hypervisor/properties/path",
+            "/vm/properties/image/properties/path",
+            "/vm/properties/kernel/properties/initrd",
+            "/vm/properties/kernel/properties/path",
+        ];
+        const VM_PARAMETER_POINTERS: &[&str] = &[
+            "/vm/properties/hypervisor/properties/parameters",
+            "/vm/properties/kernel/properties/parameters",
+        ];
+        const RATIONALE: &str = "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation.";
+
+        let manifest = checked_in_manifest();
+        let vm_items = manifest
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.inventory.schema.as_str(),
+                    "config-vm.json" | "defs-vm.json"
+                ) || (item.inventory.schema == "config-schema.json"
+                    && item.inventory.pointer == "/properties/vm")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(vm_items.len(), 26);
+        assert!(vm_items.iter().all(|item| {
+            item.disposition == OciSchemaDisposition::RejectedUnsupported
+                && item.owner == "vm-driver"
+                && item
+                    .rule_ids
+                    .iter()
+                    .any(|rule| rule == "oci.vm.configuration.runtime-owned")
+                && item
+                    .test_ids
+                    .iter()
+                    .any(|test| test == "schema::tests::validates_complete_vm_schema_shapes")
+                && item.test_ids.iter().any(|test| {
+                    test == "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
+                })
+                && item.rationale.as_deref() == Some(RATIONALE)
+        }));
+
+        let paths = vm_items
+            .iter()
+            .filter(|item| VM_PATH_POINTERS.contains(&item.inventory.pointer.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 4);
+        assert!(paths.iter().all(|item| {
+            item.rule_ids
+                == [
+                    "oci.vm.configuration.runtime-owned",
+                    "oci.common.path.no-nul",
+                    "oci.vm.path.absolute",
+                ]
+                && item.test_ids
+                    == [
+                        "schema::tests::validates_complete_vm_schema_shapes",
+                        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
+                        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
+                        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch",
+                    ]
+        }));
+
+        let parameters = vm_items
+            .iter()
+            .filter(|item| VM_PARAMETER_POINTERS.contains(&item.inventory.pointer.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(parameters.len(), 2);
+        assert!(parameters.iter().all(|item| {
+            item.rule_ids
+                == [
+                    "oci.vm.configuration.runtime-owned",
+                    "oci.vm.parameter.no-nul",
+                ]
+                && item.test_ids
+                    == [
+                        "schema::tests::validates_complete_vm_schema_shapes",
+                        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
+                        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch",
+                    ]
+        }));
+
+        let remaining = vm_items
+            .iter()
+            .filter(|item| {
+                !VM_PATH_POINTERS.contains(&item.inventory.pointer.as_str())
+                    && !VM_PARAMETER_POINTERS.contains(&item.inventory.pointer.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 20);
+        assert!(remaining.iter().all(|item| {
+            item.rule_ids == ["oci.vm.configuration.runtime-owned"]
+                && item.test_ids
+                    == [
+                        "schema::tests::validates_complete_vm_schema_shapes",
+                        "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch",
+                    ]
+        }));
+    }
 }

@@ -6,6 +6,19 @@ All notable changes to A3S OCI Runtime are documented in this file.
 
 ### Added
 
+- A closed OCI 1.3 VM configuration semantics gate. It freezes all 26
+  VM-related schema items as explicitly unsupported by current drivers and all
+  24 normative VM requirements as four validated absolute runtime paths plus
+  20 fail-closed runtime-owned controls. A dedicated negative semantic fixture
+  rejects NUL bytes in executable VM paths and hypervisor or kernel
+  parameters. Three non-overlapping evidence bindings keep the 20 generic
+  controls, four executable paths, and two parameter arrays tied only to their
+  applicable rules. Exact scoped manifest tests prevent owner, disposition,
+  count, rule, or test-evidence drift, while the Host Service still rejects a
+  complete schema-valid caller `vm` section before durable reservation,
+  bundle handoff, hypervisor entry, or mutating driver dispatch. This closes
+  bundle-supplied VM semantics only; lifecycle, security, real-host, and
+  packaged-artifact conformance remain open.
 - An exhaustive pinned OCI 1.3 JSON Schema release gate. The SDK now runs all
   19 vendored configuration, State, and Features fixtures, including malformed
   JSON and schema-invalid negatives, and SHA-256-binds the exact fixture paths

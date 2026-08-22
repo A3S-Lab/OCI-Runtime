@@ -667,7 +667,8 @@ The repository turns release claims into checked inventories:
 | --- | ---: |
 | Named OCI schema properties and enum values classified | 423 |
 | OCI schema dispositions | 257 enforced · 2 validated · 75 rejected unsupported · 89 rejected inapplicable · 0 pending · 0 conformant |
-| Reviewed schema evidence | 334 applicable items in 29 bindings · 131 rules · 95 tests |
+| Reviewed schema evidence | 334 applicable items in 31 bindings · 131 rules · 96 tests |
+| OCI VM configuration profile | 26 / 26 schema items · 24 / 24 normative requirements · 4 validated absolute paths · 20 fail-closed runtime-owned controls |
 | Pinned OCI JSON Schema suites | 19 / 19 upstream fixtures · 4 / 4 launch profiles with configuration, Features, and created/running/stopped State documents |
 | RFC 2119 occurrences across 15 pinned normative OCI 1.3 documents | 764 |
 | Typed semantic validation rules | 95 |

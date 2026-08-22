@@ -736,6 +736,50 @@ fn validates_vm_paths_without_inventing_hardware_minima() {
 }
 
 #[test]
+fn rejects_nul_in_vm_runtime_paths_and_parameters() {
+    let value = json!({
+        "ociVersion": "1.3.0",
+        "root": {"path": "rootfs"},
+        "vm": {
+            "hypervisor": {
+                "path": "/runtime/a3s-vmm\u{0}",
+                "parameters": ["--machine", "a3s\u{0}"]
+            },
+            "kernel": {
+                "path": "/runtime/vmlinux\u{0}",
+                "parameters": ["console=hvc0\u{0}"],
+                "initrd": "/runtime/initrd.img\u{0}"
+            },
+            "image": {
+                "path": "/runtime/root.raw\u{0}",
+                "format": "raw"
+            }
+        }
+    });
+    let report = OciSemanticValidator::new()
+        .expect("construct validator")
+        .inspect(OciSemanticPhase::Configuration, &value)
+        .expect("inspect NUL-containing VM configuration");
+
+    assert_eq!(
+        report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "oci.common.path.no-nul")
+            .count(),
+        4
+    );
+    assert_eq!(
+        report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "oci.vm.parameter.no-nul")
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn accepts_applicable_linux_and_vm_platform_sections_together() {
     let value = json!({
         "ociVersion": "1.3.0",

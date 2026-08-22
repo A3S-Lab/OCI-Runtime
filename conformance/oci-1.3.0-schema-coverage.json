@@ -4434,13 +4434,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4742,13 +4739,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4762,13 +4756,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4782,13 +4773,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4802,13 +4790,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4822,13 +4807,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4842,13 +4824,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4862,13 +4841,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4882,13 +4858,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4903,12 +4876,11 @@
       "owner": "vm-driver",
       "ruleIds": [
         "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.parameter.no-nul"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4923,11 +4895,12 @@
       "owner": "vm-driver",
       "ruleIds": [
         "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
+        "oci.common.path.no-nul",
         "oci.vm.path.absolute"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
@@ -4942,13 +4915,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4962,13 +4932,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -4983,11 +4950,12 @@
       "owner": "vm-driver",
       "ruleIds": [
         "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
+        "oci.common.path.no-nul",
         "oci.vm.path.absolute"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
@@ -5002,13 +4970,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -5023,11 +4988,12 @@
       "owner": "vm-driver",
       "ruleIds": [
         "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
+        "oci.common.path.no-nul",
         "oci.vm.path.absolute"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
@@ -5043,12 +5009,11 @@
       "owner": "vm-driver",
       "ruleIds": [
         "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.parameter.no-nul"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -5063,11 +5028,12 @@
       "owner": "vm-driver",
       "ruleIds": [
         "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
+        "oci.common.path.no-nul",
         "oci.vm.path.absolute"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
+        "semantic::tests::rejects_nul_in_vm_runtime_paths_and_parameters",
         "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
@@ -8560,13 +8526,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -8580,13 +8543,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -8600,13 +8560,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -8620,13 +8577,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -8640,13 +8594,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -8660,13 +8611,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -8680,13 +8628,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
@@ -8700,13 +8645,10 @@
       "disposition": "rejected-unsupported",
       "owner": "vm-driver",
       "ruleIds": [
-        "oci.vm.configuration.runtime-owned",
-        "oci.vm.parameter.no-nul",
-        "oci.vm.path.absolute"
+        "oci.vm.configuration.runtime-owned"
       ],
       "testIds": [
         "schema::tests::validates_complete_vm_schema_shapes",
-        "semantic::tests::validates_vm_paths_without_inventing_hardware_minima",
         "service::tests::rejects_caller_vm_configuration_before_durable_reservation_and_create_dispatch"
       ],
       "rationale": "Current A3S drivers use runtime-owned, digest-pinned VM assets and reject every caller-provided vm section before durable reservation or platform mutation."
